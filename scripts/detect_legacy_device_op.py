@@ -2,8 +2,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
-#!/usr/bin/env python3
 """
 Detect classes that implement the legacy concept OldDeviceOperation.
 
@@ -12,54 +10,21 @@ Uses simple pattern matching (no clang) to find classes with all three non-stati
     - compute_output_specs
     - create_program
 
-Can check a single file or process a git diff.
+Checks specified .hpp files. Used by pre-commit hooks to detect legacy patterns in newly added files.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 
-
-def get_added_hpp_files(git_base_ref="origin/main"):
-    """
-    Returns a list of .hpp files that are newly added or renamed in this PR.
-
-    Only checks files with status "A" (added) or "R" (renamed/moved).
-    Does NOT check "M" (modified) files - modifications to existing files are allowed.
-    """
-    cmd = ["git", "diff", "--name-status", git_base_ref, "HEAD"]
-    out = subprocess.check_output(cmd, encoding="utf-8")
-
-    added = []
-    for line in out.splitlines():
-        parts = line.split(maxsplit=1)
-        if len(parts) < 2:
-            continue
-        status, path = parts
-
-        # Only process Added (A) or Renamed (R) files, NOT Modified (M) files
-        # This ensures we only block new files or moved files, not changes to existing files
-        if not (status.startswith("A") or status.startswith("R")):
-            continue
-
-        # Handle rename: status is like "R100" and path might have two paths (old -> new)
-        if status.startswith("R"):
-            # For renames, take the new path (second one after the tab)
-            path_parts = path.split(maxsplit=1)
-            if len(path_parts) == 2:
-                path = path_parts[1]  # New path after rename
-            else:
-                path = path_parts[0]
-
-        # Only check .hpp files in ttnn/ directories
-        if path.endswith(".hpp") and path.startswith("ttnn/"):
-            added.append(path)
-
-    return added
+# Compile regex patterns once at module level for the three methods we check
+_METHOD_NAMES = ["validate", "compute_output_specs", "create_program"]
+_METHOD_PATTERNS = {name: re.compile(rf"\b{re.escape(name)}\s*[<(]") for name in _METHOD_NAMES}
 
 
-def check_method_is_non_static(filepath, method_name):
+def check_has_non_static_method(filepath, method_name):
     """
     Check if a method exists and is non-static.
     Returns True if a non-static declaration is found.
@@ -70,43 +35,19 @@ def check_method_is_non_static(filepath, method_name):
     except FileNotFoundError:
         return False
 
-    # Pattern to match method declarations
-    # Look for method name followed by ( or <
-    method_pattern = re.compile(rf"\b{re.escape(method_name)}\s*[<(]")
+    # Get pre-compiled pattern for the known method
+    method_pattern = _METHOD_PATTERNS[method_name]
 
     # Find all positions where the method appears
     for match in method_pattern.finditer(content):
         match_pos = match.start()
 
-        # Find which line this match is on
-        line_start = content.rfind("\n", 0, match_pos) + 1
-        line_end = content.find("\n", match_pos)
-        if line_end == -1:
-            line_end = len(content)
+        # Look backwards for "static" keyword (within reasonable distance, ~200 chars)
+        lookback_start = max(0, match_pos - 200)
+        context = content[lookback_start:match_pos]
 
-        # Get context: up to 3 lines before
-        context_start = content.rfind("\n", 0, line_start - 1)
-        for _ in range(2):  # Go back up to 2 more newlines
-            prev_newline = content.rfind("\n", 0, context_start)
-            if prev_newline == -1:
-                break
-            context_start = prev_newline
-
-        if context_start == -1:
-            context_start = 0
-        else:
-            context_start += 1  # Skip the newline
-
-        context = content[context_start:line_end]
-
-        # Check if "static" appears before the method name in this context
-        # Look for pattern: static ... method_name (allowing for whitespace, keywords like inline/const/virtual)
-        static_pattern = re.compile(
-            rf"static\s+(?:inline\s+)?(?:const\s+)?(?:virtual\s+)?(?:typename\s+)?.*?\b{re.escape(method_name)}\s*[<(]",
-            re.MULTILINE | re.DOTALL,
-        )
-
-        if static_pattern.search(context):
+        # Check if "static" appears before the method name
+        if re.search(r"\bstatic\s+", context):
             continue  # This is a static method, skip it
 
         # Found a non-static method
@@ -120,100 +61,140 @@ def check_file_for_legacy_class(filepath):
     Check if a file contains a legacy device operation class.
     Returns True if all three methods are found as non-static.
     """
-    has_validate = check_method_is_non_static(filepath, "validate")
-    has_compute_output_specs = check_method_is_non_static(filepath, "compute_output_specs")
-    has_create_program = check_method_is_non_static(filepath, "create_program")
+    for method_name in _METHOD_NAMES:
+        if not check_has_non_static_method(filepath, method_name):
+            return False
+    return True
 
-    return has_validate and has_compute_output_specs and has_create_program
 
-
-def is_file_newly_added(filepath, base_ref="HEAD"):
-    """
-    Check if a file is newly added (doesn't exist in base_ref).
-    Returns True if file is new, False if it exists in base_ref (modified).
-    """
+def _file_exists_in_git(filepath, ref):
+    """Check if a file exists in a git ref."""
     try:
         subprocess.check_output(
-            ["git", "cat-file", "-e", f"{base_ref}:{filepath}"],
+            ["git", "cat-file", "-e", f"{ref}:{filepath}"],
             stderr=subprocess.DEVNULL,
         )
-        return False  # File exists in base_ref, so it's modified
+        return True
     except subprocess.CalledProcessError:
-        return True  # File doesn't exist in base_ref, so it's new
+        return False
+
+
+def _auto_detect_from_ref(to_ref):
+    """Auto-detect from_ref by finding merge base with common branches."""
+    for base_branch in ["origin/main", "main", "origin/master", "master"]:
+        try:
+            subprocess.check_output(
+                ["git", "rev-parse", "--verify", base_branch],
+                stderr=subprocess.DEVNULL,
+            )
+            merge_base = subprocess.check_output(
+                ["git", "merge-base", to_ref, base_branch],
+                stderr=subprocess.DEVNULL,
+                encoding="utf-8",
+            ).strip()
+            if merge_base:
+                return merge_base
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+
+    # Fallback: try HEAD^ for local pre-commit (before commit)
+    try:
+        subprocess.check_output(
+            ["git", "cat-file", "-e", "HEAD^"],
+            stderr=subprocess.DEVNULL,
+        )
+        return "HEAD^"
+    except subprocess.CalledProcessError:
+        pass
+
+    # Last resort: use HEAD (but this won't work correctly in CI)
+    return "HEAD"
+
+
+def get_base_ref_for_precommit(from_ref=None, to_ref=None):
+    """
+    Determine base refs when running in pre-commit context.
+    In CI, pre-commit uses --from-ref and --to-ref, which we accept as arguments.
+    Falls back to auto-detection if not provided.
+
+    Returns tuple (from_ref, to_ref).
+    """
+    # Check environment variables first (could be set by CI)
+    from_ref = from_ref or os.environ.get("PRE_COMMIT_FROM_REF")
+    to_ref = to_ref or os.environ.get("PRE_COMMIT_TO_REF") or "HEAD"
+
+    # Auto-detect from_ref if not provided
+    if not from_ref:
+        from_ref = _auto_detect_from_ref(to_ref)
+
+    return from_ref, to_ref
+
+
+def is_file_newly_added(filepath, from_ref=None, to_ref=None):
+    """
+    Check if a file is newly added (doesn't exist in from_ref but exists in to_ref).
+    Returns True if file is new, False if it exists in from_ref (modified).
+    If refs are None, tries to auto-detect them.
+    """
+    from_ref, to_ref = get_base_ref_for_precommit(from_ref, to_ref)
+
+    # File is newly added if it doesn't exist in from_ref but exists in to_ref
+    exists_in_from = _file_exists_in_git(filepath, from_ref)
+    exists_in_to = _file_exists_in_git(filepath, to_ref) or os.path.exists(filepath)
+
+    return not exists_in_from and exists_in_to
 
 
 def main():
     parser = argparse.ArgumentParser(description="Detect legacy device operation classes")
-    parser.add_argument(
-        "files", nargs="*", help="Path(s) to .hpp file(s) to check (if not provided, processes git diff)"
-    )
-    parser.add_argument(
-        "--base-ref", default="origin/main", help="Base git reference for diff mode (default: origin/main)"
-    )
+    parser.add_argument("files", nargs="+", help="Path(s) to .hpp file(s) to check")
     parser.add_argument(
         "--check-new-only",
         action="store_true",
         help="Only check files that are newly added (not in base_ref). Used by pre-commit.",
     )
+    parser.add_argument(
+        "--from-ref",
+        help="Base ref to compare against (from-ref in pre-commit context). Auto-detected if not provided.",
+    )
+    parser.add_argument(
+        "--to-ref",
+        help="Target ref to compare to (to-ref in pre-commit context). Defaults to HEAD.",
+        default="HEAD",
+    )
     args = parser.parse_args()
 
-    if args.files:
-        # File mode (single or multiple files, e.g., from pre-commit)
-        legacy_files = []
-        for filepath in args.files:
-            # If check-new-only is set, skip files that exist in base_ref (modified files)
-            if args.check_new_only:
-                if not is_file_newly_added(filepath, "HEAD"):
-                    continue  # Skip modified files, only check newly added ones
-
-            if check_file_for_legacy_class(filepath):
-                legacy_files.append(filepath)
-
-        if not legacy_files:
-            return 0
-
-        # Output helpful error message for pre-commit
+    legacy_files = []
+    for filepath in args.files:
+        # If check-new-only is set, skip files that exist in from_ref (modified files)
         if args.check_new_only:
-            print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
-            print(
-                "   (class implements non-static member functions: validate, compute_output_specs, create_program)",
-                file=sys.stderr,
-            )
-            print("", file=sys.stderr)
-            print("Files with legacy classes:", file=sys.stderr)
-            for filepath in legacy_files:
-                print(f"  - {filepath}", file=sys.stderr)
-            print("", file=sys.stderr)
-            print("Please follow the modern device operation pattern instead:", file=sys.stderr)
-            print(
-                "  - See documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html",
-                file=sys.stderr,
-            )
-        else:
-            # Output detected legacy classes to stdout (for CI/scripting, when not in pre-commit mode)
-            for filepath in legacy_files:
-                print(f"{filepath}")
+            # Use provided from-ref and to-ref, or auto-detect
+            if not is_file_newly_added(filepath, args.from_ref, args.to_ref):
+                continue  # Skip modified files, only check newly added ones
 
-        return 1
-    else:
-        # Diff mode
-        added_hpp_files = get_added_hpp_files(args.base_ref)
-        if not added_hpp_files:
-            return 0
+        if check_file_for_legacy_class(filepath):
+            legacy_files.append(filepath)
 
-        legacy_files = []
-        for filepath in added_hpp_files:
-            if check_file_for_legacy_class(filepath):
-                legacy_files.append(filepath)
+    if not legacy_files:
+        return 0
 
-        if not legacy_files:
-            return 0
+    print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
+    print(
+        "   (class implements non-static member functions: validate, compute_output_specs, create_program)",
+        file=sys.stderr,
+    )
+    print("", file=sys.stderr)
+    print("Files with legacy classes:", file=sys.stderr)
+    for filepath in legacy_files:
+        print(f"  - {filepath}", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Please follow the modern device operation pattern instead:", file=sys.stderr)
+    print(
+        "  - See documentation: https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html",
+        file=sys.stderr,
+    )
 
-        # Output detected legacy classes
-        for filepath in legacy_files:
-            print(f"{filepath}")
-
-        return 1
+    return 1
 
 
 if __name__ == "__main__":
