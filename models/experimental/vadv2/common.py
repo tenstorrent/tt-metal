@@ -11,16 +11,15 @@ def load_torch_model(torch_model, layer="", model_location_generator=None):
     # Note: VAD_base.pth is incompatible (requires model architecture changes)
     # See CHECKPOINT_COMPARISON.md for details
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        # Priority: VAD_tiny.pth > vadv2_weights_1.pth (they're identical)
-        if os.path.exists("VAD_tiny.pth"):
-            weights_path = "VAD_tiny.pth"
-        else:
-            weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+        # Force use of vadv2_weights_1.pth for consistency in weight verification
+        # Note: VAD_tiny.pth and vadv2_weights_1.pth are identical, but we use
+        # vadv2_weights_1.pth to ensure both PyTorch and TT-NN use the exact same file
+        weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
 
         if not os.path.exists(weights_path):
             os.system("bash models/experimental/vadv2/weights_download.sh")
         backbone_path = "ckpts/fcos3d.pth"
-        print(f"Loading weights from: {weights_path}")
+        print(f"Loading weights from: {weights_path} (forced for consistency)")
     else:
         weights_path = (
             model_location_generator("vision-models/vad_v2", model_subdir="", download_if_ci_v2=True)
