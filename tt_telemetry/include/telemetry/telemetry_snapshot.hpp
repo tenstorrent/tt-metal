@@ -136,9 +136,10 @@ private:
         for (const auto& [path, timestamp] : other.string_metric_timestamps) {
             string_metric_timestamps[path] = timestamp;
         }
-        // Merge all custom labels (single unified map) - fast path, no validation
+        // Merge immutable labels - fast path, no validation
+        // Labels are only sent once (initial snapshot), never in deltas
         for (const auto& [path, labels] : other.metric_labels) {
-            metric_labels[path] = labels;
+            metric_labels.insert({path, labels});  // Use insert to preserve existing (never overwrite)
         }
     }
 
@@ -293,7 +294,8 @@ private:
             }
         }
 
-        // Validate and merge custom labels - only for existing or successfully merged metrics
+        // Validate and merge immutable labels - only sent once in initial snapshot
+        // Check that labels aren't orphaned (sent without corresponding metric)
         for (const auto& [path, labels] : other.metric_labels) {
             // Check if path was successfully merged OR already exists in base snapshot
             bool path_exists_in_base =
@@ -311,8 +313,7 @@ private:
             // Additional check: if metric exists in base but wasn't just merged,
             // verify that 'other' didn't send a conflicting metric that was rejected
             if (!was_just_merged && path_exists_in_base) {
-                // This could be a label-only update OR labels from a rejected metric
-                // Check if 'other' tried to send a metric value for this path
+                // Check if 'other' tried to send a metric value for this path that was rejected
                 bool other_sent_metric = other.bool_metrics.find(path) != other.bool_metrics.end() ||
                                          other.uint_metrics.find(path) != other.uint_metrics.end() ||
                                          other.double_metrics.find(path) != other.double_metrics.end() ||
@@ -327,33 +328,10 @@ private:
                         path);
                     continue;
                 }
-                // Else: True label-only update, safe to merge below
             }
 
-            // Check for conflicting label values and reject if found
-            auto existing = metric_labels.find(path);
-            if (existing != metric_labels.end()) {
-                bool has_conflict = false;
-                for (const auto& [label_key, label_value] : labels) {
-                    auto existing_label = existing->second.find(label_key);
-                    if (existing_label != existing->second.end() && existing_label->second != label_value) {
-                        log_error(
-                            tt::LogAlways,
-                            "Label conflict for path '{}', key '{}': existing='{}', new='{}' - rejecting merge",
-                            path,
-                            label_key,
-                            existing_label->second,
-                            label_value);
-                        has_conflict = true;
-                        break;
-                    }
-                }
-                if (has_conflict) {
-                    continue;  // Skip merging conflicting labels
-                }
-            }
-
-            metric_labels[path] = labels;
+            // Labels are immutable, only sent once - use insert to preserve existing
+            metric_labels.insert({path, labels});
         }
     }
 
