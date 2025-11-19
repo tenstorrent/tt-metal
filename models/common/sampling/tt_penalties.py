@@ -21,50 +21,16 @@ class PenaltyContext:
     prompt_mask: ttnn.Tensor
     output_mask: ttnn.Tensor
     output_counts: ttnn.Tensor
+    output_counts_gathered: ttnn.Tensor
     presence_penalties: ttnn.Tensor
     frequency_penalties: ttnn.Tensor
     repetition_penalties: ttnn.Tensor
 
 
-def _token_bin_counts_and_mask(
-    tokens: torch.Tensor | None,
-    max_batch_size: int,
-    vocab_size: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Build dense histograms/masks for the provided token tensor (host-side).
-    """
-    counts = torch.zeros((max_batch_size, vocab_size), dtype=torch.int32)
-    mask = torch.zeros_like(counts)
-
-    if tokens is None:
-        return counts, mask
-
-    tokens = tokens.long()
-    if tokens.dim() == 1:
-        tokens = tokens.unsqueeze(1)
-
-    batch = min(tokens.shape[0], max_batch_size)
-    if batch == 0 or tokens.shape[1] == 0:
-        return counts, mask
-
-    tokens = tokens[:batch]
-    valid = tokens >= 0
-    clamped = torch.clamp(tokens, min=0, max=vocab_size - 1)
-    updates = valid.to(torch.int32)
-
-    counts_slice = counts[:batch]
-    counts_slice.scatter_add_(1, clamped, updates)
-    mask[:batch] = (counts_slice > 0).to(torch.int32)
-    counts[:batch] = counts_slice
-    return counts, mask
-
-
 def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
     if context is None:
         return logits
-
-    # frequency
+    # freqeuncy
     freq_term = ttnn.multiply(context.output_counts, context.frequency_penalties)
     logits = ttnn.subtract(logits, freq_term, output_tensor=logits)
 
@@ -73,10 +39,15 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     logits = ttnn.subtract(logits, presence_term, output_tensor=logits)
 
     # repetition
+
+    # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
     combined_mask = ttnn.add(context.prompt_mask, context.output_mask)
     penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0)
-    inverse_penalties = ttnn.div(1, penalties)
+    inverse_penalties = ttnn.reciprocal(penalties)
+
+    # If logits are positive, divide by penalty, otherwise multiply by penalty.
     scaling = ttnn.where(ttnn.gt(logits, 1), inverse_penalties, penalties)
+
     logits = ttnn.multiply(logits, scaling, output_tensor=logits)
 
     return logits
@@ -90,28 +61,47 @@ class TTPenalties(LightweightModule):
     def __init__(self, mesh_device, max_batch_size: int, vocab_size: int):
         super().__init__()
         self.mesh_device = mesh_device
+        self.cluster_shape = mesh_device.shape
         self.max_batch_size = max_batch_size
         self.vocab_size = vocab_size
-        self._zero_int_host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
 
         self.prompt_mask = self._alloc_int_buffer()
         self.output_mask = self._alloc_int_buffer()
+        self.output_counts_gathered = self._alloc_int_buffer(shard_dims=(None, None))
         self.output_counts = self._alloc_int_buffer()
 
         self.presence_penalties = self._alloc_bf16_buffer()
         self.frequency_penalties = self._alloc_bf16_buffer()
         self.repetition_penalties = self._alloc_bf16_buffer()
 
-    def _alloc_int_buffer(self):
+        self.slice_start = ttnn.from_torch(torch.tensor([0], dtype=torch.int32), device=self.mesh_device)
+        num_devices = mesh_device.shape[-1]
+        end_tensor = torch.tensor(
+            [[31] * num_devices, [(n + 1) * (self.vocab_size // num_devices) - 1 for n in range(num_devices)]],
+            dtype=torch.int32,
+        )[0, :]
+        self.slice_end = ttnn.from_torch(
+            end_tensor,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape),
+        )
+
+    def _alloc_int_buffer(self, shard_dims=(None, 1)):
         host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
-        return ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.cluster_shape),
+        )
 
     def _alloc_bf16_buffer(self):
         host = torch.zeros((self.max_batch_size, 1), dtype=torch.float32)
-        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
 
     def _copy_host_to_device(self, dst: ttnn.Tensor, src: torch.Tensor):
-        src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=None)
+        src_tt = ttnn.from_torch(src, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=None)
         ttnn.copy_host_to_device_tensor(src_tt, dst)
 
     def reset_params(self, presence: List[float], frequency: List[float], repetition: List[float]):
@@ -134,25 +124,47 @@ class TTPenalties(LightweightModule):
         return tensor.view(self.max_batch_size, 1)
 
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor | None):
-        _, mask = _token_bin_counts_and_mask(prompt_tokens, self.max_batch_size, self.vocab_size)
-        self._copy_host_to_device(self.prompt_mask, mask)
+        self.token_bin_counts_and_mask(new_tokens=prompt_tokens, mask=self.prompt_mask)
 
     def reset_output_tokens(self):
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask)
         self.output_counts = ttnn.mul(self.output_counts, 0, output_tensor=self.output_counts)
+        self.output_counts_gathered = ttnn.mul(
+            self.output_counts_gathered, 0, output_tensor=self.output_counts_gathered
+        )
 
     def update_output_tokens(self, new_tokens):
-        if new_tokens is None:
-            return
-        counts_delta, _ = _token_bin_counts_and_mask(new_tokens, self.max_batch_size, self.vocab_size)
-        counts_delta_tt = ttnn.from_torch(
-            counts_delta,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=None,
+        self.token_bin_counts_and_mask(
+            new_tokens=new_tokens,
+            counts=self.output_counts_gathered,
+            counts_sliced=self.output_counts,
+            mask=self.output_mask,
         )
-        ttnn.add(self.output_counts, counts_delta_tt, output_tensor=self.output_counts)
-        self.output_mask = ttnn.gt(self.output_counts, 0, output_tensor=self.output_mask)
+
+    def token_bin_counts_and_mask(self, new_tokens, mask, counts=None, counts_sliced=None):
+        # counts_new = ttnn.scatter_add(1, new_tokens)
+
+        # fallback
+        new_tokens = ttnn.to_torch(ttnn.get_device_tensors(new_tokens)[0]).to(torch.int64)
+        counts_new = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
+        updates = torch.ones_like(new_tokens, dtype=torch.int32)
+        counts_new = counts_new.scatter_add(dim=1, index=new_tokens, src=updates)
+        counts_new = ttnn.from_torch(counts_new, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+
+        if counts:
+            counts = ttnn.add(counts, counts_new, output_tensor=counts)
+        else:
+            counts = counts_new
+        counts_sliced = ttnn.slice(
+            counts,
+            self.slice_start,
+            self.slice_end,
+            output_tensor=counts_sliced,
+            slice_dim=1,
+            num_devices=self.cluster_shape[-1],
+        )
+        mask = ttnn.gt(counts_sliced, 0, output_tensor=mask)
+        return counts, mask
 
     def apply(self, tt_logits: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
         if tt_logits is None:
@@ -162,11 +174,12 @@ class TTPenalties(LightweightModule):
             prompt_mask=self.prompt_mask,
             output_mask=self.output_mask,
             output_counts=self.output_counts,
+            output_counts_gathered=self.output_counts_gathered,
             presence_penalties=self.presence_penalties,
             frequency_penalties=self.frequency_penalties,
             repetition_penalties=self.repetition_penalties,
         )
 
-        reshaped = ttnn.reshape(tt_logits, (-1, self.vocab_size))
+        reshaped = ttnn.reshape(tt_logits, (-1, tt_logits.shape[-1]))
         apply_penalties(reshaped, context)
-        return ttnn.reshape(reshaped, (1, 1, -1, self.vocab_size))
+        return ttnn.reshape(reshaped, (1, 1, -1, tt_logits.shape[-1]))
