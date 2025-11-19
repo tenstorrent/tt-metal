@@ -74,3 +74,21 @@ pytest models/experimental/vadv2/demo/demo.py::test_torch_demo
 ```bash
 pytest models/experimental/vadv2/demo/demo.py::test_tt_demo
 ```
+
+Set `VADV2_ENABLE_VISUALIZATION=0` to skip rendering images during the demos:
+
+```bash
+VADV2_ENABLE_VISUALIZATION=0 pytest models/experimental/vadv2/demo/demo.py::test_tt_demo
+```
+
+Use `VADV2_ENABLE_VISUALIZATION=1` (default) to enable visualization again.
+
+Set `VADV2_MEMORY_DEBUG=1` to emit per-iteration memory usage logs (falls back to
+`resource` if `psutil` is unavailable).
+
+Provide `VADV2_PARAMETER_CACHE_PATH=/path/to/cache.pt` to reuse serialized TT
+parameters across runs. Set `VADV2_PARAMETER_CACHE_REBUILD=1` when you want to
+force regeneration and overwrite the cache.
+
+Set `VADV2_ENABLE_TILE_LAYOUT=0` to skip host-side tiling of convolution weights
+if you need to reduce peak RAM (warnings about layout will return).

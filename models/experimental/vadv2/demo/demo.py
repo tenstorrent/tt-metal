@@ -6,6 +6,7 @@ import os
 import sys
 import copy
 import time
+import gc
 import numpy as np
 import pytest
 import torch
@@ -17,6 +18,69 @@ from models.experimental.vadv2.reference import vad
 from models.experimental.vadv2.common import load_torch_model
 import os.path as osp
 from PIL import Image, ImageDraw
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
+
+def _env_flag_enabled(env_value, default=True):
+    if env_value is None:
+        return default
+    return env_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+ENABLE_VISUALIZATION = _env_flag_enabled(os.getenv("VADV2_ENABLE_VISUALIZATION"), default=True)
+MEMORY_DEBUG = _env_flag_enabled(os.getenv("VADV2_MEMORY_DEBUG"), default=False)
+
+
+def _get_memory_usage_mb():
+    rss_mb = peak_mb = None
+    if psutil is not None:
+        process = psutil.Process(os.getpid())
+        info = process.memory_info()
+        rss_mb = info.rss / (1024**2)
+    elif resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        rss_mb = usage.ru_maxrss
+        if sys.platform.startswith("darwin"):
+            rss_mb = rss / (1024**2)
+        else:
+            rss_mb = rss / 1024
+
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        peak = usage.ru_maxrss
+        if sys.platform.startswith("darwin"):
+            peak_mb = peak / (1024**2)
+        else:
+            peak_mb = peak / 1024
+
+    return rss_mb, peak_mb
+
+
+def log_memory_usage(prefix):
+    if not MEMORY_DEBUG:
+        return
+
+    rss_mb, peak_mb = _get_memory_usage_mb()
+    if rss_mb is None and peak_mb is None:
+        print(f"[Memory][{prefix}] Unable to determine memory usage (psutil/resource unavailable)")
+        return
+
+    if rss_mb is not None and peak_mb is not None:
+        print(f"[Memory][{prefix}] RSS: {rss_mb:.2f} MB | Peak RSS: {peak_mb:.2f} MB")
+    elif rss_mb is not None:
+        print(f"[Memory][{prefix}] RSS: {rss_mb:.2f} MB")
+    else:
+        print(f"[Memory][{prefix}] Peak RSS: {peak_mb:.2f} MB")
+
 
 # Register custom VAD transforms and datasets
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -57,10 +121,16 @@ def test_tt_demo(device, model_location_generator):
     cfg = Config.fromfile(os.path.join(os.path.dirname(__file__), "config.py"))
     # # 2. Build dataloader
     dataloader = Runner.build_dataloader(cfg.val_dataloader)
+    if MEMORY_DEBUG:
+        log_memory_usage("tt demo - post dataloader init")
     # outputs = single_cpu_test(torch_model, dataloader)
 
+    parameter = None
     for i, data in enumerate(dataloader):
         from models.experimental.vadv2.demo.data_container import DataContainer
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt demo - batch {i} raw")
 
         for k, v in data.items():
             if isinstance(v, DataContainer):
@@ -74,25 +144,22 @@ def test_tt_demo(device, model_location_generator):
 
             data[k] = v
 
+        img_for_params = data["img"][0] if isinstance(data["img"], list) else data["img"]
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt demo - before param build {i}")
+
         parameter = create_vadv2_model_parameters_vad(
             torch_model,
-            [
-                False,
-                [data["img"]],
-                [[data["img_metas"]]],
-                [[data["gt_bboxes_3d"]]],
-                [[data["gt_labels_3d"]]],
-                [data["fut_valid_flag"]],
-                [data["ego_his_trajs"]],
-                [[data["ego_fut_trajs"][0].unsqueeze(0)]],
-                [[data["ego_fut_cmd"][0].unsqueeze(0)]],
-                [data["ego_lcf_feat"]],
-                [[data["gt_attr_labels"]]],
-            ],
+            img_for_params,
             device,
         )
-        if i == 2:
-            break
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt demo - after param build {i}")
+        break
+
+    if parameter is None:
+        raise RuntimeError("Failed to create VAD parameters for TT model initialization")
 
     tt_model = tt_vad.TtVAD(
         device,
@@ -116,21 +183,31 @@ def test_tt_demo(device, model_location_generator):
         fut_ts=6,
         fut_mode=6,
     )
+    if MEMORY_DEBUG:
+        log_memory_usage("tt demo - after TtVAD init")
+
+    del parameter
+    gc.collect()
+    if MEMORY_DEBUG:
+        log_memory_usage("tt demo - after parameter gc")
 
     if not ttnn.CONFIG.enable_model_cache:
         ttnn.CONFIG.enable_model_cache = True
 
     time_tag = time.strftime("%Y%m%d_%H%M%S")
-    vis_dir = osp.join("test", "vad_tt_results", time_tag, "visualizations")
+    vis_dir = osp.join("test", "vad_tt_results", time_tag, "visualizations") if ENABLE_VISUALIZATION else None
     ttnn_outputs = single_cpu_test_tt(
         tt_model,
         dataloader,
         device,
         vis_dir=vis_dir,
         class_names=cfg.get("class_names"),
-        max_vis_images=4,
+        max_vis_images=4 if ENABLE_VISUALIZATION else 0,
         score_thr=0.2,
+        enable_visualization=ENABLE_VISUALIZATION,
     )
+    if MEMORY_DEBUG:
+        log_memory_usage("tt demo - after tt inference")
 
     # Add evaluation (same as test_torch_demo)
     tmp = {}
@@ -145,7 +222,7 @@ def test_tt_demo(device, model_location_generator):
         eval_kwargs.pop(key, None)
     eval_kwargs.update(dict(metric="bbox", **kwargs))
 
-    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  TT-Metal Evaluation outputs")
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  TT-Metal Evaluation outputs")
     dataloader_cfg = copy.deepcopy(cfg.val_dataloader)
     dataset_cfg = dataloader_cfg.pop("dataset")
     if isinstance(dataset_cfg, dict):
@@ -281,12 +358,16 @@ def single_cpu_test_tt(
     class_names=None,
     max_vis_images=0,
     score_thr=0.2,
+    enable_visualization=True,
 ):
     results = []
     prog_bar = ProgressBar(81)
     vis_count = 0
     for i, data in enumerate(dataloader):
         from models.experimental.vadv2.demo.data_container import DataContainer
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - start")
 
         for k, v in data.items():
             if isinstance(v, DataContainer):
@@ -300,12 +381,19 @@ def single_cpu_test_tt(
 
             data[k] = v
 
+        img_tensor = data["img"][0]
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - pre to_ttnn")
+
+        tt_img = ttnn.from_torch(img_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - post to_ttnn")
+
         with torch.no_grad():
             result = tt_model(
                 return_loss=False,
-                img=[
-                    [ttnn.from_torch(data["img"][0], dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)]
-                ],
+                img=[[tt_img]],
                 img_metas=[[data["img_metas"]]],
                 gt_bboxes_3d=[[data["gt_bboxes_3d"]]],
                 gt_labels_3d=[[data["gt_labels_3d"]]],
@@ -316,9 +404,17 @@ def single_cpu_test_tt(
                 ego_lcf_feat=[data["ego_lcf_feat"]],
                 gt_attr_labels=[[data["gt_attr_labels"]]],
             )
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - post inference")
+
+        del tt_img
+        del img_tensor
         results.extend(result)
 
-        if vis_dir and vis_count < max_vis_images:
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - post extend")
+
+        if enable_visualization and vis_dir and vis_count < max_vis_images:
             os.makedirs(vis_dir, exist_ok=True)
             for result_item in result:
                 if vis_count >= max_vis_images:
@@ -336,9 +432,8 @@ def single_cpu_test_tt(
         for _ in range(batch_size):
             prog_bar.update()
 
-        print(
-            "==================================================one iteration is doneee ============================================================"
-        )
+        if MEMORY_DEBUG:
+            log_memory_usage(f"tt inference iter {i} - end")
 
     return results
 
@@ -370,15 +465,18 @@ def test_torch_demo(model_location_generator):
     cfg = Config.fromfile(os.path.join(os.path.dirname(__file__), "config.py"))
     # # 2. Build dataloader
     dataloader = Runner.build_dataloader(cfg.val_dataloader)
+    if MEMORY_DEBUG:
+        log_memory_usage("torch demo - post dataloader init")
     time_tag = time.strftime("%Y%m%d_%H%M%S")
-    vis_dir = osp.join("test", "vad_torch_results", time_tag, "visualizations")
+    vis_dir = osp.join("test", "vad_torch_results", time_tag, "visualizations") if ENABLE_VISUALIZATION else None
     outputs = single_cpu_test(
         torch_model,
         dataloader,
         vis_dir=vis_dir,
         class_names=cfg.get("class_names"),
-        max_vis_images=4,
+        max_vis_images=4 if ENABLE_VISUALIZATION else 0,
         score_thr=0.2,
+        enable_visualization=ENABLE_VISUALIZATION,
     )
 
     tmp = {}
@@ -410,12 +508,16 @@ def single_cpu_test(
     class_names=None,
     max_vis_images=0,
     score_thr=0.2,
+    enable_visualization=True,
 ):
     results = []
     prog_bar = ProgressBar(81)
     vis_count = 0
     for i, data in enumerate(dataloader):
         from models.experimental.vadv2.demo.data_container import DataContainer
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"torch demo iter {i} - start")
 
         for k, v in data.items():
             if isinstance(v, DataContainer):
@@ -443,9 +545,14 @@ def single_cpu_test(
                 ego_lcf_feat=[data["ego_lcf_feat"]],
                 gt_attr_labels=[[data["gt_attr_labels"]]],
             )
+        if MEMORY_DEBUG:
+            log_memory_usage(f"torch demo iter {i} - post inference")
         results.extend(result)
 
-        if vis_dir and vis_count < max_vis_images:
+        if MEMORY_DEBUG:
+            log_memory_usage(f"torch demo iter {i} - post extend")
+
+        if enable_visualization and vis_dir and vis_count < max_vis_images:
             os.makedirs(vis_dir, exist_ok=True)
             for result_item in result:
                 if vis_count >= max_vis_images:
@@ -462,5 +569,8 @@ def single_cpu_test(
         batch_size = len(result)
         for _ in range(batch_size):
             prog_bar.update()
+
+        if MEMORY_DEBUG:
+            log_memory_usage(f"torch demo iter {i} - end")
 
     return results
