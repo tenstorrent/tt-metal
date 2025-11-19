@@ -247,6 +247,8 @@ DEFAULT_COLOR_PALETTE = [
     (0, 191, 255),
 ]
 
+DEFAULT_GROUND_Z = -1.6
+
 BOX_EDGES = [
     (0, 1),
     (1, 2),
@@ -286,6 +288,70 @@ def _project_corners_to_image(corners, lidar2img):
     return coords
 
 
+def _project_polyline(points, lidar2img):
+    points = np.asarray(points)
+    if points.ndim != 2 or points.shape[0] < 2:
+        return None
+    if points.shape[1] == 2:
+        zeros = np.zeros((points.shape[0], 1), dtype=points.dtype)
+        points3d = np.concatenate([points, zeros], axis=1)
+    else:
+        points3d = points
+    points_homo = np.concatenate([points3d, np.ones((points3d.shape[0], 1), dtype=points3d.dtype)], axis=1)
+    projections = points_homo @ lidar2img.T
+    depths = projections[:, 2]
+    valid = depths > 1.0e-3
+    if valid.sum() < 2:
+        return None
+    coords = projections[:, :2] / np.clip(depths[:, None], 1.0e-3, None)
+    coords[~valid] = np.nan
+    return coords
+
+
+def _prepare_agent_trajectory(traj_entry, fut_ts=None):
+    arr = np.asarray(traj_entry)
+    if arr.size == 0:
+        return None
+    if arr.ndim == 3 and arr.shape[-1] == 2:
+        arr = arr[0]
+    elif arr.ndim == 4 and arr.shape[-1] == 2:
+        arr = arr[0, 0]
+    elif arr.ndim == 2 and arr.shape[-1] != 2:
+        arr = arr.reshape(-1, 2)
+    elif arr.ndim != 2:
+        arr = arr.reshape(-1, 2)
+    if arr.shape[-1] != 2:
+        arr = arr.reshape(-1, 2)
+    if fut_ts is not None and fut_ts > 0 and arr.shape[0] > fut_ts:
+        arr = arr[:fut_ts]
+    arr = np.cumsum(arr, axis=0)
+    arr = np.vstack([np.zeros((1, 2), dtype=arr.dtype), arr])
+    return arr
+
+
+def _prepare_ego_trajectory(ego_preds, ego_cmd=None):
+    if ego_preds is None:
+        return None
+    arr = np.asarray(ego_preds)
+    if arr.ndim == 3 and arr.shape[-1] == 2:
+        mode_idx = 0
+        if ego_cmd is not None:
+            cmd = np.asarray(ego_cmd).reshape(-1)
+            if cmd.size > 0:
+                mode_idx = int(np.argmax(cmd))
+                mode_idx = np.clip(mode_idx, 0, arr.shape[0] - 1)
+        arr = arr[mode_idx]
+    elif arr.ndim == 2 and arr.shape[-1] == 2:
+        pass
+    else:
+        arr = arr.reshape(-1, 2)
+    if arr.shape[-1] != 2:
+        arr = arr.reshape(-1, 2)
+    arr = np.cumsum(arr, axis=0)
+    arr = np.vstack([np.zeros((1, 2), dtype=arr.dtype), arr])
+    return arr
+
+
 def _camera_name_from_path(path):
     parent = osp.basename(osp.dirname(path))
     return parent if parent else "camera"
@@ -314,10 +380,14 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
     boxes_3d = pred_dict.get("boxes_3d")
     scores_3d = pred_dict.get("scores_3d")
     labels_3d = pred_dict.get("labels_3d")
+    lane_pts = pred_dict.get("map_pts_3d")
+    lane_scores = pred_dict.get("map_scores_3d")
+    lane_labels = pred_dict.get("map_labels_3d")
     if boxes_3d is None or scores_3d is None or labels_3d is None:
         return
 
     boxes_3d = boxes_3d.to("cpu")
+    box_tensor = boxes_3d.tensor.cpu().numpy()
     corners_3d = boxes_3d.corners.cpu().numpy()
     scores_3d = scores_3d.detach().cpu().numpy()
     labels_3d = labels_3d.detach().cpu().numpy()
@@ -329,8 +399,52 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
     corners_3d = corners_3d[valid_mask]
     scores_3d = scores_3d[valid_mask]
     labels_3d = labels_3d[valid_mask]
-    if corners_3d.size == 0:
-        return
+    box_tensor = box_tensor[valid_mask]
+    if corners_3d.size > 0:
+        ground_z = float(np.min(corners_3d[..., 2]))
+    else:
+        ground_z = DEFAULT_GROUND_Z
+
+    lane_pts_np = None
+    lane_labels_np = None
+    if lane_pts is not None and lane_scores is not None and lane_labels is not None:
+        lane_scores_np = np.asarray(lane_scores.detach().cpu().numpy())
+        lane_mask = lane_scores_np >= score_thr
+        if np.any(lane_mask):
+            lane_pts_np = np.asarray(lane_pts.detach().cpu().numpy())[lane_mask]
+            lane_labels_np = np.asarray(lane_labels.detach().cpu().numpy())[lane_mask]
+            if lane_pts_np.ndim == 3 and lane_pts_np.shape[-1] == 2:
+                zeros = np.zeros((*lane_pts_np.shape[:-1], 1), dtype=lane_pts_np.dtype)
+                lane_pts_np = np.concatenate([lane_pts_np, zeros], axis=-1)
+            if lane_pts_np.ndim == 3 and lane_pts_np.shape[-1] == 3:
+                lane_pts_np[..., 2] = ground_z
+        else:
+            lane_pts_np = None
+
+    agent_trajs_np = None
+    raw_agent_trajs = pred_dict.get("trajs_3d")
+    if raw_agent_trajs is not None:
+        if isinstance(raw_agent_trajs, torch.Tensor):
+            agent_trajs_np = raw_agent_trajs.detach().cpu().numpy()
+        else:
+            agent_trajs_np = np.asarray(raw_agent_trajs)
+        if agent_trajs_np.shape[0] == valid_mask.shape[0]:
+            agent_trajs_np = agent_trajs_np[valid_mask]
+        else:
+            agent_trajs_np = None
+
+    ego_preds = pred_dict.get("ego_fut_preds")
+    ego_cmd = pred_dict.get("ego_fut_cmd")
+    ego_traj_xy = None
+    if ego_preds is not None:
+        ego_np = ego_preds.detach().cpu().numpy() if isinstance(ego_preds, torch.Tensor) else np.asarray(ego_preds)
+        ego_cmd_np = (
+            (ego_cmd.detach().cpu().numpy() if isinstance(ego_cmd, torch.Tensor) else np.asarray(ego_cmd))
+            if ego_cmd is not None
+            else None
+        )
+        ego_traj_xy = _prepare_ego_trajectory(ego_np, ego_cmd_np)
+    fut_ts = ego_traj_xy.shape[0] - 1 if ego_traj_xy is not None else None
 
     lidar2img_list = img_metas.get("lidar2img", [])
     filenames = img_metas.get("filename", [])
@@ -388,6 +502,55 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
                 fontsize=8,
                 bbox=dict(facecolor=color_tuple + (0.4,), edgecolor="none", pad=0.4),
             )
+
+            if agent_trajs_np is not None and idx < agent_trajs_np.shape[0]:
+                agent_rel = _prepare_agent_trajectory(agent_trajs_np[idx], fut_ts)
+                if agent_rel is not None and agent_rel.shape[0] >= 2:
+                    center_xy = box_tensor[idx, :2]
+                    agent_world_xy = agent_rel + center_xy
+                    agent_points3d = np.column_stack(
+                        [agent_world_xy, np.full((agent_world_xy.shape[0]), ground_z, dtype=agent_world_xy.dtype)]
+                    )
+                    projected_agent = _project_polyline(agent_points3d, lidar2img)
+                    if projected_agent is not None:
+                        ax.plot(
+                            projected_agent[:, 0],
+                            projected_agent[:, 1],
+                            color=color_tuple,
+                            linewidth=1.5,
+                            linestyle="--",
+                            alpha=0.9,
+                        )
+
+        if lane_pts_np is not None:
+            for lane_idx, lane in enumerate(lane_pts_np):
+                projected_lane = _project_polyline(lane, lidar2img)
+                if projected_lane is None:
+                    continue
+                lane_palette_idx = int(lane_labels_np[lane_idx]) % len(color_palette) if len(color_palette) > 0 else 0
+                lane_color_rgb = np.array(color_palette[lane_palette_idx], dtype=np.float32) / 255.0
+                lane_color = tuple(lane_color_rgb.tolist())
+                ax.plot(
+                    projected_lane[:, 0],
+                    projected_lane[:, 1],
+                    color=lane_color,
+                    linewidth=2.0,
+                    alpha=0.8,
+                )
+
+        if ego_traj_xy is not None and ego_traj_xy.shape[0] >= 2:
+            ego_points3d = np.column_stack(
+                [ego_traj_xy, np.full((ego_traj_xy.shape[0]), ground_z, dtype=ego_traj_xy.dtype)]
+            )
+            projected_ego = _project_polyline(ego_points3d, lidar2img)
+            if projected_ego is not None:
+                ax.plot(
+                    projected_ego[:, 0],
+                    projected_ego[:, 1],
+                    color=(1.0, 0.0, 1.0),
+                    linewidth=2.5,
+                    alpha=0.9,
+                )
 
         ax.axis("off")
         fig.tight_layout(pad=0)
