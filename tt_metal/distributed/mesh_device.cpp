@@ -602,12 +602,59 @@ bool MeshDevice::close() {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 
+    for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
+        if (dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+            auto parent_mesh = get_parent_mesh();
+            if (parent_mesh && parent_mesh->are_parents_in_use(cq_id)) {
+                TT_THROW("MeshDevice cq ID {} is in use by parent mesh ID {}", cq_id, get_parent_mesh()->id());
+            }
+
+            for (const auto& submesh : submeshes_) {
+                if (auto submesh_ptr = submesh.lock()) {
+                    if (submesh_ptr->are_children_in_use(cq_id)) {
+                        TT_THROW(
+                            "MeshDevice cq ID {} is in use by submesh ID {} of mesh ID {}",
+                            cq_id,
+                            submesh_ptr->id(),
+                            id());
+                    }
+                }
+            }
+        }
+    }
+
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
     is_internal_state_initialized = false;
     return true;
+}
+
+bool MeshDevice::are_parents_in_use(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() &&
+        dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+        return true;
+    }
+    if (parent_mesh_) {
+        return parent_mesh_->are_parents_in_use(cq_id);
+    }
+    return false;
+}
+
+bool MeshDevice::are_children_in_use(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() &&
+        dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+        return true;
+    }
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            if (submesh_ptr->are_children_in_use(cq_id)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 std::string MeshDevice::to_string() const {
