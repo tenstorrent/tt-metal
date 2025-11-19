@@ -28,7 +28,9 @@ using namespace tt::tt_fabric::mesh::experimental;
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
 //   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState)
 //   2: TOTAL_PAGES
-//   3: PAGE_SIZE
+//   3: PAGE_SIZE (actual data size to transfer)
+//   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
+//   5: SRC_ALIGNED_PAGE_SIZE (source CB stride for scatter operations)
 //
 // RT args (must match host):
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
@@ -46,6 +48,8 @@ void kernel_main() {
     constexpr uint32_t API_VARIANT = get_compile_time_arg_val(CTA_BASE + 1);
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 2);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
+    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 4);
+    constexpr uint32_t SRC_ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 5);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     // Cast to enum types for clearer comparisons
@@ -95,7 +99,10 @@ void kernel_main() {
 
     sender.open<true>();
 
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
+    // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
+    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
+    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
+    const auto scatter_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;
@@ -110,11 +117,12 @@ void kernel_main() {
             auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
             header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{initial_noc_addr}, PAGE_SIZE);
         } else if constexpr (operation_type == OperationType::Scatter) {
-            auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
-            auto noc_addr1 = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 1, 0);
+            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+            auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
+            auto noc_addr1 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 1, 0);
             header->to_noc_unicast_scatter_write(
-                tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(PAGE_SIZE)},
-                PAGE_SIZE * 2);
+                tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
+                SRC_ALIGNED_PAGE_SIZE * 2);
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
             auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
             header->to_noc_fused_unicast_write_atomic_inc(
@@ -130,11 +138,12 @@ void kernel_main() {
                 0  // page_id for initial configuration
             );
         } else if constexpr (operation_type == OperationType::Scatter) {
+            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
             fabric_unicast_noc_scatter_write_set_state(
                 header,
                 dst_dev_id,
                 dst_mesh_id,
-                dst_acc,
+                scatter_acc,
                 0,  // page_id0
                 1,  // page_id1
                 0,  // offset0
@@ -189,6 +198,7 @@ void kernel_main() {
                 );
             }
         } else if constexpr (operation_type == OperationType::Scatter) {
+            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
             if constexpr (api_variant == ApiVariant::Basic) {
                 fabric_unicast_noc_scatter_write(
                     &sender,
@@ -196,7 +206,7 @@ void kernel_main() {
                     dst_dev_id,
                     dst_mesh_id,
                     src_l1_addr,
-                    dst_acc,
+                    scatter_acc,
                     i,      // page_id0
                     i + 1,  // page_id1
                     0,      // offset0
@@ -209,7 +219,7 @@ void kernel_main() {
                     dst_dev_id,
                     dst_mesh_id,
                     src_l1_addr,
-                    dst_acc,
+                    scatter_acc,
                     i,      // page_id0
                     i + 1,  // page_id1
                     0,      // offset0
