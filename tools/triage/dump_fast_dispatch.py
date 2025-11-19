@@ -305,8 +305,7 @@ def run(args, context: Context):
     dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
-    # Map unique_id to device for lookup
-    unique_id_to_device = {device.unique_id: device for device in run_checks.devices}
+    # Remove the line: unique_id_to_device = {device.unique_id: device for device in run_checks.devices}
 
     # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
@@ -314,8 +313,7 @@ def run(args, context: Context):
         if not info.has_any_info():
             continue
 
-        # Get device by unique_id
-        device = unique_id_to_device.get(chip_unique_id)
+        device = run_checks.get_device_by_unique_id(chip_unique_id)
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 
