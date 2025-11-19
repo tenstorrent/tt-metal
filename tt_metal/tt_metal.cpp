@@ -557,7 +557,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE: {
-                ReadFromDeviceDRAMChannel(device, bank_index, address, std::span<uint8_t>(page.data(), page.size()));
+                ReadFromDeviceDRAMChannel(device, bank_index, address, std::span<uint8_t>(page));
             } break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
