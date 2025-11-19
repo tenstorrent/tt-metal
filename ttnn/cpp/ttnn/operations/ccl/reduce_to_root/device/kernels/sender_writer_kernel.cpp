@@ -12,19 +12,24 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
-    constexpr uint32_t cb_id_l = get_compile_time_arg_val(0);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t alignment = get_compile_time_arg_val(3);
-    constexpr uint32_t core_noc_x = get_compile_time_arg_val(4);
-    constexpr uint32_t core_noc_y = get_compile_time_arg_val(5);
-    constexpr auto dst_buffer_args = TensorAccessorArgs<6>();
+    constexpr uint32_t accessor_2_idx = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_l = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_s = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_m = get_compile_time_arg_val(3);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t alignment = get_compile_time_arg_val(6);
+    constexpr uint32_t core_noc_x = get_compile_time_arg_val(7);
+    constexpr uint32_t core_noc_y = get_compile_time_arg_val(8);
+    constexpr auto dst_buffer_args = TensorAccessorArgs<9>();
+    constexpr auto dst_buffer_2_args = TensorAccessorArgs<accessor_2_idx>();
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
-    const auto page_idx_start = get_arg_val<uint32_t>(1);
-    const auto page_idx_end = get_arg_val<uint32_t>(2);
+    const uint32_t receiver_base_address_2 = get_arg_val<uint32_t>(1);
+    const auto page_idx_start = get_arg_val<uint32_t>(2);
+    const auto page_idx_end = get_arg_val<uint32_t>(3);
     const uint8_t dst_num_hops = 1;  // get_arg_val<uint32_t>(3);
     const auto page_size_bytes = get_arg_val<uint32_t>(4);
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
@@ -32,14 +37,14 @@ void kernel_main() {
     // send a single packet for m and s tensors (2 pages: 1 each)
     const auto max_pages_per_packet_l = 8;  // get_arg_val<uint32_t>(6);
     const auto max_pages_per_packet_ms = 2;
-    const auto page_segments = get_arg_val<uint32_t>(7);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
-    const bool dst_is_forward = get_arg_val<uint32_t>(9);
+    const auto page_segments = get_arg_val<uint32_t>(6);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
+    const bool dst_is_forward = get_arg_val<uint32_t>(8);
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 9;
+    size_t conn_arg_idx = 8;
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -75,8 +80,9 @@ void kernel_main() {
         tt::point_to_point::common::connection_direction_collection(dst_is_forward, fabric_connection);
 
     // uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address, 0);
+
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        cb_wait_front(sender_cb_id, 1);
+        cb_wait_front(cb_id_l, 1);
         const uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             const uint32_t page_offset = page_segment_idx * payload_size_bytes;
@@ -128,9 +134,12 @@ void kernel_main() {
     // packet_header_ptr->to_noc_unicast_write(NocUnicastCommandHeader{dst_noc_addr}, packet_size_bytes_ms);
     // perform_payload_send(connection_direction, packet_base_addr, total_payload_size_ms, packet_header_ptr);
 
-    const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
+    const auto dst_buffer_2 = TensorAccessor(dst_buffer_2_args, receiver_base_address_2, payload_size_bytes);
+
+    uint32_t packet_idx_sm = 0;  // separate index for m and s packet
+    const uint64_t dst_noc_addr = get_noc_addr(packet_idx_sm, dst_buffer_2, 0, 0);
     tt::tt_fabric::linear::to_noc_unicast_write(
-        align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
+        align(payload_size_bytes, alignment), packet_header_ptr, packet_idx_sm, dst_buffer_2);
     perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);

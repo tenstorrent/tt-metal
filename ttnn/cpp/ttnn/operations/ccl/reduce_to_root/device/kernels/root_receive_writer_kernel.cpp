@@ -22,13 +22,14 @@ inline write_data(
     uint32_t cb_int_cb_m,
     uint32_t onetile) {
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
-    for (uint32_t i = 0; i < num_tiles_l; ++i) {
-        cb_wait_front(cb_int_cb_l, onetile);
+    uint32_t chunk_size = 8;
+    for (uint32_t i = 0; i < num_tiles_l / chunk_size; ++i) {
+        cb_wait_front(cb_int_cb_l, chunk_size);
         uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
-        noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
-        dst_noc_addr += onetile * page_bytes;
+        noc_async_write(l1_read_addr, dst_noc_addr, chunk_size * page_bytes);
+        dst_noc_addr += chunk_size * page_bytes;
         noc_async_write_barrier();
-        cb_pop_front(cb_int_cb_l, onetile);
+        cb_pop_front(cb_int_cb_l, chunk_size);
     }
 
     // for tensor s
@@ -58,9 +59,9 @@ void kernel_main() {
 
     constexpr core_noc_x = get_compile_time_arg_val(0);
     constexpr core_noc_y = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_int_cb_l = 0;
-    constexpr uint32_t cb_int_cb_s = 1;
-    constexpr uint32_t cb_int_cb_m = 2;
+    constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(4);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
