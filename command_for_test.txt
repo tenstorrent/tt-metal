@@ -1,0 +1,1 @@
+opencode run -m opencode/gemini-3-pro "complete the instructions defined in llm_task.txt in the current directory. do not wait for approval as this is a test run for a CI environment where you will not have access to a user"
