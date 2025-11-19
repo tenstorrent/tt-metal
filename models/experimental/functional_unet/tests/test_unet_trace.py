@@ -10,8 +10,8 @@ from ttnn.device import is_wormhole_b0
 
 from loguru import logger
 
+from models.tt_cnn.tt.testing import create_random_input_tensor
 from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
     create_unet_model_parameters,
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -75,7 +75,7 @@ def test_unet_trace_2cq(
     device,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=True)
+    torch_input, ttnn_input = create_random_input_tensor(batch, groups, channel_order="first", pad=False, fold=True)
 
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
@@ -202,7 +202,7 @@ def test_unet_trace_2cq_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
+    torch_input, ttnn_input = create_random_input_tensor(batch, groups)
 
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
@@ -213,7 +213,7 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Using {num_devices} devices for this test")
 
     total_batch = num_devices * batch
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         total_batch, groups, channel_order="first", pad=False, fold=True, mesh_mapper=inputs_mesh_mapper
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
