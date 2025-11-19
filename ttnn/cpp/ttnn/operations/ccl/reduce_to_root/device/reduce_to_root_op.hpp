@@ -154,6 +154,7 @@ device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t
     const ReduceToRootOp::tensor_args_t& tensor_args,
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& device_coordinate,
     ReduceToRootOp::tensor_return_value_t& output_tensor,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl

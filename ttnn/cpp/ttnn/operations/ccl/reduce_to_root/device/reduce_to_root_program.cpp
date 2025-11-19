@@ -16,6 +16,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const ReduceToRootOp::tensor_args_t& tensor_args,
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
+    const MeshCoordinate& device_coordinate,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor[0].device());
@@ -38,18 +39,19 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // check which device is this one based on coordinates
     auto device = input_tensor_l.device();
-    auto mesh_device = device->get_mesh_device();
-    auto mesh_shape = mesh_device->get_mesh_shape();
+    auto mesh_shape = mesh_device->shape();
     bool is_root_device = false;
     bool is_root2_device = false;
     bool is_sender_device = false;
 
-    if (mesh_device[0] == root_coord.x && mesh_device[1] == root_coord.y) {
+    if (device_coordinate == root_coord) {
         // this is the root device
         is_root_device = true;
     } else if (
-        mesh_device[1] == root_coord.y && (mesh_device[0] == root_coord.x - 1 || mesh_device[0] == root_coord.x + 1) &&
-        mesh_device[0] != 0 && mesh_device[0] != mesh_shape.x - 1) {
+        device_coordinate.coords()[1] == root_coord.coords()[1] &&
+        (device_coordinate.coords()[0] == root_coord.coords()[0] - 1 ||
+         device_coordinate.coords()[0] == root_coord.coords()[0] + 1) &&
+        device_coordinate.coords()[0] != 0 && device_coordinate.coords()[0] != mesh_shape[0] - 1) {
         // this is the intermediate device
         is_root2_device = true;
     } else {
@@ -67,8 +69,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // basic accounting
     const uint32_t input_l_num_pages = data_movement::get_num_pages(input_tensor_l);
-    const uint32_t input_s_num_pages = data_movement::get_num_pages(input_tensor_s);
-    const uint32_t input_m_num_pages = data_movement::get_num_pages(input_tensor_m);
+
     const uint32_t input_page_size_bytes =
         input_tensor_l.tensor_spec().compute_page_size_bytes();  // same page size: assuming all are tiny tiles
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -80,9 +81,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // eventually add more cores for multi-link
     const CoreCoord use_cores = {1, 1};
-    const CoreRangeSet all_cores = CoreRangeSet::from_core_coord(use_cores);
-    [ num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2 ] =
-        tt::tt_metal::split_work_to_cores(use_cores, total_packets);
+    const auto
+        [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(use_cores, total_packets);
 
     printf("num cores: %u \n", num_cores);
     printf("total packets: %u \n", total_packets);
@@ -93,16 +94,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // sdpa compute values
     uint32_t q_heads_parallel_factor = 1;
-    auto tile_shape = input_tensor_l.tensor_spec().tile_shape();
-    auto tile_width = tile_shape[0];
-    auto tile_height = tile_shape[1];
+    const auto tile_width = input_tensor_l.tensor_spec().tile().get_width();
+    const auto tile_height = input_tensor_l.tensor_spec().tile().get_height();
     uint32_t head_dim_v = 64;
     bool use_mla = true;
-    auto q_shape = {1, 1, 8, 64};
-    auto k_shape = {1, 8, 64, 64};
-    uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
+    // q_shape = {1, 1, 8, 64};
+    // k_shape = {1, 8, 64, 64};
+    uint32_t PNH = 8, DH = 64;
     uint32_t DHt = DH / tile_width;
-    uint32_t vDHt = use_mla ? head_dim_v / tile_width : DHt;
+    uint32_t vDHT = use_mla ? head_dim_v / tile_width : DHt;
     uint32_t Sq_chunk_t = PNH / q_heads_parallel_factor / tile_height;
 
     // Create buffers
@@ -149,8 +149,27 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(compute_cb_m, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_compute_m_config);
 
+    constexpr auto compute_cb_2_l = tt::CBIndex::c_6;
+    tt::tt_metal::CircularBufferConfig cb_compute_2_l_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
+            .set_page_size(compute_cb_2_l, aligned_input_page_size_bytes);
+    CreateCircularBuffer(program, all_cores, cb_compute_2_l_config);
+
+    constexpr auto compute_cb_2_s = tt::CBIndex::c_7;
+    tt::tt_metal::CircularBufferConfig cb_compute_2_s_config =
+        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_2_s, input_dataformat}})
+            .set_page_size(compute_cb_2_s, aligned_input_page_size_bytes);
+    CreateCircularBuffer(program, all_cores, cb_compute_2_s_config);
+
+    constexpr auto compute_cb_2_m = tt::CBIndex::c_8;
+    tt::tt_metal::CircularBufferConfig cb_compute_2_m_config =
+        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_2_m, input_dataformat}})
+            .set_page_size(compute_cb_2_m, aligned_input_page_size_bytes);
+    CreateCircularBuffer(program, all_cores, cb_compute_2_m_config);
+
     // allocate space for packet headers for payload sempahore
-    constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
+    constexpr auto packet_header_cb_id = tt::CBIndex::c_9;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -161,55 +180,54 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_header_config);
 
-    constexpr auto packet_cb_id = tt::CBIndex::c_7;
+    constexpr auto packet_cb_id = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, input_dataformat}})
             .set_page_size(packet_cb_id, packet_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_packet_config);
 
     // intermediate buffers for root and root2
-    constexpr auto intermediate_cb_l = tt::CBIndex::c_8;
+    constexpr auto intermediate_cb_l = tt::CBIndex::c_11;
     const uint32_t intermediate_cb_l_size_bytes = 8 * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_l_config =
         tt::tt_metal::CircularBufferConfig(intermediate_cb_l_size_bytes, {{intermediate_cb_l, input_dataformat}})
             .set_page_size(intermediate_cb_l, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_intermediate_l_config);
 
-    constexpr auto intermediate_cb_s = tt::CBIndex::c_9;
+    constexpr auto intermediate_cb_s = tt::CBIndex::c_12;
     const uint32_t intermediate_cb_s_size_bytes = 1 * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_s_config =
         tt::tt_metal::CircularBufferConfig(intermediate_cb_s_size_bytes, {{intermediate_cb_s, input_dataformat}})
             .set_page_size(intermediate_cb_s, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_intermediate_s_config);
 
-    constexpr auto intermediate_cb_m = tt::CBIndex::c_10;
+    constexpr auto intermediate_cb_m = tt::CBIndex::c_13;
     const uint32_t intermediate_cb_m_size_bytes = 1 * aligned_input_page_size_bytes;
     tt::tt_metal::CircularBufferConfig cb_intermediate_m_config =
         tt::tt_metal::CircularBufferConfig(intermediate_cb_m_size_bytes, {{intermediate_cb_m, input_dataformat}})
             .set_page_size(intermediate_cb_m, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_intermediate_m_config);
 
-    constexpr auto compute_out_cb_l = tt::CBIndex::c_11;
-    constexpr auto cb_compute_num_pages = 8;
+    constexpr auto compute_out_cb_l = tt::CBIndex::c_14;
     tt::tt_metal::CircularBufferConfig cb_compute_out_l_config =
         tt::tt_metal::CircularBufferConfig(
             cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_out_cb_l, input_dataformat}})
             .set_page_size(compute_out_cb_l, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_compute_out_l_config);
 
-    constexpr auto compute_out_cb_s = tt::CBIndex::c_12;
+    constexpr auto compute_out_cb_s = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig cb_compute_out_s_config =
         tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_out_cb_s, input_dataformat}})
             .set_page_size(compute_out_cb_s, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_compute_out_s_config);
 
-    constexpr auto compute_out_cb_m = tt::CBIndex::c_13;
+    constexpr auto compute_out_cb_m = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_compute_out_m_config =
         tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_out_cb_m, input_dataformat}})
             .set_page_size(compute_out_cb_m, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_compute_out_m_config);
 
-    constexpr auto cb_exp_max_diff_2 = tt::CBIndex::c_14;
+    constexpr auto cb_exp_max_diff_2 = tt::CBIndex::c_17;
     constexpr auto cb_exp_num_pages = 8;
     tt::tt_metal::CircularBufferConfig cb_exp_max_diff_2_config =
         tt::tt_metal::CircularBufferConfig(
@@ -217,30 +235,31 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(cb_exp_max_diff_2, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_exp_max_diff_2_config);
 
-    constexpr auto cb_exp_max_diff = tt::CBIndex::c_15;
+    constexpr auto cb_exp_max_diff = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig cb_exp_max_diff_config =
         tt::tt_metal::CircularBufferConfig(
             cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff, input_dataformat}})
             .set_page_size(cb_exp_max_diff, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_exp_max_diff_config);
 
-    constexpr auto cb_out_accumulate_im = tt::CBIndex::c_16;
+    constexpr auto cb_out_accumulate_im = tt::CBIndex::c_19;
     tt::tt_metal::CircularBufferConfig cb_out_accumulate_im_config =
         tt::tt_metal::CircularBufferConfig(
             cb_exp_num_pages * vDHT * aligned_input_page_size_bytes, {{cb_out_accumulate_im, input_dataformat}})
             .set_page_size(cb_out_accumulate_im, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_out_accumulate_im_config);
 
+    auto data_core = CoreCoord(0, 0);  // depends where the data is located
+    auto data_core_coord = device->worker_core_from_logical_core(data_core);
+    auto core_noc_x = data_core_coord.x;
+    auto core_noc_y = data_core_coord.y;
     // Create different kernels
-    tt::tt_metal::KernelHandle reader_kernel;
-    tt::tt_metal::KernelHandle writer_kernel;
-    tt::tt_metal::KernelHandle compute_kernel;
+    tt::tt_metal::KernelHandle reader_kernel = 0;
+    tt::tt_metal::KernelHandle writer_kernel = 0;
     std::vector<uint32_t> reader_ct_args;
     std::vector<uint32_t> writer_ct_args;
     std::vector<uint32_t> compute_ct_args;
-    auto data_core = CoreCoord(0, 0);  // depends where the data is located
     if (is_sender_device) {
-        auto data_core_coord = device->worker_core_from_logical_core(data_core);
         reader_ct_args = {data_core_coord.x, data_core_coord.y};
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -270,20 +289,20 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     }
 
     else if (is_root_device) {
-        reader_ct_args =
-            {0,
-             packet_header_cb_id,
-             packet_cb_id,
-             compute_cb_l,
-             compute_cb_s,
-             compute_cb_m,
-             l1_alignment,
-             compute_cb_2_l,
-             compute_cb_2_s,
-             compute_cb_2_m,
-             core_noc_x,
-             core_noc_y} tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer())
-                .append_to(reader_ct_args);
+        reader_ct_args = {
+            0,
+            packet_header_cb_id,
+            packet_cb_id,
+            compute_cb_l,
+            compute_cb_s,
+            compute_cb_m,
+            l1_alignment,
+            compute_cb_2_l,
+            compute_cb_2_s,
+            compute_cb_2_m,
+            core_noc_x,
+            core_noc_y};
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
         reader_ct_args[0] = reader_ct_args.size();
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
 
@@ -293,34 +312,33 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-        writer_ct_args =
-            {
-                core_noc_x,
-                core_noc_y,
-                compute_out_cb_l,
-                compute_out_cb_s,
-                compute_out_cb_m,
-            } writer_kernel =
-                tt::tt_metal::CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root_receive_writer_kernel.cpp",
-                    all_cores,
-                    tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        writer_ct_args = {
+            core_noc_x,
+            core_noc_y,
+            compute_out_cb_l,
+            compute_out_cb_s,
+            compute_out_cb_m,
+        };
+        writer_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root_receive_writer_kernel.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     } else if (is_root2_device) {
-        reader_ct_args =
-            {0,
-             packet_header_cb_id,
-             packet_cb_id,
-             compute_cb_l,
-             compute_cb_s,
-             compute_cb_m,
-             l1_alignment,
-             compute_cb_2_l,
-             compute_cb_2_s,
-             compute_cb_2_m,
-             core_noc_x,
-             core_noc_y} tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer())
-                .append_to(reader_ct_args);
+        reader_ct_args = {
+            0,
+            packet_header_cb_id,
+            packet_cb_id,
+            compute_cb_l,
+            compute_cb_s,
+            compute_cb_m,
+            l1_alignment,
+            compute_cb_2_l,
+            compute_cb_2_s,
+            compute_cb_2_m,
+            core_noc_x,
+            core_noc_y};
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
         reader_ct_args[0] = reader_ct_args.size();
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
         reader_kernel = tt::tt_metal::CreateKernel(
@@ -356,51 +374,53 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         // TODO: not sure of this value cause it will end up being 0, so I will set to 1 for now
         scale_fp32 = 1;
         uint32_t loop_size = is_root_device ? 2 : 1;
-        compute_ct_args =
-            {
-                compute_cb_2_l,
-                compute_out_cb_l,
-                compute_cb_l,
-                compute_cb_2_s,
-                compute_cb_m,
-                compute_cb_2_m,
-                compute_out_cb_m,
-                cb_exp_max_diff_2,
-                compute_cb_s,
-                cb_exp_max_diff,
-                compute_out_cb_s,
-                cb_out_accumulate_im,
-                scale_fp32,
-                Sq_chunk_t,
-                vDHt,
-                loop_size,
-            } compute_kernel =
-                tt::tt_metal::CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel.cpp",
-                    all_cores,
-                    tt::tt_metal::ComputeDataMovementConfig(compute_ct_args));
+        compute_ct_args = {
+            compute_cb_2_l,
+            compute_out_cb_l,
+            compute_cb_l,
+            compute_cb_2_s,
+            compute_cb_m,
+            compute_cb_2_m,
+            compute_out_cb_m,
+            cb_exp_max_diff_2,
+            compute_cb_s,
+            cb_exp_max_diff,
+            compute_out_cb_s,
+            cb_out_accumulate_im,
+            scale_fp32,
+            Sq_chunk_t,
+            vDHT,
+            loop_size,
+        };
+        tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel.cpp",
+            all_cores,
+            tt::tt_metal::ComputeConfig{
+                .compile_args = compute_ct_args,
+            });
     }
 
     // set runtime args
-    MeshCoordinate send_coord;
-    MeshCoordinate receive_coord;
+    MeshCoordinate send_coord = {0, 0};
+    MeshCoordinate receive_coord = {0, 0};
     if (is_sender_device) {
-        if (mesh_device[0] == 0) {
+        if (device_coordinate.coords()[0] == 0) {
             // left sender
-            send_coord = MeshCoordinate(mesh_device[0], mesh_device[1]);
-            receive_coord = MeshCoordinate(mesh_device[0] + 1, mesh_device[1]);
+            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            receive_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
         } else {
             // right sender
-            send_coord = MeshCoordinate(mesh_device[0], mesh_device[1]);
-            receive_coord = MeshCoordinate(mesh_device[0] - 1, mesh_device[1]);
+            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
         }
     }
     constexpr auto link_idx = 0;  // for single link implementation
 
-    uint32_t page_idx_start = 0, page_idx_end = 0;
+    // uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> sender_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+        /*
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_packets_per_core_group_1 * num_pages_per_packet;
@@ -411,6 +431,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         }
         increment = std::min(increment, input_num_pages - page_idx_start);
         page_idx_end += increment;
+        */
 
         std::vector<uint32_t> reader_runtime_args;
         std::vector<uint32_t> writer_runtime_args;
@@ -454,8 +475,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
         } else if (is_root_device) {
             auto receive_coord = root_coord;
-            auto sender_coord_1 = MeshCoordinate(root_coord.x - 1, root_coord.y);
-            auto sender_coord_2 = MeshCoordinate(root_coord.x + 1, root_coord.y);
+            auto sender_coord_1 = MeshCoordinate(root_coord.coords()[0] - 1, root_coord.coords()[1]);
+            auto sender_coord_2 = MeshCoordinate(root_coord.coords()[0] + 1, root_coord.coords()[1]);
             const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
 
             const auto [num_hops_1, dst_is_forward_1, next_fabric_id_1] =
@@ -466,13 +487,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             reader_runtime_args = {
                 0,  // fabric_2_idx,
-                input_l.buffer()->address(),
-                input_s.buffer()->address(),
-                input_m.buffer()->address(),
+                input_tensor_l.buffer()->address(),
+                input_tensor_s.buffer()->address(),
+                input_tensor_m.buffer()->address(),
                 // intermediate buffers
-                intermediate_cb_l.address(),
-                intermediate_cb_s.address(),
-                intermediate_cb_m.address(),
+                intermediate_cb_l,
+                intermediate_cb_s,
+                intermediate_cb_m,
                 0,                  // page_idx_start,
                 input_l_num_pages,  // page_idx_end,
                 num_pages_per_packet,
@@ -497,7 +518,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     this_fabric_id, next_fabric_id_1, link_idx, program, c, reader_runtime_args);
             }
             reader_runtime_args[0] = reader_runtime_args.size();
-            reader_runtime_args.emblace_back(dst_is_forward_2);
+            reader_runtime_args.emplace_back(dst_is_forward_2);
             if (dst_is_forward_2) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     this_fabric_id, next_fabric_id_2, link_idx, program, c, reader_runtime_args);
@@ -511,18 +532,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
 
             writer_runtime_args = {
-                intermediate_cb_l.address(),
+                intermediate_cb_l,
                 input_l_num_pages,
-                intermediate_cb_s.address(),
-                intermediate_cb_m.address(),
+                intermediate_cb_s,
+                intermediate_cb_m,
                 output_tensor_l.buffer()->address(),
                 output_tensor_s.buffer()->address(),
                 output_tensor_m.buffer()->address(),
                 input_page_size_bytes,
-            }
+            };
         } else if (is_root2_device) {
-            auto receive_coord = MeshCoordinate(mesh_device[0], mesh_device[1]);
-            auto sender_coord = MeshCoordinate(mesh_device[0] + 1, mesh_device[1]);
+            auto receive_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            auto sender_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
             const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
 
             const auto [num_hops, dst_is_forward, next_fabric_id] =
@@ -556,7 +577,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
 
             auto receive_coord_writer = root_coord;
-            auto sender_coord_writer = MeshCoordinate(mesh_device[0], mesh_device[1]);
+            auto sender_coord_writer = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
             const auto this_fabric_id_writer = mesh_device->get_fabric_node_id(sender_coord_writer);
 
             const auto [num_hops_writer, dst_is_forward_writer, next_fabric_id_writer] =
@@ -572,7 +593,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 num_page_segments,
                 semaphore_round2.address(),
                 dst_is_forward_writer,
-            } if (dst_is_forward_writer) {
+            };
+            if (dst_is_forward_writer) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     this_fabric_id_writer, next_fabric_id_writer, link_idx, program, c, writer_runtime_args);
             }
@@ -583,17 +605,16 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             }
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
         }
-        page_idx_start += increment;
+        // page_idx_start += increment;
         sender_cores.push_back(c);
     }
 
     return {
         std::move(program),
-        ReduceToRootOp::ReduceToRoot::shared_variables_t{
-            .send_unary_reader_kernel_id = send_unary_reader_kernel_id,
-            .send_unary_writer_kernel_id = send_unary_writer_kernel_id,
-            .sender_cores = sender_cores,
-            .semaphores = semaphores}};
+        ReduceToRootOp::ReduceToRoot::shared_variables_t{//.send_unary_reader_kernel_id = send_unary_reader_kernel_id,
+                                                         //.send_unary_writer_kernel_id = send_unary_writer_kernel_id,
+                                                         //.sender_cores = sender_cores,
+                                                         .semaphores = semaphores}};
 }
 
 void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
