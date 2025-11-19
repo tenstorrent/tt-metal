@@ -104,7 +104,7 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
         return {MeshCoordinate::zero_coordinate(mesh_device->shape().dims())};
     }
 
-    Tensor first_tensor = first_tensor_opt.value();
+    const Tensor& first_tensor = first_tensor_opt.value();
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
     std::transform(
         first_tensor.device_storage().coords.begin(),
