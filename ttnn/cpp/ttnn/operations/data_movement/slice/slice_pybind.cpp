@@ -49,11 +49,11 @@ void bind_slice(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value,
-               const std::optional<CoreRangeSet>&& sub_core_grids,
-               // used to calculate the output shape for slice op with tensor args running on device
-               // to avoid host-device data transfer for mesh device and trace cases
+               // the following two args are used to calculate the output shape for slice op with tensor args
+               // running on device to avoid host-device data transfer for mesh device and trace cases
                const std::optional<uint32_t>& slice_dim,
-               const std::optional<uint32_t>& num_devices) {
+               const std::optional<uint32_t>& num_devices,
+               const std::optional<CoreRangeSet>&& sub_core_grids) {
                 return self(
                     input_tensor,
                     slice_start,
@@ -62,9 +62,9 @@ void bind_slice(py::module& module) {
                     memory_config,
                     optional_output_tensor,
                     pad_value,
-                    sub_core_grids,
                     slice_dim,
-                    num_devices);
+                    num_devices,
+                    sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("starts"),
@@ -74,9 +74,9 @@ void bind_slice(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
-            py::arg("sub_core_grids") = std::nullopt,
             py::arg("slice_dim") = std::nullopt,
             py::arg("num_devices") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,

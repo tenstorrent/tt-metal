@@ -162,6 +162,8 @@ ttnn::Tensor SliceOperation::invoke(
                        ttnn::Shape(modified_step),
                        memory_config,
                        false,
+                       std::nullopt,
+                       std::nullopt,
                        sub_core_grids},
                    {input},
                    {},
@@ -206,9 +208,9 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<uint32_t>& slice_dim,
-    const std::optional<uint32_t>& num_devices) {
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(
         output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
@@ -268,7 +270,7 @@ ttnn::Tensor SliceOperation::invoke(
         auto res =
             tt::tt_metal::operation::run(
                 SliceDeviceOperation{
-                    dummy_start, dummy_end, dummy_step, memory_config, true, sub_core_grids, slice_dim, num_devices},
+                    dummy_start, dummy_end, dummy_step, memory_config, true, slice_dim, num_devices, sub_core_grids},
                 {input_tensor, output_tensor_start, output_tensor_end},
                 {},
                 {optional_output_tensor})
@@ -340,8 +342,8 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<uint32_t>& slice_dim,
-    const std::optional<uint32_t>& num_devices);
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::data_movement
