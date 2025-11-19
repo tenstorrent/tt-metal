@@ -5,8 +5,6 @@ graph_templates {
       name: "node1"
       node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
     }
-    internal_connections {
-    }
   }
 }
 
