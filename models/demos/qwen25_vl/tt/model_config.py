@@ -58,6 +58,7 @@ class VisionModelArgs(ModelArgs):
             in0_block_w=1 if self.is_galaxy else self.dim // 1024,
             fuse_batch=seq_len <= 1024,
         )
+        self.model_config.uses_mrope = True
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
