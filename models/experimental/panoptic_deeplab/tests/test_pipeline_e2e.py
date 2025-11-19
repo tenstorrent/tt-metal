@@ -43,6 +43,8 @@ from models.experimental.panoptic_deeplab.tt.common import (
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.tt_cnn.tt.executor import (
     ModelExecutor,
+    MultiCQTracedModelOverlappedInputExecutor,
+    TracedModelExecutor,
 )
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
@@ -73,22 +75,22 @@ EXECUTOR_CONFIGS = [
         requires_minimum_inputs=1,
         expected_executor_type=ModelExecutor,
     ),
-    # ExecutorTestConfig(
-    #     name="TracedModelExecutor",
-    #     use_trace=True,
-    #     num_command_queues=1,
-    #     all_transfers_on_separate_command_queue=False,
-    #     requires_minimum_inputs=1,
-    #     expected_executor_type=TracedModelExecutor,
-    # ),
-    # ExecutorTestConfig(
-    #     name="MultiCQTracedModelOverlappedInputExecutor",
-    #     use_trace=True,
-    #     num_command_queues=2,
-    #     all_transfers_on_separate_command_queue=False,
-    #     requires_minimum_inputs=1,
-    #     expected_executor_type=MultiCQTracedModelOverlappedInputExecutor,
-    # ),
+    ExecutorTestConfig(
+        name="TracedModelExecutor",
+        use_trace=True,
+        num_command_queues=1,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=TracedModelExecutor,
+    ),
+    ExecutorTestConfig(
+        name="MultiCQTracedModelOverlappedInputExecutor",
+        use_trace=True,
+        num_command_queues=2,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=MultiCQTracedModelOverlappedInputExecutor,
+    ),
     # Note: MultiCQTracedModelPipelinedIOExecutor doesn't support tuple outputs,
     # so we skip it for now. If needed, we'd need to modify the model wrapper
     # to return a single tensor or modify the executor to support tuples.
@@ -145,6 +147,9 @@ def create_host_input_tensors(
     """
     Create host input tensors for Panoptic DeepLab.
 
+    Uses interleaved DRAM to avoid core grid constraints (especially for traced executors),
+    and converts to L1 using to_memory_config which handles the interleaved-to-sharded conversion.
+
     Args:
         device: TTNN device
         batch_size: Batch size (should be 1 for Panoptic DeepLab)
@@ -154,7 +159,8 @@ def create_host_input_tensors(
 
     Returns:
         Tuple of (list of host input tensors, dram_memory_config, l1_memory_config)
-        The memory configs are extracted from the first preprocessed tensor
+        - dram_memory_config: Interleaved DRAM (no core constraints)
+        - l1_memory_config: Sharded L1 with full grid (original sharding from preprocessed tensor)
     """
     host_inputs = []
     dram_memory_config = None
@@ -168,23 +174,20 @@ def create_host_input_tensors(
 
         # Extract memory config from first tensor
         if i == 0:
-            # Get the memory config from the preprocessed tensor
-            # The tensor is already sharded, so we can use its memory config
-            # But we need to create DRAM and L1 versions
+            # Get the L1 memory config from the preprocessed tensor (full grid sharding)
             original_mem_config = ttnn_input.memory_config()
+            original_shard_spec = original_mem_config.shard_spec
 
-            # Create DRAM version with same sharding
-            dram_memory_config = ttnn.MemoryConfig(
-                original_mem_config.memory_layout,
-                ttnn.BufferType.DRAM,
-                original_mem_config.shard_spec,
-            )
+            # Always use interleaved DRAM (no core constraints)
+            # This avoids the logical grid constraint issue with traced executors
+            # The executor will use to_memory_config to convert from interleaved DRAM to sharded L1
+            dram_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-            # Create L1 version with same sharding
+            # Use the original L1 sharding (full grid) - to_memory_config will handle conversion
             l1_memory_config = ttnn.MemoryConfig(
                 original_mem_config.memory_layout,
                 ttnn.BufferType.L1,
-                original_mem_config.shard_spec,
+                original_shard_spec,
             )
 
         # Convert to host tensor for pipeline
@@ -200,7 +203,17 @@ def create_host_input_tensors(
     [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS],
     ids=["panoptic_deeplab", "deeplab_v3_plus"],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": PDL_L1_SMALL_SIZE,
+            "trace_region_size": 2000000,
+            "num_command_queues": 2,  # Required for multi-CQ executors
+        }
+    ],
+    indirect=True,
+)
 def test_panoptic_deeplab_pipeline_e2e(
     device, executor_config: ExecutorTestConfig, model_category: str, model_location_generator
 ):
@@ -279,6 +292,7 @@ def test_panoptic_deeplab_pipeline_e2e(
         num_inputs = max(executor_config.requires_minimum_inputs, 3)  # Test with at least 3 inputs
 
         # Create host input tensors and extract memory configs
+        # Uses interleaved DRAM to avoid core grid constraints, converts to L1 via to_memory_config
         host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors(
             device, batch_size, input_height, input_width, num_inputs
         )
@@ -409,7 +423,17 @@ def test_panoptic_deeplab_pipeline_e2e(
 
 
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS[:2], ids=lambda cfg: cfg.name)  # Test first 2 executors
-@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": PDL_L1_SMALL_SIZE,
+            "trace_region_size": 2000000,
+            "num_command_queues": 2,  # Required for multi-CQ executors
+        }
+    ],
+    indirect=True,
+)
 def test_panoptic_deeplab_pipeline_multiple_rounds(
     device, executor_config: ExecutorTestConfig, model_location_generator
 ):
