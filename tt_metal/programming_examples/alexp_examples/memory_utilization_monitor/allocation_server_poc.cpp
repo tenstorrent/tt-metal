@@ -34,7 +34,7 @@
 #include "umd/device/soc_descriptor.hpp"
 
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
-#define MAX_DEVICES 8
+#define MAX_DEVICES 256
 
 namespace {
 class NullBuffer : public std::streambuf {
@@ -201,23 +201,52 @@ private:
     }
 
     void detect_devices() {
-        // Device detection using UMD Cluster to get real SocDescriptors with harvesting
-        std::cout << "🔍 Device detection (using UMD Cluster for accurate specs):" << std::endl;
+        // Device detection: get SoC specs for ALL chips (local + remote) without hugepages
+        // Strategy: Use ClusterDescriptor for topology, but only initialize local chips
+        std::cout << "🔍 Device detection (all chips via ClusterDescriptor, no hugepages):" << std::endl;
 
         try {
-            // Create a minimal UMD Cluster with 0 hugepage channels (just for querying device info)
-            std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-                .num_host_mem_ch_per_mmio_device = 0,  // Don't allocate hugepages
-            });
+            // First, create a full ClusterDescriptor via topology discovery
+            // This discovers ALL chips (local + remote) without needing hugepages
+            std::unique_ptr<tt::umd::ClusterDescriptor> full_cluster_desc =
+                tt::umd::Cluster::create_cluster_descriptor();
 
-            if (!cluster) {
+            if (!full_cluster_desc) {
                 std::cout << "   No devices detected" << std::endl;
                 std::cout << "   Server will track allocations anyway" << std::endl;
                 return;
             }
 
-            auto all_chip_ids = cluster->get_target_device_ids();
-            size_t detected_num_chips = all_chip_ids.size();
+            auto all_chips = full_cluster_desc->get_all_chips();
+            std::unordered_set<tt::ChipId> local_chips;
+            std::unordered_set<tt::ChipId> remote_chips;
+
+            // Classify chips as local or remote
+            for (tt::ChipId chip : all_chips) {
+                if (full_cluster_desc->is_chip_remote(chip)) {
+                    remote_chips.insert(chip);
+                } else {
+                    local_chips.insert(chip);
+                }
+            }
+
+            std::cout << "   Topology: " << local_chips.size() << " local chip(s), " << remote_chips.size()
+                      << " remote chip(s)" << std::endl;
+
+            // Create cluster with ONLY local chips to avoid hugepage assertion
+            // We'll use the ClusterDescriptor to get specs for remote chips
+            std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .num_host_mem_ch_per_mmio_device = 0,          // Don't allocate hugepages
+                .target_devices = local_chips,                 // Only local chips to avoid assertion
+                .cluster_descriptor = full_cluster_desc.get()  // Use pre-created descriptor
+            });
+
+            if (!cluster) {
+                std::cout << "   Failed to initialize cluster" << std::endl;
+                return;
+            }
+
+            size_t detected_num_chips = all_chips.size();
 
             if (detected_num_chips == 0) {
                 std::cout << "   No devices detected" << std::endl;
@@ -233,20 +262,41 @@ private:
 
             num_available_devices_ = detected_num_chips;
 
-            // Get cluster descriptor for topology info
-            auto* cluster_desc = cluster->get_cluster_description();
-
-            // Iterate through all devices and get their real specs
+            // Iterate through ALL chips (local + remote) and get their specs
             size_t idx = 0;
-            for (int chip_id : all_chip_ids) {
+            for (tt::ChipId chip_id : all_chips) {
                 if (idx >= MAX_DEVICES) {
                     break;
                 }
                 idx++;
 
+                bool is_remote = remote_chips.count(chip_id) > 0;
+                bool is_local = local_chips.count(chip_id) > 0;
+
                 try {
-                    // Get the actual SocDescriptor from the cluster (has real harvesting info!)
-                    const tt::umd::SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+                    // Get the SocDescriptor
+                    // For local chips: get from cluster (has actual harvesting from hardware)
+                    // For remote chips: construct from ClusterDescriptor (topology-based, may not have actual
+                    // harvesting)
+                    tt::umd::SocDescriptor soc_desc;
+
+                    if (is_local) {
+                        // Local chip - get directly from cluster with real harvesting info
+                        soc_desc = cluster->get_soc_descriptor(chip_id);
+                    } else {
+                        // Remote chip - construct from ClusterDescriptor topology info
+                        // Get chip info from cluster descriptor
+                        tt::ChipInfo remote_chip_info{};
+                        remote_chip_info.noc_translation_enabled =
+                            full_cluster_desc->get_noc_translation_table_en().at(chip_id);
+                        remote_chip_info.harvesting_masks = full_cluster_desc->get_harvesting_masks(chip_id);
+                        remote_chip_info.board_type = full_cluster_desc->get_board_type(chip_id);
+                        remote_chip_info.asic_location = full_cluster_desc->get_asic_location(chip_id);
+
+                        // Get architecture and construct SoC descriptor
+                        tt::ARCH chip_arch = full_cluster_desc->get_arch(chip_id);
+                        soc_desc = tt::umd::SocDescriptor(chip_arch, remote_chip_info);
+                    }
 
                     // Get arch from soc descriptor
                     tt::ARCH arch = soc_desc.arch;
@@ -259,24 +309,6 @@ private:
 
                     // Get DRAM size - use dram_bank_size if available
                     uint64_t dram_size_per_channel = soc_desc.dram_bank_size;
-                    std::cout << "DRAM size per channel: " << dram_size_per_channel << std::endl;
-                    std::cout << "Number of DRAM channels: " << num_dram_channels << std::endl;
-                    std::cout << "L1 size per core: " << l1_size_per_core << std::endl;
-                    std::cout << "Grid size: " << grid_x << "x" << grid_y << std::endl;
-                    std::cout << "Arch: " << arch_to_string(arch) << std::endl;
-                    std::cout << "Is remote: " << (cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false)
-                              << std::endl;
-                    // If dram_bank_size is 0, this is likely because UMD doesn't populate it
-                    // Use a default value based on architecture (Blackhole = ~4GB per channel)
-                    // if (dram_size_per_channel == 0) {
-                    //     if (arch == tt::ARCH::BLACKHOLE) {
-                    //         dram_size_per_channel = 4278190080ULL;  // From blackhole_140_arch.yaml
-                    //     } else if (arch == tt::ARCH::WORMHOLE_B0) {
-                    //         dram_size_per_channel = 2147483648ULL;  // From wormhole_b0_80_arch.yaml
-                    //     } else if (arch == tt::ARCH::GRAYSKULL) {
-                    //         dram_size_per_channel = 1073741824ULL;  // From grayskull_120_arch.yaml
-                    //     }
-                    // }
 
                     uint64_t total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
                     uint64_t total_l1 = (uint64_t)l1_size_per_core * grid_x * grid_y;
@@ -292,10 +324,9 @@ private:
                     device_info_[chip_id].grid_x = grid_x;
                     device_info_[chip_id].grid_y = grid_y;
 
-                    bool is_remote = cluster_desc ? cluster_desc->is_chip_remote(chip_id) : false;
                     std::cout << "   Device " << chip_id << ": " << arch_to_string(arch) << " ("
                               << (total_dram / (1024 * 1024 * 1024)) << "GB DRAM, " << (total_l1 / (1024 * 1024))
-                              << "MB L1) " << (is_remote ? "[Remote]" : "[Local]") << std::endl;
+                              << "MB L1) " << (is_remote ? "[Remote Ethernet]" : "[Local PCIe]") << std::endl;
 
                 } catch (const std::exception& e) {
                     std::cerr << "   Warning: Could not query device " << chip_id << ": " << e.what() << std::endl;
@@ -303,7 +334,11 @@ private:
                 }
             }
 
-            std::cout << "   Total: " << num_available_devices_ << " device(s) detected" << std::endl;
+            std::cout << "   Total: " << num_available_devices_ << " device(s) detected";
+            std::cout << " (" << local_chips.size() << " local, " << remote_chips.size() << " remote)" << std::endl;
+            if (remote_chips.size() > 0) {
+                std::cout << "   Note: Remote chip specs from topology (hugepages needed for telemetry)" << std::endl;
+            }
 
         } catch (const std::exception& e) {
             std::cerr << "   Error during device detection: " << e.what() << std::endl;

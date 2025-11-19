@@ -1219,7 +1219,7 @@ public:
                     }
                 } else {
                     // Fallback: cluster descriptor failed, try local PCIe devices only
-                    for (int i = 0; i < 8; ++i) {
+                    for (int i = 0; i < 256; ++i) {
                         DeviceInfo dev;
                         dev.device_id = i;
                         dev.arch_name = "Unknown";

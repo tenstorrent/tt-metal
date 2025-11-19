@@ -28,7 +28,7 @@ namespace tt::tt_metal {
  */
 class TracyMemoryMonitor {
 public:
-    static constexpr int MAX_DEVICES = 8;
+    static constexpr int MAX_DEVICES = 32;
 
     enum class BufferType : uint8_t { DRAM = 0, L1 = 1, SYSTEM_MEMORY = 2, L1_SMALL = 3, TRACE = 4 };
 
