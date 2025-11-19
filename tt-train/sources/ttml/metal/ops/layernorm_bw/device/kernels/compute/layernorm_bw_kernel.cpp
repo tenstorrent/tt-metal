@@ -66,17 +66,8 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
             const uint32_t x_hat_reg = block_idx;
             const uint32_t temp_reg = x_hat_reg + 1;
 
-            // Load input tile
-            copy_tile_init(cb_input_idx);
-            copy_tile(cb_input_idx, tile_idx + block_idx, x_hat_reg);
-
-            // Load broadcasted mean
-            copy_tile_init(cb_mean_bcast_idx);
-            copy_tile(cb_mean_bcast_idx, 0, temp_reg);
-
-            // Subtract mean: (input - mean)
-            sub_binary_tile_init();
-            sub_binary_tile(x_hat_reg, temp_reg, x_hat_reg);
+            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_tiles(cb_input_idx, cb_mean_bcast_idx, tile_idx + block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
             copy_tile_init(cb_rstd_bcast_idx);
@@ -458,17 +449,6 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     copy_tile(cb_rstd_bcast_idx, 0, temp_register);
     mul_binary_tile_init();
     mul_binary_tile(dx_register, temp_register, dx_register);
-
-    if constexpr (do_mask_w) {
-        if (global_col + 1 == Wt) {
-            const uint32_t mask_register = dx_register + 1U;
-            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
-            copy_tile_init(cb_mask_w_idx);
-            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
-            mask_tile_init();
-            mask_tile(dx_register, mask_register);
-        }
-    }
 }
 
 // uses 3 registers starting from dgamma_register
