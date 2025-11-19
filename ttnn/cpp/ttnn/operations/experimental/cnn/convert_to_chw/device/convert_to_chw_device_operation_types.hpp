@@ -14,8 +14,7 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input;
-    std::optional<Tensor> preallocated_output;
+    Tensor input;
 };
 
 using tensor_return_value_t = Tensor;
