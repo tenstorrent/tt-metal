@@ -465,7 +465,6 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     const CoreCoord& logical_core,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
-    uint32_t ethernet_channel_id,
     uint32_t noc_x,
     uint32_t noc_y,
     eth_chan_directions direction) :
@@ -474,8 +473,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     relay_builder_(std::move(relay_builder)),
     logical_core_(logical_core),
     local_fabric_node_id_(local_fabric_node_id),
-    remote_fabric_node_id_(remote_fabric_node_id),
-    ethernet_channel_id_(ethernet_channel_id) {
+    remote_fabric_node_id_(remote_fabric_node_id) {
     TT_FATAL(mux_builder_ != nullptr, "Mux builder cannot be null");
 }
 
@@ -535,7 +533,6 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         my_core_logical,
         local_fabric_node_id,
         remote_fabric_node_id,
-        ethernet_channel_id,
         noc_x,
         noc_y,
         direction);
@@ -564,23 +561,6 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
     TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
     return relay_builder_->build_connection_to_fabric_channel(relay_channel_id);
-}
-
-const CoreCoord& FabricTensixDatamoverBuilder::get_logical_core() const { return logical_core_; }
-
-tt::tt_fabric::FabricNodeId FabricTensixDatamoverBuilder::get_local_fabric_node_id() const {
-    return local_fabric_node_id_;
-}
-
-tt::tt_fabric::FabricNodeId FabricTensixDatamoverBuilder::get_remote_fabric_node_id() const {
-    return remote_fabric_node_id_;
-}
-
-uint32_t FabricTensixDatamoverBuilder::get_ethernet_channel_id() const { return ethernet_channel_id_; }
-
-FabricTensixCoreType FabricTensixDatamoverBuilder::get_core_id() const {
-    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
-    return mux_builder_->get_core_id();
 }
 
 uint32_t FabricTensixDatamoverBuilder::get_noc_x() const { return FabricDatamoverBuilderBase::get_noc_x(); }

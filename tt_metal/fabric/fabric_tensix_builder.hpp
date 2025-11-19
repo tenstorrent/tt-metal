@@ -164,11 +164,6 @@ public:
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_relay_channel() const;
 
     // Getters - delegate to mux builder (primary builder)
-    const CoreCoord& get_logical_core() const;
-    tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const;
-    tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const;
-    uint32_t get_ethernet_channel_id() const;
-    FabricTensixCoreType get_core_id() const;
     uint32_t get_noc_x() const;
     uint32_t get_noc_y() const;
     eth_chan_directions get_direction() const;
@@ -184,7 +179,6 @@ private:
         const CoreCoord& logical_core,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
-        uint32_t ethernet_channel_id,
         uint32_t noc_x,
         uint32_t noc_y,
         eth_chan_directions direction);
@@ -211,7 +205,6 @@ private:
     CoreCoord logical_core_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
-    uint32_t ethernet_channel_id_;
 };
 
 }  // namespace tt::tt_fabric
