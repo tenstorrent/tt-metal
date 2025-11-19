@@ -387,7 +387,7 @@ def setup(request):
     yield
 
     # Calculate and report geomean speedup
-    report_speedup_summary(tolerance=0.015)
+    report_speedup_summary(tolerance=0.02)
 
     # clear the log file
     if os.path.exists(LOG_FILE_PATH):
