@@ -1785,8 +1785,10 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
-        tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-            tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
+        auto padded_shape =
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(tensor_1.padded_shape());
+        tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
+            tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
@@ -1817,8 +1819,10 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
-    tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-        tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
+    auto padded_shape =
+        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(tensor_2.padded_shape());
+    tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
+        tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
 
     Tensor result = ttnn::permute(
         ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),

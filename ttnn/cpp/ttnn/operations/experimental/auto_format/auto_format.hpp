@@ -51,24 +51,6 @@ public:
      */
     static ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
-    // This code is a workaround for cases where we need to remove autoformat but other dependent ops
-    // are not quite ready. So here we basically just put the tensor back on device.
-    // Used in backward_ops.cpp
-    // See: Remove auto format within permute_op.cpp #9404
-    /**
-     * Moves a tensor to device memory and pads if necessary
-     * @param input Input tensor
-     * @param device Target device
-     * @param target_layout Desired layout
-     * @param target_mem_config Optional memory configuration
-     * @return Formatted tensor on device
-     */
-    static Tensor move_tensor_to_device_and_pad(
-        const Tensor& input,
-        tt::tt_metal::distributed::MeshDevice* device,
-        tt::tt_metal::Layout target_layout,
-        std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
-
     /**
      * Formats an input tensor to meet device and layout requirements
      * @param input Input tensor
