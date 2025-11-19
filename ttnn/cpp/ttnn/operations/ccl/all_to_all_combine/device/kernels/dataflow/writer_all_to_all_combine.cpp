@@ -62,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
     constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
     constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
+
+    constexpr ReverseMode reverse_mode = get_supported_reverse_mode<topology>();
     constexpr auto output_args = TensorAccessorArgs<18>();
 
 #ifdef REPLICATE_GROUP_AXIS
@@ -126,7 +128,8 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         replicate_axis,
-        num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        num_devices,
+        reverse_mode>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
@@ -171,7 +174,9 @@ void kernel_main() {
                             topology,
                             mesh_rows,
                             mesh_cols,
-                            fabric_max_packet_size_bytes>(
+                            fabric_max_packet_size_bytes,
+                            decltype(output_addrgen),
+                            reverse_mode>(
                             output_addrgen,
                             fabric_connections,
                             packet_headers[0],
@@ -214,37 +219,36 @@ void kernel_main() {
     }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
     // "multicast" semaphore increment to let other devices know we are done
-    for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
-        const auto & dest_chip_id = dest_chip_ids[device_idx];
+    send_init_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        src_chip_id,
+        mesh_rows,
+        mesh_cols,
+        replicate_axis,
+        num_devices,
+        reverse_mode>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
 
-        if (device_idx == linearized_mesh_coord) {
-            noc_semaphore_inc(global_noc_semaphore_addr, 1);
-            noc_async_atomic_barrier();
-        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            if constexpr (is_1d_topology<topology>()) {
-                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
-            } else {
-                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                const auto& dest_chip_id = dest_chip_ids[device_idx];
-                fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
-                    fabric_connections,
-                    packet_headers[1],
-                    dest_chip_id,
-                    dest_mesh_id,
-                    global_noc_semaphore_addr,
-                    1,
-                    true);
-            }
-        }
+    uint32_t additional_increments = 0;
+    if constexpr (reverse_mode != ReverseMode::NEVER) {
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            replicate_axis,
+            num_devices,
+            reverse_mode>(
+            fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
+        additional_increments = replicate_group_devices - 1;
     }
+    noc_semaphore_inc(global_noc_semaphore_addr, 1);
+    noc_async_atomic_barrier();
 
     close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+    noc_semaphore_wait(semaphore_ptr, replicate_group_devices + additional_increments);
     noc_semaphore_set(semaphore_ptr, 0);
 }
