@@ -406,15 +406,6 @@ install_mpi_ulfm() {
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
-install_rust() {
-    INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 --profile minimal -y"
-    if [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" /bin/bash -c "$INSTALL_CMD"
-    else
-        /bin/bash -c "$INSTALL_CMD"
-    fi
-}
-
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -455,7 +446,6 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
-    install_rust
 
     # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
     if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
