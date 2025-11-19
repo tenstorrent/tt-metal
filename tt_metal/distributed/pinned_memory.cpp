@@ -302,16 +302,51 @@ void* PinnedMemory::lock() { return pImpl->lock(); }
 
 void PinnedMemory::unlock() { pImpl->unlock(); }
 
-std::unique_ptr<PinnedMemory> PinMemory(
+std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
     bool map_to_noc) {
-    return mesh_device.pin_memory(coordinate_range_set, host_buffer, map_to_noc);
+    // Extract all coordinates from the range set
+    std::vector<distributed::MeshCoordinate> coordinates = coordinate_range_set.coords();
+
+    // Convert coordinates to devices using the mesh view
+    const auto& view = mesh_device.get_view();
+    std::vector<IDevice*> devices;
+    devices.reserve(coordinates.size());
+    for (const auto& coord : coordinates) {
+        if (view.contains(coord)) {
+            if (auto* device = view.get_device(coord)) {
+                devices.push_back(device);
+            }
+        }
+    }
+
+    if (devices.empty()) {
+        throw std::invalid_argument("No valid devices found in the specified coordinate range set");
+    }
+
+    auto bytes = host_buffer.view_bytes();
+    void* host_ptr = static_cast<void*>(bytes.data());
+    size_t buffer_size = bytes.size();
+
+    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
 
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
-    return mesh_device.get_memory_pinning_parameters();
+    // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
+    bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
+    if (!iommu_enabled) {
+        return experimental::MemoryPinningParameters{0u, 0u, false};
+    }
+
+    auto& hal = MetalContext::instance().hal();
+    experimental::MemoryPinningParameters params{};
+    params.max_pins = hal.get_max_pinned_memory_count();
+    params.max_total_pin_size = hal.get_total_pinned_memory_size();
+    // Disable NOC mapping until tested, except on Blackhole where it's supported.
+    params.can_map_to_noc = (mesh_device.arch() == tt::ARCH::BLACKHOLE);
+    return params;
 }
 
 }  // namespace tt::tt_metal::experimental
