@@ -65,11 +65,10 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
          device_shape[1],
          (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
          (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])});
-    return AutoFormat::format_input_tensor(
-        input, device, new_device_shape, 0.0, target_layout, std::move(target_mem_config));
+    return AutoFormat::format_tensor(input, device, new_device_shape, 0.0, target_layout, std::move(target_mem_config));
 }
 
-Tensor AutoFormat::format_input_tensor(
+Tensor AutoFormat::format_tensor(
     const Tensor& input,
     tt::tt_metal::distributed::MeshDevice* device,
     const ttnn::Shape& padded_shape,
@@ -79,90 +78,61 @@ Tensor AutoFormat::format_input_tensor(
     bool pad_input = input.padded_shape() != padded_shape;
     bool convert_layout = input.layout() != target_layout;
 
-    if (!pad_input && !convert_layout) {
-        return input.to_device(device);
-    }
-
+    auto formatted_input = input.to_device(device);
     MemoryConfig mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     if (target_mem_config.has_value()) {
         mem_config = target_mem_config.value();
-    } else if (input.storage_type() == StorageType::DEVICE) {
+    } else {
         mem_config = input.memory_config();
     }
 
-    Tensor formatted_input = input;
     auto shape = formatted_input.padded_shape();
 
-    // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
-    // Device side conversions
-    if (formatted_input.storage_type() == StorageType::DEVICE) {
-        if (convert_layout && !pad_input) {
-            if (target_layout == Layout::TILE && formatted_input.layout() == Layout::ROW_MAJOR) {
-                return ttnn::tilize(formatted_input, mem_config);
-            } else if (target_layout == Layout::ROW_MAJOR && formatted_input.layout() == Layout::TILE) {
-                return ttnn::untilize(formatted_input, mem_config);
-            }
-        } else if (!convert_layout && pad_input) {
-            if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
-                return ttnn::pad(
-                    (const ttnn::Tensor)formatted_input,
-                    padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value,
-                    /* multicore */ false,
-                    mem_config);
-            }
-        } else if (convert_layout && pad_input) {
-            if (formatted_input.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-                PadValue pad_value_variant;
-                if (formatted_input.dtype() == ttnn::DataType::BFLOAT16 or
-                    formatted_input.dtype() == ttnn::DataType::FLOAT32) {
-                    pad_value_variant = (float)pad_value;
-                } else {
-                    pad_value_variant = (uint32_t)pad_value;
-                }
-                return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value_variant, mem_config);
-            } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
-                formatted_input = ttnn::untilize(formatted_input, mem_config);
-                return ttnn::pad(
-                    (const ttnn::Tensor)formatted_input,
-                    padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value,
-                    /* multicore */ false,
-                    mem_config);
-            }
+    if (convert_layout && !pad_input) {
+        if (target_layout == Layout::TILE && formatted_input.layout() == Layout::ROW_MAJOR) {
+            return ttnn::tilize(formatted_input, mem_config);
+        } else if (target_layout == Layout::ROW_MAJOR && formatted_input.layout() == Layout::TILE) {
+            return ttnn::untilize(formatted_input, mem_config);
         }
-        // Fall back to host conversions
-        formatted_input = formatted_input.cpu();
-    }
-
-    // Host side conversions
-    if (pad_input) {
-        if (formatted_input.layout() != Layout::ROW_MAJOR) {
-            formatted_input = formatted_input.to_layout(Layout::ROW_MAJOR);
-            convert_layout = formatted_input.layout() != target_layout;
+    } else if (!convert_layout && pad_input) {
+        if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
+            return ttnn::pad(
+                (const ttnn::Tensor)formatted_input,
+                padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                pad_value,
+                /* multicore */ false,
+                mem_config);
         }
-        formatted_input = ttnn::pad(
-            (const ttnn::Tensor)formatted_input,
-            padded_shape.to_array_4D(),
-            tt::tt_metal::Array4D({0, 0, 0, 0}),
-            pad_value);
+    } else if (convert_layout && pad_input) {
+        if (formatted_input.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
+            PadValue pad_value_variant;
+            if (formatted_input.dtype() == ttnn::DataType::BFLOAT16 or
+                formatted_input.dtype() == ttnn::DataType::FLOAT32) {
+                pad_value_variant = (float)pad_value;
+            } else {
+                pad_value_variant = (uint32_t)pad_value;
+            }
+            return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value_variant, mem_config);
+        } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
+            formatted_input = ttnn::untilize(formatted_input, mem_config);
+            return ttnn::pad(
+                (const ttnn::Tensor)formatted_input,
+                padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                pad_value,
+                /* multicore */ false,
+                mem_config);
+        }
     }
-
-    if (convert_layout) {
-        formatted_input = formatted_input.to_layout(target_layout);
-    }
-
-    return formatted_input.to_device(device, mem_config);
+    return formatted_input;
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device.");
     auto padded_shape = pad_to_tile_shape(input.padded_shape());
-    return format_input_tensor(
-        input, input.device(), padded_shape, pad_value, target_layout, std::move(target_mem_config));
+    return format_tensor(input, input.device(), padded_shape, pad_value, target_layout, std::move(target_mem_config));
 }
 
 Tensor AutoFormat::format_output_tensor(
