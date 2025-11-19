@@ -72,9 +72,9 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     }
 
     using namespace ttnn::operations::experimental::auto_format;
-    Tensor formatted_input = AutoFormat::format_tensor(input_tensor, 0, Layout::TILE);
-    Tensor formatted_cos = AutoFormat::format_tensor(cos_cache, 0, Layout::TILE);
-    Tensor formatted_sin = AutoFormat::format_tensor(sin_cache, 0, Layout::TILE);
+    Tensor formatted_input = AutoFormat::format_tensor(input_tensor, PadValue(0.0f), Layout::TILE);
+    Tensor formatted_cos = AutoFormat::format_tensor(cos_cache, PadValue(0.0f), Layout::TILE);
+    Tensor formatted_sin = AutoFormat::format_tensor(sin_cache, PadValue(0.0f), Layout::TILE);
 
     return tt::tt_metal::operation::run(
                tt::tt_metal::RotaryEmbedding{

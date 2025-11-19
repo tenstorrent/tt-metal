@@ -36,14 +36,15 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
          device_shape[1],
          (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
          (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])});
-    return AutoFormat::format_tensor(input, device, new_device_shape, 0.0, target_layout, std::move(target_mem_config));
+    return AutoFormat::format_tensor(
+        input, device, new_device_shape, PadValue(0.0f), target_layout, std::move(target_mem_config));
 }
 
 Tensor AutoFormat::format_tensor(
     const Tensor& input,
     tt::tt_metal::distributed::MeshDevice* device,
     const ttnn::Shape& padded_shape,
-    float pad_value,
+    tt::tt_metal::PadValue pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.padded_shape() != padded_shape;
@@ -67,31 +68,26 @@ Tensor AutoFormat::format_tensor(
         }
     } else if (!convert_layout && pad_input) {
         if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
+            auto pad_value_float = std::visit([](auto&& arg) { return static_cast<float>(arg); }, pad_value);
             return ttnn::pad(
                 (const ttnn::Tensor)formatted_input,
                 padded_shape.to_array_4D(),
                 tt::tt_metal::Array4D({0, 0, 0, 0}),
-                pad_value,
+                pad_value_float,
                 /* multicore */ false,
                 mem_config);
         }
     } else if (convert_layout && pad_input) {
         if (formatted_input.layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-            PadValue pad_value_variant;
-            if (formatted_input.dtype() == ttnn::DataType::BFLOAT16 or
-                formatted_input.dtype() == ttnn::DataType::FLOAT32) {
-                pad_value_variant = (float)pad_value;
-            } else {
-                pad_value_variant = (uint32_t)pad_value;
-            }
-            return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value_variant, mem_config);
+            return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
         } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
             formatted_input = ttnn::untilize(formatted_input, mem_config);
+            auto pad_value_float = std::visit([](auto&& arg) { return static_cast<float>(arg); }, pad_value);
             return ttnn::pad(
                 (const ttnn::Tensor)formatted_input,
                 padded_shape.to_array_4D(),
                 tt::tt_metal::Array4D({0, 0, 0, 0}),
-                pad_value,
+                pad_value_float,
                 /* multicore */ false,
                 mem_config);
         }
@@ -100,7 +96,10 @@ Tensor AutoFormat::format_tensor(
 }
 
 Tensor AutoFormat::format_tensor(
-    const Tensor& input, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+    const Tensor& input,
+    tt::tt_metal::PadValue pad_value,
+    Layout target_layout,
+    std::optional<MemoryConfig> target_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device.");
     auto padded_shape = pad_to_tile_shape(input.padded_shape());
     return format_tensor(input, input.device(), padded_shape, pad_value, target_layout, std::move(target_mem_config));

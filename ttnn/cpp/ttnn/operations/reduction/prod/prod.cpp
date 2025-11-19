@@ -25,7 +25,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
 
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
             formatted_input_tensor =
-                AutoFormat::format_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
+                AutoFormat::format_tensor(input_a, input_a.device(), a_pad_shape, PadValue(1.0f), Layout::TILE);
         }
     }
 
@@ -41,7 +41,8 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         auto out_shape = temp.padded_shape();
         out_shape = ttnn::Shape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+            formatted_input_tensor =
+                AutoFormat::format_tensor(temp, temp.device(), a_pad_shape, PadValue(1.0f), Layout::TILE);
         }
     }
     // Apply prod

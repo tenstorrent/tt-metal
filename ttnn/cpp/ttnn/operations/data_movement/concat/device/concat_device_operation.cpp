@@ -204,7 +204,8 @@ Tensor concat_impl(
                 std::vector<Tensor> formatted_tensors;
                 formatted_tensors.reserve(input_tensors.size());
                 for (const auto& input_tensor : input_tensors) {
-                    formatted_tensors.push_back(AutoFormat::format_tensor(input_tensor, 0, Layout::TILE));
+                    auto pad_value = is_floating_point(input_tensor.dtype()) ? PadValue(0.0f) : PadValue(0u);
+                    formatted_tensors.push_back(AutoFormat::format_tensor(input_tensor, pad_value, Layout::TILE));
                 }
                 return formatted_tensors;
             }
