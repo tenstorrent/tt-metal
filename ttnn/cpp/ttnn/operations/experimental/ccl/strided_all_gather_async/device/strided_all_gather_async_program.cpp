@@ -264,6 +264,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::set<CoreRange> sender_backward_core_ranges;
     std::set<CoreRange> mux_forward_core_ranges;
     std::set<CoreRange> mux_backward_core_ranges;
+    std::vector<CoreCoord> sender_forward_cores;
+    std::vector<CoreCoord> sender_backward_cores;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -276,8 +278,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
                 if (dir) {
+                    sender_forward_cores.push_back(worker_core);
                     sender_forward_core_ranges.insert(CoreRange(worker_core));
                 } else {
+                    sender_backward_cores.push_back(worker_core);
                     sender_backward_core_ranges.insert(CoreRange(worker_core));
                 }
                 sender_worker_core_ranges.insert(CoreRange(worker_core));
@@ -316,14 +320,12 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     // KERNEL CREATION
     /* All gather fusion */
     if (fuse_op) {
-        auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
-        auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
         fused_op_signaler_forward->init_all_gather(
-            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+            program, mesh_device, sender_forward_core_ranges, sender_forward_cores);
         fused_op_signaler_backward->init_all_gather(
-            program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+            program, mesh_device, sender_backward_core_ranges, sender_backward_cores);
         fused_op_signaler_sender_workers->init_all_gather(
-            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+            program, mesh_device, sender_forward_core_ranges, sender_forward_cores);
     }
 
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
