@@ -159,6 +159,7 @@ void MetalContext::initialize(
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+#if 0
         // fw_build_key is a combination of build_key and fw_compile_hash
         // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
         // if it's not already in firmware_built_keys_
@@ -171,6 +172,9 @@ void MetalContext::initialize(
             BuildEnvManager::get_instance().build_firmware(device_id);
             firmware_built_keys_.insert(fw_build_key);
         }
+#else
+        BuildEnvManager::get_instance().build_firmware(device_id);
+#endif
 
         // Clear the entire launch message ring buffer on ethernet cores before application firmware is activated.
         // This is required since ethernet cores context switch between application and routing firmware.

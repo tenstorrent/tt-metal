@@ -65,7 +65,6 @@
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -1402,15 +1401,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->register_kernel_elf_paths_with_watcher(*device);
 
                     if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                        }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    } else {
                         GenerateBinaries(device, build_options, kernel);
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
