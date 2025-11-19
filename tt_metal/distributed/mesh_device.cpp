@@ -605,7 +605,7 @@ bool MeshDevice::close() {
     // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation will
     // hang. Validate this.
     for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
-        if (dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+        if (dynamic_cast<MeshCommandQueueBase*>(mesh_command_queues_[cq_id].get())->in_use()) {
             auto parent_mesh = get_parent_mesh();
             if (parent_mesh) {
                 auto parent_mesh_id = parent_mesh->get_parent_mesh_id_with_in_use_cq(cq_id);
@@ -643,7 +643,7 @@ bool MeshDevice::close() {
 
 std::optional<int> MeshDevice::get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const {
     if (cq_id < mesh_command_queues_.size() &&
-        dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+        dynamic_cast<MeshCommandQueueBase*>(mesh_command_queues_[cq_id].get())->in_use()) {
         return id();
     }
     if (parent_mesh_) {
@@ -654,7 +654,7 @@ std::optional<int> MeshDevice::get_parent_mesh_id_with_in_use_cq(uint32_t cq_id)
 
 std::optional<int> MeshDevice::get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const {
     if (cq_id < mesh_command_queues_.size() &&
-        dynamic_cast<FDMeshCommandQueue*>(mesh_command_queues_[cq_id].get())->in_use()) {
+        dynamic_cast<MeshCommandQueueBase*>(mesh_command_queues_[cq_id].get())->in_use()) {
         return id();
     }
     for (const auto& submesh : submeshes_) {
