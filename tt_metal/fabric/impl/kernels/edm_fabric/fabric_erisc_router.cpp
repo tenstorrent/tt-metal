@@ -661,6 +661,7 @@ FORCE_INLINE bool downstreams_have_space(
                    DIRECTIONS>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, local_relay_interface));
 }
 
+#ifdef FABRIC_2D
 template <
     uint8_t rx_channel_id,
     typename DownstreamSenderVC0T,

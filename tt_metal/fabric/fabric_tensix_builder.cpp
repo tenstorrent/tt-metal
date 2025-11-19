@@ -472,15 +472,11 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     FabricDatamoverBuilderBase(noc_x, noc_y, direction),
     mux_builder_(std::move(mux_builder)),
     relay_builder_(std::move(relay_builder)),
-    my_core_logical_(my_core_logical),
+    logical_core_(logical_core),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
-    ethernet_channel_id_(ethernet_channel_id),
-    link_idx_(link_idx),
-    risc_id_(risc_id),
-    fabric_mux_config_(std::move(fabric_mux_config)) {
+    ethernet_channel_id_(ethernet_channel_id) {
     TT_FATAL(mux_builder_ != nullptr, "Mux builder cannot be null");
-    TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
@@ -587,11 +583,13 @@ FabricTensixCoreType FabricTensixDatamoverBuilder::get_core_id() const {
     return mux_builder_->get_core_id();
 }
 
-uint32_t FabricTensixDatamoverBuilder::get_noc_x() const { return noc_x_; }
+uint32_t FabricTensixDatamoverBuilder::get_noc_x() const { return FabricDatamoverBuilderBase::get_noc_x(); }
 
-uint32_t FabricTensixDatamoverBuilder::get_noc_y() const { return noc_y_; }
+uint32_t FabricTensixDatamoverBuilder::get_noc_y() const { return FabricDatamoverBuilderBase::get_noc_y(); }
 
-eth_chan_directions FabricTensixDatamoverBuilder::get_direction() const { return direction_; }
+eth_chan_directions FabricTensixDatamoverBuilder::get_direction() const {
+    return FabricDatamoverBuilderBase::get_direction();
+}
 
 void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y) {
     TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");

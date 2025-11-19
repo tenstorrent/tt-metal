@@ -1493,7 +1493,7 @@ void FabricEriscDatamoverBuilder::connect_to_local_tensix_builder(FabricTensixDa
     adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, CoreCoord(tensix_noc_x, tensix_noc_y));
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
-    tensix_builder.append_relay_router_noc_xy(this->my_noc_x, this->my_noc_y);
+    tensix_builder.append_relay_router_noc_xy(this->get_noc_x(), this->get_noc_y());
 }
 
 // TODO: take the downstream sender channel, based on the VC index, and use it to construct our
