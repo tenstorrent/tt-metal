@@ -1139,14 +1139,10 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
                 gt_vecs_pts_loc = gt_vecs_pts_loc
 
         # Handle both list (training) and dict (testing) formats
-        if isinstance(example, list):
-            example[0]["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
-            example[0]["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
-            return example[0]
-        else:
-            example["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
-            example["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
-            return example
+
+        example[0]["map_gt_labels_3d"] = DC(gt_vecs_label, cpu_only=False)
+        example[0]["map_gt_bboxes_3d"] = DC(gt_vecs_pts_loc, cpu_only=True)
+        return example[0]
 
     def prepare_train_data(self, index):
         """
@@ -1703,6 +1699,12 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
         map_results = pred_results["map_results"]
         gt_anns = mmengine.load(self.map_ann_file)
         map_annotations = gt_anns["GTs"]
+
+        # Filter map annotations to match the subset if we're evaluating on fewer samples
+        if len(map_results) < len(map_annotations):
+            print(f"Filtering map annotations from {len(map_annotations)} to {len(map_results)} samples")
+            map_annotations = map_annotations[: len(map_results)]
+
         cls_gens, cls_gts = format_res_gt_by_classes(
             result_path,
             map_results,
