@@ -254,14 +254,15 @@ void DevicePool::initialize(
     _inst->worker_thread_to_cpu_core_map =
         device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs, _inst->completion_queue_reader_to_cpu_core_map);
 
+    _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
     _inst->worker_l1_size = worker_l1_size;
-    _inst->num_hw_cqs = num_hw_cqs;
-    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
+    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
 
     std::vector<ChipId> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
@@ -340,7 +341,6 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
