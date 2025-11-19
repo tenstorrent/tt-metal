@@ -143,7 +143,6 @@ def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
         "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
@@ -264,7 +263,6 @@ def test_full_buffer():
     RISC_COUNT = 5
     ZONE_COUNT = 125
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [
             72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
@@ -603,7 +601,6 @@ def test_timestamped_events():
             BH_COMBO_COUNTS.append((T, E))
 
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
     }
