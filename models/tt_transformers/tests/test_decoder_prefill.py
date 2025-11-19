@@ -14,6 +14,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import get_rot_mats
 
@@ -65,10 +66,22 @@ def test_decoder_inference(
             "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
         )
 
+    # Create submesh for Galaxy (T3K with dp4)
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    if num_devices == 32:  # Galaxy
+        data_parallel = 4
+        submesh_devices = create_submeshes(mesh_device, data_parallel)
+        device = submesh_devices[0]  # Use first T3K submesh
+        logger.info(f"Using T3K submesh on Galaxy with dp={data_parallel}")
+    else:
+        device = mesh_device
+        logger.info(f"Using full mesh device with {num_devices} devices")
+        assert False
+
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = ModelArgs(device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -84,12 +97,13 @@ def test_decoder_inference(
 
     generation_start_pos = 0
     generation_length = 1
+    # n = 3
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
         head_dim=model_args.head_dim,
-        device=mesh_device,
+        device=device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,
         rope_scaling=model_args.rope_scaling,
@@ -97,7 +111,7 @@ def test_decoder_inference(
     if model_args.rope_theta_local is not None:
         rot_mats_local = get_rot_mats(
             head_dim=model_args.head_dim,
-            device=mesh_device,
+            device=device,
             seq_len=max_seq_len,
             theta=model_args.rope_theta_local,
             rope_scaling=None,
@@ -109,9 +123,9 @@ def test_decoder_inference(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
+        device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
@@ -133,16 +147,16 @@ def test_decoder_inference(
         )
         page_table_tt = ttnn.from_torch(
             page_table,
-            device=mesh_device,
+            device=device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
     # Initialize TT model
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(device)
     tt_model = TransformerBlock(
-        mesh_device=mesh_device,
+        mesh_device=device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -196,6 +210,9 @@ def test_decoder_inference(
             mask=attn_mask,
         )
         # Run TT model
+        # for j in range(n):
+        #     if j == n - 1:
+        #         tracy.signpost("mstojko")
         tt_out = tt_model(
             decode_input,
             None,
@@ -207,7 +224,7 @@ def test_decoder_inference(
         )
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
