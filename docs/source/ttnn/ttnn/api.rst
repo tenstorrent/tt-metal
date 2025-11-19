@@ -15,7 +15,6 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.format_input_tensor
    ttnn.pad_to_tile_shape
 
 Memory Config
