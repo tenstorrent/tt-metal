@@ -77,7 +77,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 3
+      test_splits: 5
       pytest_markers: "perf"
       timeout_minutes: 240
 
@@ -92,7 +92,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 3
+      test_splits: 5
       pytest_markers: "perf"
       timeout_minutes: 240
 
