@@ -11,13 +11,16 @@ import numpy as np
 import pytest
 import torch
 import ttnn
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from mmengine.config import Config
 from mmengine.runner import Runner
 from mmdet3d.registry import DATASETS
 from models.experimental.vadv2.reference import vad
 from models.experimental.vadv2.common import load_torch_model
 import os.path as osp
-from PIL import Image, ImageDraw
 
 try:
     import psutil
@@ -244,6 +247,21 @@ DEFAULT_COLOR_PALETTE = [
     (0, 191, 255),
 ]
 
+BOX_EDGES = [
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 0),
+    (4, 5),
+    (5, 6),
+    (6, 7),
+    (7, 4),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+]
+
 
 def _recover_images(img_tensor, img_norm_cfg):
     mean = np.array(img_norm_cfg.get("mean", [0.0, 0.0, 0.0]), dtype=np.float32)
@@ -257,17 +275,14 @@ def _recover_images(img_tensor, img_norm_cfg):
     return imgs
 
 
-def _project_box_to_image(corners, lidar2img):
-    num_pts = corners.shape[0]
-    corners_homo = np.concatenate([corners, np.ones((num_pts, 1), dtype=corners.dtype)], axis=1)
+def _project_corners_to_image(corners, lidar2img):
+    corners_homo = np.concatenate([corners, np.ones((corners.shape[0], 1), dtype=corners.dtype)], axis=1)
     projections = corners_homo @ lidar2img.T
     depths = projections[:, 2]
     valid = depths > 1.0e-3
-    if not np.any(valid):
+    if not np.all(valid):
         return None
-    projections = projections[valid]
-    depths = depths[valid][:, None]
-    coords = projections[:, :2] / depths
+    coords = projections[:, :2] / depths[:, None]
     return coords
 
 
@@ -282,72 +297,104 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
     if color_palette is None:
         color_palette = DEFAULT_COLOR_PALETTE
 
-    os.makedirs(out_dir, exist_ok=True)
     img_batch = data["img"]
     img_metas_batch = data["img_metas"]
     if not isinstance(img_batch, list) or len(img_batch) == 0:
         return
+
     img_tensor = img_batch[0]
     if not isinstance(img_tensor, torch.Tensor):
         return
-    img_metas = img_metas_batch[0]
+
+    img_metas = img_metas_batch[0] if isinstance(img_metas_batch, list) and img_metas_batch else {}
     img_norm_cfg = img_metas.get("img_norm_cfg", {})
     recovered_imgs = _recover_images(img_tensor, img_norm_cfg)
 
     pred_dict = result.get("pts_bbox", result if isinstance(result, dict) else {})
-    boxes_3d = pred_dict.get("boxes_3d", None)
-    scores_3d = pred_dict.get("scores_3d", None)
-    labels_3d = pred_dict.get("labels_3d", None)
+    boxes_3d = pred_dict.get("boxes_3d")
+    scores_3d = pred_dict.get("scores_3d")
+    labels_3d = pred_dict.get("labels_3d")
     if boxes_3d is None or scores_3d is None or labels_3d is None:
         return
 
     boxes_3d = boxes_3d.to("cpu")
+    corners_3d = boxes_3d.corners.cpu().numpy()
     scores_3d = scores_3d.detach().cpu().numpy()
     labels_3d = labels_3d.detach().cpu().numpy()
-    corners_3d = boxes_3d.corners.cpu().numpy()
 
     valid_mask = scores_3d >= score_thr
     if not np.any(valid_mask):
         valid_mask = np.ones_like(scores_3d, dtype=bool)
 
-    sample_token = img_metas.get("sample_idx", "sample")
+    corners_3d = corners_3d[valid_mask]
+    scores_3d = scores_3d[valid_mask]
+    labels_3d = labels_3d[valid_mask]
+    if corners_3d.size == 0:
+        return
+
     lidar2img_list = img_metas.get("lidar2img", [])
     filenames = img_metas.get("filename", [])
     img_shapes = img_metas.get("img_shape", [])
 
+    sample_token = (
+        img_metas.get("sample_idx")
+        or img_metas.get("sample_token")
+        or img_metas.get("frame_id")
+        or img_metas.get("timestamp")
+        or "sample"
+    )
+    sample_token = str(sample_token)
+
+    os.makedirs(out_dir, exist_ok=True)
+
     for cam_idx in range(recovered_imgs.shape[0]):
         if cam_idx >= len(lidar2img_list):
             break
+
         lidar2img = np.asarray(lidar2img_list[cam_idx])
         image_array = recovered_imgs[cam_idx]
         height, width = image_array.shape[:2]
         if cam_idx < len(img_shapes):
             height, width = img_shapes[cam_idx][:2]
-        image = Image.fromarray(image_array[:height, :width])
-        draw = ImageDraw.Draw(image)
+            image_array = image_array[:height, :width]
 
-        for box_idx, is_valid in enumerate(valid_mask):
-            if not is_valid:
-                continue
-            coords = _project_box_to_image(corners_3d[box_idx], lidar2img)
-            if coords is None or coords.size == 0:
-                continue
-            x_min, y_min = coords.min(axis=0)
-            x_max, y_max = coords.max(axis=0)
-            if x_max < 0 or y_max < 0 or x_min > width or y_min > height:
-                continue
-            x_min = float(np.clip(x_min, 0, width - 1))
-            y_min = float(np.clip(y_min, 0, height - 1))
-            x_max = float(np.clip(x_max, 0, width - 1))
-            y_max = float(np.clip(y_max, 0, height - 1))
-            color = color_palette[int(labels_3d[box_idx]) % len(color_palette)]
-            draw.rectangle([x_min, y_min, x_max, y_max], outline=color, width=2)
-            label_name = class_names[int(labels_3d[box_idx])] if class_names else str(labels_3d[box_idx])
-            draw.text((x_min + 2, y_min + 2), f"{label_name}:{scores_3d[box_idx]:.2f}", fill=color)
+        fig_w = max(width / 200.0, 4.0)
+        fig_h = max(height / 200.0, 3.0)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.imshow(image_array)
+        ax.set_xlim(0, width)
+        ax.set_ylim(height, 0)
 
+        for idx, corners in enumerate(corners_3d):
+            projected = _project_corners_to_image(corners, lidar2img)
+            if projected is None:
+                continue
+
+            palette_index = int(labels_3d[idx]) % len(color_palette) if len(color_palette) > 0 else 0
+            color_rgb = np.array(color_palette[palette_index], dtype=np.float32) / 255.0
+            color_tuple = tuple(color_rgb.tolist())
+
+            for edge in BOX_EDGES:
+                pts = projected[list(edge)]
+                ax.plot(pts[:, 0], pts[:, 1], color=color_tuple, linewidth=1.5)
+
+            label_name = class_names[int(labels_3d[idx])] if class_names else str(labels_3d[idx])
+            label_position = projected.mean(axis=0)
+            ax.text(
+                label_position[0],
+                label_position[1],
+                f"{label_name} {scores_3d[idx]:.2f}",
+                color="white",
+                fontsize=8,
+                bbox=dict(facecolor=color_tuple + (0.4,), edgecolor="none", pad=0.4),
+            )
+
+        ax.axis("off")
+        fig.tight_layout(pad=0)
         camera_name = _camera_name_from_path(filenames[cam_idx]) if cam_idx < len(filenames) else f"camera_{cam_idx}"
         output_path = osp.join(out_dir, f"{sample_token}_{camera_name}.png")
-        image.save(output_path)
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
 
 
 def single_cpu_test_tt(
