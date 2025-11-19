@@ -48,7 +48,7 @@ void kernel_main() {
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             remote_cb.wait_front(1);
-            remote_cb.pop_front(1);
+            remote_cb.pop_front(1, noc);
         }
     }
     remote_cb.commit();

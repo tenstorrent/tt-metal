@@ -449,24 +449,28 @@ public:
      *
      * @tparam update_remote_pointer The type of remote pointer update
      *
-     * @param src_local_cb The local circular buffer to push from
+     * @param src The source to push from. Must be local.
      * @param num_pages The number of pages to push
      * @param num_rows The number of rows to push
      * @param coalesced_num_pages_per_row The number of coalesced pages per row
      * @param coalesced_page_size The size of the coalesced page
      * @param noc The NoC to use for the remote pointer update
      */
-    template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
+    template <typename Src, RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void push_back(
-        experimental::CircularBuffer& src_local_cb,
+        const Src& src,
         uint32_t num_pages,
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size,
-        experimental::Noc& noc) {
+        experimental::Noc& noc,
+        const typename experimental::noc_traits_t<Src>::src_args_type& src_args =
+            typename experimental::noc_traits_t<Src>::src_args_type{}) {
+        auto src_addr = experimental::noc_traits_t<Src>::template src_addr<experimental::Noc::AddressType::LOCAL_L1>(
+            src, noc, src_args);
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
-            src_local_cb.get_read_ptr(),
+            src_addr,
             num_pages,
             num_rows,
             coalesced_num_pages_per_row,
