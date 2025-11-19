@@ -81,8 +81,8 @@ Tensor BcastOperation::invoke(
 
     // Bcast only works with tile layout, so we need to tilize the input tensors if neccessary
     using namespace ttnn::operations::experimental::auto_format;
-    Tensor formatted_a = AutoFormat::format_tensor(input_tensor_a, 0, Layout::TILE);
-    Tensor formatted_b = AutoFormat::format_tensor(input_tensor_b, 0, Layout::TILE);
+    Tensor formatted_a = AutoFormat::format_tensor(input_tensor_a, PadValue(0.0f), Layout::TILE);
+    Tensor formatted_b = AutoFormat::format_tensor(input_tensor_b, PadValue(0.0f), Layout::TILE);
 
     auto output = tt::tt_metal::operation::run(
                       EltwiseBinaryBroadcast{bcast_op, bcast_dim, output_memory_config},

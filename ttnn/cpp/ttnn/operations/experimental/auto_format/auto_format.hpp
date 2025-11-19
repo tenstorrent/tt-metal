@@ -6,12 +6,14 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include <optional>
 
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::auto_format {
+using PadValue = tt::tt_metal::PadValue;
 
 struct FormatParams {
     ttnn::Shape pad_shape;
@@ -91,7 +93,7 @@ public:
         const Tensor& input,
         tt::tt_metal::distributed::MeshDevice* device,
         const ttnn::Shape& padded_shape,
-        float pad_value,
+        PadValue pad_value,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 
@@ -105,7 +107,7 @@ public:
      */
     static Tensor format_tensor(
         const Tensor& input,
-        float pad_value,
+        PadValue pad_value,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };
