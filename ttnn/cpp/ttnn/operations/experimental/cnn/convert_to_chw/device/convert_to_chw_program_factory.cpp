@@ -10,6 +10,30 @@ namespace ttnn::operations::experimental::cnn::program {
 
 using namespace tt::constants;
 
+namespace {
+// Helper function to set runtime arguments for reader, writer, and compute kernels
+void set_runtime_args_for_all_kernels(
+    tt::tt_metal::Program& program,
+    const std::vector<CoreCoord>& cores,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    tt::tt_metal::KernelHandle compute_kernel_id,
+    uint32_t total_tiles_per_core) {
+    std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
+    std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
+    std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0}};  // (num_tiles_per_core)
+
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        reader_runtime_args[i][0] = total_tiles_per_core;
+        writer_runtime_args[i][0] = total_tiles_per_core;
+        compute_runtime_args[i][0] = total_tiles_per_core;
+    }
+    SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
+    SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+}
+}  // namespace
+
 ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -117,18 +141,8 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
     UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
-    std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> compute_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-
-    for (uint32_t i = 0; i < input_cores.size(); i++) {
-        reader_runtime_args[i][0] = total_tiles_per_core;
-        writer_runtime_args[i][0] = total_tiles_per_core;
-        compute_runtime_args[i][0] = total_tiles_per_core;
-    }
-    SetRuntimeArgs(program, reader_kernel_id, input_cores, reader_runtime_args);
-    SetRuntimeArgs(program, writer_kernel_id, input_cores, writer_runtime_args);
-    SetRuntimeArgs(program, compute_kernel_id, input_cores, compute_runtime_args);
+    set_runtime_args_for_all_kernels(
+        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
 
     return cached_program_t{
         std::move(program),
@@ -164,18 +178,8 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);
 
-    std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> compute_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-
-    for (uint32_t i = 0; i < input_cores.size(); i++) {
-        reader_runtime_args[i][0] = total_tiles_per_core;
-        writer_runtime_args[i][0] = total_tiles_per_core;
-        compute_runtime_args[i][0] = total_tiles_per_core;
-    }
-    SetRuntimeArgs(program, reader_kernel_id, input_cores, reader_runtime_args);
-    SetRuntimeArgs(program, writer_kernel_id, input_cores, writer_runtime_args);
-    SetRuntimeArgs(program, compute_kernel_id, input_cores, compute_runtime_args);
+    set_runtime_args_for_all_kernels(
+        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
 }
 
 }  // namespace ttnn::operations::experimental::cnn::program
