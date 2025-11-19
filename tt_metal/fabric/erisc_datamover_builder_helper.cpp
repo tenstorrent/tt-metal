@@ -299,8 +299,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
             for (size_t l = 0; l < num_links; l++) {
-                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+                forward_direction_edm.at(l).connect_to_downstream_edm(&backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(&forward_direction_edm.at(l));
             }
         }
     }
@@ -407,8 +407,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
             for (size_t l = 0; l < this->num_links; l++) {
-                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+                forward_direction_edm.at(l).connect_to_downstream_edm(&backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(&forward_direction_edm.at(l));
             }
         }
     }
@@ -489,7 +489,7 @@ EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_me
     auto generate_termination_info =
         [](const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) -> tt::tt_fabric::edm_termination_info_t {
         return tt::tt_fabric::edm_termination_info_t{
-            0, edm_builder.my_noc_x, edm_builder.my_noc_y, edm_builder.config.termination_signal_address};
+            0, edm_builder.get_noc_x(), edm_builder.get_noc_y(), edm_builder.config.termination_signal_address};
     };
     std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(this->num_links * 2);
@@ -542,13 +542,13 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
             auto& farther_edm = farther_edms.at(l);
             const std::size_t distance_receiver = i + 1;
             edm_termination_infos.push_back(
-                {distance_receiver, farther_edm.my_noc_x, farther_edm.my_noc_y, config.termination_signal_address});
+                {distance_receiver, farther_edm.get_noc_x(), farther_edm.get_noc_y(), config.termination_signal_address});
         }
         for (size_t l = 0; l < this->num_links; l++) {
             auto& nearer_edm = nearer_edms.at(l);
             const std::size_t distance_sender = i;
             edm_termination_infos.push_back(
-                {distance_sender, nearer_edm.my_noc_x, nearer_edm.my_noc_y, config.termination_signal_address});
+                {distance_sender, nearer_edm.get_noc_x(), nearer_edm.get_noc_y(), config.termination_signal_address});
         }
     }
     log_trace(tt::LogFabric, "Done Generating termination infos");

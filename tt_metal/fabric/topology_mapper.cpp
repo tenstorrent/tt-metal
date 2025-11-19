@@ -288,6 +288,9 @@ void TopologyMapper::build_mapping() {
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        // Validate that all meshes in the mesh graph descriptor have rank bindings
+        validate_mesh_id_host_names(mesh_id_host_names);
+
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
@@ -386,6 +389,41 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     }
 
     return mesh_id_to_hosts;
+}
+
+void TopologyMapper::validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const {
+    // Get all mesh IDs from the mesh graph descriptor
+    const auto mesh_graph_mesh_ids = mesh_graph_.get_mesh_ids();
+
+    // Collect mesh IDs that have hosts bound to them from rank bindings
+    std::unordered_set<MeshId> bound_mesh_ids;
+    for (const auto& [mesh_id, _] : mesh_id_host_names) {
+        bound_mesh_ids.insert(mesh_id);
+    }
+
+    // Find meshes that are in the mesh graph but not bound to any host
+    std::vector<MeshId> unbound_mesh_ids;
+    for (const auto& mesh_id : mesh_graph_mesh_ids) {
+        if (bound_mesh_ids.find(mesh_id) == bound_mesh_ids.end()) {
+            unbound_mesh_ids.push_back(mesh_id);
+        }
+    }
+
+    // Throw error if any meshes are missing bindings
+    if (!unbound_mesh_ids.empty()) {
+        std::string unbound_list;
+        for (size_t i = 0; i < unbound_mesh_ids.size(); ++i) {
+            if (i > 0) {
+                unbound_list += ", ";
+            }
+            unbound_list += std::to_string(*unbound_mesh_ids[i]);
+        }
+        TT_THROW(
+            "The following mesh IDs are defined in the mesh graph descriptor but have no hosts bound to them in "
+            "rank_bindings.yaml: {}. Please add rank bindings for these mesh IDs or remove them from the mesh graph "
+            "descriptor.",
+            unbound_list);
+    }
 }
 
 std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
@@ -1483,7 +1521,6 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
             }
         }
     }
-
     // Build MeshContainer<MeshHostRankId> by row-major ordering of host tile ranges
     // Determine host grid using unique start rows/cols
     mesh_host_ranks_.clear();
@@ -1535,6 +1572,47 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         }
         mesh_host_ranks_[*mesh_id] = MeshContainer<MeshHostRankId>(host_grid_shape, host_rank_values);
     }
+}
+
+HostName TopologyMapper::get_hostname_for_mesh(MeshId mesh_id) const {
+    // Get all hosts for this mesh_id from the fabric node mapping
+    // Meshes can be multi-host, so we collect all unique hostnames and return the first one
+    std::unordered_set<HostName> mesh_hosts;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        if (fabric_node_id.mesh_id == mesh_id) {
+            mesh_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(asic_id));
+        }
+    }
+
+    TT_FATAL(!mesh_hosts.empty(), "Mesh mesh_id {} not found in fabric node mapping", *mesh_id);
+
+    // Return the first hostname (for multi-host meshes, this represents one of the hosts)
+    return *mesh_hosts.begin();
+}
+
+HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
+    // Verify that the switch exists in the mesh graph
+    const auto& switch_ids = mesh_graph_.get_switch_ids();
+    bool switch_exists = false;
+    for (const auto& existing_switch_id : switch_ids) {
+        if (*existing_switch_id == *switch_id) {
+            switch_exists = true;
+            break;
+        }
+    }
+    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
+
+    // Convert SwitchId to MeshId and use the consolidated mesh hostname function
+    return get_hostname_for_mesh(MeshId(*switch_id));
+}
+
+HostName TopologyMapper::get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const {
+    // Direct lookup in the fabric node to ASIC mapping
+    auto it = fabric_node_id_to_asic_id_.find(fabric_node_id);
+    TT_FATAL(it != fabric_node_id_to_asic_id_.end(), "Fabric node id {} not found in mapping", fabric_node_id);
+
+    // Get the hostname for the corresponding ASIC
+    return physical_system_descriptor_.get_host_name_for_asic(it->second);
 }
 
 void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const {

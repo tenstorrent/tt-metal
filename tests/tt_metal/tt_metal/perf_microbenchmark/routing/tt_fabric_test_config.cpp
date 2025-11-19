@@ -393,12 +393,10 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
             auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
             if (filter_value == "LowLatency") {
                 r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
-            } else if (filter_value == "Dynamic") {
-                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
             } else {
                 log_info(
                     tt::LogTest,
-                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
+                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency",
                     filter_value);
                 return false;
             }
