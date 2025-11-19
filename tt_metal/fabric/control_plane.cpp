@@ -89,16 +89,6 @@ void build_golden_link_counts(
     }
 }
 
-std::uint64_t encode_mesh_id_and_rank(MeshId mesh_id, MeshHostRankId host_rank) {
-    return (static_cast<uint64_t>(mesh_id.get()) << 32) | static_cast<uint64_t>(host_rank.get());
-}
-
-std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_value) {
-    return {
-        MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
-        MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
-}
-
 bool check_connection_requested(
     MeshId my_mesh_id,
     MeshId neighbor_mesh_id,
@@ -365,6 +355,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     const auto& host_ranks =
         this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding.mesh_ids[0]).values();
     if (host_rank_str == nullptr) {
+        local_mesh_binding.host_rank = MeshHostRankId{0};
         TT_FATAL(
             host_ranks.size() == 1 && *host_ranks.front() == 0,
             "TT_MESH_HOST_RANK must be set when multiple host ranks are present in the mesh graph descriptor for mesh "
@@ -395,19 +386,15 @@ void ControlPlane::initialize_distributed_contexts() {
     std::array this_host = {*global_context->rank()};
     host_local_context_ = global_context->create_sub_context(this_host);
 
-    // Find out which MPI ranks manage the same meshes as this host.
-    uint64_t this_host_encoded_ids =
-        encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[0], local_mesh_binding_.host_rank);
-    std::vector<std::uint64_t> encoded_mesh_ids(*global_context->size());
-    global_context->all_gather(
-        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&this_host_encoded_ids), sizeof(std::uint64_t)),
-        ttsl::as_writable_bytes(ttsl::make_span(encoded_mesh_ids)));
-
-    int mpi_rank = 0;
-    for (std::uint64_t encoded_value : encoded_mesh_ids) {
-        const auto [mesh_id, mesh_host_rank] = decode_mesh_id_and_rank(encoded_value);
-        mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
-        global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank++}] = {mesh_id, mesh_host_rank};
+    // Use mesh_graph to get all (mesh_id, host_rank) pairs (this follows topology_mapper's mesh_rank_bindings),
+    // then use topology_mapper's helper function to get the MPI rank for each (mesh_id, host_rank) pair.
+    for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+        const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
+        for (const auto& [_, mesh_host_rank] : host_ranks) {
+            int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
+            mpi_ranks_[mesh_id][mesh_host_rank] = tt::tt_metal::distributed::multihost::Rank{mpi_rank};
+            global_logical_bindings_[tt::tt_metal::distributed::multihost::Rank{mpi_rank}] = {mesh_id, mesh_host_rank};
+        }
     }
 
     // Create a sub-context for each mesh-host-rank pair.
@@ -418,17 +405,21 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, host_local_context_);
         } else {
             std::vector<int> mpi_neighbors;
+            // Sort mesh_host_ranks->second for deterministic iteration across hosts
+            std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
+                mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
+            std::sort(sorted_host_ranks.begin(), sorted_host_ranks.end(), [](const auto& a, const auto& b) {
+                return a.first.get() < b.first.get();
+            });
             std::transform(
-                mesh_host_ranks->second.begin(),
-                mesh_host_ranks->second.end(),
+                sorted_host_ranks.begin(),
+                sorted_host_ranks.end(),
                 std::back_inserter(mpi_neighbors),
                 [](const auto& p) { return p.second.get(); });
             std::sort(mpi_neighbors.begin(), mpi_neighbors.end());
             distributed_contexts_.emplace(local_mesh_id, global_context->create_sub_context(mpi_neighbors));
         }
     }
-
-    global_context->barrier();
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
@@ -467,8 +458,6 @@ void ControlPlane::init_control_plane(
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-
-    this->initialize_distributed_contexts();
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         // Initialize topology mapper with provided mapping, skipping discovery
@@ -510,6 +499,9 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
+
+    // Initialize distributed contexts after topology_mapper is created so we can use its helper function
+    this->initialize_distributed_contexts();
     this->generate_intermesh_connectivity();
 
     // Printing, only enabled with log_debug
@@ -881,6 +873,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
             const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+            auto asic_id = this->topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
 
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[*mesh_id][fabric_chip_id]) {
                 auto connected_mesh_coord =
@@ -933,15 +926,17 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                 } else {
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
+
+                    auto neighbor_host = this->topology_mapper_->get_hostname_for_fabric_node_id(
+                        FabricNodeId(mesh_id, logical_connected_chip_id));
+
                     TT_ASSERT(
                         host_rank_for_chip.has_value(),
                         "Mesh {} Chip {} does not have a host rank associated with it",
-                        mesh_id,
+                        *mesh_id,
                         logical_connected_chip_id);
                     auto connected_host_rank_id = host_rank_for_chip.value();
 
-                    auto unique_chip_id =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Iterate over all neighboring hosts
                     // Check if the neighbor belongs to the same mesh and owns the connected chip
                     // If so, iterate over all cross host connections between the neighbors
@@ -959,7 +954,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                             const auto& neighbor_exit_nodes =
                                 physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
                             for (const auto& exit_node : neighbor_exit_nodes) {
-                                if (*exit_node.src_exit_node == unique_chip_id) {
+                                if (*exit_node.src_exit_node == *asic_id) {
                                     this->assign_direction_to_fabric_eth_chan(
                                         fabric_node_id, exit_node.eth_conn.src_chan, edge.port_direction);
                                 }
