@@ -22,6 +22,8 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+      tracy: true
+      skip-tt-train: true
   data-movement-unit-tests:
     uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
     needs: build-artifact
