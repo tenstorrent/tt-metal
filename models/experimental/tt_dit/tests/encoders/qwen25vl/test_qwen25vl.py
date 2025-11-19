@@ -224,7 +224,7 @@ def test_qwen25vl_text_encoder(
 @pytest.mark.parametrize(
     "prompts",
     [
-        ["Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot"],
+        ["", "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot"],
     ],
 )
 @pytest.mark.parametrize(
@@ -270,10 +270,13 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
             max_sequence_length=sequence_length,
         )
 
+        embeds = torch.nn.functional.pad(embeds, [0, 0, 0, sequence_length - embeds.shape[1]], value=0)
+        mask = torch.nn.functional.pad(mask, [0, sequence_length - mask.shape[1]], value=0)
+
     logger.info("running TT model...")
     tt_embeds, tt_mask = tt_encoder_pair.encode(
         prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=sequence_length
     )
 
-    assert_quality(embeds, tt_embeds, pcc=1, relative_rmse=0)
-    assert_quality(mask, tt_mask, pcc=1, relative_rmse=0)
+    assert_quality(mask, tt_mask, relative_rmse=0)
+    assert_quality(embeds * mask.unsqueeze(-1), tt_embeds * tt_mask.unsqueeze(-1), pcc=1, relative_rmse=0)
