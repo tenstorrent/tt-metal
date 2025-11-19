@@ -1655,16 +1655,20 @@ class Generator:
 
 def create_submeshes(mesh_device, data_parallel):
     if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
-        return [mesh_device]
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(8, 1))
 
-    num_rows, num_cols = mesh_device.shape
-    num_devices = num_rows * num_cols
-    assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
+        submeshes[0].reshape(ttnn.MeshShape(1, 8))
 
-    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
-        for submesh in submeshes:
-            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
-        return submeshes
+        return [submeshes[0]]
 
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+    # num_rows, num_cols = mesh_device.shape
+    # num_devices = num_rows * num_cols
+    # assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
+
+    # if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
+    #     submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
+    #     for submesh in submeshes:
+    #         submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
+    #     return submeshes
+
+    # return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
