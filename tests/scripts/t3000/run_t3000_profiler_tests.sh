@@ -152,7 +152,7 @@ run_op_support_count_T3000_test() {
             expected_count=${expected_counts[$((i-1))]}
 
             # Unique ID = (GLOBAL CALL COUNT, METAL TRACE ID, METAL TRACE REPLAY SESSION ID)
-            unique_id_count=$(tail -n +2 $report_file | awk -F',' '{print $3","$35","$36}' | sort -u | wc -l)
+            unique_id_count=$(tail -n +2 $report_file | awk -F',' '{print $0","$1","$2}' | sort -u | wc -l)
 
             if (( unique_id_count < expected_count )); then
                 echo "Expected at least $expected_count unique operation IDs, but found $unique_id_count" 1>&2
@@ -163,6 +163,8 @@ run_op_support_count_T3000_test() {
 }
 
 run_profiling_test() {
+    run_op_support_count_T3000_test
+
     run_async_test
 
     run_ccl_T3000_test
