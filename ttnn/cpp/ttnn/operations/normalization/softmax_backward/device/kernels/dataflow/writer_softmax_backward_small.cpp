@@ -4,11 +4,8 @@
 
 #include <dataflow_api.h>
 #include <cstdint>
-#include <tools/profiler/kernel_profiler.hpp>
 
 void kernel_main() {
-    DeviceZoneScopedN("WriterSoftmaxBackwardSmall-Main");
-
     // Compile time args
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(1);
@@ -49,7 +46,6 @@ void kernel_main() {
 
     // Write output rows
     for (uint32_t row_idx = 0; row_idx < num_rows; ++row_idx) {
-        DeviceZoneScopedN("WriterSoftmaxBackwardSmall-RowProcessing");
         uint32_t row_start_tile = (start_tile + row_idx) * num_tiles_per_row;
 
         // Wait for compute to produce all tiles in the row
@@ -58,7 +54,6 @@ void kernel_main() {
 
         // Write all tiles in the row
         for (uint32_t w = 0; w < num_tiles_per_row; ++w) {
-            DeviceZoneScopedN("WriterSoftmaxBackwardSmall-TileProcessing");
             noc_async_write(
                 l1_read_addr + w * out_tile_size, output_accessor.get_noc_addr(row_start_tile + w), out_tile_size);
         }

@@ -18,7 +18,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "tt-metalium/base_types.hpp"
-#include "tt-metalium/runtime_args_data.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -192,7 +191,6 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const uint32_t out_cb_index = tt::CBIndex::c_7;         // output
     const uint32_t intermed0_cb_index = tt::CBIndex::c_13;  // y * grad
     const uint32_t intermed1_cb_index = tt::CBIndex::c_14;  // sum(y * grad)
-    const uint32_t intermed2_cb_index = tt::CBIndex::c_15;  // grad - sum(y * grad)
 
     // Input buffers: sized for one row (width_tiles)
     auto c_in0_config = CircularBufferConfig(width_tiles * input_tile_size * 2, {{src0_cb_index, input_data_format}})
@@ -224,11 +222,6 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
                                   .set_page_size(intermed1_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed1_config);
 
-    // intermed2: grad - sum (single tile for intermediate subtraction result)
-    auto c_intermed2_config = CircularBufferConfig(1 * intermed_tile_size, {{intermed2_cb_index, intermed_data_format}})
-                                  .set_page_size(intermed2_cb_index, intermed_tile_size);
-    CreateCircularBuffer(program, all_cores, c_intermed2_config);
-
     // Compile time arguments for kernels
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
@@ -251,7 +244,6 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         out_cb_index,        // 2: out_cb_id (output)
         intermed0_cb_index,  // 3: mul_cb_id (y * grad)
         intermed1_cb_index,  // 4: sum_reduce_cb_id (sum(y * grad))
-        intermed2_cb_index,  // 5: grad_minus_sum_cb_id (grad - sum)
         ones_cb_index,       // 6: ones_cb_id (ones vector for matmul reduction)
         width_tiles          // 7: num_tiles_per_row
     };

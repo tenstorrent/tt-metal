@@ -4,12 +4,7 @@
 
 #include <dataflow_api.h>
 #include <cstdint>
-#include <type_traits>
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
-
-// Generate a column vector of ones for matmul-based reduction using BF16 scaler tile
-// Uses optimized helper to place 1.0 at the first column of faces 0 and 2
-// Packed BF16 1.0 is 0x3f80; double-packed into u32 as 0x3f803f80
 
 void kernel_main() {
     // Compile time args

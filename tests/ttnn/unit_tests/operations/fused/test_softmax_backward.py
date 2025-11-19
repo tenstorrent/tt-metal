@@ -9,7 +9,6 @@
 # Enable logs with: export TT_METAL_LOGGER_LEVEL=2
 # Or use: export TT_METAL_LOGGER_TYPES=Op to see only operation logs
 
-import os
 import torch
 import pytest
 import ttnn
@@ -36,60 +35,45 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
 
 def assert_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor, pcc_threshold: float = 0.999) -> None:
     pcc_value = compute_pcc(tensor1, tensor2)
-    logger.info(f"  PCC: {pcc_value:.6f} (threshold: {pcc_threshold})")
+    logger.debug(f"  PCC: {pcc_value:.6f} (threshold: {pcc_threshold})")
     assert pcc_value >= pcc_threshold, f"PCC {pcc_value:.6f} < threshold {pcc_threshold}"
 
 
-def dump_tensors_to_files(pt_output_tensor_fused: torch.Tensor, pt_output_tensor_reference: torch.Tensor) -> None:
-    if os.environ.get("TTNN_DUMP_TENSORS_TO_FILES", "0") == "1":
-        torch.set_printoptions(threshold=1_000_000)
-
-        # Write outputs to separate files for analysis
-        with open("softmax_backward_fused_output.txt", "w") as f:
-            f.write(f"pt_output_tensor_fused: {pt_output_tensor_fused}")
-
-        with open("softmax_backward_reference_output.txt", "w") as f:
-            f.write(f"pt_output_tensor_reference: {pt_output_tensor_reference}")
-
-        with open("softmax_backward_diff.txt", "w") as f:
-            f.write(f"diff (fused vs reference): {pt_output_tensor_fused - pt_output_tensor_reference}")
-
-
 def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_name: str = "", range: int = 0) -> None:
-    if os.environ.get("TTNN_PRINT_TOLERANCES", "0") == "1":
-        """Calculate and print tolerance metrics between two tensors"""
-        # Calculate actual differences
-        abs_diff = torch.abs(tensor1 - tensor2)
-        max_abs_diff = torch.max(abs_diff).item()
-        mean_abs_diff = torch.mean(abs_diff).item()
+    """Calculate and print tolerance metrics between two tensors"""
+    # Calculate actual differences
+    abs_diff = torch.abs(tensor1 - tensor2)
+    max_abs_diff = torch.max(abs_diff).item()
+    mean_abs_diff = torch.mean(abs_diff).item()
 
-        # Calculate relative difference
-        rel_diff = abs_diff / (torch.abs(tensor2) + 1e-8)
-        max_rel_diff = torch.max(rel_diff).item()
-        mean_rel_diff = torch.mean(rel_diff).item()
+    # Calculate relative difference
+    rel_diff = abs_diff / (torch.abs(tensor2) + 1e-8)
+    max_rel_diff = torch.max(rel_diff).item()
+    mean_rel_diff = torch.mean(rel_diff).item()
 
-        # Pearson correlation coefficient (PCC)
-        pcc = compute_pcc(tensor1, tensor2)
+    # Pearson correlation coefficient (PCC)
+    pcc = compute_pcc(tensor1, tensor2)
 
-        logger.info(f"\nTolerance metrics for {dtype_name} and range {range}:")
-        logger.info(f"  Max absolute difference: {max_abs_diff:.6e}")
-        logger.info(f"  Mean absolute difference: {mean_abs_diff:.6e}")
-        logger.info(f"  Max relative difference: {max_rel_diff:.6e}")
-        logger.info(f"  Mean relative difference: {mean_rel_diff:.6e}")
-        logger.info(f"  PCC: {pcc:.6f}")
+    logger.info(f"\nTolerance metrics for {dtype_name} and range {range}:")
+    logger.info(f"  Max absolute difference: {max_abs_diff:.6e}")
+    logger.info(f"  Mean absolute difference: {mean_abs_diff:.6e}")
+    logger.info(f"  Max relative difference: {max_rel_diff:.6e}")
+    logger.info(f"  Mean relative difference: {mean_rel_diff:.6e}")
+    logger.info(f"  PCC: {pcc:.6f}")
 
 
-PCC_THRESHOLD = 0.987
 BATCH_SIZE = 1
 SEED = 77
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([BATCH_SIZE, 3, 64, 64])),  # 3x64 tiles = small
-        (torch.Size([BATCH_SIZE, 32, 2048, 2048])),  # 32x2048 tiles = large
-    ),
+    "input_shapes,rtol,atol,pcc_threshold",
+    [
+        # Small tensor
+        pytest.param(torch.Size([BATCH_SIZE, 3, 64, 64]), 1e-3, 1e-2, 0.9999, id="small_3x64x64"),
+        # Large tensor
+        pytest.param(torch.Size([BATCH_SIZE, 32, 2048, 2048]), 3e4, 6e-3, 0.987, id="large_32x2048x2048"),
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -105,7 +89,7 @@ SEED = 77
     "dim",
     [3],  # only last dimension supported for now
 )
-def test_bw_softmax(input_shapes, dtype, range, dim, device):
+def test_bw_softmax(input_shapes, rtol, atol, pcc_threshold, dtype, range, dim, device):
     grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -range, range, device, ttnn_dtype=dtype, seed=SEED)
     in_data, input_tensor = data_gen_with_range_dtype(
         input_shapes, -range, range, device, required_grad=True, ttnn_dtype=dtype, seed=SEED
@@ -120,41 +104,41 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     pt_output_tensor_fused = ttnn.to_torch(tt_output_tensor_fused)
     pt_output_tensor_reference = reference_softmax_backward_output(pt_softmax_tensor, grad_data, axis=dim)
 
-    # Debug output (enable with TTNN_DUMP_TENSORS_TO_FILES=1 environment variable)
-    dump_tensors_to_files(pt_output_tensor_fused, pt_output_tensor_reference)
-
     # Use torch.allclose with torch reference for bf16 and fp32 types
     if dtype in [ttnn.bfloat16, ttnn.float32]:
-        relative_tolerance = 3e05
-        absolute_tolerance = 6e-3
-        logger.info(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
+        logger.debug(f"  Shape: {input_shapes}, Elements: {input_shapes.numel():,}")
+        logger.debug(f"  Tolerances: rtol={rtol}, atol={atol}, pcc_threshold={pcc_threshold}")
 
-        # Debug output (enable with TTNN_PRINT_TOLERANCES=1 environment variable)
-        print_tolerance_metrics(
-            pt_output_tensor_fused,
-            pt_output_tensor_reference,
-            dtype_name=f"dtype={dtype}",
-            range=range,
-        )
+        try:
+            assert torch.allclose(
+                pt_output_tensor_fused,
+                pt_output_tensor_reference,
+                rtol=rtol,
+                atol=atol,
+            )
 
-        assert torch.allclose(
-            pt_output_tensor_fused,
-            pt_output_tensor_reference,
-            rtol=relative_tolerance,
-            atol=absolute_tolerance,
-        )
-
-        assert_pcc(pt_output_tensor_fused, pt_output_tensor_reference, PCC_THRESHOLD)
+            assert_pcc(pt_output_tensor_fused, pt_output_tensor_reference, pcc_threshold)
+        except AssertionError:
+            # Print detailed metrics on failure to help debug
+            print_tolerance_metrics(
+                pt_output_tensor_fused,
+                pt_output_tensor_reference,
+                dtype_name=f"dtype={dtype}",
+                range=range,
+            )
+            raise
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        # Shapes with non-tile-aligned dimensions (require padding)
-        (torch.Size([2, 1, 64, 500])),  # SMALL, width=500, needs padding to 512
-        (torch.Size([1, 1, 320, 1000])),  # LARGE, width=1000, needs padding to 1024
-        (torch.Size([10, 30, 320, 999])),  # LARGE,width=1000, needs padding to 1024
-    ),
+    "input_shapes,rtol,atol,pcc_threshold",
+    [
+        # Small padded tensors
+        pytest.param(torch.Size([1, 1, 128, 499]), 5e-1, 5e-3, 0.9999, id="small_padded_128x499"),
+        pytest.param(torch.Size([2, 1, 64, 500]), 5e-3, 5e-3, 0.9999, id="small_padded_64x500"),
+        # Large padded tensors
+        pytest.param(torch.Size([1, 1, 320, 1000]), 1e-4, 4e-3, 0.999, id="large_padded_320x1000"),
+        pytest.param(torch.Size([10, 30, 320, 999]), 3e4, 6e-3, 0.987, id="large_padded_10x30x320x999"),
+    ],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -170,7 +154,7 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     "dim",
     [-1],  # test on last dimension
 )
-def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
+def test_bw_softmax_padded(input_shapes, rtol, atol, pcc_threshold, dtype, range, dim, device):
     """Test softmax backward with padded tensors (non-tile-aligned dimensions)"""
 
     torch.manual_seed(seed=SEED)
@@ -185,13 +169,13 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
 
     # Use the pattern from test_fast_reduce_nc.py which works correctly
     # Create ttnn.Tensor directly, pad, then convert layout, then move to device
-    tt_softmax_tensor = ttnn.Tensor(pt_softmax_tensor, dtype).pad_to_tile(float("-inf")).to(ttnn.TILE_LAYOUT).to(device)
+    tt_softmax_tensor = ttnn.Tensor(pt_softmax_tensor, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
-    tt_grad_tensor = ttnn.Tensor(grad_data, dtype).pad_to_tile(float("-inf")).to(ttnn.TILE_LAYOUT).to(device)
+    tt_grad_tensor = ttnn.Tensor(grad_data, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
-    logger.info(f"\nOriginal shape: {input_shapes}")
-    logger.info(f"Padded shape: {tt_softmax_tensor.shape}")
-    # logger.info(f"Logical shape: {tt_softmax_tensor.logical_shape()}")
+    logger.debug(f"\nOriginal shape: {input_shapes}, Elements: {input_shapes.numel():,}")
+    logger.debug(f"Padded shape: {tt_softmax_tensor.shape}")
+    logger.debug(f"Tolerances: rtol={rtol}, atol={atol}, pcc_threshold={pcc_threshold}")
 
     # Run softmax backward on padded tensors
     tt_output_tensor_fused = ttnn.softmax_backward(tt_softmax_tensor, tt_grad_tensor, dim=dim)
@@ -199,34 +183,30 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
     # Convert back to torch (automatically unpads to logical shape)
     pt_output_tensor_fused = ttnn.to_torch(tt_output_tensor_fused)
 
-    # Debug output
-    dump_tensors_to_files(pt_output_tensor_fused, pt_output_tensor_reference)
-
     # Verify the output matches reference (only on logical/unpadded region)
     if dtype in [ttnn.bfloat16, ttnn.float32]:
-        relative_tolerance = 3e05
-        absolute_tolerance = 6e-3
-        logger.info(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
+        try:
+            # The key test: output should match reference on the logical (unpadded) region
+            # This verifies that padding did not corrupt the result
+            assert (
+                pt_output_tensor_fused.shape == pt_output_tensor_reference.shape
+            ), f"Unpadded output shape mismatch: {pt_output_tensor_fused.shape} vs {pt_output_tensor_reference.shape}"
 
-        print_tolerance_metrics(
-            pt_output_tensor_fused,
-            pt_output_tensor_reference,
-            dtype_name=f"dtype={dtype} (padded)",
-            range=range,
-        )
-
-        # The key test: output should match reference on the logical (unpadded) region
-        # This verifies that padding did not corrupt the result
-        assert (
-            pt_output_tensor_fused.shape == pt_output_tensor_reference.shape
-        ), f"Unpadded output shape mismatch: {pt_output_tensor_fused.shape} vs {pt_output_tensor_reference.shape}"
-
-        assert torch.allclose(
-            pt_output_tensor_fused,
-            pt_output_tensor_reference,
-            rtol=relative_tolerance,
-            atol=absolute_tolerance,
-        ), f"Padded tensor output does not match reference! This means padding corrupted the reduction."
+            assert torch.allclose(
+                pt_output_tensor_fused,
+                pt_output_tensor_reference,
+                rtol=rtol,
+                atol=atol,
+            ), f"Padded tensor output does not match reference! This means padding corrupted the reduction."
+        except AssertionError:
+            # Print detailed metrics on failure to help debug
+            print_tolerance_metrics(
+                pt_output_tensor_fused,
+                pt_output_tensor_reference,
+                dtype_name=f"dtype={dtype} (padded)",
+                range=range,
+            )
+            raise
 
 
 @pytest.mark.parametrize(
@@ -241,7 +221,6 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
         ((8, 8, 1024, 1024), "LARGE"),  # 256x32 tiles = very large
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_softmax_backward_kernel_selection(shape, expected_kernel, device):
     """
     Test that verifies correct kernel selection based on tensor size.
@@ -259,10 +238,10 @@ def test_softmax_backward_kernel_selection(shape, expected_kernel, device):
     or:
         "SoftmaxBackward: Using LARGE (streaming) kernel | Shape: 64x16 tiles (1024 total) | Estimated L1: XX KB"
     """
-    logger.info(f"\n{'='*80}")
-    logger.info(f"Testing kernel selection for shape {shape}")
-    logger.info(f"Expected kernel: {expected_kernel}")
-    logger.info(f"{'='*80}")
+    logger.debug(f"\n{'='*80}")
+    logger.debug(f"Testing kernel selection for shape {shape}")
+    logger.debug(f"Expected kernel: {expected_kernel}")
+    logger.debug(f"{'='*80}")
 
     torch.manual_seed(SEED)
 
@@ -276,7 +255,7 @@ def test_softmax_backward_kernel_selection(shape, expected_kernel, device):
 
     # Run operation - kernel selection happens here
     # Check the logs to verify expected_kernel was used
-    logger.info("⚠️  Check the logs above for kernel selection message!")
+    logger.debug("⚠️  Check the logs above for kernel selection message!")
     tt_output = ttnn.softmax_backward(tt_y, tt_grad, dim=-1)
 
     # Verify correctness
@@ -285,8 +264,14 @@ def test_softmax_backward_kernel_selection(shape, expected_kernel, device):
 
     # Quick sanity check
     pcc = compute_pcc(pt_output, pt_reference)
-    logger.info(f"PCC: {pcc:.6f}")
-    assert pcc >= 0.99, f"Output doesn't match reference (PCC={pcc:.6f})"
+    logger.debug(f"PCC: {pcc:.6f}")
 
-    logger.info(f"✅ Test passed for shape {shape} (expected {expected_kernel} kernel)")
-    logger.info(f"{'='*80}\n")
+    try:
+        assert pcc >= 0.99999, f"Output doesn't match reference (PCC={pcc:.6f})"
+    except AssertionError:
+        # Print detailed metrics on failure to help debug
+        print_tolerance_metrics(pt_output, pt_reference, dtype_name=f"shape={shape}", range=0)
+        raise
+
+    logger.debug(f"✅ Test passed for shape {shape} (expected {expected_kernel} kernel)")
+    logger.debug(f"{'='*80}\n")

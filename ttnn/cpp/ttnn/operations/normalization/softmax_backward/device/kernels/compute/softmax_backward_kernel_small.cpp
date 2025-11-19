@@ -7,7 +7,6 @@
 #include <compute_kernel_api/tile_move_copy.h>
 #include <compute_kernel_api/eltwise_binary.h>
 #include <compute_kernel_api/matmul.h>
-#include <tools/profiler/kernel_profiler.hpp>
 
 inline void reduce_tile_to_cb(uint32_t icb0, uint32_t icb_ones, uint32_t ocb, uint32_t size) {
     constexpr uint32_t onetile = 1;
@@ -58,67 +57,46 @@ ALWI void elementwise_multiply(
     cb_push_back(out_cb_id, /*ntiles*/ 1);
 }
 
-// TODO: first candidate for fusion
-// Compute: output = src0 * (src1 - scalar_cb)
-// This computes y * (grad - sum(y * grad)) for softmax backward
+// Fused subtract and multiply: output = y * (grad - sum)
+// Reuses DST register to eliminate intermediate CB write/read
 ALWI void fused_sub_mul(
-    uint32_t src0_cb_id,  // y (softmax output)Expand commentComment on line R64ResolvedCode has comments. Press enter
-                          // to view.
-    uint32_t src1_cb_id,  // grad (upstream gradient)
+    uint32_t y_cb_id,           // y (softmax output)
+    uint32_t grad_cb_id,        // grad (upstream gradient)
     uint32_t sum_reduce_cb_id,  // sum(y * grad) - broadcasted scalar
-    uint32_t intermed_cb_id,    // intermediate CB for grad - sum
     uint32_t out_cb_id,         // output
-    uint32_t src0_tile_idx,
-    uint32_t src1_tile_idx) {
-    // Step 1: Compute grad - sum(y * grad) and store in intermediate CB
-    // Note: caller ensures src1, sum_reduce_cb have required tiles available
-    // sum_reduce_cb always has the scalar at index 0
-    cb_reserve_back(intermed_cb_id, 1);
+    uint32_t y_tile_idx,
+    uint32_t grad_tile_idx) {
+    constexpr uint32_t one_tile = 1;
+    constexpr uint32_t dst_reg_tile = 0;
 
-    sub_bcast_cols_init_short(src1_cb_id, sum_reduce_cb_id);
-
+    cb_reserve_back(out_cb_id, one_tile);
     tile_regs_acquire();
-    sub_tiles_bcast<BROADCAST_TYPE>(src1_cb_id, sum_reduce_cb_id, src1_tile_idx, 0, 0);  // grad[w] - sum[0]
+
+    // Step 1: Compute grad - sum(y * grad) and store in DST[0]
+    sub_bcast_cols_init_short(grad_cb_id, sum_reduce_cb_id);
+    sub_tiles_bcast<BROADCAST_TYPE>(grad_cb_id, sum_reduce_cb_id, grad_tile_idx, 0, dst_reg_tile);
+
+    // Step 2: Multiply y * DST[0], reusing the DST register
+    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id);
+    binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(y_cb_id, y_tile_idx, dst_reg_tile);
+
     tile_regs_commit();
-
     tile_regs_wait();
-    pack_tile(0, intermed_cb_id);
+    pack_tile(dst_reg_tile, out_cb_id);
     tile_regs_release();
-
-    cb_push_back(intermed_cb_id, 1);
-
-    // Step 2: Compute y * (grad - sum)
-    // Note: caller ensures src0 has required tiles available
-    cb_reserve_back(out_cb_id, 1);
-    cb_wait_front(intermed_cb_id, 1);
-
-    mul_tiles_init(src0_cb_id, intermed_cb_id);
-
-    tile_regs_acquire();
-    mul_tiles(src0_cb_id, intermed_cb_id, src0_tile_idx, 0, 0);  // y[w] * intermed[0]
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile(0, out_cb_id);
-    tile_regs_release();
-
-    cb_pop_front(intermed_cb_id, 1);
-    cb_push_back(out_cb_id, 1);
+    cb_push_back(out_cb_id, one_tile);
 }
 
 namespace NAMESPACE {
 void MAIN {
-    DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-Main");
-
     // Compile time args
     constexpr uint32_t y_cb_id = get_compile_time_arg_val(0);               // softmax_output (y)
     constexpr uint32_t grad_cb_id = get_compile_time_arg_val(1);            // upstream_grad (grad)
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);             // output
     constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);             // y * grad
     constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);      // sum(y * grad)
-    constexpr uint32_t grad_minus_sum_cb_id = get_compile_time_arg_val(5);  // grad - sum(y * grad)
-    constexpr uint32_t ones_cb_id = get_compile_time_arg_val(6);            // ones vector for matmul reduction
-    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);
+    constexpr uint32_t ones_cb_id = get_compile_time_arg_val(5);            // ones vector for matmul reduction
+    constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(6);
 
     // Runtime args
     const uint32_t num_rows = get_arg_val<uint32_t>(0);        // Number of rows to process
@@ -129,70 +107,42 @@ void MAIN {
 
     // Process each row
     for (uint32_t row = 0; row < num_rows; ++row) {
-        DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-RowProcessing");
-
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-WaitInputs");
-            // Wait for reader to provide all input tiles
-            cb_wait_front(y_cb_id, width_in_tiles);
-            cb_wait_front(grad_cb_id, width_in_tiles);
-        }
+        // Wait for reader to provide all input tiles
+        cb_wait_front(y_cb_id, width_in_tiles);
+        cb_wait_front(grad_cb_id, width_in_tiles);
 
         // Step 1: Compute y * grad for all tiles in the row (element-wise multiplication)
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-MulTilesInit");
-            mul_tiles_init(y_cb_id, grad_cb_id);
-        }
+        mul_tiles_init(y_cb_id, grad_cb_id);
 
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-ElementwiseMul");
-            for (uint32_t w = 0; w < width_in_tiles; ++w) {
-                elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, w, w);
-            }
+        for (uint32_t w = 0; w < width_in_tiles; ++w) {
+            elementwise_multiply(y_cb_id, grad_cb_id, mul_cb_id, w, w);
         }
 
         // Step 2: Reduce sum(y * grad) across the row using matmul with ones vector
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-ReduceSum");
-            reduce_tile_to_cb(mul_cb_id, ones_cb_id, sum_reduce_cb_id, width_in_tiles);
-        }
-
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-PopMul");
-            cb_pop_front(mul_cb_id, width_in_tiles);
-        }
+        reduce_tile_to_cb(mul_cb_id, ones_cb_id, sum_reduce_cb_id, width_in_tiles);
+        cb_pop_front(mul_cb_id, width_in_tiles);
 
         // Step 3: For each tile in the row, compute final result: y * (grad - sum(y * grad))
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-WaitStep3Inputs");
-            // Wait for all input tiles to be available before processing
-            cb_wait_front(y_cb_id, width_in_tiles);
-            cb_wait_front(grad_cb_id, width_in_tiles);
-            cb_wait_front(sum_reduce_cb_id, 1);
-        }
+        // Wait for all input tiles to be available before processing
+        cb_wait_front(y_cb_id, width_in_tiles);
+        cb_wait_front(grad_cb_id, width_in_tiles);
+        cb_wait_front(sum_reduce_cb_id, 1);
 
         // Step 3: subtract grad - sum, then multiply y * (grad - sum)
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-FusedSubMul");
-            for (uint32_t w = 0; w < width_in_tiles; ++w) {
-                fused_sub_mul(
-                    y_cb_id,               // y
-                    grad_cb_id,            // grad
-                    sum_reduce_cb_id,      // sum(y * grad)
-                    grad_minus_sum_cb_id,  // intermediate: grad - sum
-                    out_cb_id,             // output
-                    w,                     // y tile index
-                    w);                    // grad tile index
-            }
+        for (uint32_t w = 0; w < width_in_tiles; ++w) {
+            fused_sub_mul(
+                y_cb_id,           // y
+                grad_cb_id,        // grad
+                sum_reduce_cb_id,  // sum(y * grad)
+                out_cb_id,         // output
+                w,                 // y tile index
+                w);                // grad tile index
         }
 
         // Pop consumed data for this row
-        {
-            DeviceZoneScopedN("ComputeSoftmaxBackwardSmall-PopOutputs");
-            cb_pop_front(y_cb_id, width_in_tiles);
-            cb_pop_front(grad_cb_id, width_in_tiles);
-            cb_pop_front(sum_reduce_cb_id, 1);
-        }
+        cb_pop_front(y_cb_id, width_in_tiles);
+        cb_pop_front(grad_cb_id, width_in_tiles);
+        cb_pop_front(sum_reduce_cb_id, 1);
     }
 }
 }  // namespace NAMESPACE
