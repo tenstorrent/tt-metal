@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
     }
 
     if (device_config.enable_tp) {
-        if (!training_config.model_path.empty()) {
+        if (!model_config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
 
