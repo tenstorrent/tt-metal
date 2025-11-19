@@ -540,8 +540,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(ui
     } else {
         // MUX mode: topology-based channels (includes fabric routers)
         const auto topology = fabric_context.get_fabric_topology();
-        const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-        const auto worker_channel = is_2d_fabric ? direction_ : 0;
+        const auto worker_channel = 0;
         const auto worker_stream_id = tensix_config.get_channel_credits_stream_id(worker_channel, core_id_);
 
         switch (topology) {
@@ -553,14 +552,13 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(ui
             case tt::tt_fabric::Topology::Mesh:
             case tt::tt_fabric::Topology::Torus:
                 fabric_stream_ids = {
+                    worker_stream_id,
                     tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,
                     tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,
-                    tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,
-                    tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id};
+                    tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id};
                 break;
             default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
         }
-        fabric_stream_ids[worker_channel] = worker_stream_id;
     }
 
     TT_FATAL(

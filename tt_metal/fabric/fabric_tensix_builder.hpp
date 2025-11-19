@@ -212,9 +212,6 @@ private:
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
     tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;
-    uint32_t noc_x_;
-    uint32_t noc_y_;
-    eth_chan_directions direction_;
 };
 
 }  // namespace tt::tt_fabric
