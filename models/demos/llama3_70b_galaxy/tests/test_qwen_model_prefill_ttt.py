@@ -290,7 +290,9 @@ def test_qwen_model_prefill_inference(
     # Convert transformer output to torch tensor first
     tt_output_torch = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(1, 3) if model_args.is_galaxy else (1, 3), mesh_shape=model_args.cluster_shape
+        ),
     )
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.dim].view(
         batch_size, seq_len, -1
@@ -353,7 +355,7 @@ def test_qwen_model_prefill_inference(
                                 layer_past,
                                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                                     mesh_device,
-                                    dims=(1, 3),
+                                    dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                     mesh_shape=model_args.cluster_shape,
                                 ),
                             )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -376,7 +378,7 @@ def test_qwen_model_prefill_inference(
                                 layer_past,
                                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                                     mesh_device,
-                                    dims=(1, 0),
+                                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                     mesh_shape=model_args.cluster_shape,
                                 ),
                             )

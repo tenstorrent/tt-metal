@@ -212,72 +212,33 @@ class TtLlamaMLP(LightweightModule):
 
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
-        # w1_out = ttnn.linear(
-        #     x,
-        #     self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-        #     compute_kernel_config=(
-        #         self.args.compute_kernel_config_lofi
-        #         if self.four_bit_mlp
-        #         else self.args.compute_kernel_config_hifi2_fp16
-        #     ),
-        #     dtype=ttnn.bfloat8_b,
-        #     program_config=pc_1,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        w1_out = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-            # fused_activation=ttnn.UnaryOpType.SILU,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=16,
-                K_block_size=4,
-                N_block_size=8,
-                subblock_h=4,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+        w1_out = ttnn.linear(
+            x,
+            self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
             ),
-            compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            ),
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
         )
         ttnn.deallocate(w1_out)
-        # w3_out = ttnn.linear(
-        #     x,
-        #     self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-        #     compute_kernel_config=(
-        #         self.args.compute_kernel_config_lofi
-        #         if self.four_bit_mlp
-        #         else self.args.compute_kernel_config_hifi2_fp16
-        #     ),
-        #     dtype=ttnn.bfloat8_b,
-        #     program_config=pc_3,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        w3_out = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
-            weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=16,
-                K_block_size=4,
-                N_block_size=8,
-                subblock_h=4,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+        w3_out = ttnn.linear(
+            x,
+            self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
             ),
-            compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            ),
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
@@ -298,33 +259,15 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
 
-        # w2_out = ttnn.linear(
-        #     w2_in_gathered,
-        #     self.w2_interleaved,
-        #     compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-        #     dtype=ttnn.bfloat8_b,
-        #     program_config=pc_2,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        w2_out = ttnn.experimental.minimal_matmul(
-            input_tensor=w2_in_gathered,
-            weight_tensor=self.w2_interleaved,
-            config=ttnn.MinimalMatmulConfig(
-                M_block_size=16,
-                K_block_size=4,
-                N_block_size=8,
-                subblock_h=4,
-                subblock_w=2,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            ),
-            compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                self.mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            ),
+        w2_out = ttnn.linear(
+            w2_in_gathered,
+            self.w2_interleaved,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            dtype=ttnn.bfloat8_b,
+            program_config=pc_2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"

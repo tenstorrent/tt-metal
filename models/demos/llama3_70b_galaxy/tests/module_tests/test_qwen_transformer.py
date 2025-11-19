@@ -146,7 +146,7 @@ def test_qwen_transformer_inference(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -176,7 +176,9 @@ def test_qwen_transformer_inference(
         )
 
         # Convert ttnn tensor to torch tensor
-        mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape)
+        mesh_composer = ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+        )
 
         outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
         outs = torch.concat(outs, dim=-1)
@@ -204,7 +206,7 @@ def test_qwen_transformer_inference(
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0) if (batch_size > 1) else (None, None),
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )

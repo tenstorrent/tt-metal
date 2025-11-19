@@ -163,7 +163,7 @@ def test_qwen_attention_inference_prefill(
     for _ in range(1):
         attention_input = model_args.prepare_residual_tensor_prefill(
             tt_attention_input,
-            force_replicated=False,
+            force_replicated=False if model_args.is_galaxy else True,
         )
 
         tt_out = tt_model(
@@ -218,7 +218,7 @@ def test_qwen_attention_inference_prefill(
                         cache,
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device,
-                            dims=(1, 3),
+                            dims=(1, 3) if model_args.is_galaxy else (0, 1),
                             mesh_shape=model_args.cluster_shape,
                         ),
                     )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -242,7 +242,7 @@ def test_qwen_attention_inference_prefill(
                     cache,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                         mesh_device,
-                        dims=(1, 0),
+                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
                         mesh_shape=model_args.cluster_shape,
                     ),
                 )[:batch_size, :, :, :]

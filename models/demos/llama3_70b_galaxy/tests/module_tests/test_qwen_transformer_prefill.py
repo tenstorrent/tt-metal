@@ -185,7 +185,9 @@ def test_qwen_transformer_inference_prefill(
         # Convert ttnn tensor to torch tensor
         tt_out = ttnn.to_torch(
             tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(1, 3) if model_args.is_galaxy else (1, 3), mesh_shape=model_args.cluster_shape
+            ),
         )
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 
@@ -227,7 +229,7 @@ def test_qwen_transformer_inference_prefill(
                                     layer_past,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
-                                        dims=(1, 3),
+                                        dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
                                 )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
@@ -249,7 +251,7 @@ def test_qwen_transformer_inference_prefill(
                                     cache,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
-                                        dims=(1, 0),
+                                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
                                 )[reverse_permutation]
@@ -274,7 +276,7 @@ def test_qwen_transformer_inference_prefill(
                                     layer_past,
                                     mesh_composer=ttnn.ConcatMesh2dToTensor(
                                         mesh_device,
-                                        dims=(1, 0),
+                                        dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
                                 )
