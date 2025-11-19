@@ -27,7 +27,6 @@ void py_module(py::module& module) {
             input_tensor (ttnn.Tensor): the input indices tensor.
             weight (ttnn.Tensor): the embeddings tensor that corresponds to the indices tensor.
 
-
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
@@ -35,7 +34,6 @@ void py_module(py::module& module) {
             layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.

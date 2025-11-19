@@ -422,7 +422,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
                 * Attention mask must be interleaved and have shape [1, 1, H, W] (i.e. hw_dims_only)
                 * The mask is treated as a causal mask by design
                 * Scale parameter is typically provided for attention scaling
-        )doc";
+    )doc";
 
     using OperationType = decltype(ttnn::scale_causal_mask_hw_dims_softmax_in_place);
 
