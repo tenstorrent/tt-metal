@@ -21,6 +21,8 @@ from ...parallel.manager import CCLManager
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+MAX_CHUNK_SIZE = 128
+
 
 @dataclass
 class Qwen25VlContext:
@@ -92,8 +94,23 @@ class Qwen25VlTextEncoder(Module):
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
+            if seq_len < MAX_CHUNK_SIZE:
+                # make sequence length a multiple of tile size
+                padded_seq_len = -(-seq_len // 32) * 32
+            else:
+                # make sequence length a multiple of MAX_CHUNK_SIZE
+                padded_seq_len = -(-seq_len // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
+
+            input_ids = ttnn.pad(input_ids, [(0, padded_seq_len - seq_len)], value=0)
+            pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
+
             assert attention_mask.shape == (batch_size, seq_len)
+            attention_mask = ttnn.pad(attention_mask, [(0, padded_seq_len - seq_len)], value=0)
             attention_mask = prepare_attention_mask(attention_mask)
+        else:
+            # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when using
+            # an attention mask
+            padded_seq_len = seq_len
 
         input_embeds = self.embed_tokens.forward(input_ids)
 
@@ -118,6 +135,9 @@ class Qwen25VlTextEncoder(Module):
 
         hidden_states = self.norm.forward(hidden_states)
         hidden_states_list.append(hidden_states)
+
+        if padded_seq_len != seq_len:
+            hidden_states_list = [x[:, :seq_len, :] for x in hidden_states_list]
 
         return hidden_states_list
 
@@ -216,14 +236,6 @@ class Qwen25VlAttention(Module):
             padded_heads * head_dim, hidden_size, bias=False, mesh_device=ctx.device, mesh_axis=ctx.tp_axis
         )
 
-        grid_size = ctx.device.compute_with_storage_grid_size()
-
-        self._sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
-        )
         self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -241,6 +253,7 @@ class Qwen25VlAttention(Module):
         self._split_factor = split_factor
         self._tp_axis = ctx.tp_axis
         self._tp_factor = tp_factor
+        self._device = ctx.device
         self._ccl_manager = ctx.ccl_manager
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -327,7 +340,7 @@ class Qwen25VlAttention(Module):
             v,
             attn_mask=causal_mask,
             is_causal=causal_mask is None,
-            program_config=self._sdpa_program_config,
+            program_config=self._sdpa_program_config(q.shape[2]),
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
 
@@ -342,6 +355,19 @@ class Qwen25VlAttention(Module):
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
+
+    def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+        grid_size = self._device.compute_with_storage_grid_size()
+
+        seq_len = -(-seq_len // 32) * 32
+        chunk_size = min(seq_len, MAX_CHUNK_SIZE)
+
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=False,
+        )
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L529

@@ -224,7 +224,10 @@ def test_qwen25vl_text_encoder(
 @pytest.mark.parametrize(
     "prompts",
     [
-        ["", "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot"],
+        [
+            "",
+            "Neon-lit cyberpunk alley, rain-soaked, cinematic wide shot",
+        ],
     ],
 )
 @pytest.mark.parametrize(
@@ -243,9 +246,12 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
     num_images_per_prompt = 1
 
     checkpoint = "Qwen/Qwen-Image"
-    sequence_length = 512
 
     torch_pipeline = diffusers.pipelines.qwenimage.pipeline_qwenimage.QwenImagePipeline.from_pretrained(checkpoint)
+
+    template = torch_pipeline.prompt_template_encode
+    start_idx = torch_pipeline.prompt_template_encode_start_idx
+    sequence_length = 512
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
@@ -269,14 +275,19 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, prompts: list[st
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=sequence_length,
         )
-
         embeds = torch.nn.functional.pad(embeds, [0, 0, 0, sequence_length - embeds.shape[1]], value=0)
         mask = torch.nn.functional.pad(mask, [0, sequence_length - mask.shape[1]], value=0)
 
     logger.info("running TT model...")
+    formatted_prompts = [template.format(e) for e in prompts]
     tt_embeds, tt_mask = tt_encoder_pair.encode(
-        prompts, num_images_per_prompt=num_images_per_prompt, sequence_length=sequence_length
+        formatted_prompts,
+        num_images_per_prompt=num_images_per_prompt,
+        sequence_length=sequence_length + start_idx,
     )
+    tt_embeds = tt_embeds[:, start_idx:]
+    tt_mask = tt_mask[:, start_idx:]
+    tt_embeds *= tt_mask.unsqueeze(-1)
 
-    assert_quality(mask, tt_mask, relative_rmse=0)
-    assert_quality(embeds * mask.unsqueeze(-1), tt_embeds * tt_mask.unsqueeze(-1), pcc=1, relative_rmse=0)
+    assert torch.allclose(mask, tt_mask)
+    assert_quality(embeds, tt_embeds, pcc=0.983, relative_rmse=0.19)

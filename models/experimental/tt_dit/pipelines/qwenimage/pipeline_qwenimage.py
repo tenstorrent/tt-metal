@@ -117,7 +117,6 @@ class QwenImagePipeline:
         logger.info("loading models...")
 
         checkpoint_name = "Qwen/Qwen-Image"
-        text_encoder_checkpoint_name = "Qwen/Qwen2.5-VL-7B-Instruct"
 
         torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
             checkpoint_name,
@@ -189,11 +188,13 @@ class QwenImagePipeline:
         with self.encoder_reshape(self.encoder_device):
             logger.info("creating TT-NN text encoder...")
             self._text_encoder = Qwen25VlTokenizerEncoderPair(
-                text_encoder_checkpoint_name,
-                max_batch_size=2,
-                max_sequence_length=1024,
-                device=self.encoder_device,
+                checkpoint_name,
+                tokenizer_subfolder="tokenizer",
+                encoder_subfolder="text_encoder",
                 use_torch=use_torch_text_encoder,
+                device=self.encoder_device,
+                parallel_config=self._encoder_parallel_config,
+                ccl_manager=self._ccl_managers[self.encoder_submesh_idx],
             )
 
             if self.encoder_device is not None:
@@ -378,7 +379,6 @@ class QwenImagePipeline:
             prompt_rope_cos = prompt_rope.real.repeat_interleave(2, dim=-1)
             prompt_rope_sin = prompt_rope.imag.repeat_interleave(2, dim=-1)
 
-            tt_prompt_embeds_device_list = []
             tt_prompt_embeds_list = []
             tt_latents_step_list = []
             tt_spatial_rope_cos_list = []
@@ -386,16 +386,10 @@ class QwenImagePipeline:
             tt_prompt_rope_cos_list = []
             tt_prompt_rope_sin_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
-                # TODO: redundant?
-                tt_prompt_embeds_device = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
-                    device=submesh_device,
-                    on_host=traced,
-                )
                 tt_prompt_embeds = tensor.from_torch(
                     prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
                     device=submesh_device,
-                    on_host=True,
+                    on_host=traced,
                 )
 
                 tt_initial_latents = tensor.from_torch(
@@ -414,27 +408,26 @@ class QwenImagePipeline:
                 if traced:
                     if self._traces is None:
                         tt_initial_latents = tt_initial_latents.to(submesh_device)
-                        tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
+                        tt_prompt_embeds = tt_prompt_embeds.to(submesh_device)
                         tt_spatial_rope_cos = tt_spatial_rope_cos.to(submesh_device)
                         tt_spatial_rope_sin = tt_spatial_rope_sin.to(submesh_device)
                         tt_prompt_rope_cos = tt_prompt_rope_cos.to(submesh_device)
                         tt_prompt_rope_sin = tt_prompt_rope_sin.to(submesh_device)
                     else:
                         ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
+                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._traces[i].prompt_input)
                         ttnn.copy_host_to_device_tensor(tt_spatial_rope_cos, self._traces[i].spatial_rope_cos)
                         ttnn.copy_host_to_device_tensor(tt_spatial_rope_sin, self._traces[i].spatial_rope_sin)
                         ttnn.copy_host_to_device_tensor(tt_prompt_rope_cos, self._traces[i].prompt_rope_cos)
                         ttnn.copy_host_to_device_tensor(tt_prompt_rope_sin, self._traces[i].prompt_rope_sin)
 
                         tt_initial_latents = self._traces[i].spatial_input
-                        tt_prompt_embeds_device = self._traces[i].prompt_input
+                        tt_prompt_embeds = self._traces[i].prompt_input
                         tt_spatial_rope_cos = self._traces[i].spatial_rope_cos
                         tt_spatial_rope_sin = self._traces[i].spatial_rope_sin
                         tt_prompt_rope_cos = self._traces[i].prompt_rope_cos
                         tt_prompt_rope_sin = self._traces[i].prompt_rope_sin
 
-                tt_prompt_embeds_device_list.append(tt_prompt_embeds_device)
                 tt_prompt_embeds_list.append(tt_prompt_embeds)
                 tt_latents_step_list.append(tt_initial_latents)
                 tt_spatial_rope_cos_list.append(tt_spatial_rope_cos)
@@ -469,17 +462,11 @@ class QwenImagePipeline:
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
 
-                        # TODO: move out of the loop
-                        ttnn.copy_host_to_device_tensor(
-                            tt_prompt_embeds_list[submesh_nr],
-                            tt_prompt_embeds_device_list[submesh_nr],
-                        )
-
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
                         latents=tt_latents_step_list,
                         cfg_enabled=cfg_enabled,
-                        prompt_embeds=tt_prompt_embeds_device_list,
+                        prompt_embeds=tt_prompt_embeds_list,
                         cfg_scale=cfg_scale,
                         sigma_difference=tt_sigma_difference_list,
                         spatial_rope_cos=tt_spatial_rope_cos_list,

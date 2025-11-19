@@ -14,7 +14,7 @@ from transformers import PreTrainedTokenizerBase, Qwen2_5_VLForConditionalGenera
 from ...encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -69,7 +69,7 @@ class Qwen25VlTokenizerEncoderPair:
             tt_model=model,
             torch_model=torch_text_model,
             model_name=checkpoint,
-            subfolder="",
+            subfolder=subfolder if subfolder is not None else "",
             parallel_config=self._parallel_config,
             mesh_shape=tuple(self._device.shape),
             dtype="bf16",
@@ -126,10 +126,10 @@ def _get_qwen_prompt_embeds(
 
         cos, sin = text_encoder.create_rope_tensors(tokens.shape[0], tokens.shape[1], attention_mask)
 
-        tt_tokens = ttnn.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
-        tt_attention_mask = ttnn.from_torch(attention_mask, device=mesh_device)
-        tt_cos = ttnn.from_torch(cos, device=mesh_device)
-        tt_sin = ttnn.from_torch(sin, device=mesh_device)
+        tt_tokens = tensor.from_torch(tokens, device=mesh_device, dtype=ttnn.uint32)
+        tt_attention_mask = tensor.from_torch(attention_mask, device=mesh_device)
+        tt_cos = tensor.from_torch(cos, device=mesh_device)
+        tt_sin = tensor.from_torch(sin, device=mesh_device)
 
         tt_hidden_states = text_encoder.forward(
             tt_tokens, attention_mask=tt_attention_mask, pos_embeds=(tt_cos, tt_sin)

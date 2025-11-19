@@ -40,38 +40,14 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
             "1x8tp1",
             id="1x8tp1",
         ),
-        # pytest.param(
-        #     (2, 4),  # mesh_device
-        #     (2, 0),  # cfg
-        #     (1, 0),  # sp
-        #     (4, 1),  # tp
-        #     (4, 1),  # encoder_tp
-        #     (4, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     1,  # num_links
-        #     "2x4cfg0sp0tp1",
-        #     id="2x4cfg0sp0tp1",
-        # ),
-        # pytest.param(
-        #     (2, 4),  # mesh_device
-        #     (2, 1),  # cfg
-        #     (2, 0),  # sp
-        #     (2, 1),  # tp
-        #     (4, 1),  # encoder_tp
-        #     (4, 1),  # vae_tp
-        #     ttnn.Topology.Linear,
-        #     1,  # num_links
-        #     "2x4cfg1sp0tp1",
-        #     id="2x4cfg1sp0tp1",
-        # ),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "use_torch_text_encoder",
     [
-        pytest.param(True, id="encoder_cpu"),
-        # pytest.param(False, id="encoder_device"),
+        # pytest.param(True, id="encoder_cpu"),
+        pytest.param(False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
@@ -119,11 +95,11 @@ def test_qwenimage_pipeline(
         'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee 😊 $2 per cup," with a neon light '
         'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
         'poster is written "π≈3.1415926-53589793-23846264-33832795-02384197". Ultra HD, 4K, cinematic composition'
-        ", Ultra HD, 4K, cinematic composition."
+        ", Ultra HD, 4K, cinematic composition.",  # text with duplicate part from original demo
         'Tokyo neon alley at night, rain-slick pavement, cinematic cyberpunk lighting; include glowing sign text "深夜営業" in bold neon above a doorway; moody reflections, shallow depth of field.',
-        'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "しょうゆラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
+        'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "醤油ラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
         'Minimalist tea poster, cream background, elegant layout; vertical calligraphy "抹茶" centered in sumi ink; small red hanko-style seal "本格" in the corner; high-resolution graphic design.',
-        'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
+        'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語の始まり" centered; author line "山本村上" below; tasteful serif typography, dramatic vignette illustration.',
         'Anime manga panel, dynamic action lines; speech bubble with clear Japanese text "大丈夫、行こう！"; bold hand-lettered style; black-and-white screentone shading.',
         'Shinto shrine ema (wooden wish plaque) close-up; handwritten ink message "合格祈願"; tied with a red cord; shallow depth of field, natural morning light.',
         'Bento box label design, clean packaging mockup; headline "手作り弁当"; small ingredient list: "鮭・卵焼き・梅干し"; price sticker "650円"; modern sans-serif Japanese fonts.',
