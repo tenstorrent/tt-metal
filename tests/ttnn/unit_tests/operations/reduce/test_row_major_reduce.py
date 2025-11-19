@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
 
 
