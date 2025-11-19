@@ -79,47 +79,51 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
     1e23F,  1e24F,  1e25F,  1e26F,  1e27F,  1e28F,  1e29F,  1e30F,  1e31F,  1e32F,  1e33F,  1e34F,  1e35F,  1e36F,  1e37F,  1e38F,
 };
 
+template <bool APPROXIMATION_MODE, bool USE_FP32>
+inline sfpi::vFloat _floor_body_(sfpi::vFloat v)
+{
+    sfpi::vInt tmp;
+
+    if constexpr (USE_FP32)
+    {
+        tmp = _float_to_int32_(v);
+    }
+    else
+    {
+        tmp = float_to_int16(v, 0);
+    }
+
+    sfpi::vFloat result = int32_to_float(tmp, 0);
+
+    v_if (result > v)
+    {
+        result = result - 1;
+    }
+    v_endif;
+
+    if constexpr (!USE_FP32)
+    {
+        v_if (v <= SHRT_MIN || v >= SHRT_MAX)
+        {
+            result = v;
+        }
+        v_endif;
+    }
+    v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(v))
+    {
+        result = v;
+    }
+    v_endif;
+    return result;
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool USE_FP32 = false>
 inline void _calculate_floor_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = v;
-        sfpi::vInt tmp;
-
-        if constexpr (USE_FP32)
-        {
-            tmp = _float_to_int32_(result);
-        }
-        else
-        {
-            tmp = float_to_int16(result, 0);
-        }
-
-        result = int32_to_float(tmp, 0);
-
-        v_if (result > v)
-        {
-            result = result - 1;
-        }
-        v_endif;
-
-        if constexpr (!USE_FP32)
-        {
-            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-            {
-                result = v;
-            }
-            v_endif;
-        }
-        v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(v))
-        {
-            result = v;
-        }
-        v_endif;
-
-        sfpi::dst_reg[0] = result;
+        sfpi::vFloat v   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _floor_body_<APPROXIMATION_MODE, USE_FP32>(v);
         sfpi::dst_reg++;
     }
 }
@@ -164,62 +168,62 @@ inline void _calculate_ceil_()
     }
 }
 
+template <bool APPROXIMATION_MODE, bool USE_FP32>
+inline sfpi::vFloat _trunc_body_(sfpi::vFloat in)
+{
+    sfpi::vInt tmp;
+
+    sfpi::vFloat result = sfpi::setsgn(in, 0);
+
+    sfpi::vFloat v = result;
+
+    if constexpr (USE_FP32)
+    {
+        tmp = _float_to_int32_(result);
+    }
+    else
+    {
+        tmp = float_to_int16(result, 0);
+    }
+
+    result = int32_to_float(tmp, 0);
+
+    v_if (result > v)
+    {
+        result = result - 1;
+    }
+    v_endif;
+
+    if constexpr (!USE_FP32)
+    {
+        v_if (v <= SHRT_MIN || v >= SHRT_MAX)
+        {
+            result = v;
+        }
+        v_endif;
+    }
+
+    v_if (in < 0)
+    {
+        result = sfpi::setsgn(result, 1);
+    }
+    v_endif;
+
+    v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(in))
+    {
+        result = in;
+    }
+    v_endif;
+    return result;
+}
+
 template <bool APPROXIMATION_MODE, bool USE_FP32 = false, int ITERATIONS = 8>
 inline void _calculate_trunc_()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in     = sfpi::dst_reg[0];
-        sfpi::vFloat result = in;
-        sfpi::vInt tmp;
-
-        v_if (in < 0)
-        {
-            result = 0 - result;
-        }
-        v_endif;
-
-        sfpi::vFloat v = result;
-
-        if constexpr (USE_FP32)
-        {
-            tmp = _float_to_int32_(result);
-        }
-        else
-        {
-            tmp = float_to_int16(result, 0);
-        }
-
-        result = int32_to_float(tmp, 0);
-
-        v_if (result > v)
-        {
-            result = result - 1;
-        }
-        v_endif;
-
-        if constexpr (!USE_FP32)
-        {
-            v_if (v <= SHRT_MIN || v >= SHRT_MAX)
-            {
-                result = v;
-            }
-            v_endif;
-        }
-
-        v_if (in < 0)
-        {
-            result = 0 - result;
-        }
-        v_endif;
-
-        v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(in))
-        {
-            result = in;
-        }
-        v_endif;
-
-        sfpi::dst_reg[0] = result;
+        sfpi::vFloat in  = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _trunc_body_<APPROXIMATION_MODE, USE_FP32>(in);
         sfpi::dst_reg++;
     }
 }
