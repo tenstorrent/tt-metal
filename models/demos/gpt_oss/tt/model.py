@@ -365,7 +365,7 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill_trace(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """Prepare inputs on host so we later send them to device"""
         host_inputs = self.prepare_inputs_prefill(
             tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
