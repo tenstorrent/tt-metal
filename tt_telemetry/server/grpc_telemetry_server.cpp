@@ -22,7 +22,8 @@ namespace telemetry {
 // Service implementation
 class TelemetryServiceImpl final : public TelemetryService::Service {
 public:
-    TelemetryServiceImpl() = default;
+    TelemetryServiceImpl(TelemetrySnapshot& telemetry_state, std::mutex& state_mutex) :
+        telemetry_state_(telemetry_state), state_mutex_(state_mutex) {}
     ~TelemetryServiceImpl() override = default;
 
     // Ping RPC implementation
@@ -34,13 +35,71 @@ public:
 
         return Status::OK;
     }
+
+    // QueryMetric RPC implementation
+    Status QueryMetric(
+        ServerContext* context, const QueryMetricRequest* request, QueryMetricResponse* response) override {
+        const std::string& metric_name = request->metric_name();
+
+        log_debug(tt::LogAlways, "gRPC QueryMetric received for metric: {}", metric_name);
+
+        // Lock the mutex to safely access telemetry_state_
+        std::lock_guard<std::mutex> lock(state_mutex_);
+
+        // Check each metric type map to find the requested metric
+        // Try bool metrics first
+        auto bool_it = telemetry_state_.bool_metrics.find(metric_name);
+        if (bool_it != telemetry_state_.bool_metrics.end()) {
+            response->set_metric_name(metric_name);
+            response->set_bool_value(bool_it->second);
+            log_debug(tt::LogAlways, "Found bool metric '{}' with value: {}", metric_name, bool_it->second);
+            return Status::OK;
+        }
+
+        // Try uint metrics
+        auto uint_it = telemetry_state_.uint_metrics.find(metric_name);
+        if (uint_it != telemetry_state_.uint_metrics.end()) {
+            response->set_metric_name(metric_name);
+            response->set_uint_value(uint_it->second);
+            log_debug(tt::LogAlways, "Found uint metric '{}' with value: {}", metric_name, uint_it->second);
+            return Status::OK;
+        }
+
+        // Try double metrics
+        auto double_it = telemetry_state_.double_metrics.find(metric_name);
+        if (double_it != telemetry_state_.double_metrics.end()) {
+            response->set_metric_name(metric_name);
+            response->set_double_value(double_it->second);
+            log_debug(tt::LogAlways, "Found double metric '{}' with value: {}", metric_name, double_it->second);
+            return Status::OK;
+        }
+
+        // Try string metrics
+        auto string_it = telemetry_state_.string_metrics.find(metric_name);
+        if (string_it != telemetry_state_.string_metrics.end()) {
+            response->set_metric_name(metric_name);
+            response->set_string_value(string_it->second);
+            log_debug(tt::LogAlways, "Found string metric '{}' with value: {}", metric_name, string_it->second);
+            return Status::OK;
+        }
+
+        // Metric not found in any map - return error status
+        log_debug(tt::LogAlways, "Metric '{}' not found in telemetry state", metric_name);
+        return Status(grpc::StatusCode::NOT_FOUND, "Metric '" + metric_name + "' not found");
+    }
+
+private:
+    // References to the telemetry state (from GrpcTelemetryServer/TelemetrySubscriber)
+    TelemetrySnapshot& telemetry_state_;
+    std::mutex& state_mutex_;
 };
 
 }  // namespace telemetry
 }  // namespace tt
 
 GrpcTelemetryServer::GrpcTelemetryServer() :
-    TelemetrySubscriber(), service_impl_(std::make_unique<tt::telemetry::TelemetryServiceImpl>()) {}
+    TelemetrySubscriber(),
+    service_impl_(std::make_unique<tt::telemetry::TelemetryServiceImpl>(telemetry_state_, state_mutex_)) {}
 
 GrpcTelemetryServer::~GrpcTelemetryServer() { stop(); }
 
