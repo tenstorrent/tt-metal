@@ -5,9 +5,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
+#include "paged_fill_cache_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
+#include "paged_fill_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
@@ -183,29 +183,28 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
          num_blocks_per_core_group_2,
          Wt,
          use_batch_idx_tensor  // Capture this
-    ](const void* operation,   // Should be PagedUpdateCacheDeviceOperation
+    ](const void* operation,   // Should be PagedFillCacheDeviceOperation
         Program& program,
         const std::vector<Tensor>& input_tensors,                                // cache, input, page_table
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,  // batch_idx_tensor if used
         const std::vector<Tensor>& output_tensors) {                             // output_tensors not used by fill op
-            auto dst_addr = input_tensors.at(0).buffer()->address();         // cache_tensor
-            auto src_addr = input_tensors.at(1).buffer()->address();         // input_tensor
-            auto page_table_addr = input_tensors.at(2).buffer()->address();  // page_table_tensor
+            auto dst_addr = input_tensors.at(0).buffer()->address();             // cache_tensor
+            auto src_addr = input_tensors.at(1).buffer()->address();             // input_tensor
+            auto page_table_addr = input_tensors.at(2).buffer()->address();      // page_table_tensor
 
             uint32_t current_kernel_batch_arg;
-            const auto op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
+            const auto op_specific = static_cast<const PagedFillCacheDeviceOperation*>(operation);
 
             if (use_batch_idx_tensor) {
-
                 TT_FATAL(
                     op_specific->batch_idx_tensor_opt.has_value(),
-                    "batch_idx_tensor_opt is expected in PagedUpdateCacheDeviceOperation but not provided for callback "
+                    "batch_idx_tensor_opt is expected in PagedFillCacheDeviceOperation but not provided for callback "
                     "when use_batch_idx_tensor is true.");
                 current_kernel_batch_arg = op_specific->batch_idx_tensor_opt.value().buffer()->address();
             } else {
                 // Fallback to scalar batch_idx from the operation struct
                 current_kernel_batch_arg =
-                    op_specific->batch_idx_fallback;  // Assumes PagedUpdateCacheDeviceOperation has batch_idx_fallback
+                    op_specific->batch_idx_fallback;  // Assumes PagedFillCacheDeviceOperation has batch_idx_fallback
             }
 
             auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);

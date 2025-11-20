@@ -5,9 +5,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
+#include "paged_update_cache_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/experimental/paged_cache/device/paged_update_cache_program_factory.hpp"
+#include "paged_update_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;

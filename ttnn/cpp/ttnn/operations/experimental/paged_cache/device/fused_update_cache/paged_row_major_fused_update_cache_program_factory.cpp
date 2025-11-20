@@ -5,9 +5,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
+#include "paged_fused_update_cache_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/experimental/paged_cache/device/paged_row_major_fused_update_cache_program_factory.hpp"
+#include "paged_row_major_fused_update_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
@@ -439,7 +439,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const std::vector<uint32_t> update_idxs =
-                static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
+                static_cast<const PagedFusedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
             const auto src1_buffer = input_tensors.at(1).buffer();
             const auto src2_buffer = input_tensors.at(3).buffer();

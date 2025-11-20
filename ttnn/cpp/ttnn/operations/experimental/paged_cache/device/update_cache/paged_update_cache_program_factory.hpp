@@ -1,19 +1,17 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
+#include "paged_update_cache_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::paged_cache::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
-    const Tensor& cache_tensor1,
-    const Tensor& input_tensor1,
-    const Tensor& cache_tensor2,
-    const Tensor& input_tensor2,
+tt::tt_metal::operation::ProgramWithCallbacks paged_update_cache_multi_core(
+    const Tensor& cache_tensor,
+    const Tensor& input_tensor,
     std::optional<const Tensor> update_idxs_tensor,
     std::optional<const Tensor> page_table,
     const std::vector<uint32_t>& update_idxs,

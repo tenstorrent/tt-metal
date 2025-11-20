@@ -14,16 +14,9 @@ namespace ttnn::operations::experimental::paged_cache {
 
 enum class PagedUpdateCacheOpParallelizationStrategy { MULTI_CORE };
 
-enum class PagedUpdateCacheOpType { UPDATE, FUSED_UPDATE, FILL };
-
 struct PagedUpdateCacheDeviceOperation {
-    uint32_t batch_idx_fallback;
-    std::optional<Tensor>
-        batch_idx_tensor_opt;  // This will be handled by create_program, not directly in attributes for simple hashing
-
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
-    const PagedUpdateCacheOpType op_type;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>>
@@ -48,18 +41,11 @@ struct PagedUpdateCacheDeviceOperation {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "batch_idx_fallback",
-        "update_idxs",
-        "batch_offset",
-        "op_type",
-        "compute_kernel_config",
-        "share_cache",
-        "mesh_coords");
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("update_idxs", "batch_offset", "compute_kernel_config", "share_cache", "mesh_coords");
 
     auto attribute_values() const {
-        return std::forward_as_tuple(
-            batch_idx_fallback, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache, mesh_coords);
+        return std::forward_as_tuple(update_idxs, batch_offset, compute_kernel_config, share_cache, mesh_coords);
     }
 
     tt::tt_metal::operation::Hash compute_program_hash(
