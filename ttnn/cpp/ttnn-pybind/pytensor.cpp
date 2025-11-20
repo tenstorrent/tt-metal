@@ -1644,7 +1644,7 @@ void pytensor_module(py::module& m_tensor) {
 
                     topology = tt_tensor.tensor_topology()
             )doc")
-        .def_property_readonly("tensor_id", [](const Tensor& self) { return self.get_tensor_id(); });
+        .def_property_readonly("tensor_id", [](const Tensor& self) { return self.get_id(); });
 }
 
 }  // namespace ttnn::tensor
