@@ -3306,6 +3306,16 @@ public:
         return get_unsafe_ptr()[0];
     }
 
+    /** @brief Dereference operator
+     *
+     * @return Pointer to the structure in the core's local memory
+     */
+    volatile T* operator->() const {
+        // TODO: To be moved to a Watcher sanitize check
+        ASSERT(address_ < MEM_L1_SIZE);
+        return get_unsafe_ptr();
+    }
+
     CoreLocalMem& operator+=(difference_type offset) {
         address_ += offset * sizeof(T);
         return *this;

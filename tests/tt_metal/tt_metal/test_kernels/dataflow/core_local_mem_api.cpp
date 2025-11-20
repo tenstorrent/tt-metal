@@ -46,6 +46,20 @@ void kernel_main() {
     access_memory<false>(src_addr, end_addr, num_iterations, &((volatile uint64_t*)(cycles_addr))[0]);
     access_memory<true>(src_addr, end_addr, num_iterations, &((volatile uint64_t*)(cycles_addr))[1]);
 
+    // Try using a more complex type
+    struct TestStruct {
+        uint32_t foo;
+        uint64_t bar;
+    };
+
+    experimental::CoreLocalMem<TestStruct> struct_mem(src_addr);
+    struct_mem->foo = pattern;
+    struct_mem->bar = pattern + 1;
+    while (struct_mem->foo != pattern) {
+    }
+    while (struct_mem->bar != pattern + 1) {
+    }
+
     // Try writing and reading with operator[]
     experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
