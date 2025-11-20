@@ -100,15 +100,7 @@ void forward_data(
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
-    bool is_persistent_channel,
-
-    // Note that while `channel_id` is unused and can be deleted, there was a severe performance impact when that
-    // was tried. Time has not been spent yet to root cause but the current suspicion is some pathalogical codegen
-    // issue. Given that the inclusion of the arg is functionally harmless (if only slightly visually noisy), and
-    // the substantial performance loss (> 1GB/s), when removed, it's being kept for now. The performance drop was
-    // measured in the mux bandwidth tests and was root caused to the isolated change of simply removing this arg.
-    // To be root-caused in the future.
-    uint8_t channel_id) {
+    bool is_persistent_channel) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
@@ -267,8 +259,7 @@ void kernel_main() {
                         fabric_connection,
                         full_size_channel_connection_established[channel_id],
                         StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id],
-                        channel_id);
+                        is_persistent_channels[channel_id]);
                 }
             }
 
@@ -279,8 +270,7 @@ void kernel_main() {
                     fabric_connection,
                     header_only_channel_connection_established[channel_id],
                     StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    channel_id + NUM_FULL_SIZE_CHANNELS);
+                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS]);
             }
         }
     }
