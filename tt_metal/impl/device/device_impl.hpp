@@ -17,6 +17,7 @@
 #include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
@@ -69,7 +70,6 @@ public:
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
-    uint32_t get_worker_noc_hop_distance(CoreCoord logical_src, CoreCoord logical_dst, NOC noc) const override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -238,6 +238,10 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+
+    // Friend declaration for experimental API
+    friend uint32_t experimental::Device::get_worker_noc_hop_distance(
+        IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 };
 
 }  // namespace tt::tt_metal
