@@ -32,6 +32,13 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_LINE_BYTES{subtile_elements * 2U}; // FP16 is 2 bytes
     constexpr uint32_t subtile_size_bytes{subtile_elements * SUBTILE_LINE_BYTES}; 
     constexpr uint32_t tile_size_bytes{tile_elements * tile_elements * 2U}; // * 2U since FP16 is 2 bytes
+
+    const uint32_t ALIGNMENT{get_arg_val<uint32_t>(8U)};
+    const bool MISALIGNED {ALIGNMENT > SUBTILE_LINE_BYTES};
+
+    const uint32_t intermed_l1_scratch{MISALIGNED ? get_write_ptr(1U) : 0U};
+    uint8_t* intermed_l1_scratch_ptr{reinterpret_cast<uint8_t* const>(intermed_l1_scratch)};
+
     constexpr uint32_t onetile{1U};
     constexpr uint32_t operand0{0U};
     constexpr auto src_args{TensorAccessorArgs<0U>()};
@@ -94,20 +101,31 @@ void kernel_main() {
                             const uint64_t bsrc_offs{(batch_addr + src_offs) - src0_addr};
                             const uint32_t batch_itile{static_cast<uint32_t>(bsrc_offs / tile_size_bytes)};
                             const uint32_t rem{ static_cast<uint32_t>(bsrc_offs & (tile_size_bytes - 1U))};
-
-                            // if (h == 0 && ct == 0 && wt == 0) {
-                            //     DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();
-                            //     DPRINT << "    Reading from src_offs=" << src_offs << ENDL();
-                            //     DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
-                            // }
-
+                            
                             const uint64_t banked_addr{get_noc_addr(batch_itile, s0) + rem};
 
-                            // this starts async NOC dma from DRAM to TR0_L1 buffer
-                            noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
-
-                            // if (h == 0 && ct == 0 && wt == 0)
-                            //     DPRINT << uint32_t( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
+                            if (MISALIGNED) {
+                                // if banked addr and dest addr don't share alignment then we need to read to the intermediate
+                                // buffer and then copy it to the correct location
+                                const uint32_t banked_alignment{static_cast<uint32_t>(banked_addr % ALIGNMENT)};
+                                if ((dest_tr0_l1 % ALIGNMENT) != banked_alignment) {
+                                    // we write to the top of the intermediate buffer as that's aligned, and we write from the
+                                    // closest align source address if source is not aligned to ALIGNMENT then we go to the nearest
+                                    // address that is aligned and copy from there
+                                    noc_async_read(banked_addr - (banked_alignment), intermed_l1_scratch, ALIGNMENT);
+                                    uint8_t* const dest_tr0_l1_ptr{reinterpret_cast<uint8_t* const>(dest_tr0_l1)};
+                                    // need the barrier to ensure that we can copy from the intermediate buffer
+                                    noc_async_read_barrier();
+                                    // if source is not aligned to ALIGNMENT then we need to skip forward by the amount needed to
+                                    // align to get to the correct data
+                                    ::memcpy(dest_tr0_l1_ptr, intermed_l1_scratch_ptr + banked_alignment, SUBTILE_LINE_BYTES);
+                                } else {
+                                    // this starts async NOC dma from DRAM to TR0_L1 buffer
+                                    noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                                }
+                            } else {
+                                noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                            }
 
                             // the output address is just linearly incremented
                             dest_tr0_l1 += SUBTILE_LINE_BYTES;

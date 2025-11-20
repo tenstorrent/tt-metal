@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
 
         constexpr uint32_t tile_elements{32U};
         constexpr uint32_t tile_size{tile_elements * tile_elements};
-        // std::vector<uint32_t> shape = {1, 96, 32*4, 32*5};
+
         // shape of this vector is [N, C, H, W]
         // It is laid out in memory as addr = W + ShapeW * H + ShapeW * ShapeH * C + ShapeW * SHapeH * ShapeC * N
         const std::vector<uint32_t> shape = {2U, tile_elements * 3U, tile_elements * 5U, tile_elements * 2U};
@@ -89,6 +89,7 @@ int main(int argc, char** argv) {
         auto src0_dram_buffer{CreateBuffer(dram_config)};
         const uint32_t dram_buffer_src0_addr{src0_dram_buffer->address()};
         auto dst_dram_buffer{CreateBuffer(dram_config)};
+        const uint32_t alignment{dst_dram_buffer->alignment()};
         const uint32_t dram_buffer_dst_addr{dst_dram_buffer->address()};
 
         const uint32_t src0_cb_index{0U};
@@ -156,7 +157,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
         tt_metal::SetRuntimeArgs(
-            program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
+            program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW, alignment});
 
         tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
