@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_hwc.hpp"
-#include "device/convert_to_hwc_device_operation.hpp"
+#include "device/convert_to_hwc_op.hpp"
+#include "device/convert_to_hwc_program_factory.hpp"
 
 namespace ttnn::operations::experimental::cnn {
 
@@ -61,7 +62,8 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
         alignment_elements,
         output_memory_config.shard_spec()->shape[1]);
 
-    return ttnn::prim::convert_to_hwc(a, output_memory_config, dtype.value_or(a.dtype()));
+    auto program = ConvertToHWC{output_memory_config, dtype.value_or(a.dtype())};
+    return tt::tt_metal::operation::run(program, {a}, {}, {}).at(0);
 }
 
 }  // namespace ttnn::operations::experimental::cnn
