@@ -28,6 +28,7 @@ See the comprehensive guide for detailed examples and the complete 15-step check
 2. **Including runtime-only values in hash**: Only hash compile-time constants that affect program structure
 3. **Not including values that affect the program structure in hash**: Every parameter that affects program structure must be in the hash
 4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
+5. **tensor_args_t must NOT contain references** - no `const &` or `&`
 
 ## Example Reference
 
