@@ -158,15 +158,63 @@ protected:
     mutable size_t fabric_endpoint_channel_num_buffers_ = 0;
     mutable size_t fabric_endpoint_status_address_ = 0;
 
-    // Memory regions
+    // Memory regions (sequentially allocated in L1)
+    // Each region manages a specific type of control or data structure used by mux/relay kernels
+
+    // Kernel status tracking (STARTED → READY_FOR_TRAFFIC → TERMINATED)
     MemoryRegion status_region_{};
+
+    // Local copy of fabric router status read from local fabric router through NoC
+    // Used for synchronization: mux waits for router status before opening connection
     MemoryRegion local_fabric_router_status_region_{};
+
+    // Termination signals from host or other cores (e.g., mux signals relay during teardown)
     MemoryRegion termination_signal_region_{};
+
+    // EDMChannelWorkerLocationInfo (per channel) - stores connection metadata for each channel:
+    //   - worker_semaphore_address: Remote L1 address to update worker's read counter
+    //   - worker_teardown_semaphore_address: Remote L1 address to acknowledge teardown
+    //   - worker_xy: NOC coordinates (x,y) of connected worker/client
+    //   - edm_read_counter: Local tracking of packets read by the local kernel
+    // Remote clients populate this when establishing connection; local kernel reads it to get client NOC coords
     MemoryRegion connection_info_region_{};
+
+    // Connection liveness/handshake region (per channel)
+    // Remote clients write to this address to signal connection state changes:
+    //   - Write 1 (open_connection_value): Client requests connection establishment
+    //   - Write 2 (close_connection_request_value): Client requests connection teardown
+    // Local polls these addresses to detect when clients want to connect/disconnect
     MemoryRegion connection_handshake_region_{};
+
+    // RESERVED/UNUSED: Flow control region (per channel)
+    // This region is allocated but NOT currently used by mux/relay kernels
+    // Instead, mux/relay use STREAM REGISTERS for credit-based flow control:
+    //   - Each channel has a stream register (my_channel_free_slots_stream_id)
+    //   - Local reads: get_ptr_val(stream_id) to check available slots locally
+    //   - Local decrements: increment_local_update_ptr_val(stream_id, 1) when sending packet
+    //   - Remote client increments: writes to stream register via NoC when consuming packet
+    // The flow_control_region_ is passed to constructors but never stored/used (legacy/reserved)
     MemoryRegion flow_control_region_{};
+
+    // Buffer index synchronization region (per channel) - used for connection lifecycle synchronization
+    // This stores the write pointer (wrptr) for each channel's buffer slots, used ONLY during:
+    //   1. CONNECTION OPEN (client → local): Remote client reads this address to get starting buffer slot
+    //      - Client performs NoC read from buffer_index_region_ to sync with local's wrptr
+    //      - This allows client to resume from correct slot (e.g., after reconnection)
+    //   2. CONNECTION CLOSE (client → local): Remote client writes final wrptr back to this address
+    //      - Client performs NoC write of its buffer_slot_write_counter to buffer_index_region_
+    //      - This tells local where client stopped for proper teardown/cleanup
+    // During normal operation: Local tracks wrptr/rdptr internally using local_write_counter/local_read_counter
+    //   - These are NOT stored in buffer_index_region_ during packet forwarding
+    //   - buffer_index_region_ is only accessed during connection establishment/teardown
     MemoryRegion buffer_index_region_{};
+
+    // Full-size channel buffer storage (header + payload data)
+    // Each channel has num_buffers slots of buffer_size_bytes each
     MemoryRegion full_size_channels_region_{};
+
+    // Header-only channel buffer storage (header without payload, for control/small messages)
+    // Each channel has num_buffers slots of sizeof(PacketHeader) each
     MemoryRegion header_only_channels_region_{};
 
     size_t memory_map_end_address_ = 0;
@@ -221,9 +269,30 @@ public:
     size_t get_relay_termination_signal_address() const { return termination_signal_region_.get_address(); }
 
 private:
-    // Semaphore regions for relay → mux connection (mux writes to these in relay's L1)
+    // ==================================================================================
+    // Relay-specific memory regions for relay → mux connection
+    // The relay acts as a CLIENT connecting to the mux (both kernels run on same core)
+    // ==================================================================================
+
+    // Flow control semaphore/counter (relay → mux direction)
+    // - Stored in RELAY's L1 memory
+    // - Relay writes this address to mux's connection_info.worker_semaphore_address during connection setup
+    // - Relay reads from this address to check how many packets mux has consumed
+    // - Mux updates this counter when it consumes a packet from relay
+    // - This acts as a read-counter: tracks how many packets mux has processed from relay's channel
     MemoryRegion mux_relay_flow_control_semaphore_region_{};
+
+    // Teardown semaphore (relay → mux direction)
+    // - Stored in RELAY's L1 memory
+    // - Relay writes this address to mux's connection_info.worker_teardown_semaphore_address during setup
+    // - Relay writes teardown request, then polls this address waiting for acknowledgment
+    // - Mux writes (via NoC) acknowledgment value when it completes teardown processing
     MemoryRegion mux_relay_teardown_semaphore_region_{};
+
+    // Buffer index synchronization (relay → mux direction) - CURRENTLY UNUSED
+    // - Stored in RELAY's L1 memory
+    // - Unused: Passed to relay's adapter constructor but never stored or accessed
+    // - The relay only uses mux's buffer_index_region_ (edm_copy_of_wr_counter_addr) for sync
     MemoryRegion mux_relay_buffer_index_semaphore_region_{};
 };
 
