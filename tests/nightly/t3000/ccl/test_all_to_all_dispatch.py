@@ -106,8 +106,6 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
     experts_per_device = experts // devices
     batch_per_device = batch // devices
 
-    # logger.info(f"batch: {batch}, experts: {experts}, selected_experts_k: {selected_experts_k}, seq_len: {seq_len}, mesh_shape: {mesh_shape}, cluster_axis: {cluster_axis}, devices: {devices}, experts_per_device: {experts_per_device}, batch_per_device: {batch_per_device}")
-
     for b in range(batch):
         for s in range(seq_len):
             for k in range(selected_experts_k):
@@ -136,7 +134,6 @@ def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, 
                         expert_indices[b, 0, s, k] = 0
                     else:
                         expert_indices[b, 0, s, k] = (b // batch_per_device) * experts_per_device  # use a local expert
-                    # logger.info(f"b: {b}, expert_indices: {expert_indices[b, 0, s, k]} sending from device {b // batch_per_device} to device {expert_indices[b, 0, s, k] // experts_per_device}")
                 else:
                     raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices

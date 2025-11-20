@@ -324,7 +324,7 @@ void kernel_main() {
             }
         }
 
-        // As we alternated directions along the axis, we need to send another semaphore increment to the configured
+        // As we alternate directions along the axis, we need to send another semaphore increment to the configured
         // targets
         send_final_semaphore_to_configured_targets<
             linearized_mesh_coord,
