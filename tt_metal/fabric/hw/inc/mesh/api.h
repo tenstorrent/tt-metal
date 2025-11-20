@@ -2230,14 +2230,53 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_fused_unicast_with_atomic_inc(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+    if (page_size <= FABRIC_MAX_PACKET_SIZE) {
+        // Single packet: use existing implementation
+        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            src_addr,
+            page_size,
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+    } else {
+        // Multi-packet: split into chunks
+        // Send N-1 chunks as regular unicast writes (no semaphore)
+        // Send final chunk as fused write+atomic inc (with semaphore)
+        [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+
+        // Set route once
+        fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+
+        uint32_t remaining = page_size;
+        uint32_t current_src_addr = src_addr;
+        uint64_t current_noc_addr = noc_address;
+
+        while (remaining > FABRIC_MAX_PACKET_SIZE) {
+            // Intermediate chunk: regular unicast write (no semaphore)
+            packet_header->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr}, FABRIC_MAX_PACKET_SIZE);
+            client_interface->wait_for_empty_write_slot();
+            client_interface->send_payload_without_header_non_blocking_from_address(
+                current_src_addr, FABRIC_MAX_PACKET_SIZE);
+            client_interface->send_payload_flush_blocking_from_address(
+                (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+            current_src_addr += FABRIC_MAX_PACKET_SIZE;
+            current_noc_addr += FABRIC_MAX_PACKET_SIZE;
+            remaining -= FABRIC_MAX_PACKET_SIZE;
+        }
+
+        // Final chunk: fused write+atomic inc (with semaphore)
+        packet_header->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{current_noc_addr, semaphore_noc_address, val, flush},
+            remaining);
+        client_interface->wait_for_empty_write_slot();
+        client_interface->send_payload_without_header_non_blocking_from_address(current_src_addr, remaining);
+        client_interface->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
 }
 
 // clang-format off
@@ -2273,12 +2312,58 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_fused_unicast_with_atomic_inc(
-        connection_manager,
-        route_id,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+    if (page_size <= FABRIC_MAX_PACKET_SIZE) {
+        // Single packet: use existing implementation
+        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+            connection_manager,
+            route_id,
+            src_addr,
+            page_size,
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush});
+    } else {
+        // Multi-packet: split into chunks
+        // Send N-1 chunks as regular unicast writes (no semaphore)
+        // Send final chunk as fused write+atomic inc (with semaphore)
+
+        uint32_t remaining = page_size;
+        uint32_t current_src_addr = src_addr;
+        uint64_t current_noc_addr = noc_address;
+
+        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+            auto& slot = connection_manager.get(i);
+
+            // Set route once
+            fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+
+            uint32_t chunk_remaining = remaining;
+            uint32_t chunk_src_addr = current_src_addr;
+            uint64_t chunk_noc_addr = current_noc_addr;
+
+            while (chunk_remaining > FABRIC_MAX_PACKET_SIZE) {
+                // Intermediate chunk: regular unicast write (no semaphore)
+                packet_header->to_noc_unicast_write(
+                    tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_addr}, FABRIC_MAX_PACKET_SIZE);
+                slot.sender.wait_for_empty_write_slot();
+                slot.sender.send_payload_without_header_non_blocking_from_address(
+                    chunk_src_addr, FABRIC_MAX_PACKET_SIZE);
+                slot.sender.send_payload_flush_blocking_from_address(
+                    (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+                chunk_src_addr += FABRIC_MAX_PACKET_SIZE;
+                chunk_noc_addr += FABRIC_MAX_PACKET_SIZE;
+                chunk_remaining -= FABRIC_MAX_PACKET_SIZE;
+            }
+
+            // Final chunk: fused write+atomic inc (with semaphore)
+            packet_header->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{chunk_noc_addr, semaphore_noc_address, val, flush},
+                chunk_remaining);
+            slot.sender.wait_for_empty_write_slot();
+            slot.sender.send_payload_without_header_non_blocking_from_address(chunk_src_addr, chunk_remaining);
+            slot.sender.send_payload_flush_non_blocking_from_address(
+                (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        });
+    }
 }
 
 // clang-format off
