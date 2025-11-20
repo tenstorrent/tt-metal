@@ -315,15 +315,15 @@ SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShard
         i++;
     }
 
-    shared_variables_t shared_variables{
-        .iter_cores = iter_cores,
-        .unary_reader_kernel_id = unary_reader_kernel_id,
-        .unary_writer_kernel_id = unary_writer_kernel_id,
-        .output_tensor_start = output_tensor_start,
-        .output_tensor_end = output_tensor_end,
-        .cb_input_tuple = cb_input_tuple};
-
-    return cached_program_t(std::move(program), std::move(shared_variables));
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .iter_cores = iter_cores,
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
+            .output_tensor_start = output_tensor_start,
+            .output_tensor_end = output_tensor_end,
+            .cb_input_tuple = cb_input_tuple});
 }
 
 void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(

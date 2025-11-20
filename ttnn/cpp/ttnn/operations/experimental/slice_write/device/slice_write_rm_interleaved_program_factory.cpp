@@ -315,13 +315,13 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
     }
 
-    shared_variables_t shared_variables{
-        .unary_reader_kernel_id = unary_reader_kernel_id,
-        .unary_writer_kernel_id = unary_writer_kernel_id,
-        .compute_with_storage_grid_size = compute_with_storage_grid_size,
-        .max_read_size = max_read_size};
-
-    return cached_program_t(std::move(program), std::move(shared_variables));
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
+            .compute_with_storage_grid_size = compute_with_storage_grid_size,
+            .max_read_size = max_read_size});
 }
 
 void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(

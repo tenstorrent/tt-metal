@@ -305,16 +305,16 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
         i++;
     }
 
-    shared_variables_t shared_variables{
-        .iter_cores = iter_cores,
-        .unary_reader_kernel_id = unary_reader_kernel_id,
-        .unary_writer_kernel_id = unary_writer_kernel_id,
-        .output_tensor_start = output_tensor_start,
-        .output_tensor_end = output_tensor_end,
-        .max_read_size = max_read_size,
-        .input_cb_handle = input_cb_handle};
-
-    return cached_program_t(std::move(program), std::move(shared_variables));
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .iter_cores = iter_cores,
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
+            .output_tensor_start = output_tensor_start,
+            .output_tensor_end = output_tensor_end,
+            .max_read_size = max_read_size,
+            .input_cb_handle = input_cb_handle});
 }
 
 void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
