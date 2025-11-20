@@ -8,6 +8,7 @@ import yaml
 from typing import Union
 from ttml.common.utils import get_tt_metal_home
 
+
 class DeviceConfig:
     """Configuration for device mesh and distributed training."""
 
@@ -157,8 +158,7 @@ class MultiHostConfig:
         )
 
 
-def load_config(path: str,
-    configs_root: str = None) -> dict:
+def load_config(path: str, configs_root: str = None) -> dict:
     """Load configuration from YAML file.
 
     Args:
@@ -172,11 +172,10 @@ def load_config(path: str,
         configs_root = f"{get_tt_metal_home()}/tt-train/configs/"
 
     # if the path is relative, make it absolute
-    if not(os.path.isabs(path)):    
+    if not (os.path.isabs(path)):
         path = os.path.join(configs_root, path)
-        
-    with open(path, "r") as f:
 
+    with open(path, "r") as f:
         config = yaml.safe_load(f)
     return config
 
