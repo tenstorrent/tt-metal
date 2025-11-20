@@ -215,6 +215,9 @@ public:
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
+    const std::unordered_map<uint32_t, std::vector<uint32_t>>& get_pcie_devices_per_tray() const {
+        return pcie_devices_per_tray_;
+    }
 
 private:
     void run_local_discovery(bool run_live_discovery);
@@ -245,6 +248,7 @@ private:
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
     tt::umd::semver_t ethernet_firmware_version_;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> pcie_devices_per_tray_;
 };
 
 }  // namespace tt::tt_metal

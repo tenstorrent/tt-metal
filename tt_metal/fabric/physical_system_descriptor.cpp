@@ -68,7 +68,10 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
+    tt::umd::Cluster& cluster,
+    ChipId chip_id,
+    bool using_mock_cluster_desc,
+    std::unordered_map<uint32_t, std::vector<uint32_t>>& pcie_devices_per_tray) {
     auto cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -77,6 +80,8 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
+        auto pcie_id = cluster_desc->get_chips_with_mmio().at(chip_id);
+        pcie_devices_per_tray[ubb_id.tray_id].push_back(pcie_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
@@ -258,8 +263,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
         tt::umd::Cluster& cluster = *cluster_;
-        auto [tray_id, asic_location] =
-            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
+        auto [tray_id, asic_location] = get_asic_position(
+            cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, pcie_devices_per_tray_);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -301,7 +306,11 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
-            auto dst_chan = std::get<1>(remote_info);
+            auto dst_chan = eth_chan;  // std::get<1>(remote_info);
+            if (eth_chan == 8 || eth_chan == 9) {
+                // Skip Z Links for now
+                continue;
+            }
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
@@ -649,9 +658,11 @@ void PhysicalSystemDescriptor::validate_graphs() {
                     TT_FATAL(
                         exit_conn_found,
                         "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
+                        "host connectivity graph. Please reset the system and try again {} {}.",
                         src_host,
-                        dst_host);
+                        dst_host,
+                        eth_conn.src_chan,
+                        eth_conn.dst_chan);
                 }
             }
         }
