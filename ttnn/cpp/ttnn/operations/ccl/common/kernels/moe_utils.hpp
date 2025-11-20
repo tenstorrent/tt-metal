@@ -673,10 +673,119 @@ inline void send_init_semaphore_to_configured_targets(
     }
 }
 
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t DispatchDevices,
+    ReverseMode RevMode>
+inline constexpr uint32_t get_excess_semaphore_increments() {
+    if constexpr (RevMode == ReverseMode::NEVER) {
+        return 0;
+    }
+    if constexpr (RevMode == ReverseMode::ON_TIE && DispatchDevices % 2 == 0) {
+        return 1;  // 1 extra from the device on the other side of the ring that has the same distance both ways
+    } else if constexpr (RevMode == ReverseMode::PER_TOKEN) {
+        return 2 * (DispatchDevices - 1);  // 2 from each device that is not the source
+    }
+    return 0;
+}
+
+// Send initialization semaphore to configured target devices for synchronization
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis,
+    uint32_t NumDevices,
+    ReverseMode RevMode>
+inline void send_final_semaphore_to_configured_targets(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint8_t dest_chip_ids[NumDevices],
+    const uint8_t dest_mesh_ids[NumDevices],
+    uint64_t final_noc_semaphore_addr) {
+    if constexpr (RevMode == ReverseMode::NEVER) {
+        return;
+    }
+    uint32_t device_begin_idx = 0;
+    uint32_t device_end_idx = NumDevices;
+    uint32_t device_stride = 1;
+
+    constexpr uint32_t row = LinearizedSrcMeshCoord / MeshCols;
+    constexpr uint32_t col = LinearizedSrcMeshCoord % MeshCols;
+
+    if constexpr (Axis == ReplicateGroup::COLS) {
+        device_begin_idx = col;
+        device_end_idx = col + MeshRows * MeshCols;
+        device_stride = MeshCols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        device_begin_idx = row * MeshCols;
+        device_end_idx = row * MeshCols + MeshCols;
+        device_stride = 1;
+    }
+
+    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+    constexpr uint32_t dispatch_index = Axis == ReplicateGroup::COLS ? row : col;
+
+    if constexpr (RevMode == ReverseMode::ON_TIE && dispatch_devices % 2 == 0) {
+        // only need to send the semaphore if you have another device that has two equidistance routes to the same
+        // destination if positive distance is equal to negative distance, then you have a tie find device on the other
+        // side of the ring that has the same distance both ways
+        constexpr uint32_t other_device_idx = (dispatch_index + dispatch_devices / 2) % dispatch_devices;
+        if constexpr (is_1d_topology<Topology>()) {
+            // previous send already sent in one direction, so we need to send in the other direction
+            // using globals was probably not great
+            fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                LinearizedSrcMeshCoord,
+                Topology,
+                MeshRows,
+                MeshCols,
+                RevMode>(fabric_connections, packet_header, other_device_idx, final_noc_semaphore_addr, 1, false);
+        } else {
+            uint32_t dest_chip_id = dest_chip_ids[other_device_idx];
+            uint32_t dest_mesh_id = dest_mesh_ids[other_device_idx];
+            fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                fabric_connections, packet_header, dest_chip_id, dest_mesh_id, final_noc_semaphore_addr, 1, false);
+        }
+
+    } else {
+        // PER_TOKEN: send the semaphore to all devices that are not the source, twice
+        for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
+            if (device_idx == LinearizedSrcMeshCoord) {
+                continue;
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+                for (uint32_t i = 0; i < 2; i++) {
+                    if constexpr (is_1d_topology<Topology>()) {
+                        fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                            LinearizedSrcMeshCoord,
+                            Topology,
+                            MeshRows,
+                            MeshCols,
+                            RevMode>(fabric_connections, packet_header, device_idx, final_noc_semaphore_addr, 1, false);
+                    } else {
+                        const auto& dest_chip_id = dest_chip_ids[device_idx];
+                        const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                        fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                            fabric_connections,
+                            packet_header,
+                            dest_chip_id,
+                            dest_mesh_id,
+                            final_noc_semaphore_addr,
+                            1,
+                            false);
+                    }
+                }
+            }
+        }
+    }
+}
+
 template <tt::tt_fabric::Topology Topology>
 inline constexpr ReverseMode get_supported_reverse_mode() {
     if constexpr (has_wrap_around<Topology>() && is_1d_topology<Topology>()) {
-        return ReverseMode::PER_TOKEN;
+        return ReverseMode::ON_TIE;
     } else {
         return ReverseMode::NEVER;
     }

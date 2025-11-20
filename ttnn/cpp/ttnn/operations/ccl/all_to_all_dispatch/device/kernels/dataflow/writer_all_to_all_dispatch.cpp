@@ -173,7 +173,7 @@ void kernel_main() {
         mesh_cols,
         axis,
         num_devices,
-        reverse_mode>(
+        ReverseMode::NEVER>(
         fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization synchronization
@@ -326,18 +326,16 @@ void kernel_main() {
 
         // As we alternated directions along the axis, we need to send another semaphore increment to the configured
         // targets
-        if constexpr (reverse_mode != ReverseMode::NEVER) {
-            send_init_semaphore_to_configured_targets<
-                linearized_mesh_coord,
-                topology,
-                src_chip_id,
-                mesh_rows,
-                mesh_cols,
-                axis,
-                num_devices,
-                reverse_mode>(
-                fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
-        }
+        send_final_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices,
+            reverse_mode>(
+            fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
     } else {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
         uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
@@ -391,20 +389,16 @@ void kernel_main() {
             }
         }
 
-        // As we alternated directions along the axis, we need to send another semaphore increment to the configured
-        // targets
-        if constexpr (reverse_mode != ReverseMode::NEVER) {
-            send_init_semaphore_to_configured_targets<
-                linearized_mesh_coord,
-                topology,
-                src_chip_id,
-                mesh_rows,
-                mesh_cols,
-                axis,
-                num_devices,
-                reverse_mode>(
-                fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
-        }
+        send_final_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices,
+            reverse_mode>(
+            fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
         // Need to wait for the local flushed metadata write.
         noc_async_write_barrier();
         noc_semaphore_inc(global_noc_semaphore_address, 1);

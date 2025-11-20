@@ -229,20 +229,20 @@ void kernel_main() {
         num_devices,
         reverse_mode>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
 
-    uint32_t additional_increments = 0;
-    if constexpr (reverse_mode != ReverseMode::NEVER) {
-        send_init_semaphore_to_configured_targets<
-            linearized_mesh_coord,
-            topology,
-            src_chip_id,
-            mesh_rows,
-            mesh_cols,
-            replicate_axis,
-            num_devices,
-            reverse_mode>(
-            fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
-        additional_increments = replicate_group_devices - 1;
-    }
+    // need to send another when if we're alternating directions along the axis in a ring
+    send_final_semaphore_to_configured_targets<
+        linearized_mesh_coord,
+        topology,
+        src_chip_id,
+        mesh_rows,
+        mesh_cols,
+        replicate_axis,
+        num_devices,
+        reverse_mode>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
+
+    constexpr uint32_t additional_increments =
+        get_excess_semaphore_increments<linearized_mesh_coord, topology, replicate_group_devices, reverse_mode>();
+
     noc_semaphore_inc(global_noc_semaphore_addr, 1);
     noc_async_atomic_barrier();
 

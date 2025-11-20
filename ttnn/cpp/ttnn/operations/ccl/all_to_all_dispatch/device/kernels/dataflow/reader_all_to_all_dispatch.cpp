@@ -105,7 +105,8 @@ void kernel_main() {
 
     // wait for all other devices to finish dispatching their input tokens and metadata
     uint32_t my_device_offset = tokens_per_device * dispatch_index;
-    constexpr uint32_t additional_increments = reverse_mode != ReverseMode::NEVER ? dispatch_devices - 1 : 0;
+    constexpr uint32_t additional_increments =
+        get_excess_semaphore_increments<linearized_mesh_coord, topology, dispatch_devices, reverse_mode>();
     if constexpr (write_page_by_page) {
         // if the writer is directly sending the metadata to its output buffer, we just wait for the semaphore to be set
         noc_semaphore_wait(
