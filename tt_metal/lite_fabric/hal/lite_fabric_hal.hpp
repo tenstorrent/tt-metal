@@ -56,7 +56,7 @@ public:
 
     virtual void terminate() = 0;
 
-    virtual tt::umd::tt_version get_binary_version() = 0;
+    virtual tt::umd::semver_t get_binary_version() = 0;
 
     virtual void wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) = 0;
 
