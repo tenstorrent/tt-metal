@@ -82,7 +82,7 @@ def test_all_to_all_dispatch_perf(
 
     assert (
         measured_avg_us <= perf_target_max_us
-    ), f"Performance target not met due a regression (measured vs expected max): {measured_avg_us} us > {perf_target_max_us} us"
+    ), f"Performance target not met due to a regression (measured vs expected max): {measured_avg_us} us > {perf_target_max_us} us"
     assert (
         measured_avg_us >= perf_target_min_us
     ), f"Performance target not met due to a performance improvement (measured vs expected min): {measured_avg_us} us < {perf_target_min_us} us"
