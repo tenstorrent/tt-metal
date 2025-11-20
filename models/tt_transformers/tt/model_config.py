@@ -2352,13 +2352,13 @@ class ModelArgs:
                 logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
                 raise e
 
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-                # Phi-3-mini uses "<|end|>" as EOS token
-                if "phi-3-mini" in self.base_model_name.lower():
-                    tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            # Phi-3-mini uses "<|end|>" as EOS token
+            if "phi-3-mini" in self.base_model_name.lower():
+                tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
+        return tokenizer
 
     def create_processor(self):
         from transformers import AutoProcessor
