@@ -775,10 +775,9 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(true);
     DumpRingBuffer(true);
-    sleep(100000);
     LogRunningKernels();
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
- //   TT_THROW("Watcher detected tripped assert and stopped device.");
+    TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
 void WatcherDeviceReader::Core::DumpPauseStatus() const {
