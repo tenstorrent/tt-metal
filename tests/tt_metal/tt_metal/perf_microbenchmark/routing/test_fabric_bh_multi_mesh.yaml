@@ -1,0 +1,54 @@
+Tests:
+  - name: "SimpleUnicastMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [32, 64, 128, 256, 512, 1024, 2048, 4096]
+      num_packets: [100000]
+
+    defaults:
+      ftype: unicast
+
+    senders:
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [1, [0, 1]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [2, [0, 0]]
+      - device: [2, [1, 1]]
+        patterns:
+          - destination:
+              device: [3, [0, 1]]
+
+  - name: "SimpleUnicastMesh2"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [32, 64, 128, 256, 512, 1024, 2048, 4096]
+      num_packets: [100000]
+
+    defaults:
+      ftype: unicast
+
+    senders:
+      - device: [0, [0, 2]]
+        patterns:
+          - destination:
+              device: [1, [0, 2]]
+      - device: [1, [0, 2]]
+        patterns:
+          - destination:
+              device: [2, [0, 2]]
+      - device: [2, [0, 2]]
+        patterns:
+          - destination:
+              device: [3, [0, 2]]
