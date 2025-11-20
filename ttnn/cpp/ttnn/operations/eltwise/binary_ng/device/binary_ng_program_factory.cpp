@@ -413,6 +413,12 @@ void set_or_update_runtime_arguments(
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                 compute_scalar_value = pack_scalar_runtime_arg(
                     operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+                log_info(
+                    tt::LogOp,
+                    "BinaryNG WHERE runtime args - scalar_value: {}, packed: {}, dtype: {}",
+                    operation_attributes.scalar.value(),
+                    compute_scalar_value,
+                    b.has_value() ? b->dtype() : a.dtype());
             }
             std::array compute_runtime_args = {c_num_tiles, freq, counter, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
@@ -813,6 +819,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
 
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
+        log_info(
+            tt::LogOp,
+            "BinaryNG WHERE kernel setup - op_type: {}, broadcast_type: {}, compute_kernel: {}, is_sfpu: {}, dtype: {}",
+            op_type == BinaryOpType::WHERE_TTS ? "WHERE_TTS" : "WHERE_TST",
+            static_cast<int>(operation_attributes.subtile_broadcast_type),
+            static_cast<int>(compute_kernel),
+            is_sfpu_op,
+            b_dtype);
+
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
         if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
@@ -824,9 +839,19 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
+
+    auto kernel_file_path = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
+    if (is_where_op) {
+        log_info(
+            tt::LogOp,
+            "BinaryNG WHERE kernel file selected: {}, kernel_name: {}",
+            kernel_file_path,
+            static_cast<int>(compute_kernel));
+    }
+
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op),
+        kernel_file_path,
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
