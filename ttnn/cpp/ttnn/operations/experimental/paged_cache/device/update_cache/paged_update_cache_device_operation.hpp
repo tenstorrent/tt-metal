@@ -1,56 +1,61 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "paged_update_cache_device_operation_types.hpp"
+#include "paged_update_cache_program_factory.hpp"
 
 namespace ttnn::operations::experimental::paged_cache {
 
-enum class PagedUpdateCacheOpParallelizationStrategy { MULTI_CORE };
-
 struct PagedUpdateCacheDeviceOperation {
-    const std::vector<uint32_t> update_idxs;
-    const uint32_t batch_offset;
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    const bool share_cache;
-    const std::optional<std::set<ttnn::MeshCoordinate>>
-        mesh_coords;  // Optional mesh coordinates to use for the operation
+    using operation_attributes_t = update_cache::operation_attributes_t;
+    using tensor_args_t = update_cache::tensor_args_t;
+    using spec_return_value_t = update_cache::spec_return_value_t;
+    using tensor_return_value_t = update_cache::tensor_return_value_t;
+    using program_factory_t = std::variant<program::PagedUpdateCacheProgramFactory>;
 
-    PagedUpdateCacheOpParallelizationStrategy get_parallelization_strategy(
-        const std::vector<Tensor>& input_tensors) const;
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& _,  // Unused
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("update_idxs", "batch_offset", "compute_kernel_config", "share_cache", "mesh_coords");
+    static spec_return_value_t compute_output_specs(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    auto attribute_values() const {
-        return std::forward_as_tuple(update_idxs, batch_offset, compute_kernel_config, share_cache, mesh_coords);
-    }
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    tt::tt_metal::operation::Hash compute_program_hash(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& cache_tensor,
+        const Tensor& input_tensor,
+        const std::vector<uint32_t>& update_idxs,
+        const std::optional<const Tensor>& update_idxs_tensor,
+        const std::optional<bool> share_cache,
+        const std::optional<const Tensor>& page_table,
+        const uint32_t batch_offset,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
 }  // namespace ttnn::operations::experimental::paged_cache
+
+namespace ttnn::prim {
+constexpr auto paged_update_cache = ttnn::register_operation<
+    "ttnn::prim::paged_update_cache",
+    ttnn::operations::experimental::paged_cache::PagedUpdateCacheDeviceOperation>();
+}  // namespace ttnn::prim

@@ -91,6 +91,13 @@ tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
         page_table_tensor.padded_shape(),
         tensor_args.batch_idx_tensor_opt.has_value());
 
+    // Include batch_idx_tensor properties when present (affects CB data format and compile-time args)
+    if (tensor_args.batch_idx_tensor_opt.has_value()) {
+        const auto& batch_idx_tensor = tensor_args.batch_idx_tensor_opt.value();
+        hash = tt::stl::hash::hash_objects(
+            hash, batch_idx_tensor.dtype(), batch_idx_tensor.memory_config(), batch_idx_tensor.padded_shape());
+    }
+
     return hash;
 }
 

@@ -1,22 +1,32 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "paged_update_cache_device_operation.hpp"
-
+#include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::paged_cache {
 
-void PagedUpdateCacheDeviceOperation::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "Expect 2 input tensors for update_cache");
+PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return program::PagedUpdateCacheProgramFactory{};
+}
 
-    const auto& cache_tensor = input_tensors.at(0);
-    const auto& input_tensor = input_tensors.at(1);
+void PagedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
+    const auto& page_table = tensor_args.page_table;
 
     // Device and storage validation
     TT_FATAL(
@@ -46,9 +56,9 @@ void PagedUpdateCacheDeviceOperation::validate(
         "Last dim of input tensor must match last dim of cache tensor");
 
     // Paged cache validation
-    const bool paged_cache = optional_input_tensors.at(1).has_value();
+    const bool paged_cache = page_table.has_value();
     if (!paged_cache) {
-        if (this->share_cache) {
+        if (operation_attributes.share_cache) {
             TT_FATAL(
                 cache_tensor.padded_shape()[0] == 1, "Share cache feature expects cache tensor to have batch of 1");
         } else {
@@ -57,22 +67,22 @@ void PagedUpdateCacheDeviceOperation::validate(
                 "Expect batch in input tensor match the batch in cache tensor");
         }
     } else {
-        TT_FATAL(!this->share_cache, "share_cache not supported with paged cache");
-        TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
+        TT_FATAL(!operation_attributes.share_cache, "share_cache not supported with paged cache");
+        TT_FATAL(update_idxs_tensor.has_value(), "Paged cache requires update_idxs tensor");
 
-        auto page_table = optional_input_tensors.at(1).value();
+        auto page_table_val = page_table.value();
 
-        if (page_table.is_sharded()) {
-            TT_FATAL(page_table.dtype() == DataType::UINT16, "Expect page table to have datatype UINT16");
+        if (page_table_val.is_sharded()) {
+            TT_FATAL(page_table_val.dtype() == DataType::UINT16, "Expect page table to have datatype UINT16");
         } else {
-            TT_FATAL(page_table.dtype() == DataType::INT32, "Expect page table to have datatype INT32");
+            TT_FATAL(page_table_val.dtype() == DataType::INT32, "Expect page table to have datatype INT32");
         }
 
-        TT_FATAL(page_table.layout() == Layout::ROW_MAJOR, "Expect page table to have memory layout in ROW MAJOR");
+        TT_FATAL(page_table_val.layout() == Layout::ROW_MAJOR, "Expect page table to have memory layout in ROW MAJOR");
 
-        if (page_table.is_sharded()) {
-            uint32_t num_cores = page_table.memory_config().shard_spec()->grid.num_cores();
-            uint32_t page_table_shard_height = page_table.padded_shape()[0] / num_cores;
+        if (page_table_val.is_sharded()) {
+            uint32_t num_cores = page_table_val.memory_config().shard_spec()->grid.num_cores();
+            uint32_t page_table_shard_height = page_table_val.padded_shape()[0] / num_cores;
             TT_FATAL(
                 page_table_shard_height == input_tensor.padded_shape()[1],
                 "Batch size in input tensor {} should match page table shard height {}",
@@ -80,55 +90,55 @@ void PagedUpdateCacheDeviceOperation::validate(
                 page_table_shard_height);
         } else {
             TT_FATAL(
-                page_table.padded_shape()[0] == input_tensor.padded_shape()[1],
+                page_table_val.padded_shape()[0] == input_tensor.padded_shape()[1],
                 "Batch size between page_table and input_tensor must match");
         }
         TT_FATAL(
-            page_table.padded_shape()[1] <= cache_tensor.padded_shape()[0],
+            page_table_val.padded_shape()[1] <= cache_tensor.padded_shape()[0],
             "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
             "max_num_blocks={}",
-            page_table.padded_shape()[1],
+            page_table_val.padded_shape()[1],
             cache_tensor.padded_shape()[0]);
     }
 
     // Update indices validation
     TT_FATAL(
-        (optional_input_tensors.at(0).has_value()) != (!this->update_idxs.empty()),
+        (update_idxs_tensor.has_value()) != (!operation_attributes.update_idxs.empty()),
         "Only an update tensor or an update vector can be provided. Not both or neither.");
 
     uint32_t num_indices = 0;
     uint32_t num_cores_cur_pos = 0;
-    if (optional_input_tensors.at(0).has_value()) {
-        const auto& update_idxs_tensor = optional_input_tensors.at(0).value();
-        TT_FATAL(update_idxs_tensor.dtype() == DataType::INT32, "Expected update_idxs to have datatype INT32");
+    if (update_idxs_tensor.has_value()) {
+        const auto& update_idxs_tensor_val = update_idxs_tensor.value();
+        TT_FATAL(update_idxs_tensor_val.dtype() == DataType::INT32, "Expected update_idxs to have datatype INT32");
         TT_FATAL(
-            update_idxs_tensor.layout() == Layout::ROW_MAJOR,
+            update_idxs_tensor_val.layout() == Layout::ROW_MAJOR,
             "Expected update_idxs to have memory layout in ROW MAJOR");
 
-        if (optional_input_tensors.at(0)->is_sharded()) {
+        if (update_idxs_tensor_val.is_sharded()) {
             TT_FATAL(
-                update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                update_idxs_tensor_val.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Expect update_idxs to be HEIGHT SHARDED if sharded");
             TT_FATAL(
-                update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+                update_idxs_tensor_val.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
                 "Expect update_idxs to have buffer type L1 if sharded");
-            num_cores_cur_pos = update_idxs_tensor.padded_shape()[0];
-            num_indices = update_idxs_tensor.logical_shape()[1];
+            num_cores_cur_pos = update_idxs_tensor_val.padded_shape()[0];
+            num_indices = update_idxs_tensor_val.logical_shape()[1];
         } else {
             TT_FATAL(
-                update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                update_idxs_tensor_val.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "Expect update_idxs to be DRAM INTERLEAVED");
             TT_FATAL(
-                update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                update_idxs_tensor_val.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Expect update_idxs to have buffer type DRAM");
             num_cores_cur_pos = 0;
-            num_indices = update_idxs_tensor.padded_shape()[0];
+            num_indices = update_idxs_tensor_val.padded_shape()[0];
         }
     } else {
-        num_indices = this->update_idxs.size();
+        num_indices = operation_attributes.update_idxs.size();
     }
-    if (optional_input_tensors.at(0).has_value() && optional_input_tensors.at(0)->is_sharded()) {
-        uint32_t in_num_cores_cur_pos = optional_input_tensors.at(0)->shard_spec().value().grid.num_cores();
+    if (update_idxs_tensor.has_value() && update_idxs_tensor.value().is_sharded()) {
+        uint32_t in_num_cores_cur_pos = update_idxs_tensor.value().shard_spec().value().grid.num_cores();
         TT_FATAL(
             input_tensor.logical_shape()[1] == num_indices,
             "Number of update_idxs ({}) should match batch size ({}) if sharded",
@@ -177,81 +187,96 @@ void PagedUpdateCacheDeviceOperation::validate(
         input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
         "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16");
 
-    TT_FATAL(this->batch_offset == 0, "batch_offset must be 0");
+    TT_FATAL(operation_attributes.batch_offset == 0, "batch_offset must be 0");
 }
 
-std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
+PagedUpdateCacheDeviceOperation::spec_return_value_t PagedUpdateCacheDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
     return {};
 }
 
-operation::MeshWorkloadWithCallbacks PagedUpdateCacheDeviceOperation::create_mesh_workload(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    operation::MeshWorkloadWithCallbacks workload_with_callbacks;
-    for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            // If mesh_coords is provided, check if the coordinate is in the set
-            if (this->mesh_coords.has_value()) {
-                bool enable_on_coord =
-                    std::find(this->mesh_coords->begin(), this->mesh_coords->end(), coord) != this->mesh_coords->end();
-                if (!enable_on_coord) {
-                    continue;  // Skip this coordinate if it's not in the mesh_coords set
-                }
-            }
+PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // In-place operation, return the cache tensor
+    return tensor_args.cache_tensor;
+}
 
-            // Create the program for the coordinate
-            const ttnn::MeshCoordinateRange program_range(coord, coord);
-            auto program_with_callbacks = PagedUpdateCacheDeviceOperation::create_program_at(
-                {0, 0}, input_tensors, optional_input_tensors, output_tensors);
-            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
-            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-                workload_with_callbacks.per_program_callbacks.emplace(
-                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
-            }
-        }
+tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+
+    tt::stl::hash::hash_t hash = 0;
+    hash = tt::stl::hash::hash_objects(
+        hash,
+        operation_attributes.update_idxs,
+        operation_attributes.batch_offset,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.share_cache,
+        operation_attributes.mesh_coords,
+        program_factory.index(),  // Include program factory variant index
+        cache_tensor.dtype(),
+        cache_tensor.layout(),
+        cache_tensor.memory_config(),
+        cache_tensor.padded_shape(),
+        input_tensor.dtype(),
+        input_tensor.layout(),
+        input_tensor.memory_config(),
+        input_tensor.padded_shape());
+
+    if (tensor_args.update_idxs_tensor.has_value()) {
+        hash = tt::stl::hash::hash_objects(
+            hash,
+            tensor_args.update_idxs_tensor.value().dtype(),
+            tensor_args.update_idxs_tensor.value().layout(),
+            tensor_args.update_idxs_tensor.value().memory_config(),
+            tensor_args.update_idxs_tensor.value().padded_shape());
     }
-    return workload_with_callbacks;
-}
 
-operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_at(
-    const ttnn::MeshCoordinate& _,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    switch (this->get_parallelization_strategy(input_tensors)) {
-        case PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE:
-        default:
-            const auto& cache_tensor = input_tensors.at(0);
-            const auto& input_tensor = input_tensors.at(1);
-            const auto& update_idxs_tensor =
-                optional_input_tensors.at(0);  // TODO: Is this tensor passed around by value?
-            const auto& page_table = optional_input_tensors.at(1);
-            return detail::paged_update_cache_multi_core(
-                cache_tensor,
-                input_tensor,
-                update_idxs_tensor,
-                page_table,
-                this->update_idxs,
-                this->batch_offset,
-                this->compute_kernel_config,
-                this->share_cache);
+    if (tensor_args.page_table.has_value()) {
+        hash = tt::stl::hash::hash_objects(
+            hash,
+            tensor_args.page_table.value().dtype(),
+            tensor_args.page_table.value().layout(),
+            tensor_args.page_table.value().memory_config(),
+            tensor_args.page_table.value().padded_shape());
     }
+
+    return hash;
 }
 
-PagedUpdateCacheOpParallelizationStrategy PagedUpdateCacheDeviceOperation::get_parallelization_strategy(
-    const std::vector<Tensor>& input_tensors) const {
-    return PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE;
-}
+std::tuple<PagedUpdateCacheDeviceOperation::operation_attributes_t, PagedUpdateCacheDeviceOperation::tensor_args_t>
+PagedUpdateCacheDeviceOperation::invoke(
+    const Tensor& cache_tensor,
+    const Tensor& input_tensor,
+    const std::vector<uint32_t>& update_idxs,
+    const std::optional<const Tensor>& update_idxs_tensor,
+    const std::optional<bool> share_cache,
+    const std::optional<const Tensor>& page_table,
+    const uint32_t batch_offset,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+    const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
 
-operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
-        input_tensors, optional_input_tensors, this->mesh_coords);
+    operation_attributes_t attrs{
+        .update_idxs = update_idxs,
+        .batch_offset = batch_offset,
+        .compute_kernel_config = kernel_config_val,
+        .share_cache = share_cache_arg,
+        .mesh_coords = mesh_coords};
+
+    tensor_args_t tensor_args{
+        .cache_tensor = cache_tensor,
+        .input_tensor = input_tensor,
+        .update_idxs_tensor =
+            update_idxs_tensor.has_value() ? std::optional<Tensor>(update_idxs_tensor.value()) : std::nullopt,
+        .page_table = page_table.has_value() ? std::optional<Tensor>(page_table.value()) : std::nullopt};
+
+    return {attrs, tensor_args};
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache
