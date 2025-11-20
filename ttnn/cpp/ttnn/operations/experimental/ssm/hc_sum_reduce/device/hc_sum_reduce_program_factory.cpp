@@ -22,7 +22,7 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto* input_buffer = tensor_args.input.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
     tt::tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -129,7 +129,7 @@ HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
         num_cores, device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, row_major);
 
     // Set initial runtime args
-    tt::tt_metal::Buffer* input_buffer_mutable = const_cast<tt::tt_metal::Buffer*>(input_buffer);
+    tt::tt_metal::Buffer* input_buffer_mutable = input_buffer;
     tt::tt_metal::Buffer* output_buffer_mutable = out_buffer;
 
     uint32_t num_blocks_per_core = 0;
