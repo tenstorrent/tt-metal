@@ -100,12 +100,12 @@ enum class BandwidthStatistics {
 };
 // The header of each statistic in the Bandwidth Summary CSV
 const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHeader = {
-    {BandwidthStatistics::BandwidthMean, "Avg Bandwidth (GB/s)"},
-    {BandwidthStatistics::BandwidthMin, "BW Min (GB/s)"},
-    {BandwidthStatistics::BandwidthMax, "BW Max (GB/s)"},
-    {BandwidthStatistics::BandwidthStdDev, "BW Std Dev (GB/s)"},
-    {BandwidthStatistics::PacketsPerSecondMean, "Avg Packets/s"},
-    {BandwidthStatistics::CyclesMean, "Avg Cycles"},
+    {BandwidthStatistics::BandwidthMean, "avg_bandwidth_gb_per_s"},
+    {BandwidthStatistics::BandwidthMin, "bw_min_gb_per_s"},
+    {BandwidthStatistics::BandwidthMax, "bw_max_gb_per_s"},
+    {BandwidthStatistics::BandwidthStdDev, "bw_std_dev_gb_per_s"},
+    {BandwidthStatistics::PacketsPerSecondMean, "avg_packets_per_s"},
+    {BandwidthStatistics::CyclesMean, "avg_cycles"},
 };
 
 // Access to internal API: ProgramImpl::num_kernel
@@ -1360,7 +1360,11 @@ private:
         csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
         for (BandwidthStatistics stat : stat_order_) {
             const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
-            csv_stream << "," << stat_name;
+            if (include_upload_columns) {
+                csv_stream << "," << to_lower(stat_name);
+            } else {
+                csv_stream << "," << stat_name;
+            }
         }
         csv_stream << ",tolerance_percent\n";
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_path.string());
