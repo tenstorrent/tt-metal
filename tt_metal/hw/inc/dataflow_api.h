@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #if __has_include("chlkc_unpack_data_format.h")
 #include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_data_format.h"
@@ -3236,9 +3237,15 @@ struct noc_traits_t<tensor_accessor::Page> {
 /**
  * @brief Provides a safe pointer to a structure of type T in local L1 memory
  */
-template <typename T, typename AddressType = uint32_t>
+template <typename T, typename AddressType = uintptr_t>
 class L1Memory {
     using difference_type = std::ptrdiff_t;
+
+    static_assert(std::is_integral<AddressType>::value, "AddressType must be an integral type");
+    static_assert(std::is_unsigned<AddressType>::value, "AddressType must be unsigned for address representation");
+    static_assert(
+        sizeof(AddressType) >= sizeof(difference_type),
+        "AddressType must be large enough to hold difference_type for safe pointer arithmetic");
 
 public:
     /** @brief Construct a L1Memory instance from a raw address
