@@ -27,7 +27,8 @@ target_sources(
     PRIVATE
         device/paged_cache_operation.cpp
         device/paged_fill_cache_program_factory.cpp
-        device/paged_fused_update_cache_program_factory.cpp
+        device/paged_tiled_fused_update_cache_program_factory.cpp
+        device/paged_row_major_fused_update_cache_program_factory.cpp
         device/paged_update_cache_program_factory.cpp
         paged_cache.cpp
 )

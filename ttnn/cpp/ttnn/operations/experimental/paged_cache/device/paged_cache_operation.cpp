@@ -5,7 +5,8 @@
 #include "paged_cache_operation.hpp"
 
 #include "paged_update_cache_program_factory.hpp"
-#include "paged_fused_update_cache_program_factory.hpp"
+#include "paged_tiled_fused_update_cache_program_factory.hpp"
+#include "paged_row_major_fused_update_cache_program_factory.hpp"
 #include "paged_fill_cache_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -373,17 +374,34 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_
                 const auto& update_idxs_tensor =
                     optional_input_tensors.at(0);  // TODO: Is this tensor passed around by value?
                 const auto& page_table = optional_input_tensors.at(1);
-                return detail::paged_fused_update_cache_multi_core(
-                    cache_tensor1,
-                    input_tensor1,
-                    cache_tensor2,
-                    input_tensor2,
-                    update_idxs_tensor,
-                    page_table,
-                    this->update_idxs,
-                    this->batch_offset,
-                    this->compute_kernel_config,
-                    this->share_cache);
+                if (input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE) {
+                    return detail::paged_tiled_fused_update_cache_multi_core(
+                        cache_tensor1,
+                        input_tensor1,
+                        cache_tensor2,
+                        input_tensor2,
+                        update_idxs_tensor,
+                        page_table,
+                        this->update_idxs,
+                        this->batch_offset,
+                        this->compute_kernel_config,
+                        this->share_cache);
+                } else if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
+                    return detail::paged_row_major_fused_update_cache_multi_core(
+                        cache_tensor1,
+                        input_tensor1,
+                        cache_tensor2,
+                        input_tensor2,
+                        update_idxs_tensor,
+                        page_table,
+                        this->update_idxs,
+                        this->batch_offset,
+                        this->compute_kernel_config,
+                        this->share_cache);
+                } else {
+                    TT_FATAL(
+                        false, "Error: input tensor1 and input tensor2 must be either both tiled or both row-major");
+                }
             } else {
                 const auto& cache_tensor = input_tensors.at(0);
                 const auto& input_tensor = input_tensors.at(1);
