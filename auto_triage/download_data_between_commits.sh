@@ -21,7 +21,7 @@ fi
 
 START_COMMIT="$1"
 END_COMMIT="$2"
-OUTPUT_FILE="${3:-auto_triage/outputs/commit_info.json}"
+OUTPUT_FILE="${3:-auto_triage/data/commit_info.json}"
 
 # Validate commits exist
 if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
@@ -56,6 +56,7 @@ echo ""
 # Initialize JSON output
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
 mkdir -p "$OUTPUT_DIR"
+rm -f "$OUTPUT_FILE"
 echo "[]" > "$OUTPUT_FILE"
 
 # Process each commit
