@@ -27,7 +27,14 @@ class FactorySystemDescriptor;
 
 class TopologyHelper;
 
-class EthernetEndpointUpMetric: public BoolMetric {
+// Base class for all Ethernet metrics to share common path prefix
+class EthernetMetricBase {
+protected:
+    // Returns base path for all Ethernet metrics
+    const std::vector<std::string> ethernet_base_path() const { return {"ethernet"}; }
+};
+
+class EthernetEndpointUpMetric : public BoolMetric, public EthernetMetricBase {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
 
@@ -36,7 +43,8 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
     const std::vector<std::string> telemetry_path() const override;
     void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
@@ -51,7 +59,7 @@ private:
     uint32_t link_up_addr_;
 };
 
-class EthernetCRCErrorCountMetric: public UIntMetric {
+class EthernetCRCErrorCountMetric : public UIntMetric, public EthernetMetricBase {
 public:
     EthernetCRCErrorCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -59,7 +67,8 @@ public:
         tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -75,7 +84,7 @@ private:
     uint32_t crc_addr_;
 };
 
-class EthernetRetrainCountMetric: public UIntMetric {
+class EthernetRetrainCountMetric : public UIntMetric, public EthernetMetricBase {
 public:
     EthernetRetrainCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -83,7 +92,8 @@ public:
         tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -99,7 +109,7 @@ private:
     uint32_t retrain_count_addr_;
 };
 
-class EthernetCorrectedCodewordCountMetric: public UIntMetric {
+class EthernetCorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
 public:
     EthernetCorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -107,7 +117,8 @@ public:
         tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -123,7 +134,7 @@ private:
     uint32_t corr_addr_;
 };
 
-class EthernetUncorrectedCodewordCountMetric: public UIntMetric {
+class EthernetUncorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
 public:
     EthernetUncorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -131,7 +142,8 @@ public:
         tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal);
+        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
