@@ -21,7 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-
+#include <tt-metalium/device_pool.hpp>
 using json = nlohmann::json;
 
 namespace tt {
