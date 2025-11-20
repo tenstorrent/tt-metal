@@ -39,7 +39,7 @@ jobs:
             arch: blackhole
             cmd: |
               if [ "${{ inputs.runner-label }}" != "P300-viommu" ]; then echo "Skipping - not P300-viommu"; exit 0; fi
-              pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
+              pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
             owner_id: U08TED0JM9D # Samuel Adesoye
     name: ${{ matrix.test-group.name }}
     runs-on:
