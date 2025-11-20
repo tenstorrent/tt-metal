@@ -52,11 +52,7 @@ def test_forward_pass(
 
     # Setup: Convert weights and get weight_config
     weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+        cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST") / f"{hf_config.num_hidden_layers}_layers"
     )
 
     weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), weight_cache_path, mesh_device)

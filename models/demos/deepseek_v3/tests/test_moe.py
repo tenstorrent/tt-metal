@@ -82,11 +82,7 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+        cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST") / f"{hf_config.num_hidden_layers}_layers"
     )
     # Setup: Convert weights and get weight_config
     weight_config = MoE.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)
