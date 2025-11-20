@@ -309,18 +309,29 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for fused adamw
     // -------------------------------------------------------------------------
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[kMomentumCbIndex] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[kVarianceCbIndex] = UnpackToDestMode::UnpackToDestFp32;
+
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
         block_size};                 // per_core_block_size
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    tt::tt_metal::ComputeConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = true,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = false,
+        .compile_args = compute_group_1_args,
+        .defines = {},
+    };
+    kernels.compute_group_1 = tt::tt_metal::CreateKernel(program, kComputeKernelPath, core_group_1, compute_config);
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        kernels.compute_group_2 = tt::tt_metal::CreateKernel(program, kComputeKernelPath, core_group_2, compute_config);
     }
 
     // -------------------------------------------------------------------------
