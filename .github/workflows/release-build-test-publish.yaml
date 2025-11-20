@@ -49,6 +49,7 @@ jobs:
 
   single-card-demo-tests:
     needs: build-artifact
+    # if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
@@ -59,7 +60,7 @@ jobs:
 
   t3000-demo-tests:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    # if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -69,7 +70,7 @@ jobs:
 
   galaxy-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    # if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
