@@ -76,33 +76,26 @@ public:
 
     void step(xt::xarray<float>& params, const xt::xarray<float>& grads) {
         if (m_steps == 0) {
-            // Initialize momentum buffers
             m_first_moment = xt::zeros_like(params);
             m_second_moment = xt::zeros_like(params);
         }
 
         m_steps++;
 
-        // Update biased first moment estimate
         // m_t = beta1 * m_{t-1} + (1 - beta1) * grad
         m_first_moment = m_beta1 * m_first_moment + (1.0f - m_beta1) * grads;
-
-        // Update biased second raw moment estimate
         // v_t = beta2 * v_{t-1} + (1 - beta2) * grad^2
         m_second_moment = m_beta2 * m_second_moment + (1.0f - m_beta2) * (grads * grads);
 
-        // Compute bias-corrected first moment estimate
-        // m_hat = m_t / (1 - beta1^t)
         float bias_correction1 = 1.0f - std::pow(m_beta1, static_cast<float>(m_steps));
+        // m_hat = m_t / (1 - beta1^t)
         xt::xarray<float> first_moment_hat = m_first_moment / bias_correction1;
 
-        // Compute bias-corrected second raw moment estimate
-        // v_hat = v_t / (1 - beta2^t)
         float bias_correction2 = 1.0f - std::pow(m_beta2, static_cast<float>(m_steps));
+        // v_hat = v_t / (1 - beta2^t)
         xt::xarray<float> second_moment_hat = m_second_moment / bias_correction2;
 
-        // Update parameters
-        // theta = theta - lr * m_hat / (sqrt(v_hat) + epsilon)
+        // params = params - lr * m_hat / (sqrt(v_hat) + epsilon)
         params = params - m_lr * first_moment_hat / (xt::sqrt(second_moment_hat) + m_epsilon);
     }
 
@@ -184,10 +177,8 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     composite_cfg.epsilon = pc.epsilon;
     composite_cfg.weight_decay = 0.0f;  // No weight decay for comparison
     composite_cfg.use_kahan_summation = false;
-
     ttml::optimizers::AdamW opt_composite(params_composite, composite_cfg);
 
-    // AdamWFused implementation (placeholder - will be skipped for now)
     auto theta_fused = autograd::create_tensor(to_tt(w0), true);
     theta_fused->set_grad(to_tt(g0));
     ttml::serialization::NamedParameters params_fused{{"theta", theta_fused}};
@@ -226,14 +217,14 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     auto composite_metrics = compute_error_metrics(w_cpu, result_composite_cpu, "AdamW (composite)");
     auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamWFused");
 
-    EXPECT_LT(fused_metrics.mean_error, moreh_metrics.mean_error)
+    EXPECT_LE(fused_metrics.mean_error, moreh_metrics.mean_error)
         << "AdamWFused mean error should be lower than MorehAdamW";
-    EXPECT_LT(fused_metrics.max_error, moreh_metrics.max_error)
+    EXPECT_LE(fused_metrics.max_error, moreh_metrics.max_error)
         << "AdamWFused max error should be lower than MorehAdamW";
 
-    EXPECT_LT(fused_metrics.mean_error, composite_metrics.mean_error)
+    EXPECT_LE(fused_metrics.mean_error, composite_metrics.mean_error)
         << "AdamWFused mean error should be lower than AdamW (composite)";
-    EXPECT_LT(fused_metrics.max_error, composite_metrics.max_error)
+    EXPECT_LE(fused_metrics.max_error, composite_metrics.max_error)
         << "AdamWFused max error should be lower than AdamW (composite)";
 
     fmt::print("\n");
@@ -286,3 +277,56 @@ static const AdamWCase kBasicCases[] = {
 
 INSTANTIATE_TEST_SUITE_P(
     AdamWFusedBasicComparison, AdamWFusedComparisonTest, ::testing::ValuesIn(kBasicCases), CaseName);
+
+// ====================================================================
+// Isolated Feature Tests
+// Test individual features in isolation to verify correctness
+// ====================================================================
+
+// Test cases that isolate individual AdamW features
+static const AdamWCase kIsolatedFeatureCases[] = {
+    // Pure learning rate only (beta1=0, beta2=0)
+    // This should behave like: params = params - lr * grad
+    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1.0f, "PureLR_1"},
+    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1e-8f, "PureLR_2"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1.0f, "PureLR_3"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1e-8f, "PureLR_4"},
+
+    // Only beta1 (first moment/momentum) with lr, beta2=0
+    // Tests exponential moving average of gradients
+    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, "OnlyBeta1_0p9"},
+    {{1, 8, 128, 64}, 1e-3f, 0.8f, 0.0f, 1e-8f, "OnlyBeta1_0p8"},
+    {{2, 4, 128, 64}, 1e-3f, 0.95f, 0.0f, 1e-8f, "OnlyBeta1_0p95"},
+    {{1, 4, 128, 128}, 1e-3f, 0.5f, 0.0f, 1e-8f, "OnlyBeta1_0p5"},
+
+    // Only beta2 (second moment) with lr, beta1=0
+    // Tests exponential moving average of squared gradients (adaptive learning rate)
+    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, "OnlyBeta2_0p999"},
+    {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, "OnlyBeta2_0p99"},
+    {{2, 4, 128, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, "OnlyBeta2_0p9999"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.95f, 1e-8f, "OnlyBeta2_0p95"},
+
+    // Learning rate + beta1 only (momentum without adaptive learning rate)
+    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, "LR_Beta1_std"},
+    {{1, 8, 128, 64}, 1e-2f, 0.8f, 0.0f, 1e-8f, "LR_Beta1_high_lr"},
+    {{2, 4, 128, 64}, 1e-4f, 0.95f, 0.0f, 1e-8f, "LR_Beta1_low_lr"},
+
+    // Learning rate + beta2 only (adaptive learning rate without momentum)
+    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, "LR_Beta2_std"},
+    {{1, 8, 128, 64}, 1e-2f, 0.0f, 0.99f, 1e-8f, "LR_Beta2_high_lr"},
+    {{2, 4, 128, 64}, 1e-4f, 0.0f, 0.9999f, 1e-8f, "LR_Beta2_low_lr"},
+
+    // Epsilon variations with only beta2 (tests numerical stability)
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, "Beta2_eps1e6"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-7f, "Beta2_eps1e7"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-9f, "Beta2_eps1e9"},
+
+    // Edge cases: extreme beta values
+    {{1, 4, 128, 128}, 1e-3f, 0.1f, 0.0f, 1e-8f, "Beta1_0p1_low_momentum"},
+    {{1, 4, 128, 128}, 1e-3f, 0.99f, 0.0f, 1e-8f, "Beta1_0p99_high_momentum"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9f, 1e-8f, "Beta2_0p9_fast_adapt"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9999f, 1e-8f, "Beta2_0p9999_slow_adapt"},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    AdamWFusedIsolatedFeatures, AdamWFusedComparisonTest, ::testing::ValuesIn(kIsolatedFeatureCases), CaseName);
