@@ -34,6 +34,11 @@ inline void device_setup()
     TTI_ZEROACC(ckernel::p_zeroacc::CLR_ALL, 0, 0);
 #endif
 
+#if defined(ARCH_QUASAR)
+    // Reset all dest dvalid bits for all clients
+    TTI_CLEARDVALID(0, 0, 0xf, 0xf, 0, 0);
+#endif
+
 // Enable CC stack
 #if defined(ARCH_QUASAR)
     TTI_SFPENCC(3, 10);
