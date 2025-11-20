@@ -8,7 +8,6 @@ import ttnn
 # Reuse the shared test runner and helpers from the nightly test module
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     run_all_to_all_dispatch_test,
-    get_max_links,
 )
 
 
