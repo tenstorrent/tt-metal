@@ -2555,14 +2555,66 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_unicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        src_addr,
-        page_size * 2,  // Total payload size (both chunks)
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    uint32_t total_size = page_size * 2;
+
+    if (total_size <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: existing single scatter operation
+        fabric_unicast_noc_scatter_write(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            src_addr,
+            total_size,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    } else {
+        // Large pages: fall back to separate writes per page
+        // Source layout is [all_page0_data][all_page1_data], not interleaved
+        // So we can't use scatter for chunks; use regular writes instead
+        uint32_t remaining_size = page_size;
+        uint32_t current_offset = 0;
+
+        // Send page0 in chunks
+        while (remaining_size > 0) {
+            uint32_t chunk_size = (remaining_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : remaining_size;
+            auto chunk_noc_address =
+                tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0 + current_offset);
+
+            fabric_unicast_noc_unicast_write(
+                client_interface,
+                packet_header,
+                dst_dev_id,
+                dst_mesh_id,
+                src_addr + current_offset,
+                chunk_size,
+                tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address});
+
+            current_offset += chunk_size;
+            remaining_size -= chunk_size;
+        }
+
+        // Send page1 in chunks
+        remaining_size = page_size;
+        current_offset = 0;
+        while (remaining_size > 0) {
+            uint32_t chunk_size = (remaining_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : remaining_size;
+            auto chunk_noc_address =
+                tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1 + current_offset);
+
+            fabric_unicast_noc_unicast_write(
+                client_interface,
+                packet_header,
+                dst_dev_id,
+                dst_mesh_id,
+                src_addr + page_size + current_offset,  // Start after page0's data
+                chunk_size,
+                tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address});
+
+            current_offset += chunk_size;
+            remaining_size -= chunk_size;
+        }
+    }
 }
 
 // clang-format off
