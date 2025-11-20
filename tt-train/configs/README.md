@@ -162,7 +162,7 @@ multihost_config:
 ```
 tt-train/configs/
 ├── training_configs/          # Training configuration files
-├── model_configs/            # Model architecture configurations  
+├── model_configs/            # Model architecture configurations
 ├── device_configs/           # Device mesh configurations
 ├── multihost_configs/        # MultiHost execution configurations
 └── README.md                 # This file
@@ -175,14 +175,14 @@ Configurations can be loaded using the provided utility functions:
 ```python
 from ttml.common.config import (
     get_training_config,
-    get_device_config, 
+    get_device_config,
     get_model_config,
     get_multihost_config
 )
 
 # Load configurations
 training_config = get_training_config("training_shakespeare_tinyllama.yaml")
-device_config = get_device_config("device_config.yaml") 
+device_config = get_device_config("device_config.yaml")
 model_config = get_model_config("configs/model_configs/tinyllama.yaml")
 multihost_config = get_multihost_config("multihost_config.yaml")
 ```
