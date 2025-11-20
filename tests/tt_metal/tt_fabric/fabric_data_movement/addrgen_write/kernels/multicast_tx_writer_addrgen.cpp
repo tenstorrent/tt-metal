@@ -163,6 +163,9 @@ void kernel_main() {
             } else if constexpr (operation_type == OperationType::Scatter) {
                 // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 fabric_multicast_noc_scatter_write_set_state(left_packet_header, 0, 0, ranges_w, scatter_acc, 0, 1);
+            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                    left_packet_header, 0, 0, ranges_w, dst_acc, 0, sem_noc, 1);
             }
         }
         if (e_hops > 0) {
@@ -172,6 +175,9 @@ void kernel_main() {
             } else if constexpr (operation_type == OperationType::Scatter) {
                 // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 fabric_multicast_noc_scatter_write_set_state(right_packet_header, 0, 0, ranges_e, scatter_acc, 0, 1);
+            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                    right_packet_header, 0, 0, ranges_e, dst_acc, 0, sem_noc, 1);
             }
         }
         if (n_hops > 0) {
@@ -182,6 +188,9 @@ void kernel_main() {
             } else if constexpr (operation_type == OperationType::Scatter) {
                 // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 fabric_multicast_noc_scatter_write_set_state(north_packet_header, 0, 0, ranges_n, scatter_acc, 0, 1);
+            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                    north_packet_header, 0, 0, ranges_n, dst_acc, 0, sem_noc, 1);
             }
         }
         if (s_hops > 0) {
@@ -192,6 +201,9 @@ void kernel_main() {
             } else if constexpr (operation_type == OperationType::Scatter) {
                 // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
                 fabric_multicast_noc_scatter_write_set_state(south_packet_header, 0, 0, ranges_s, scatter_acc, 0, 1);
+            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                    south_packet_header, 0, 0, ranges_s, dst_acc, 0, sem_noc, 1);
             }
         }
     }
@@ -225,8 +237,13 @@ void kernel_main() {
                         &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, sem_noc, 1);
+                if constexpr (api_variant == ApiVariant::Basic) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, sem_noc, 1);
+                } else {  // WithState or SetState
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                        &senderW, left_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+                }
             }
         }
 
@@ -251,8 +268,13 @@ void kernel_main() {
                         &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, sem_noc, 1);
+                if constexpr (api_variant == ApiVariant::Basic) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, sem_noc, 1);
+                } else {  // WithState or SetState
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                        &senderE, right_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+                }
             }
         }
 
@@ -278,8 +300,13 @@ void kernel_main() {
                         &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, sem_noc, 1);
+                if constexpr (api_variant == ApiVariant::Basic) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, sem_noc, 1);
+                } else {  // WithState or SetState
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                        &senderN, north_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+                }
             }
         }
 
@@ -305,8 +332,13 @@ void kernel_main() {
                         &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, scatter_acc, i, i + 1);
                 }
             } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, sem_noc, 1);
+                if constexpr (api_variant == ApiVariant::Basic) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, sem_noc, 1);
+                } else {  // WithState or SetState
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                        &senderS, south_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+                }
             }
         }
 
