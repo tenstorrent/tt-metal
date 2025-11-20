@@ -48,6 +48,9 @@ jupyter lab --no-browser --port=8888
 
 ## Tools and Instruments
 
+### [TT-Triage](https://github.com/tenstorrent/tt-metal/blob/main/tools/triage/tt-triage.md)
+The TT-Triage tool diagnoses failures by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores. It identifies running kernels and provides callstack data for troubleshooting.
+
 ### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
 A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
 
