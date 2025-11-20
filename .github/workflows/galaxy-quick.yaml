@@ -9,6 +9,7 @@ on:
         options:
           - wormhole_b0
           - blackhole
+        default: wormhole_b0
   schedule:
     - cron: "0 */6 * * *" # Runs every 6 hours
   push:
@@ -36,4 +37,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
+      scheduled: ${{ github.event_name == 'schedule' }}
     secrets: inherit
