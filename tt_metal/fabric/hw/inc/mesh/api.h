@@ -2963,15 +2963,36 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_multicast_noc_scatter_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        ranges,
-        src_addr,
-        page_size * 2,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use single scatter operation
+        fabric_multicast_noc_scatter_write(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr,
+            page_size * 2,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+    } else {
+        // Large pages: fall back to separate multicast unicast writes
+        // Send page0
+        fabric_multicast_noc_unicast_write(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, ranges, src_addr, addrgen, page_id0, offset0);
+
+        // Send page1
+        fabric_multicast_noc_unicast_write(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr + page_size,  // Offset for second page in CB
+            addrgen,
+            page_id1,
+            offset1);
+    }
 }
 
 // clang-format off
