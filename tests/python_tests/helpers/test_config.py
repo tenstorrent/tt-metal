@@ -583,5 +583,5 @@ def run_test(
     build_test(test_config, boot_mode, profiler_build)
 
     # run test
-    run_elf_files(test_config["testname"], boot_mode)
-    wait_for_tensix_operations_finished()
+    elfs = run_elf_files(test_config["testname"], boot_mode)
+    wait_for_tensix_operations_finished(elfs)

@@ -151,8 +151,8 @@ def perf_benchmark(
         runs = []
         for _ in range(run_count):
             reset_mailboxes()
-            run_elf_files(test_config["testname"], boot_mode)
-            wait_for_tensix_operations_finished()
+            elfs = run_elf_files(test_config["testname"], boot_mode)
+            wait_for_tensix_operations_finished(elfs)
 
             profiler_data = Profiler.get_data(test_config["testname"])
 
