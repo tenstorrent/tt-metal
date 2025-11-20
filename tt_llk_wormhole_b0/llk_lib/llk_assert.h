@@ -13,7 +13,16 @@
 
 #else
 
-// TODO: implement asserts in LLK infra
-#define LLK_ASSERT(condition, message)
+#include "ckernel.h"
+
+#define LLK_ASSERT(condition, message) \
+    do                                 \
+    {                                  \
+        if (UNLIKELY(!(condition)))    \
+        {                              \
+            asm volatile("ebreak");    \
+            UNREACHABLE();             \
+        }                              \
+    } while (0)
 
 #endif
