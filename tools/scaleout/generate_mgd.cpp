@@ -10,7 +10,7 @@
 #include <set>
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
-#include "cabling_descriptor/schemas/cluster_config.pb.h"
+#include "protobuf/cluster_config.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -193,7 +193,7 @@ void generate_mesh_graph_descriptor(
     // Count total connections
     size_t total_connections = 0;
     for (const auto& [src_host, conn] : intermesh_connections) {
-        for (const auto& [dst_host, count] : conn) {
+        for ([[maybe_unused]] const auto& [dst_host, count] : conn) {
             total_connections++;
         }
     }
