@@ -1027,7 +1027,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 
             // Check if any rank experienced a hang/timeout
             const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-            bool any_rank_hung;
+            bool any_rank_hung = false;
             distributed_context.all_reduce(
                 tt::stl::Span<bool>(&did_hang_locally, 1),
                 tt::stl::Span<bool>(&any_rank_hung, 1),
