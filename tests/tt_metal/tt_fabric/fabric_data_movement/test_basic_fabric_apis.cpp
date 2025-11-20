@@ -750,6 +750,105 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::S, 1));
 }
 
+// UDM Mode Write Tests with explicit src/dest node IDs - test specific node pairs that has traffic turns
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode0) {
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(0u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(0u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode1) {
+    for (uint32_t dst : {4u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(1u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(1u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode2) {
+    for (uint32_t dst : {4u, 5u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(2u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(2u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode3) {
+    for (uint32_t dst : {4u, 5u, 6u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(3u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(3u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode4) {
+    for (uint32_t dst : {1u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(4u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(4u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode5) {
+    for (uint32_t dst : {0u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(5u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(5u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode6) {
+    for (uint32_t dst : {0u, 1u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(6u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(6u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteFromNode7) {
+    for (uint32_t dst : {0u, 1u, 2u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(7u, dst));
+        UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(7u, dst));
+    }
+}
+// UDM Mode Read Tests with explicit src/dest node IDs - test specific node pairs that has traffic turns
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode0) {
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode1) {
+    for (uint32_t dst : {4u, 6u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode2) {
+    for (uint32_t dst : {4u, 5u, 7u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode3) {
+    for (uint32_t dst : {4u, 5u, 6u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode4) {
+    for (uint32_t dst : {1u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode5) {
+    for (uint32_t dst : {0u, 2u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode6) {
+    for (uint32_t dst : {0u, 1u, 3u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst));
+    }
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
+    for (uint32_t dst : {0u, 1u, 2u}) {
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst));
+    }
+}
+
 // Unicast Scatter Write
 TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocScatterWrite) {
     for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
