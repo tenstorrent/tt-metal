@@ -26,4 +26,5 @@ inline void llk_math_sfpu_reduce_max_sdpa(
 
 inline void llk_math_sfpu_reduce_max_col_epilogue() { ckernel::sfpu::epilogue_reduce_max_col_(); }
 
+inline void llk_math_sfpu_reduce_max_load_initial_values() { ckernel::sfpu::sfpu_reduce_max_load_initial_values(); }
 }  // namespace ckernel

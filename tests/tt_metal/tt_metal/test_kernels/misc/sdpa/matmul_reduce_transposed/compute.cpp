@@ -56,11 +56,13 @@ void matmul_blocks(
     uint32_t total_reduce_tiles = in1_num_subblocks * subblock_w;  // = N
     cb_reserve_back(reduce_out_cb, total_reduce_tiles);
 
+    sfpu_reduce_max_sdpa_init();
+
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
         // Initialize reduce once per column (before processing any row blocks)
-        sfpu_reduce_max_sdpa_init();
-
+        
+        sfpu_reduce_max_load_initial_values();
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             tile_regs_acquire();
 
