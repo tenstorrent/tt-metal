@@ -17,11 +17,12 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/device_pool.hpp>
+
 using json = nlohmann::json;
 
 namespace tt {
