@@ -14,8 +14,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::debug {
 
@@ -117,19 +115,8 @@ ApplyDeviceDelayDeviceOperation::invoke(
     operation_attributes_t operation_attributes{
         .delays = delays, .worker_core_range_set = subdevice_core_range_set, .mesh_device = &mesh_device};
 
-    auto input_tensor = create_device_tensor(
-        ttnn::TensorSpec(
-            ttnn::Shape({1}),
-            tt::tt_metal::TensorLayout(
-                ttnn::DataType::BFLOAT16, tt::tt_metal::PageConfig(ttnn::Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG)),
-        std::addressof(mesh_device));
-
-    tensor_args_t tensor_args{
-        .input_tensor = input_tensor,
-    };
-
     log_info(tt::LogAlways, "Returning delay op structs");
-    return {operation_attributes, tensor_args};
+    return {operation_attributes, tensor_args_t{}};
 }
 
 }  // namespace ttnn::operations::debug
