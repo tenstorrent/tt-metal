@@ -307,8 +307,7 @@ PYBIND11_MODULE(_ttnn, module) {
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
         "Increment tensor id and return the previously held id");
 
-    module.def(
-        "next_tensor_id", &ttnn::tensor::Tensor::next_id, "Atomically fetch and increment the tensor ID counter");
+    module.def("next_tensor_id", &ttnn::Tensor::next_id, "Atomically fetch and increment the tensor ID counter");
 
     module.def(
         "get_device_operation_id",
