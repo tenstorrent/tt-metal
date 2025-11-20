@@ -66,6 +66,7 @@ target_sources(
         test_rsub_int.cpp
         test_sub_int.cpp
         test_lazy_mode.cpp
+        test_lazy_convolution.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(

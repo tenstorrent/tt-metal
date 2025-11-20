@@ -55,6 +55,9 @@ ttnn::Tensor to_device(
         auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<ToDeviceOperation>(tensor);
         auto output_tensor =
             tt::tt_metal::Tensor::make_lazy_tensor(lazy_inputs, to_device_operation, tensor.tensor_spec());
+        // Fake it until you make it, further operations might require the tensor to be on device, which it will be...
+        // eventually.
+        output_tensor.lazy()->set_storage_type(tt::tt_metal::StorageType::DEVICE);
         return output_tensor;
     }
 

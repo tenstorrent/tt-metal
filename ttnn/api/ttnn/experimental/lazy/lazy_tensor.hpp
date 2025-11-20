@@ -138,6 +138,8 @@ public:
     void set_op_inputs(std::shared_ptr<LazyOperationInputs> new_inputs);
     void set_op(const LazyOperationPtr& new_op);
 
+    void set_storage_type(tt::tt_metal::StorageType storage_type);
+
 private:
     void set_siblings(const std::vector<std::shared_ptr<LazyTensor>>& siblings);
     void set_materialized_output_idx(size_t idx);

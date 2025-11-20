@@ -136,7 +136,9 @@ void LazyTensor::set_state(LazyTensorState state) { state_ = state; }
 
 void LazyTensor::set_op_inputs(std::shared_ptr<LazyOperationInputs> new_inputs) { op_inputs_ = std::move(new_inputs); }
 void LazyTensor::set_op(const LazyOperationPtr& new_op) { op_ = new_op; }
-
+void LazyTensor::set_storage_type(tt::tt_metal::StorageType storage_type) {
+    tensor_metadata_.storage_type_ = storage_type;
+}
 // ======================= LazyTensor::TensorMetadata =======================
 LazyTensor::TensorMetadata::TensorMetadata(
     const TensorSpec& tensor_spec,

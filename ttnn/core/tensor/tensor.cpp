@@ -147,6 +147,13 @@ Tensor Tensor::from_vector(
 
 template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<ttnn::QueueId> cq_id) const {
+    if (!lazy_tensor_->is_materialized()) {
+        // The implementation of to_vector has a "to_cpu" call, we need to materialize this in order to work correctly.
+        // Maybe, and just maybe, we could make a more clever implementation of this, but the goal is to avoid rewriting
+        // operations as much as possible.
+        ttnn::experimental::lazy::evaluate(*this);
+    }
+
     return get_materialized_tensor().to_vector<T>(cq_id);
 }
 
@@ -303,7 +310,10 @@ tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() {
 }
 
 const tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() const {
-    TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
+    if (!lazy_tensor_->is_materialized()) {
+        TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
+    }
+
     return lazy_tensor_->materialized_tensor();
 }
 
