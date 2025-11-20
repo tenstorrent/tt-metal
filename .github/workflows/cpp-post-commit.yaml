@@ -61,7 +61,6 @@ jobs:
             # { name: "Nightly tools", cmd: '({ [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_tools_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_tools_tests.sh) && ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER && ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER', nightly: true },
             { name: "ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: false },
             # { name: "Nightly ttnn tensor accessor", cmd: './build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=$GTEST_FILTER', nightly: true },
-            { name: "data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: false },
             { name: "Nightly data movement", cmd: './build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER', nightly: true },
           ]]
     steps:
