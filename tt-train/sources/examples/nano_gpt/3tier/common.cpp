@@ -78,7 +78,6 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
 
     try {
-        text = read_file_to_str(config.data_path);
         // check file extension:
         if (config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(config.data_path);
@@ -105,8 +104,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
                 } catch (const std::exception &e) {
                     std::cerr << e.what() << std::endl;
-                    std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
-                    exit(-1);
+                    std::cerr << "\nExpected tokenized data file for BPE tokenizer, but received a .txt file or an invalid format. Did you tokenize the dataset? See the README for details." << std::endl;                    exit(-1);
                 }
             }
             else {

@@ -385,7 +385,6 @@ int main(int argc, char **argv) {
     std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
     try {
-        text = read_file_to_str(training_config.data_path);
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(training_config.data_path);

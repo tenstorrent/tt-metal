@@ -208,7 +208,7 @@ The main executable accepts these command line arguments:
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--config` | `-c` | Training config file path | `$TT_METAL_HOME/tt-train/training_configs/training_shakespeare_nanogpt.yaml` |
+| `--config` | `-c` | Training config file path | `$TT_METAL_HOME/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml` |
 | `--multihost` | | Multihost config file path | "" (optional) |
 | `--name` | `-n` | Run name | "" |
 | `--add_time_to_name` | `-t` | Add timestamp to run name | true |
@@ -248,7 +248,6 @@ if (!multihost_config_name.empty()) {
 # Complete training configuration file
 training_config:
   project_name: "shakespeare_training"
-  model_type: "llama"
   seed: 5489
   model_save_interval: 500
   batch_size: 8
