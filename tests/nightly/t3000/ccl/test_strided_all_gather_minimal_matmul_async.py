@@ -4,14 +4,12 @@
 
 import torch
 import pytest
-import math
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tracy import signpost
 
 
@@ -290,7 +288,9 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out,
-                mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims
+                ),
             )
 
             tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
@@ -305,7 +305,9 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
             tt_mm_out = ttnn.to_torch(
                 tt_mm_out,
-                mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims
+                ),
             )
             if not shard_weights:
                 tt_mm_out = tt_mm_out[:, :, :, 0 : torch_mm_out_tensor.shape[3]]
