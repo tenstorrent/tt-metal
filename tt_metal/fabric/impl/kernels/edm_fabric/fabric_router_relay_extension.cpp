@@ -36,7 +36,7 @@ using WorkerToFabricRelaySender = WorkerToFabricEdmSenderImpl<false, FABRIC_RELA
 using FabricRelayStatus = EDMStatus;
 
 template <uint8_t NUM_EDM_BUFFERS>
-using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<true, NUM_EDM_BUFFERS>;
+using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
 constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
@@ -49,23 +49,70 @@ constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(6);
 constexpr size_t channels_base_l1_address = get_compile_time_arg_val(7);
 constexpr size_t channel_stream_id = get_compile_time_arg_val(8);
 constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(9);
-// Mux connection info compile args (note: mux_noc_x/y use my_x[0]/my_y[0] instead)
-constexpr size_t mux_buffer_base_addr = get_compile_time_arg_val(10);
-constexpr size_t mux_num_buffers = get_compile_time_arg_val(11);
-constexpr size_t mux_connection_handshake_addr = get_compile_time_arg_val(12);
-constexpr size_t mux_worker_location_info_addr = get_compile_time_arg_val(13);
-constexpr size_t mux_buffer_size_bytes = get_compile_time_arg_val(14);
-constexpr size_t mux_buffer_index_addr = get_compile_time_arg_val(15);
-constexpr size_t mux_relay_flow_control_semaphore_addr = get_compile_time_arg_val(16);
-constexpr size_t mux_relay_teardown_semaphore_addr = get_compile_time_arg_val(17);
-constexpr size_t mux_relay_buffer_index_semaphore_addr = get_compile_time_arg_val(18);
-constexpr size_t mux_free_slots_stream_id = get_compile_time_arg_val(19);
-constexpr size_t local_mux_status_address = get_compile_time_arg_val(20);
-constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(21);
-constexpr size_t udm_memory_pool_size = get_compile_time_arg_val(22);
-constexpr size_t router_noc_x = get_compile_time_arg_val(23);
-constexpr size_t router_noc_y = get_compile_time_arg_val(24);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(25);
+constexpr size_t mux_num_buffers = get_compile_time_arg_val(10);
+constexpr size_t mux_buffer_size_bytes = get_compile_time_arg_val(11);
+constexpr size_t downstream_mux_status_readback_address = get_compile_time_arg_val(12);
+
+// Mux connection configuration (arg 13)
+constexpr uint32_t NUM_MUX_CONNECTIONS = get_compile_time_arg_val(13);
+
+// Mux connection arrays: [0]=local, [1]=downstream_en, [2]=downstream_ws (args 14-46)
+// Each array has NUM_MUX_CONNECTIONS elements, indices computed incrementally
+constexpr uint32_t MUX_ACTIVE_START_IDX = 14;
+constexpr uint32_t MUX_NOC_X_START_IDX = MUX_ACTIVE_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_NOC_Y_START_IDX = MUX_NOC_X_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_BUFFER_BASE_ADDR_START_IDX = MUX_NOC_Y_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX = MUX_BUFFER_BASE_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_WORKER_LOCATION_INFO_ADDR_START_IDX =
+    MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_BUFFER_INDEX_ADDR_START_IDX = MUX_WORKER_LOCATION_INFO_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_RELAY_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX =
+    MUX_BUFFER_INDEX_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_RELAY_TEARDOWN_SEMAPHORE_ADDR_START_IDX =
+    MUX_RELAY_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_RELAY_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX =
+    MUX_RELAY_TEARDOWN_SEMAPHORE_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr uint32_t MUX_FREE_SLOTS_STREAM_ID_START_IDX =
+    MUX_RELAY_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX + NUM_MUX_CONNECTIONS;
+
+// Initialize mux connection arrays using compile-time argument helper
+constexpr std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_active =
+    fill_array_with_next_n_args<uint32_t, MUX_ACTIVE_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_noc_x =
+    fill_array_with_next_n_args<uint32_t, MUX_NOC_X_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_noc_y =
+    fill_array_with_next_n_args<uint32_t, MUX_NOC_Y_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_buffer_base_addr =
+    fill_array_with_next_n_args<size_t, MUX_BUFFER_BASE_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_connection_handshake_addr =
+    fill_array_with_next_n_args<size_t, MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_worker_location_info_addr =
+    fill_array_with_next_n_args<size_t, MUX_WORKER_LOCATION_INFO_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_buffer_index_addr =
+    fill_array_with_next_n_args<size_t, MUX_BUFFER_INDEX_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_relay_flow_control_semaphore_addr =
+    fill_array_with_next_n_args<size_t, MUX_RELAY_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_relay_teardown_semaphore_addr =
+    fill_array_with_next_n_args<size_t, MUX_RELAY_TEARDOWN_SEMAPHORE_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_relay_buffer_index_semaphore_addr =
+    fill_array_with_next_n_args<size_t, MUX_RELAY_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX, NUM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_free_slots_stream_id =
+    fill_array_with_next_n_args<size_t, MUX_FREE_SLOTS_STREAM_ID_START_IDX, NUM_MUX_CONNECTIONS>();
+
+// Final compile-time arguments (computed incrementally from last array)
+constexpr size_t LOCAL_MUX_STATUS_ADDRESS_IDX = MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_MUX_CONNECTIONS;
+constexpr size_t mux_status_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX);
+constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 1);
+constexpr size_t udm_memory_pool_size = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 2);
+constexpr size_t direction = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 3);
+constexpr size_t router_noc_x = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 4);
+constexpr size_t router_noc_y = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 5);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 6);
+
+// Mux connection array indices: [0]=local, [1]=downstream_en, [2]=downstream_ws
+constexpr uint32_t LOCAL_MUX_IDX = 0;
+constexpr uint32_t DOWNSTREAM_EN_MUX_IDX = 1;
+constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
@@ -75,6 +122,19 @@ void wait_for_static_connection_to_ready(
     }
 
     worker_interface.cache_producer_noc_addr();
+}
+
+FORCE_INLINE void wait_for_mux_endpoint_ready(
+    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address) {
+    uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
+    auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
+
+    ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    do {
+        noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC);
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -107,7 +167,7 @@ void setup_channel(
 
 template <typename RelayToMuxSenderType>
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
-    RelayToMuxSenderType& mux_connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
+    RelayToMuxSenderType& local_mux_connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
     const auto& header = *packet_header;
     uint16_t payload_size_bytes = header.payload_size_bytes;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
@@ -120,7 +180,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -129,11 +189,9 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             if (header.command_fields.unicast_seminc.flush) {
                 noc_async_write_barrier();
             }
-            noc_semaphore_inc<true>(noc_addr, increment);
-            // temporarily place here until we have txn id support
-            noc_async_atomic_barrier();
+            noc_semaphore_inc(noc_addr, increment);
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_atomic_ack(mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_atomic_ack(local_mux_connection, packet_header);
 
         } break;
 
@@ -144,7 +202,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -156,11 +214,9 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             if (header.command_fields.unicast_seminc_fused.flush) {
                 noc_async_write_barrier();
             }
-            noc_semaphore_inc<true>(semaphore_dest_address, increment);
-            // temporarily place here until we have txn id support
-            noc_async_atomic_barrier();
+            noc_semaphore_inc(semaphore_dest_address, increment);
             // writes done, send ack back - Do we also need to send atomic inc response back?
-            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -179,7 +235,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
@@ -192,7 +248,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             noc_async_read_barrier();
             // reads done, send ack back
             tt::tt_fabric::udm::fabric_fast_read_any_len_ack(
-                mux_connection, packet_header, read_response_memory_pool_addr);
+                local_mux_connection, packet_header, read_response_memory_pool_addr);
             // free memory chunk
             tt::tt_fabric::udm::UDMMemoryPool::deallocate_memory(size_bytes);
         } break;
@@ -206,7 +262,7 @@ template <uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
-    tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>& mux_connection,
+    tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>& local_mux_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
@@ -215,7 +271,7 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        execute_noc_txn_to_local_chip(mux_connection, packet_header);
+        execute_noc_txn_to_local_chip(local_mux_connection, packet_header);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -244,24 +300,32 @@ void kernel_main() {
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
-    // Construct the mux connection from compile time args directly
-    // Note: Mux is on the same core, so use my_x[0] and my_y[0] for NOC coordinates
-    constexpr bool is_persistent_fabric = true;
-    auto mux_connection = tt::tt_fabric::FabricRelayToMuxSender<mux_num_buffers>(
-        is_persistent_fabric,
-        my_x[0],
-        my_y[0],
-        mux_buffer_base_addr,
-        static_cast<uint8_t>(mux_num_buffers),
-        mux_connection_handshake_addr,
-        mux_worker_location_info_addr,
-        static_cast<uint16_t>(mux_buffer_size_bytes),
-        mux_buffer_index_addr,
-        reinterpret_cast<volatile uint32_t*>(mux_relay_flow_control_semaphore_addr),
-        reinterpret_cast<volatile uint32_t*>(mux_relay_teardown_semaphore_addr),
-        mux_relay_buffer_index_semaphore_addr,
-        static_cast<uint32_t>(mux_free_slots_stream_id),
-        StreamId{static_cast<uint32_t>(mux_free_slots_stream_id)});
+    // Construct mux connections using arrays: [0]=local, [1]=downstream_en, [2]=downstream_ws
+    // Use placement new to construct only active connections (like downstream_edm_noc_interfaces in router)
+    std::array<tt::tt_fabric::FabricRelayToMuxSender<mux_num_buffers>, NUM_MUX_CONNECTIONS> mux_connections;
+
+    // Create each mux connection if active
+    constexpr bool is_persistent = true;  // All active connections are persistent
+
+    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
+        if (mux_active[i]) {
+            new (&mux_connections[i]) tt::tt_fabric::FabricRelayToMuxSender<mux_num_buffers>(
+                is_persistent,
+                mux_noc_x[i],
+                mux_noc_y[i],
+                mux_buffer_base_addr[i],
+                static_cast<uint8_t>(mux_num_buffers),
+                mux_connection_handshake_addr[i],
+                mux_worker_location_info_addr[i],
+                static_cast<uint16_t>(mux_buffer_size_bytes),
+                mux_buffer_index_addr[i],
+                reinterpret_cast<volatile uint32_t*>(mux_relay_flow_control_semaphore_addr[i]),
+                reinterpret_cast<volatile uint32_t*>(mux_relay_teardown_semaphore_addr[i]),
+                mux_relay_buffer_index_semaphore_addr[i],
+                static_cast<uint32_t>(mux_free_slots_stream_id[i]),
+                StreamId{static_cast<uint32_t>(mux_free_slots_stream_id[i]) /* unused */});
+        }
+    }
 
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS> channel;
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS> worker_interface;
@@ -289,13 +353,28 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
-    volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_mux_status_address);
+    volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_address);
     while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
         invalidate_l1_cache();
     }
 
-    // this is connecting to the local mux - (always non idle eth)
-    mux_connection.open<false>();
+    // before connecting to downstream mux, wait for mux status to turn into READY_FOR_TRAFFIC
+    for (uint32_t i = 1; i < NUM_MUX_CONNECTIONS; i++) {
+        if (mux_active[i]) {
+            wait_for_mux_endpoint_ready(
+                mux_connections[i].edm_noc_x,
+                mux_connections[i].edm_noc_y,
+                mux_status_address,
+                downstream_mux_status_readback_address);
+        }
+    }
+
+    // Open all active mux connections (local: same core, downstream: remote cores)
+    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
+        if (mux_active[i]) {
+            mux_connections[i].open();
+        }
+    }
 
     // signal the fabric router (this is the router that is connecting to the relay) the relay is ready
     auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
@@ -308,7 +387,11 @@ void kernel_main() {
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             forward_data<NUM_BUFFERS, mux_num_buffers>(
-                channel, worker_interface, mux_connection, channel_connection_established, StreamId{channel_stream_id});
+                channel,
+                worker_interface,
+                mux_connections[0],
+                channel_connection_established,
+                StreamId{channel_stream_id});
         }
     }
 
