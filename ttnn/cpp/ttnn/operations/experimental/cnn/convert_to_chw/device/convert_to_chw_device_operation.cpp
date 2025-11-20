@@ -16,6 +16,11 @@ ConvertToCHWDeviceOperation::program_factory_t ConvertToCHWDeviceOperation::sele
     return program::ConvertToCHWProgramFactory{};
 }
 
+void ConvertToCHWDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
 void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -44,7 +49,6 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t ConvertToCHWDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    
     const auto& shape = tensor_args.input.logical_shape();
     const auto B = shape[0];
     const auto HW = shape[2];
@@ -53,6 +57,11 @@ spec_return_value_t ConvertToCHWDeviceOperation::compute_output_specs(
         Shape({B, 1, C, HW}),
         tt::tt_metal::TensorLayout(
             args.dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.memory_config));
+}
+
+tensor_return_value_t ConvertToCHWDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t ConvertToCHWDeviceOperation::compute_program_hash(
