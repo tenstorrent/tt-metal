@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+#include <utility>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::slice_write {
@@ -22,5 +25,10 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
+
+using ReaderKernelArgs = std::vector<uint32_t>;
+using WriterKernelArgs = std::vector<uint32_t>;
+using KernelRuntimeArgs = std::pair<ReaderKernelArgs, WriterKernelArgs>;
+using SliceWriteRuntimeArgs = std::vector<KernelRuntimeArgs>;
 
 }  // namespace ttnn::operations::experimental::slice_write

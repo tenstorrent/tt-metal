@@ -11,7 +11,9 @@
 #include "ttnn/decorators.hpp"
 
 #include "slice_write_device_operation_types.hpp"
-#include "slice_write_program_factory.hpp"
+#include "slice_write_rm_sharded_input_program_factory.hpp"
+#include "slice_write_tiled_sharded_input_program_factory.hpp"
+#include "slice_write_rm_interleaved_program_factory.hpp"
 
 namespace ttnn::operations::experimental::slice_write {
 
@@ -34,6 +36,9 @@ struct SliceWriteDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
