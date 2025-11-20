@@ -1984,7 +1984,7 @@ void dumpPerfCounters(const std::map<CoreCoord, std::map<tracy::RiscType, std::s
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
-        log_file_ofs << "runtime id, op name, device id, core_x, core_y, RISC processor type, counter type, record time, ref cnt, value"
+        log_file_ofs << "runtime id,trace id,trace id counter,op name,device id,core_x, core_y,RISC processor type,counter type,record time,ref cnt,value"
                     << std::endl;
     }
 
@@ -1997,9 +1997,16 @@ void dumpPerfCounters(const std::map<CoreCoord, std::map<tracy::RiscType, std::s
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
                 if (isMarkerATimestampedDatapoint(marker) && marker.marker_id == 12345) {
+                    const std::string trace_id_str =
+                        marker.trace_id == tracy::TTDeviceMarker::INVALID_NUM ? "" : fmt::format("{}", marker.trace_id);
+                    const std::string trace_id_counter_str = marker.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM
+                                                                ? ""
+                                                                : fmt::format("{}", marker.trace_id_counter);
                     log_file_ofs << fmt::format(
-                        "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}\n",
+                        "{},{},{},{},{},{},{},{},{},{},{},{}\n",
                         marker.runtime_host_id,
+                        trace_id_str,
+                        trace_id_counter_str,
                         marker.op_name,
                         marker.chip_id,
                         marker.core_x,
