@@ -25,7 +25,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         slice_write.cpp
-        device/slice_write_op.cpp
+        device/slice_write_device_operation.cpp
         device/slice_write_program_factory.cpp
 )
 
