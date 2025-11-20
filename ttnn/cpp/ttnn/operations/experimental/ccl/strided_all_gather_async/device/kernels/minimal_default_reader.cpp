@@ -88,7 +88,6 @@ void kernel_main() {
     uint32_t batch_input_tile_offset = input_worker_tile_offset;
     uint32_t global_tile_index = 0;
     uint32_t tiles_per_batch = input_tensor_Wt * input_tensor_Ht;
-    uint32_t chunks_per_core = div_up(tiles_per_batch, tiles_per_chunk);
     uint32_t sem_target = 0;
 
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
@@ -180,7 +179,7 @@ void kernel_main() {
                             tiles_in_current_chunk,
                             actual_chunk_w,
                             actual_chunk_h,
-                            input_tensor_Ht / mm_cores_y,
+                            padded_M_tiles / mm_cores_y,
                             max_tiles_per_packet,
                             ag_worker_id,
                             ag_worker_cores,
