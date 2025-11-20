@@ -3365,13 +3365,8 @@ public:
     difference_type operator-(const CoreLocalMem& other) const {
         difference_type byte_diff =
             static_cast<difference_type>(address_) - static_cast<difference_type>(other.address_);
-        if constexpr ((sizeof(T) & (sizeof(T) - 1)) == 0) {
-            // Optimized division for of sizeof(T) is a power of 2 for common cases like T = uint32_t
-            constexpr int shift = __builtin_ctz(sizeof(T));
-            return byte_diff >> shift;
-        } else {
-            return byte_diff / sizeof(T);
-        }
+        // Compiler automatically optimizes division to a shift if T is pow2
+        return byte_diff / sizeof(T);
     }
 
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
