@@ -21,24 +21,22 @@
 #include <vector>
 #include <array>
 #include <cstddef>
-#include <variant>
 #include <memory>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
-class FabricEriscDatamoverBuilder;
-class FabricTensixDatamoverBuilder;
+class FabricRouterBuilder;
 class MultiPoolChannelAllocator;
 class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
 
-// Type alias for any fabric datamover builder
-using FabricDatamoverBuilder = std::
-    variant<std::reference_wrapper<FabricEriscDatamoverBuilder>, std::reference_wrapper<FabricTensixDatamoverBuilder>>;
+class FabricEriscDatamoverBuilder;
+class FabricTensixDatamoverBuilder;
 
 /**
  * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
@@ -153,17 +151,16 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
     static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
     // Receiver channel free slots stream IDs
-    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 15;
     // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 1D->VC1, 2D->VC0
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
     // Used by Lite Fabric
     // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
     static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
@@ -189,16 +186,14 @@ struct StreamRegAssignments {
             to_sender_2_pkts_completed_id,
             to_sender_3_pkts_completed_id,
             to_sender_4_pkts_completed_id,
-            receiver_channel_0_free_slots_from_east_stream_id,
-            receiver_channel_0_free_slots_from_west_stream_id,
-            receiver_channel_0_free_slots_from_north_stream_id,
-            receiver_channel_0_free_slots_from_south_stream_id,
-            receiver_channel_1_free_slots_from_downstream_stream_id,
+            vc_0_free_slots_from_downstream_edge_1,
+            vc_0_free_slots_from_downstream_edge_2,
+            vc_0_free_slots_from_downstream_edge_3,
+            vc_1_free_slots_from_downstream_edge_1,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
-            vc1_sender_channel_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -231,7 +226,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 4;
+    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
     static constexpr std::size_t num_downstream_edms_vc1 = 1;
     static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
     static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
@@ -442,7 +437,9 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
  *   two ERISCs on the Ethernet core and Fabric Tensix MUX is enabled. Decisions such as ERISC count and
  *   TXQ selection are derived from this effective mode. A presence-based disable env exists to force-disable.
  */
-class FabricEriscDatamoverBuilder {
+class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
+    friend class FabricRouterBuilder;
+
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
@@ -499,7 +496,7 @@ public:
         bool has_tensix_extension = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const override;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
@@ -508,13 +505,10 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
-    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
+    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
 
-    eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
-    size_t get_noc_x() const;
-    size_t get_noc_y() const;
 
     void dump_to_log() const {
         // TODO
@@ -533,8 +527,6 @@ public:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
-    size_t my_noc_x = 0;
-    size_t my_noc_y = 0;
 
     FabricEriscDatamoverConfig config;
 
@@ -557,7 +549,6 @@ public:
     size_t edm_local_sync_ptr = 0;
     size_t edm_local_tensix_sync_ptr = 0;
     size_t edm_status_ptr = 0;
-    eth_chan_directions direction = eth_chan_directions::EAST;
     size_t downstream_edms_connected = 0;
 
     // Semaphore IDs
@@ -573,7 +564,7 @@ public:
     std::array<size_t, builder_config::num_sender_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id =
         {};
 
-    std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
+    mutable std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
@@ -587,13 +578,12 @@ public:
 
 private:
     // Shared helper for setting up VC connections
-    template <typename BuilderType>
     void setup_downstream_vc_connection(
-        BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
+        FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(
-        FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+        FabricDatamoverBuilderBase *downstream_builder, FabricDatamoverBuilderBase *vc1_edm_builder);
 };
 
 }  // namespace tt::tt_fabric

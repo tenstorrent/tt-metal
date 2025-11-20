@@ -111,7 +111,7 @@ private:
  * - Builds mux kernels on fabric tensix cores for worker → mux → fabric router routing.
  * - Build the connections between Fabric routers, fabric router -> mux -> downstream fabric router.
  */
-class FabricTensixDatamoverBuilder {
+class FabricTensixDatamoverBuilder : public FabricDatamoverBuilderBase {
 public:
     // Constructor for fabric tensix datamover builder
     FabricTensixDatamoverBuilder(
@@ -139,7 +139,7 @@ public:
     void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect to this mux
-    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
+    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
     const CoreCoord& get_logical_core() const { return my_core_logical_; }
@@ -147,9 +147,6 @@ public:
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
     size_t get_risc_id() const { return risc_id_; }
-    uint32_t get_noc_x() const { return noc_x_; }
-    uint32_t get_noc_y() const { return noc_y_; }
-    eth_chan_directions get_direction() const { return direction_; }
 
     void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
@@ -163,14 +160,9 @@ private:
 
     // RISC and NOC configuration
     size_t risc_id_;
-    uint32_t noc_x_;
-    uint32_t noc_y_;
 
     // Mux configuration
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config_;
-
-    // Direction for routing
-    eth_chan_directions direction_;
 
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};

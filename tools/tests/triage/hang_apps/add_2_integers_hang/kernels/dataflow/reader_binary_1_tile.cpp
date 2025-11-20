@@ -23,11 +23,11 @@ void kernel_main() {
     // Setting the page size to be tile_size_bytes works because we set it up
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
-    constexpr auto args_in0 = TensorAccessorArgs<0>();
-    const auto in0 = TensorAccessor(args_in0, in0_addr, tile_size_bytes);
+    constexpr auto in0_args = TensorAccessorArgs<0>();
+    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
 
-    constexpr auto args_in1 = TensorAccessorArgs<args_in0.next_compile_time_args_offset()>();
-    const auto in1 = TensorAccessor(args_in1, in1_addr, tile_size_bytes);
+    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+    const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
 
     // read the tiles from DRAM into the circular buffers
     cb_reserve_back(cb_in0, 1);

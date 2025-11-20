@@ -16,9 +16,6 @@ on:
       docker-image:
         required: true
         type: string
-      build-artifact-name:
-        required: true
-        type: string
       wheel-artifact-name:
         required: true
         type: string
@@ -51,9 +48,6 @@ on:
         type: number
         default: 40
       docker-image:
-        required: true
-        type: string
-      build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
@@ -92,7 +86,6 @@ jobs:
             { name: "ttnn transformers group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "ttnn reduce and misc ops group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/rand tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
             { name: "core ttnn unit test group", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/light_metal tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
-            { name: "ttnn notebook", cmd: 'TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"', merge_gate: false },
             # { name: "ttnn fast runtime off", cmd: 'pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off', merge_gate: false, fast_runtime_mode_off: true },
           ]]
     steps:

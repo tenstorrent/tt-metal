@@ -52,7 +52,12 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
                 or any(
                     [
                         f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                        for name in [
+                            "tok_embeddings.weight",
+                            "learnable_embedding.weight",
+                            "norm.weight",
+                            "output.weight",
+                        ]
                     ]
                 )
             )

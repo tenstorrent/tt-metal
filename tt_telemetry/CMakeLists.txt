@@ -104,7 +104,6 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
-        TT::ScaleoutTools # Add scaleout tools for protobuf headers
         protobuf::libprotobuf # Add protobuf library for compatibility
 )
 

@@ -28,7 +28,7 @@ target_sources(
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-            hw/inc/fabric_routing_table_interface.h
+            hw/inc/fabric_direction_table_interface.h
             fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
@@ -36,6 +36,8 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        fabric_router_channel_mapping.cpp
+        fabric_router_builder.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
@@ -51,7 +53,7 @@ target_sources(
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         fabric_types.cpp
-        compressed_routing_table.cpp
+        compressed_direction_table.cpp
         compressed_routing_path.cpp
         serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
