@@ -662,13 +662,14 @@ uint32_t process_relay_paged_cmd_large(
         uint32_t amt_to_write = write_length;
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
+
+        downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
         DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     } else {
+        downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         DispatchRelayInlineState::cb_writer.release_pages(1, downstream_data_ptr);
     }
-
-    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -764,7 +765,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
             // Third step - write from DB
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr);
+            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr);
 
             read_length -= amt_read;
 
@@ -1379,8 +1380,8 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
     uint32_t npages = write_pages_to_dispatcher<1, false>(downstream_data_ptr, start, length);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 }
 
 template <bool cmddat_wrap_enable>
@@ -1984,6 +1985,9 @@ void kernel_main() {
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+
+    DispatchRelayInlineState::cb_writer.initialize();
+    DispatchSRelayInlineState::cb_writer.initialize();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
