@@ -2434,6 +2434,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
             auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
             // Intermediate chunk: regular write (no semaphore)
+            // CRITICAL: Must set noc_send_type to match the command fields we're populating
+            packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
             populate_unicast_write_fields<UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                 packet_header, FABRIC_MAX_PACKET_SIZE, tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address});
             client_interface->wait_for_empty_write_slot();
@@ -2450,6 +2452,8 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
         // Final chunk: fused write+atomic inc (with semaphore)
         auto final_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // CRITICAL: Must set noc_send_type back to fused for final chunk
+        packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
         populate_unicast_fused_atomic_inc_fields<UpdateMask>(
             packet_header,
             remaining_size,
