@@ -4,7 +4,7 @@ Your goal is to determine which commit has caused the specific subjob in the pip
 
 The key data files live under `auto_triage/data/`:
 
-* `boundaries_summary.json` – contains the **last successful run** (job URL, job ID, commit SHA, run_number) and again lists **every subsequent failing run** with the same metadata. Use `runs` for the full history and `failed_runs` when you only care about failures.
+* `boundaries_summary.json` – contains the **last successful run** (job URL, job ID, commit SHA, run_number) and again lists **every subsequent failing run** with the same metadata. the higher the count number, the more recent the run with run 0 being the last run where the job passed. Use `runs` for the full history and `failed_runs` when you only care about failures.
 * `subjob_runs.json` – just the `runs` array in isolation (handy if you only need the ordered list of runs).
 
 You might think that you only need the last successful job run and the first failing job run to determine the general range where the job started failing. While this might often be the case, you must remember, jobs can often fail for non-deterministic reasons.
@@ -15,9 +15,11 @@ As you can see, the problematic commit would be somewhere between runs A and D, 
 
 However, there is a caveat. Just because an error appears more than 2 times in a row doesn't necessarily mean the error is deterministic. lets say that github was experiencing issues one day, and so 10 runs all ran and all experienced server issues. All these runs might have the same error, but none are deterministic because it's not a test failure, but a github failure. You should consider a job to be the first instance of a deterministic error only if the error in the logs are from the ACTUAL TEST ITSELF, not a failure in setup steps or other steps in the job. This is in addition to the requirement that the error repeat in two successive job runs.
 
-If you determine that a job failed due to a non-deterministic failure, you are not allowed to use that job in the analysis. You must act as thought that job didn't exist. In the context of our previous example, you would have to base your reasoning on the assumption that runs B and C didn't occur and you're only working with data from run A, D, E, and any later runs. Using non-deterministic failures to justify choosing a commit is illegal.
+This next part is very important: you are not allowed to analyze any commits unless you have verified that the failed jobs have failed due to deterministic reasons. For example, if job A succeeds, and then job B fails, you might think to look for the commits between jobs A and B. however, you are not allowed to do this unless you have shown for certain that job B failed due to a deterministic error. This means job B failed due to a test failure, and it failed the same way that the next job C failed (with the exception being that job B is the most recent job).
 
 You also are not allowed to analyze any commits between jobs until you have determined that the job failure is deterministic. Your explanation must explain why a job failure is deterministic
+
+As a helper mechanism, if you cannot find the log for the actual test after downloading logs for a run, that means that the test probably didn't execute, so you can assume that that run was non-deterministic
 
 Also don't run find_boundaries.sh. That command was already run before you were given this task. Running it wastes compute time.
 
@@ -57,9 +59,15 @@ Also don't run find_boundaries.sh. That command was already run before you were 
 
 Use these tools to gather evidence: confirm the first deterministic failure, narrow to the correct commit window, and dig into the likely offending commit(s).
 
+keep in mind, the log files are very long, so it will be more efficient to run grep commands or write your own parsing scripts then trying to just read the entire log yourself. Feel free to edit and then run auto_triage/llm_script.sh if you need to run long bash commands, as that script already has execution privileges. make sure it only runs read commands though.
+
+Also, to justify which commit you think caused the failure, you must use the commit information retrieved by download_data_between_commits.sh as that explains what the commit did.
+
 At the end, write your results to thre files in `auto_triage/output/`:
 * `chosen_commit.json`: your best guess for the commit that broke the subjob.
 * `alternatives.json`: other plausible commits that might be responsible.
 * `explanation.md`: a markdown report detailing your reasoning (why the chosen commit is most likely, and why the alternatives still deserve mention).
+
+explanation.md should explain exactly which job you chose as the first indication of deterministic failure, which commit range you used, and what copilot summary you used in your analysis, what the repeated error was, as well as any other information (like files changed or lines changed) that you used to choose the commit.
 
 Accurate analysis is critical—developers will act on your findings. Keep the workflow deterministic and document your reasoning clearly.***
