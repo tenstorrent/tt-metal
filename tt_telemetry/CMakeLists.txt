@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.22...3.30)
 
+# Add local cmake modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
 # Find required packages
 find_package(Threads REQUIRED)
+
+# Find gRPC and Protobuf (handles both modern and older systems)
+include(FindSystemgRPC)
 
 # Fetch cpp-httplib using CPM (consistent with third_party dependencies)
 CPMAddPackage(
@@ -67,6 +73,9 @@ target_link_libraries(
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
 
+# Build the telemetry gRPC proto library
+include(BuildTelemetryProto)
+
 add_executable(tt_telemetry_server)
 target_sources(
     tt_telemetry_server
@@ -80,6 +89,7 @@ target_sources(
         server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
+        server/grpc_telemetry_server.cpp
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
@@ -105,7 +115,9 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
-        protobuf::libprotobuf # Add protobuf library for compatibility
+        ${_PROTOBUF_LIBPROTOBUF} # Add protobuf library for compatibility
+        telemetry_grpc_proto # Link the generated gRPC proto library
+        ${_GRPC_GRPCPP}
 )
 
 # Copy frontend files to build directory so they're accessible relative to the executable

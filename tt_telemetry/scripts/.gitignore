@@ -1,0 +1,5 @@
+# Generated gRPC Python files
+telemetry_service_pb2.py
+telemetry_service_pb2_grpc.py
+__pycache__/
+*.pyc
