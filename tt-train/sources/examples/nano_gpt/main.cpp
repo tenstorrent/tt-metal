@@ -401,12 +401,12 @@ int main(int argc, char **argv) {
         [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
             if (tokenizer_type == "char") {
                 return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<0>(text), sequence_length);
+                    std::get<std::string>(text), sequence_length);
             } 
             else if (tokenizer_type == "bpe") {
                 try
                 {
-                    return ttml::datasets::InMemoryTokenDataset(std::move(std::get<1>(text)), sequence_length);
+                    return ttml::datasets::InMemoryTokenDataset(std::get<std::vector<uint32_t>>(text), sequence_length);
 
                 } catch (const std::exception &e) {
                     std::cerr << e.what() << std::endl;
