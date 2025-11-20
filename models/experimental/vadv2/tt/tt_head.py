@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -10,6 +9,7 @@ from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransform
 from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
+from models.experimental.vadv2.tt.tt_opt_utils import get_high_perf_compute_config
 
 
 class TtLearnedPositionalEncoding:
@@ -123,6 +123,9 @@ class TtVADHead:
         self.cls_out_channels = 10
         self.map_cls_out_channels = 3
 
+        # LOAD OPTIMIZATION CONFIG
+        self.compute_config = get_high_perf_compute_config()
+
         self.positional_encoding = TtLearnedPositionalEncoding(
             params.head.positional_encoding, device, self.embed_dims // 2, row_num_embed=100, col_num_embed=100
         )
@@ -137,6 +140,8 @@ class TtVADHead:
             decoder=True,
             map_decoder=True,
             embed_dims=256,
+            bev_h=bev_h,
+            bev_w=bev_w,
         )
 
         self.with_box_refine = with_box_refine
@@ -318,6 +323,7 @@ class TtVADHead:
                     cls_layers[str(i)].weight,
                     bias=cls_layers[str(i)].bias,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
 
                 norm_key = f"{i+1}_norm"
@@ -335,7 +341,11 @@ class TtVADHead:
 
             for i in range(3):
                 tmp = ttnn.linear(
-                    tmp, reg_layers[str(i)].weight, bias=reg_layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                    tmp,
+                    reg_layers[str(i)].weight,
+                    bias=reg_layers[str(i)].bias,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
                 if i < 2:
                     tmp = ttnn.relu(tmp)
@@ -383,6 +393,7 @@ class TtVADHead:
                     cls_params[str(i)].weight,
                     bias=cls_params[str(i)].bias,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
                 norm_key = f"{i+1}_norm"
                 if norm_key in cls_params:
@@ -402,6 +413,7 @@ class TtVADHead:
                     reg_params[str(i)].weight,
                     bias=reg_params[str(i)].bias,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
                 if i < 2:
                     reg_tmp = ttnn.relu(reg_tmp)
@@ -438,7 +450,10 @@ class TtVADHead:
             if self.use_pe:
                 motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
                 motion_pos = self.pos_mlp_sa(
-                    motion_coords, self.params.head.pos_mlp_sa.weight, bias=self.params.head.pos_mlp_sa.bias
+                    motion_coords,
+                    self.params.head.pos_mlp_sa.weight,
+                    bias=self.params.head.pos_mlp_sa.bias,
+                    compute_kernel_config=self.compute_config,
                 )  # [B, A, D]
                 motion_pos = ttnn.unsqueeze(motion_pos, 2)
                 motion_pos = ttnn.repeat(motion_pos, (1, 1, self.fut_mode, 1))
@@ -510,10 +525,18 @@ class TtVADHead:
                     (num_query, batch) = ca_motion_query.shape[0], ca_motion_query.shape[1]
                     motion_pos = ttnn.zeros((num_query, batch, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
                     motion_pos = self.pos_mlp(
-                        motion_pos, self.params.head.pos_mlp.weight, bias=self.params.head.pos_mlp.bias
+                        motion_pos,
+                        self.params.head.pos_mlp.weight,
+                        bias=self.params.head.pos_mlp.bias,
+                        compute_kernel_config=self.compute_config,
                     )
                     map_pos = ttnn.permute(map_pos, (1, 0, 2))
-                    map_pos = self.pos_mlp(map_pos, self.params.head.pos_mlp.weight, bias=self.params.head.pos_mlp.bias)
+                    map_pos = self.pos_mlp(
+                        map_pos,
+                        self.params.head.pos_mlp.weight,
+                        bias=self.params.head.pos_mlp.bias,
+                        compute_kernel_config=self.compute_config,
+                    )
                 else:
                     motion_pos, map_pos = None, None
 
@@ -550,6 +573,7 @@ class TtVADHead:
                 traj_branch_params[str(i)].weight,
                 bias=traj_branch_params[str(i)].bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
             )
             if i < 2:
                 motion_h = ttnn.relu(motion_h)
@@ -563,6 +587,7 @@ class TtVADHead:
                 traj_cls_params[str(i)].weight,
                 bias=traj_cls_params[str(i)].bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
             )
             norm_key = f"{i+1}_norm"
             if norm_key in traj_cls_params:
@@ -595,7 +620,10 @@ class TtVADHead:
         ego_query = ego_his_feats
         ego_pos = ttnn.zeros((batch, 1, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
         ego_pos_emb = ttnn.linear(
-            ego_pos, self.params.head.ego_agent_pos_mlp.weight, bias=self.params.head.ego_agent_pos_mlp.bias
+            ego_pos,
+            self.params.head.ego_agent_pos_mlp.weight,
+            bias=self.params.head.ego_agent_pos_mlp.bias,
+            compute_kernel_config=self.compute_config,
         )  # 0.9999987105141137
         agent_conf = outputs_classes[-1]
         agent_query = ttnn.reshape(motion_hs, (batch, num_agent, -1))
@@ -609,6 +637,7 @@ class TtVADHead:
                     layer_params["weight"],
                     bias=layer_params["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
             elif i == 1:  # LayerNorm
                 norm_params = agent_fus_mlp_params[str(i)]["0_norm"]
@@ -628,7 +657,10 @@ class TtVADHead:
 
         agent_pos = ttnn.to_layout(agent_pos, ttnn.TILE_LAYOUT)
         agent_pos_emb = self.ego_agent_pos_mlp(
-            agent_pos, self.params.head.ego_agent_pos_mlp.weight, bias=self.params.head.ego_agent_pos_mlp.bias
+            agent_pos,
+            self.params.head.ego_agent_pos_mlp.weight,
+            bias=self.params.head.ego_agent_pos_mlp.bias,
+            compute_kernel_config=self.compute_config,
         )
         # ego <-> agent interaction
         ego_agent_query = self.ego_agent_decoder(
@@ -647,6 +679,7 @@ class TtVADHead:
             self.params.head.ego_map_pos_mlp.weight,
             bias=self.params.head.ego_map_pos_mlp.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
         )
         map_query = map_hs[-1]
         ttnn.deallocate(map_hs)
@@ -684,6 +717,7 @@ class TtVADHead:
             self.params.head.ego_map_pos_mlp.weight,
             bias=self.params.head.ego_map_pos_mlp.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_config,
         )
         ego_map_query = self.ego_map_decoder(
             query=ego_agent_query,
@@ -733,6 +767,7 @@ class TtVADHead:
                     layer_params["weight"],
                     bias=layer_params["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
                 )
             elif i in [1, 3]:  # ReLU layers
                 cls_tmp = ttnn.relu(cls_tmp)

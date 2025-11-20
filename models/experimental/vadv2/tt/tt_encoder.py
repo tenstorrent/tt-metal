@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -29,6 +28,9 @@ class TtBEVFormerEncoder:
         feedforward_channels=512,
         ffn_dropout=0.1,
         operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
+        bev_h=None,
+        bev_w=None,
+        bs=1,
     ):
         super(TtBEVFormerEncoder, self).__init__()
         self.device = device
@@ -38,6 +40,31 @@ class TtBEVFormerEncoder:
         self.pc_range = pc_range
         self.num_layers = num_layers
         self.fp16_enabled = False
+
+        # Store BEV dimensions
+        self.bev_h = bev_h
+        self.bev_w = bev_w
+        self.bs = bs
+
+        # Pre-compute reference points on device
+        if bev_h is not None and bev_w is not None:
+            self.ref_3d = self.get_reference_points_ttnn(
+                bev_h,
+                bev_w,
+                pc_range[5] - pc_range[2],
+                num_points_in_pillar,
+                dim="3d",
+                bs=bs,
+                device=device,
+            )
+            self.ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bs, device=device)
+            # Shift reference points (computed once)
+            self.shift_ref_2d = ttnn.clone(self.ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # Fallback if dimensions not provided at init (though strongly discouraged for trace)
+            self.ref_3d = None
+            self.ref_2d = None
+            self.shift_ref_2d = None
 
         transformer_layers = dict(
             attn_cfgs=[
@@ -240,41 +267,60 @@ class TtBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        ref_3d = self.get_reference_points_ttnn(
-            bev_h,
-            bev_w,
-            self.pc_range[5] - self.pc_range[2],
-            self.num_points_in_pillar,
-            dim="3d",
-            bs=bev_query.shape[1],
-            device=self.device,
-        )
+        # Use pre-computed or compute on-the-fly
+        if self.ref_3d is not None:
+            ref_3d = self.ref_3d
+            ref_2d = self.ref_2d
+            shift_ref_2d = self.shift_ref_2d
+        else:
+            # Check if dimensions were provided in call if not in init
+            if bev_h is None or bev_w is None:
+                # Fallback if neither init nor call provides dims (shouldn't happen in valid flow)
+                # Assuming dims are passed in kwargs or args if not explicit
+                pass
 
-        ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
+            ref_3d = self.get_reference_points_ttnn(
+                bev_h,
+                bev_w,
+                self.pc_range[5] - self.pc_range[2],
+                self.num_points_in_pillar,
+                dim="3d",
+                bs=bev_query.shape[1],
+                device=self.device,
+            )
+            ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
+            shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         reference_points_cam, bev_mask = self.point_sampling_ttnn(ref_3d, self.pc_range, kwargs["img_metas"])
 
-        shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Handle shift
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
         shift_ref_2d = shift_ref_2d + shift
 
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
+
         bs, len_bev, num_bev_level, _ = ref_2d.shape
         if prev_bev is not None:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             prev_bev = ttnn.stack([prev_bev, bev_query], 1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
-            # Ensure both tensors have the same layout for stack
+
+            # Ensure layouts match for stack
             shift_ref_2d = ttnn.to_layout(shift_ref_2d, ref_2d.layout)
             hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         else:
             hybird_ref_2d = ttnn.stack([ref_2d, ref_2d], 1)
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
-        ttnn.deallocate(ref_2d)
+
+        # Only deallocate if we computed them on-the-fly
+        if self.ref_3d is None:
+            ttnn.deallocate(ref_2d)
+            ttnn.deallocate(shift_ref_2d)
+
         ttnn.deallocate(shift)
-        ttnn.deallocate(shift_ref_2d)
+
         reference_points_cam = ttnn.to_torch(reference_points_cam)
         for lid, layer in enumerate(self.layers):
             output = layer(
@@ -285,8 +331,8 @@ class TtBEVFormerEncoder:
                 bev_pos=bev_pos,
                 ref_2d=hybird_ref_2d,
                 ref_3d=ref_3d,
-                bev_h=bev_h,
-                bev_w=bev_w,
+                bev_h=bev_h if bev_h is not None else self.bev_h,
+                bev_w=bev_w if bev_w is not None else self.bev_w,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 reference_points_cam=reference_points_cam,
@@ -299,7 +345,11 @@ class TtBEVFormerEncoder:
             bev_query = output
             if self.return_intermediate:
                 intermediate.append(output)
-        ttnn.deallocate(ref_3d)
+
+        # Only deallocate if we computed on the fly
+        if self.ref_3d is None:
+            ttnn.deallocate(ref_3d)
+
         ttnn.deallocate(hybird_ref_2d)
         ttnn.deallocate(bev_mask)
 

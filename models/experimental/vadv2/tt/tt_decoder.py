@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.experimental.vadv2.tt.tt_base_transformer_layer import TtBaseTransformerLayer
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid
+from models.experimental.vadv2.tt.tt_opt_utils import get_high_perf_compute_config
 
 
 class TtDetectionTransformerDecoder:
@@ -13,6 +13,8 @@ class TtDetectionTransformerDecoder:
         self.device = device
         self.params = params
         self.params_branches = params_branches
+        self.compute_config = get_high_perf_compute_config()
+
         self.layers = [
             TtBaseTransformerLayer(
                 params.layers[f"layer{i}"],
@@ -85,8 +87,13 @@ class TtDetectionTransformerDecoder:
 
                 tmp = output
                 for i in range(3):
+                    # Optimization: Use HiFi2 compute config
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp,
+                        layers[str(i)].weight,
+                        bias=layers[str(i)].bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        compute_kernel_config=self.compute_config,
                     )
                     if i < 2:
                         tmp = ttnn.relu(tmp)
@@ -120,6 +127,8 @@ class TtMapDetectionTransformerDecoder:
         self.device = device
         self.params = params
         self.params_branches = params_branches
+        self.compute_config = get_high_perf_compute_config()
+
         self.layers = [
             TtBaseTransformerLayer(
                 params.layers[f"layer{i}"],
@@ -190,8 +199,13 @@ class TtMapDetectionTransformerDecoder:
 
                 tmp = output
                 for i in range(3):
+                    # Optimization: Use HiFi2 compute config
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp,
+                        layers[str(i)].weight,
+                        bias=layers[str(i)].bias,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        compute_kernel_config=self.compute_config,
                     )
                     if i < 2:  # Apply ReLU after the first two layers
                         tmp = ttnn.relu(tmp)

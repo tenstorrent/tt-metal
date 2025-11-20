@@ -31,6 +31,8 @@ class TtVADPerceptionTransformer:
         rotate_center=[100, 100],
         map_num_vec=50,
         map_num_pts_per_vec=10,
+        bev_h=None,
+        bev_w=None,
         **kwargs,
     ):
         super(TtVADPerceptionTransformer, self).__init__(**kwargs)
@@ -56,6 +58,8 @@ class TtVADPerceptionTransformer:
             feedforward_channels=_ffn_dim_,
             ffn_dropout=0.1,
             operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
+            bev_h=bev_h,
+            bev_w=bev_w,
         )
         if decoder is not None:
             self.decoder = TtDetectionTransformerDecoder(
