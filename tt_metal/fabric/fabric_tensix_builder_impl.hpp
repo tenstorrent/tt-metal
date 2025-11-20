@@ -25,6 +25,21 @@ namespace tt::tt_fabric {
 enum class FabricMuxChannelType : uint8_t;
 enum class FabricTensixCoreType : uint8_t;
 
+// Shared struct for mux/relay connection info (used by both mux→mux and relay→mux connections)
+struct MuxConnectionInfo {
+    uint32_t active;
+    uint32_t noc_x;
+    uint32_t noc_y;
+    size_t buffer_base_addr;
+    size_t connection_handshake_addr;
+    size_t worker_location_info_addr;
+    size_t buffer_index_addr;
+    size_t flow_control_semaphore_addr;  // In sender's L1 (relay/mux)
+    size_t teardown_semaphore_addr;      // In sender's L1 (relay/mux)
+    size_t buffer_index_semaphore_addr;  // In sender's L1 (relay/mux)
+    size_t stream_id;                    // Receiver mux's stream ID for credit tracking
+};
+
 /**
  * UDM Mode Channel Assignments
  * - Defines which channels are reserved for specific purposes in UDM mode
@@ -37,8 +52,31 @@ enum class UdmMuxChannelId : uint32_t {
     LOCAL_RELAY_CHANNEL = 1,          // Relay connects to mux on this channel
     EAST_OR_NORTH_RELAY_CHANNEL = 2,  // Upstream East or North Relay connects to mux on this channel
     WEST_OR_SOUTH_RELAY_CHANNEL = 3,  // Upstream West or South Relay connects to mux on this channel
-    INTER_MUX_CHANNEL = 4,            // Inter-mux forwarding channel
-    NUM_CHANNELS = 5
+    // ==================================================================================
+    // Inter-Mux channels
+    // Used for forwarding local fabric requests to the correct router endpoint
+    // Each Mux on a direction will have different upstream Mux connect to self
+    // For East mux:
+    //   Channel 4: Accept connection from West Mux
+    //   Channel 5: Accept connection from North Mux
+    //   Channel 6: Accept connection from South Mux
+    // For West mux:
+    //   Channel 4: Accept connection from East Mux
+    //   Channel 5: Accept connection from North Mux
+    //   Channel 6: Accept connection from South Mux
+    // For North mux:
+    //   Channel 4: Accept connection from East Mux
+    //   Channel 5: Accept connection from West Mux
+    //   Channel 6: Accept connection from South Mux
+    // For South mux:
+    //   Channel 4: Accept connection from East Mux
+    //   Channel 5: Accept connection from West Mux
+    //   Channel 6: Accept connection from North Mux
+    // ==================================================================================
+    EAST_OR_WEST_MUX_CHANNEL = 4,    // Upstream East or West Mux connects to mux on this channel
+    WEST_OR_NORTH_MUX_CHANNEL = 5,   // Upstream West or North Mux connects to mux on this channel
+    NORTH_OR_SOUTH_MUX_CHANNEL = 6,  // Upstream North or South Mux connects to mux on this channel
+    NUM_CHANNELS = 7
 };
 
 /**
@@ -238,7 +276,41 @@ public:
         size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args() const override;
+    std::vector<uint32_t> get_compile_time_args(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
+
+private:
+    // ==================================================================================
+    // Mux-specific: Support for inter-mux connections (mux → downstream mux)
+    // Each mux can connect to 3 other muxes (all directions except itself)
+    // ==================================================================================
+
+    // Helper to collect downstream mux connection info (uses shared MuxConnectionInfo struct)
+    MuxConnectionInfo get_mux_connection_info(
+        const std::pair<uint32_t, uint32_t>* noc_coords,
+        uint32_t downstream_mux_channel_id,
+        uint32_t connection_region_idx,
+        uint32_t stream_id) const;
+
+    // Number of downstream mux connections (all directions except self = 3)
+    static constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = 3;
+
+    // Flow control semaphores (mux → downstream mux direction) for each downstream mux connection
+    // - Stored in current MUX's L1 memory
+    // - Current mux reads from these addresses to check how many packets each downstream mux has consumed
+    // - Downstream mux updates its counter when it consumes a packet from current mux's channel
+    // - Acts as read-counters: track how many packets each downstream mux has processed from current mux
+    std::array<MemoryRegion, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_flow_control_semaphore_regions_{};
+
+    // Teardown semaphores (mux → downstream mux direction) for each downstream mux connection
+    // - Stored in current MUX's L1 memory
+    // - Current mux writes teardown request, then polls these addresses waiting for acknowledgment
+    // - Downstream mux writes (via NoC) acknowledgment value when it completes teardown processing
+    std::array<MemoryRegion, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_teardown_semaphore_regions_{};
+
+    // Buffer index synchronization (mux → downstream mux direction) for each downstream mux connection
+    // - Stored in current MUX's L1 memory
+    std::array<MemoryRegion, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_index_semaphore_regions_{};
 };
 
 /**
@@ -273,22 +345,7 @@ private:
     // The relay acts as a CLIENT connecting to mux(es) (both kernels run on same core)
     // ==================================================================================
 
-    // Helper struct to collect mux connection info
-    struct MuxConnectionInfo {
-        uint32_t active;
-        uint32_t noc_x;
-        uint32_t noc_y;
-        size_t buffer_base_addr;
-        size_t connection_handshake_addr;
-        size_t worker_location_info_addr;
-        size_t buffer_index_addr;
-        size_t relay_flow_control_semaphore_addr;
-        size_t relay_teardown_semaphore_addr;
-        size_t relay_buffer_index_semaphore_addr;
-        size_t stream_id;  // Mux's stream ID for credit tracking
-    };
-
-    // Helper to collect mux connection info
+    // Helper to collect mux connection info (uses shared MuxConnectionInfo struct)
     MuxConnectionInfo get_mux_connection_info(
         const std::pair<uint32_t, uint32_t>* noc_coords,
         uint32_t mux_channel_id,

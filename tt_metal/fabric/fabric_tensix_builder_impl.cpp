@@ -36,6 +36,66 @@ static std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_dir
     }
 }
 
+// Helper function to get directions for inter-mux connections
+// Returns all directions except the current direction, in E,W,N,S order
+static std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction) {
+    std::vector<eth_chan_directions> all_directions = {
+        eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
+
+    std::vector<eth_chan_directions> dirs;
+    for (auto dir : all_directions) {
+        if (dir != direction) {
+            dirs.push_back(dir);
+        }
+    }
+
+    return dirs;
+}
+
+static uint32_t get_downstream_mux_channel_id(eth_chan_directions direction, eth_chan_directions downstream_direction) {
+    size_t channel_id;
+    size_t inter_mux_base_channel_id = static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_WEST_MUX_CHANNEL);
+    if (downstream_direction == eth_chan_directions::EAST) {
+        // For East mux as downstream:
+        //   Channel 4: Accept connection from West Mux (direction=1, channel_id=1+4-1=4)
+        //   Channel 5: Accept connection from North Mux (direction=2, channel_id=2+4-1=5)
+        //   Channel 6: Accept connection from South Mux (direction=3, channel_id=3+4-1=6)
+        channel_id = static_cast<uint32_t>(direction) + inter_mux_base_channel_id - 1;
+    } else {
+        // For other downstream directions: if upstream < downstream, use as-is; else subtract 1
+        // For West mux as downstream:
+        //   Channel 4: Accept connection from East Mux (direction=0, channel_id=0+4=4)
+        //   Channel 5: Accept connection from North Mux (direction=2, channel_id=2+4-1=5)
+        //   Channel 6: Accept connection from South Mux (direction=3, channel_id=3+4-1=6)
+        // For North mux as downstream:
+        //   Channel 4: Accept connection from East Mux (direction=0, channel_id=0+4=4)
+        //   Channel 5: Accept connection from West Mux (direction=1, channel_id=1+4=5)
+        //   Channel 6: Accept connection from South Mux (direction=3, channel_id=3+4-1=6)
+        // For South mux as downstream:
+        //   Channel 4: Accept connection from East Mux (direction=0, channel_id=0+4=4)
+        //   Channel 5: Accept connection from West Mux (direction=1, channel_id=1+4=5)
+        //   Channel 6: Accept connection from North Mux (direction=3, channel_id=3+4-1=6)
+        channel_id = (direction < downstream_direction)
+                         ? (static_cast<uint32_t>(direction) + inter_mux_base_channel_id)
+                         : (static_cast<uint32_t>(direction) + inter_mux_base_channel_id - 1);
+    }
+
+    return channel_id;
+}
+
+static uint32_t get_upstream_mux_channel_id(eth_chan_directions direction, eth_chan_directions upstream_direction) {
+    // Calculate channel based on upstream direction, skipping the current direction in the enum ordering
+    uint32_t upstream_idx = static_cast<uint32_t>(upstream_direction);
+    uint32_t current_idx = static_cast<uint32_t>(direction);
+
+    // Base channel for inter-mux connections
+    uint32_t base_channel = static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_WEST_MUX_CHANNEL);
+
+    // If upstream comes before current in enum order (E=0, W=1, N=2, S=3), use index as-is
+    // Otherwise subtract 1 to account for skipping the current direction
+    return (upstream_idx < current_idx) ? (base_channel + upstream_idx) : (base_channel + upstream_idx - 1);
+}
+
 // ==================================================================================================
 // FabricTensixDatamoverBaseConfig Implementation
 // ==================================================================================================
@@ -327,12 +387,65 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
         buffer_size_bytes_full_size_channel,
         base_l1_address,
         l1_end_address,
-        core_type) {}
+        core_type) {
+    // Allocate semaphore regions for mux → downstream mux connections (two perpendicular directions)
+    // These are in current mux's L1 memory for downstream muxes to write flow control signals back
+    size_t current_address = memory_map_end_address_;
+
+    // Allocate 2 sets of semaphore regions (one per downstream mux connection)
+    for (uint32_t i = 0; i < NUM_DOWNSTREAM_MUX_CONNECTIONS; i++) {
+        downstream_mux_flow_control_semaphore_regions_[i] =
+            MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
+        current_address = downstream_mux_flow_control_semaphore_regions_[i].get_end_address();
+
+        downstream_mux_teardown_semaphore_regions_[i] =
+            MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
+        current_address = downstream_mux_teardown_semaphore_regions_[i].get_end_address();
+
+        downstream_mux_buffer_index_semaphore_regions_[i] =
+            MemoryRegion(current_address, noc_aligned_address_size_bytes_, 1);
+        current_address = downstream_mux_buffer_index_semaphore_regions_[i].get_end_address();
+    }
+
+    memory_map_end_address_ = current_address;
+
+    TT_FATAL(
+        memory_map_end_address_ <= l1_end_address,
+        "Mux memory map end address: {} exceeds allocated L1 end address: {}",
+        memory_map_end_address_,
+        l1_end_address);
+}
+
+MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
+    const std::pair<uint32_t, uint32_t>* noc_coords,
+    uint32_t downstream_mux_channel_id,
+    uint32_t connection_region_idx,
+    uint32_t stream_id) const {
+    // Get downstream mux config (all muxes share the same config)
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+
+    return MuxConnectionInfo{
+        .active = noc_coords ? 1u : 0u,
+        .noc_x = noc_coords ? noc_coords->first : 0u,
+        .noc_y = noc_coords ? noc_coords->second : 0u,
+        .buffer_base_addr = get_channel_base_address(channel_type, downstream_mux_channel_id),
+        .connection_handshake_addr = get_connection_handshake_address(channel_type, downstream_mux_channel_id),
+        .worker_location_info_addr = get_connection_info_address(channel_type, downstream_mux_channel_id),
+        .buffer_index_addr = get_buffer_index_address(channel_type, downstream_mux_channel_id),
+        .flow_control_semaphore_addr =
+            downstream_mux_flow_control_semaphore_regions_[connection_region_idx].get_address(),
+        .teardown_semaphore_addr = downstream_mux_teardown_semaphore_regions_[connection_region_idx].get_address(),
+        .buffer_index_semaphore_addr =
+            downstream_mux_buffer_index_semaphore_regions_[connection_region_idx].get_address(),
+        .stream_id = stream_id};
+}
 
 // Overload that updates fabric endpoint info from fabric_router_config
-std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args() const {
+std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& tensix_config = fabric_context.get_tensix_config();
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
         fabric_tensix_config);
 
@@ -348,25 +461,101 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args() co
     TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
     TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
 
-    return std::vector<uint32_t>{
-        num_full_size_channels_,
-        num_buffers_full_size_channel_,
-        buffer_size_bytes_full_size_channel_,
-        num_header_only_channels_,
-        num_buffers_header_only_channel_,
-        status_region_.get_address(),
-        termination_signal_region_.get_address(),
-        connection_info_region_.get_address(),
-        connection_handshake_region_.get_address(),
-        flow_control_region_.get_address(),
-        full_size_channels_region_.get_address(),
-        local_fabric_router_status_region_.get_address(),
-        fabric_endpoint_status_address_,
-        fabric_endpoint_channel_num_buffers_,
-        num_full_size_channel_iters_,
-        num_iters_between_teardown_checks_,
-        core_type_index_,
-        (uint32_t)wait_for_fabric_endpoint_ready_};
+    auto downstream_dirs = get_all_other_directions(direction);
+
+    std::array<MuxConnectionInfo, NUM_DOWNSTREAM_MUX_CONNECTIONS> mux_infos;
+
+    // Collect connection info for each downstream mux
+    for (uint32_t i = 0; i < downstream_dirs.size(); i++) {
+        auto downstream_dir = downstream_dirs[i];
+        auto downstream_mux_noc_coord =
+            tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, downstream_dir);
+
+        // Calculate which channel on the downstream mux this mux should connect to
+        uint32_t downstream_mux_channel = get_downstream_mux_channel_id(direction, downstream_dir);
+
+        // Get the stream ID for the downstream mux's channel
+        uint32_t mux_stream_id =
+            tensix_config.get_channel_credits_stream_id(downstream_mux_channel, FabricTensixCoreType::MUX);
+
+        // Connection region index maps to the array index
+        uint32_t connection_region_idx = i;
+
+        // Collect connection info for this downstream mux
+        mux_infos[i] = get_mux_connection_info(
+            downstream_mux_noc_coord, downstream_mux_channel, connection_region_idx, mux_stream_id);
+    }
+
+    // Build compile time args following similar pattern to relay
+    std::vector<uint32_t> ct_args = {
+        num_full_size_channels_,                           // 0
+        num_buffers_full_size_channel_,                    // 1
+        buffer_size_bytes_full_size_channel_,              // 2
+        num_header_only_channels_,                         // 3
+        num_buffers_header_only_channel_,                  // 4
+        status_region_.get_address(),                      // 5
+        termination_signal_region_.get_address(),          // 6
+        connection_info_region_.get_address(),             // 7
+        connection_handshake_region_.get_address(),        // 8
+        flow_control_region_.get_address(),                // 9
+        full_size_channels_region_.get_address(),          // 10
+        local_fabric_router_status_region_.get_address(),  // 11
+        fabric_endpoint_status_address_,                   // 12
+        fabric_endpoint_channel_num_buffers_,              // 13
+        num_full_size_channel_iters_,                      // 14
+        num_iters_between_teardown_checks_,                // 15
+        core_type_index_,                                  // 16
+        (uint32_t)wait_for_fabric_endpoint_ready_,         // 17
+        NUM_DOWNSTREAM_MUX_CONNECTIONS                     // 18: NUM_DOWNSTREAM_MUX_CONNECTIONS
+    };
+
+    // Append downstream mux connection arrays (similar to relay's mux connection arrays)
+    // Active flags array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.active);
+    }
+    // NOC X coords array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.noc_x);
+    }
+    // NOC Y coords array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.noc_y);
+    }
+    // Buffer base addresses array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.buffer_base_addr);
+    }
+    // Connection handshake addresses array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.connection_handshake_addr);
+    }
+    // Worker location info addresses array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.worker_location_info_addr);
+    }
+    // Buffer index addresses array
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.buffer_index_addr);
+    }
+    // Flow control semaphore addresses array (current mux's L1 memory)
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.flow_control_semaphore_addr);
+    }
+    // Teardown semaphore addresses array (current mux's L1 memory)
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.teardown_semaphore_addr);
+    }
+    // Buffer index semaphore addresses array (current mux's L1 memory)
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.buffer_index_semaphore_addr);
+    }
+    // Stream IDs array (downstream mux's stream IDs)
+    for (const auto& info : mux_infos) {
+        ct_args.push_back(info.stream_id);
+    }
+
+    return ct_args;
 }
 
 // ==================================================================================================
@@ -417,7 +606,7 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
         l1_end_address);
 }
 
-FabricTensixDatamoverRelayConfig::MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
+MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
     const std::pair<uint32_t, uint32_t>* noc_coords,
     uint32_t mux_channel_id,
     uint32_t connection_region_idx,
@@ -435,9 +624,9 @@ FabricTensixDatamoverRelayConfig::MuxConnectionInfo FabricTensixDatamoverRelayCo
         .connection_handshake_addr = mux_config->get_connection_handshake_address(channel_type, mux_channel_id),
         .worker_location_info_addr = mux_config->get_connection_info_address(channel_type, mux_channel_id),
         .buffer_index_addr = mux_config->get_buffer_index_address(channel_type, mux_channel_id),
-        .relay_flow_control_semaphore_addr = mux_flow_control_semaphore_regions_[connection_region_idx].get_address(),
-        .relay_teardown_semaphore_addr = mux_teardown_semaphore_regions_[connection_region_idx].get_address(),
-        .relay_buffer_index_semaphore_addr = mux_buffer_index_semaphore_regions_[connection_region_idx].get_address(),
+        .flow_control_semaphore_addr = mux_flow_control_semaphore_regions_[connection_region_idx].get_address(),
+        .teardown_semaphore_addr = mux_teardown_semaphore_regions_[connection_region_idx].get_address(),
+        .buffer_index_semaphore_addr = mux_buffer_index_semaphore_regions_[connection_region_idx].get_address(),
         .stream_id = stream_id};
 }
 
@@ -550,17 +739,17 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     for (const auto& info : mux_infos) {
         ct_args.push_back(info.buffer_index_addr);
     }
-    // Relay flow control semaphore addresses array
+    // Flow control semaphore addresses array (relay's L1 memory)
     for (const auto& info : mux_infos) {
-        ct_args.push_back(info.relay_flow_control_semaphore_addr);
+        ct_args.push_back(info.flow_control_semaphore_addr);
     }
-    // Relay teardown semaphore addresses array
+    // Teardown semaphore addresses array (relay's L1 memory)
     for (const auto& info : mux_infos) {
-        ct_args.push_back(info.relay_teardown_semaphore_addr);
+        ct_args.push_back(info.teardown_semaphore_addr);
     }
-    // Relay buffer index semaphore addresses array
+    // Buffer index semaphore addresses array (relay's L1 memory)
     for (const auto& info : mux_infos) {
-        ct_args.push_back(info.relay_buffer_index_semaphore_addr);
+        ct_args.push_back(info.buffer_index_semaphore_addr);
     }
     // Stream IDs array (mux's stream IDs)
     for (const auto& info : mux_infos) {
@@ -721,35 +910,37 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         // UDM mode: ensure relay and inter-mux channels are persistent
         TT_FATAL(
-            num_full_size_channels > static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL),
+            num_full_size_channels >= static_cast<uint32_t>(UdmMuxChannelId::NUM_CHANNELS),
             "UDM mode requires at least {} channels (got {})",
-            static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL) + 1,
+            static_cast<uint32_t>(UdmMuxChannelId::NUM_CHANNELS),
             num_full_size_channels);
 
         // Local relay channel is always persistent (local relay always exists)
         is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::LOCAL_RELAY_CHANNEL)] = 1;
 
-        // For EAST_OR_NORTH and WEST_OR_SOUTH relay channels, check if upstream relay exists
-        // Current mux is on direction_, so upstream relays are on perpendicular directions
-        // E/W mux: upstream relays are on N/S; N/S mux: upstream relays are on E/W
-        auto [upstream_en_dir, upstream_ws_dir] = get_perpendicular_directions(direction_);
+        // Check upstream relay channels (perpendicular directions have relays that connect to this mux)
+        auto [upstream_relay_dir1, upstream_relay_dir2] = get_perpendicular_directions(direction_);
+        std::array<eth_chan_directions, 2> upstream_relay_dirs = {upstream_relay_dir1, upstream_relay_dir2};
+        std::array<UdmMuxChannelId, 2> upstream_relay_channels = {
+            UdmMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL, UdmMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL};
 
-        // Check if upstream E/N relay exists (pointer not null means it exists)
-        auto upstream_en_noc_coords =
-            tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_en_dir);
-        if (upstream_en_noc_coords) {
-            is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL)] = 1;
+        for (size_t i = 0; i < upstream_relay_dirs.size(); i++) {
+            auto noc_coords =
+                tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
+            if (noc_coords) {
+                is_persistent_channels[static_cast<uint32_t>(upstream_relay_channels[i])] = 1;
+            }
         }
 
-        // Check if upstream W/S relay exists (pointer not null means it exists)
-        auto upstream_ws_noc_coords =
-            tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_ws_dir);
-        if (upstream_ws_noc_coords) {
-            is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL)] = 1;
+        // Check inter-mux channels (all other directions have muxes that may connect to this mux)
+        auto upstream_mux_dirs = get_all_other_directions(direction_);  // Upstream for me = downstream for them
+        for (auto upstream_dir : upstream_mux_dirs) {
+            auto noc_coords = tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
+            if (noc_coords) {
+                uint32_t channel_id = get_upstream_mux_channel_id(direction_, upstream_dir);
+                is_persistent_channels[channel_id] = 1;
+            }
         }
-
-        // Inter-mux channel: set to 0 for now (will be implemented later)
-        is_persistent_channels[static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL)] = 0;
     } else {
         // MUX mode: use channel_connection_liveness_check_disable_array_ to determine persistent channels
         for (uint8_t i = 0; i < num_full_size_channels; i++) {
@@ -768,7 +959,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
         fabric_tensix_config);
 
-    auto ct_args = config_->get_compile_time_args();
+    // Call config's get_compile_time_args with fabric node, routing plane, and direction
+    auto ct_args = config_->get_compile_time_args(local_fabric_node_id_, link_idx_, direction_);
 
     // Add number of upstream routers and sync address
     ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));

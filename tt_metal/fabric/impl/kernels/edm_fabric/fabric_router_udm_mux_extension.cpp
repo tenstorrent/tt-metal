@@ -38,24 +38,96 @@ constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15
 
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
-constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
 
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
-constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(20) != 0;
+constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(18) != 0;
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
 constexpr size_t FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_FULL_SIZE_CHANNELS;
 constexpr size_t HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_HEADER_ONLY_CHANNELS;
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 21;
+// Downstream mux connection configuration (arg 19)
+constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = get_compile_time_arg_val(19);
+
+// Downstream mux connection arrays (args 20+): each array has NUM_DOWNSTREAM_MUX_CONNECTIONS elements
+// [0]=first downstream, [1]=second downstream, [2]=third downstream (all directions except self)
+constexpr uint32_t DOWNSTREAM_MUX_ACTIVE_START_IDX = 20;
+constexpr uint32_t DOWNSTREAM_MUX_NOC_X_START_IDX = DOWNSTREAM_MUX_ACTIVE_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_NOC_Y_START_IDX = DOWNSTREAM_MUX_NOC_X_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_BUFFER_BASE_ADDR_START_IDX =
+    DOWNSTREAM_MUX_NOC_Y_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX =
+    DOWNSTREAM_MUX_BUFFER_BASE_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_WORKER_LOCATION_INFO_ADDR_START_IDX =
+    DOWNSTREAM_MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_BUFFER_INDEX_ADDR_START_IDX =
+    DOWNSTREAM_MUX_WORKER_LOCATION_INFO_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX =
+    DOWNSTREAM_MUX_BUFFER_INDEX_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_TEARDOWN_SEMAPHORE_ADDR_START_IDX =
+    DOWNSTREAM_MUX_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX =
+    DOWNSTREAM_MUX_TEARDOWN_SEMAPHORE_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr uint32_t DOWNSTREAM_MUX_FREE_SLOTS_STREAM_ID_START_IDX =
+    DOWNSTREAM_MUX_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+
+// Initialize downstream mux connection arrays using compile-time argument helper
+constexpr std::array<uint32_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_active =
+    fill_array_with_next_n_args<uint32_t, DOWNSTREAM_MUX_ACTIVE_START_IDX, NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<uint32_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_noc_x =
+    fill_array_with_next_n_args<uint32_t, DOWNSTREAM_MUX_NOC_X_START_IDX, NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<uint32_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_noc_y =
+    fill_array_with_next_n_args<uint32_t, DOWNSTREAM_MUX_NOC_Y_START_IDX, NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_base_addr =
+    fill_array_with_next_n_args<size_t, DOWNSTREAM_MUX_BUFFER_BASE_ADDR_START_IDX, NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_connection_handshake_addr =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_CONNECTION_HANDSHAKE_ADDR_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_worker_location_info_addr =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_WORKER_LOCATION_INFO_ADDR_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_index_addr =
+    fill_array_with_next_n_args<size_t, DOWNSTREAM_MUX_BUFFER_INDEX_ADDR_START_IDX, NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_flow_control_semaphore_addr =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_FLOW_CONTROL_SEMAPHORE_ADDR_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_teardown_semaphore_addr =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_TEARDOWN_SEMAPHORE_ADDR_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_index_semaphore_addr =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_BUFFER_INDEX_SEMAPHORE_ADDR_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_free_slots_stream_id =
+    fill_array_with_next_n_args<
+        size_t,
+        DOWNSTREAM_MUX_FREE_SLOTS_STREAM_ID_START_IDX,
+        NUM_DOWNSTREAM_MUX_CONNECTIONS>();
+
+// Upstream routers and sync address (computed incrementally from last downstream mux array)
+constexpr size_t NUM_UPSTREAM_ROUTERS_IDX =
+    DOWNSTREAM_MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr size_t num_upstream_routers = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX + 1);
+
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = NUM_UPSTREAM_ROUTERS_IDX + 2;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
+using FabricMuxToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_BUFFERS_FULL_SIZE_CHANNEL>;
 }  // namespace tt::tt_fabric
 
 static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay kernel can use 1");
@@ -68,6 +140,19 @@ void wait_for_static_connection_to_ready(
     }
 
     worker_interface.cache_producer_noc_addr();
+}
+
+FORCE_INLINE void wait_for_mux_endpoint_ready(
+    uint8_t mux_noc_x, uint8_t mux_noc_y, size_t mux_status_address, uint32_t mux_status_readback_address) {
+    uint64_t noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address);
+    auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_readback_address);
+
+    ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    do {
+        noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC);
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -247,6 +332,33 @@ void kernel_main() {
             is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
     }
 
+    // Construct downstream mux connections similar to how relay kernel does it for mux_connections
+    // Use placement new to construct only active connections
+    std::array<tt::tt_fabric::FabricMuxToMuxSender, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_connections;
+
+    // Create each downstream mux connection if active
+    constexpr bool is_persistent = true;  // All active downstream mux connections are persistent
+
+    for (uint32_t i = 0; i < NUM_DOWNSTREAM_MUX_CONNECTIONS; i++) {
+        if (downstream_mux_active[i]) {
+            new (&downstream_mux_connections[i]) tt::tt_fabric::FabricMuxToMuxSender(
+                is_persistent,
+                downstream_mux_noc_x[i],
+                downstream_mux_noc_y[i],
+                downstream_mux_buffer_base_addr[i],
+                static_cast<uint8_t>(NUM_BUFFERS_FULL_SIZE_CHANNEL),
+                downstream_mux_connection_handshake_addr[i],
+                downstream_mux_worker_location_info_addr[i],
+                static_cast<uint16_t>(BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL),
+                downstream_mux_buffer_index_addr[i],
+                reinterpret_cast<volatile uint32_t*>(downstream_mux_flow_control_semaphore_addr[i]),
+                reinterpret_cast<volatile uint32_t*>(downstream_mux_teardown_semaphore_addr[i]),
+                downstream_mux_buffer_index_semaphore_addr[i],
+                static_cast<uint32_t>(downstream_mux_free_slots_stream_id[i]),
+                StreamId{static_cast<uint32_t>(downstream_mux_free_slots_stream_id[i]) /* unused */});
+        }
+    }
+
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
@@ -265,6 +377,25 @@ void kernel_main() {
     fabric_connection.open<false>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+
+    // Before connecting to downstream muxes, wait for their status to turn into READY_FOR_TRAFFIC
+    // Use status_address (our own status address) as the readback location
+    for (uint32_t i = 0; i < NUM_DOWNSTREAM_MUX_CONNECTIONS; i++) {
+        if (downstream_mux_active[i]) {
+            wait_for_mux_endpoint_ready(
+                downstream_mux_noc_x[i],
+                downstream_mux_noc_y[i],
+                status_address,                       // Read downstream mux's status (same structure as ours)
+                local_fabric_router_status_address);  // Use as temporary readback buffer
+        }
+    }
+
+    // Open all active downstream mux connections
+    for (uint32_t i = 0; i < NUM_DOWNSTREAM_MUX_CONNECTIONS; i++) {
+        if (downstream_mux_active[i]) {
+            downstream_mux_connections[i].open();
+        }
+    }
 
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         if (is_persistent_channels[i]) {
