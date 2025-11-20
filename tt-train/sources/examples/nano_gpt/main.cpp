@@ -400,8 +400,10 @@ int main(int argc, char **argv) {
     auto create_dataset =
         [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
             if (tokenizer_type == "char") {
-                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
                     std::get<std::string>(text), sequence_length);
+
+                return dataset;
             } 
             else if (tokenizer_type == "bpe") {
                 try
@@ -411,7 +413,7 @@ int main(int argc, char **argv) {
                 } catch (const std::exception &e) {
                     std::cerr << e.what() << std::endl;
                     std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
-                    return -1;
+                    exit(-1);
                 }
             } 
             else {
