@@ -796,19 +796,42 @@ jobs:
           pattern: sweeps-vectors-*
           path: /tmp/vectors-download
           merge-multiple: true
+          continue-on-error: true
       - name: Merge vector artifacts
         shell: bash
         run: |
           # Create final vectors directory
           mkdir -p /tmp/vectors
-          # Move all JSON files from subdirectories to /tmp/vectors
-          find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
+          # Move all JSON files from subdirectories to /tmp/vectors (if directory exists and has files)
+          if [ -d "/tmp/vectors-download" ]; then
+            find /tmp/vectors-download -name "*.json" -type f -exec mv {} /tmp/vectors/ \; 2>/dev/null || true
+            # Check if any files were moved
+            if [ -z "$(ls -A /tmp/vectors 2>/dev/null)" ]; then
+              echo "⚠️  No vector files found in artifacts"
+            else
+              echo "✅ Merged $(ls -1 /tmp/vectors/*.json 2>/dev/null | wc -l) vector file(s)"
+            fi
+          else
+            echo "⚠️  No artifacts directory found - some matrix entries may have been skipped"
+          fi
       - id: set-matrix
         shell: bash
         run: |
           python - <<'PY' > /tmp/matrix.json
           import os, json, sys
           d = '/tmp/vectors'
+          # Check if directory exists and has files
+          if not os.path.exists(d) or not os.listdir(d):
+              print("⚠️  No vector files found - cannot compute module matrix", file=sys.stderr)
+              # Return empty matrix
+              result = {
+                  "module": [],
+                  "batches": [],
+                  "ccl_batches": [],
+                  "include": [],
+              }
+              print(json.dumps(result))
+              sys.exit(0)
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
           # Helper for chunking modules into batches
