@@ -662,7 +662,6 @@ uint32_t process_relay_paged_cmd_large(
         uint32_t amt_to_write = write_length;
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-
         downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
         DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
