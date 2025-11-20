@@ -18,6 +18,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_metal {
 

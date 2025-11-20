@@ -23,6 +23,7 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
