@@ -17,7 +17,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     Tensor
-        output{};  // TODO: To be removed when API will be fixed with https://github.com/tenstorrent/tt-metal/pull/32260
+        output;  // TODO: To be removed when API will be fixed with https://github.com/tenstorrent/tt-metal/pull/32260
     std::optional<Tensor> seeds = std::nullopt;
     std::optional<Tensor> user_ids = std::nullopt;
 };
