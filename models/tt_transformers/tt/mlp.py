@@ -261,7 +261,7 @@ class MLP(LightweightModule):
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
+            num_all_gather_links=self.args.num_all_gather_links if mode == "decode" else 4,
             sharded=(mode == "decode"),
             memory_config=(
                 (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
