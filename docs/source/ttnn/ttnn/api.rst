@@ -72,6 +72,7 @@ Tensor Creation
    ttnn.full
    ttnn.full_like
    ttnn.rand
+   ttnn.from_buffer
 
 Matrix Multiplication
 =====================

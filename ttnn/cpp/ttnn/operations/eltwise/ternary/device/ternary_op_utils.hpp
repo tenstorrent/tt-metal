@@ -31,12 +31,14 @@ enum class KernelName {
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
-    ComputeBcastTTT,        // TTT : column and scalar bcast cases
-    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
-    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
-    ComputeNoBcastAddcmul,  // ADDCMUL: no bcast, uses existing add/mul operations
-    ComputeBcastAddcmul,    // ADDCMUL: column and scalar bcast cases
+    ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,         // TTT : column and scalar bcast cases
+    ComputeRowBcastTTT,      // TTT : row bcast cases : bfloat16 only
+    ComputeBcastTTS_TST,     // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,   // TTS, TST: no bcast, outer dim and row bcast cases
+    ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
+    ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
+    ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
 };
 
 struct TernaryKernelConfig {

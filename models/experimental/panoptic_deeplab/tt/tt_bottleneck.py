@@ -149,25 +149,17 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 
         # Store input for residual connection
-        # For blocks without shortcuts, we must create a deep copy of the input because conv1 will
-        # deallocate x (deallocate_activation=True), and if identity is just a reference to x,
-        # it will also become deallocated, causing PCC errors when we try to add it later.
-        # For blocks with shortcuts (res2.0, res3.0, res4.0, res5.0), conv1 has deallocate_activation=False
-        # configured in model_configs, so identity can safely reference x (shortcut will replace it anyway).
-        if not self.has_shortcut or "res4" in self.block_id or "res5" in self.block_id:
-            # All blocks without shortcuts need a deep copy
-            # Efficient strategy based on current memory location:
-            # - If already in DRAM: Use ttnn.clone() to create a copy
-            # - If sharded or L1: Move to DRAM (this creates a new allocation)
-            if x.memory_config().buffer_type == ttnn.BufferType.DRAM:
-                # Already in DRAM: clone works and is efficient
-                identity = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            else:
-                # Sharded or L1 tensor: moving to DRAM creates new allocation
-                identity = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # With deallocate_activation=False configured for conv1 in blocks that need it,
+        # we can safely reference x without cloning. The model_configs setup ensures:
+        # - Blocks without shortcuts (i > 0): conv1 has deallocate_activation=False
+        # - res4 and res5 blocks: conv1 has deallocate_activation=False
+        # - Blocks with shortcuts in res2/res3: shortcut replaces identity anyway
+        # Exception: res3.3 needs to copy input to DRAM due to L1 memory constraints
+        if self.block_id == "res3.3":
+            # res3.3 has deallocate_activation=True, so we need to preserve identity
+            # Moving to DRAM creates a new allocation, preserving the input
+            identity = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            # Blocks with shortcuts: conv1 won't deallocate x, so identity can reference it
-            # (it will be replaced by shortcut output anyway)
             identity = x
 
         # Process shortcut if needed (BatchNorm is now fused into shortcut Conv)
