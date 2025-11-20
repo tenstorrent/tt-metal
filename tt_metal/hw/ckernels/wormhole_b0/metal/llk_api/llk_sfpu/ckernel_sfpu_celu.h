@@ -39,4 +39,11 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
     }
 }
 
+template <bool APPROXIMATION_MODE>
+inline void celu_init() {
+    if constexpr (!APPROXIMATION_MODE) {
+        exp_init<false, false>();
+    }
+}
+
 }  // namespace ckernel::sfpu

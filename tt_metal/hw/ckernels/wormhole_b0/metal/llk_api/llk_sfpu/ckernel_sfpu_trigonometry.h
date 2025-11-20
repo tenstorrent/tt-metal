@@ -269,6 +269,9 @@ void atan_init() {
 template <bool APPROXIMATION_MODE>
 void init_hyperbolic_trig() {
     _init_exponential_<APPROXIMATION_MODE, false, p_sfpu::kCONST_1_FP16B>();
+    if constexpr (!APPROXIMATION_MODE) {
+        exp_init<false, false>();
+    }
 }
 
 }  // namespace ckernel::sfpu
