@@ -125,15 +125,7 @@ def test_model_inference(
         model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
-        # TODO: maybe delete irrelevant metrics
         final_model_pcc = {
-            "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
-            "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
-            "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
-            "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-            "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
-            "llama32_90b": 0.9759,
-            # TODO: Investigate HF_MODEL PCC drop compared to LLAMA_DIR (especially 3.2-3B)
             "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
             "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
@@ -144,12 +136,6 @@ def test_model_inference(
         }[model_name]
 
         final_k_cache_pcc = {
-            "llama32_1b": 0.9998,
-            "llama32_3b": 0.9998,
-            "llama31_8b": 0.9997,
-            "llama32_11b": 0.9995,
-            "llama31_70b": 0.9997,
-            "llama32_90b": 0.9995,
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9998,
@@ -159,12 +145,6 @@ def test_model_inference(
             "Mistral-7B": 0.68,
         }[model_name]
         final_v_cache_pcc = {
-            "llama32_1b": 0.9996,
-            "llama32_3b": 0.9998,
-            "llama31_8b": 0.9997,
-            "llama32_11b": 0.9996,
-            "llama31_70b": 0.9997,
-            "llama32_90b": 0.9996,
             "Llama-3.1-8B": 0.9997,
             "Llama-3.1-70B": 0.9997,
             "Llama-3.2-1B": 0.9996,
@@ -175,12 +155,6 @@ def test_model_inference(
         }[model_name]
 
         quick_iterations = {
-            "llama32_1b": 2,
-            "llama32_3b": 4,
-            "llama31_8b": 6,
-            "llama32_11b": 6,
-            "llama31_70b": 6,
-            "llama32_90b": 6,
             "Llama-3.1-8B": 6,
             "Llama-3.1-70B": 6,
             "Llama-3.2-1B": 2,
