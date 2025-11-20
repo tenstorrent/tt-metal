@@ -117,24 +117,25 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
             return fmt::format(
                 compute,
                 root,
-                is_where_op ? "eltwise_where_sfpu.cpp"
-                : is_sfpu   ? "eltwise_binary_sfpu.cpp"
-                            : "eltwise_binary.cpp");
+                is_where_op ? "eltwise_where_sfpu.cpp" : (is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp"));
         case KernelName::ComputeScalar:
             return fmt::format(
                 compute,
                 root,
                 is_where_op ? "eltwise_where_sfpu_scalar"
-                : is_sfpu   ? "eltwise_binary_sfpu_scalar.cpp"
-                            : "eltwise_binary_scalar.cpp");
+                            : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+                compute,
+                root_ng,
+                is_where_op ? "eltwise_where_sfpu_row_bcast.cpp"
+                            : (is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp"));
         case KernelName::ComputeRowColBcastNg:
             return fmt::format(
                 compute,
                 root_ng,
-                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
+                is_where_op ? "eltwise_where_sfpu_row_col_bcast.cpp"
+                            : (is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp"));
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
