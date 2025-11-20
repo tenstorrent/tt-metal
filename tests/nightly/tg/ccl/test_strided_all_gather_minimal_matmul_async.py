@@ -178,7 +178,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
             256,
             2,
             2,
-            ttnn.CoreCoord(8, 5),
+            ttnn.CoreCoord(8, 6),
             False,
             (0, 6),
         ),
