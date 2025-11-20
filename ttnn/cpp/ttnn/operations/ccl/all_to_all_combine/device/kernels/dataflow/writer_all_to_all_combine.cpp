@@ -229,7 +229,7 @@ void kernel_main() {
         num_devices,
         reverse_mode>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, global_noc_semaphore_addr);
 
-    // need to send another when if we're alternating directions along the axis in a ring
+    // need to send another if we're alternating directions along the axis in a ring
     send_final_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
