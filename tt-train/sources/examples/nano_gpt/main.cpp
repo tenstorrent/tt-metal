@@ -305,7 +305,7 @@ int main(int argc, char **argv) {
 
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_gpt2s.yaml";
+    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
