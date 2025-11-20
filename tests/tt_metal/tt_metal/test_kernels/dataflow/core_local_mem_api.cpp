@@ -46,10 +46,14 @@ void kernel_main() {
     access_memory<false>(src_addr, end_addr, num_iterations, &((volatile uint64_t*)(cycles_addr))[0]);
     access_memory<true>(src_addr, end_addr, num_iterations, &((volatile uint64_t*)(cycles_addr))[1]);
 
-    // Try writing with pattern
+    // Try writing and reading with operator[]
     experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
-        mem[i] = pattern;
+        mem[i] = pattern + i;
+        if (mem[i] != pattern + i) {
+            while (true) {
+            }
+        }
     }
 
     // Try sending with NoC API
@@ -67,4 +71,105 @@ void kernel_main() {
         },
         0);
     noc.async_write_barrier();
+
+    // Pointer arithmetic (hangs if incorrect)
+    while (mem[0] != pattern) {
+    }
+    while (mem[4] != pattern + 4) {
+    }
+    while (mem[8] != pattern + 8) {
+    }
+
+    // Add offset to pointer
+    uint32_t mid_index = num_bytes / sizeof(uint32_t) / 2;
+    auto mid = mem + mid_index;
+
+    // get_address
+    auto mid_addr = mid.get_address();
+    if (mid_addr != src_addr + mid_index * sizeof(uint32_t)) {
+        while (true) {
+        }
+    }
+
+    // get_unsafe_ptr
+    auto unsafe_ptr = mid.get_unsafe_ptr();
+    if (reinterpret_cast<uintptr_t>(unsafe_ptr) != src_addr + mid_index * sizeof(uint32_t)) {
+        while (true) {
+        }
+    }
+
+    uint32_t middle_value = pattern + mid_index;
+    while (mid[0] != middle_value) {
+    }
+    while (mid[4] != middle_value + 4) {
+    }
+    while (mid[8] != middle_value + 8) {
+    }
+
+    // Subtract two pointers
+    auto diff = mid - mem;
+    if ((uint32_t)diff != mid_index) {
+        while (true) {
+        }
+    }
+
+    // Increment and decrement operators
+    auto inc_mem = mem;
+    inc_mem++;
+    while (inc_mem[0] != pattern + 1) {
+    }
+    while (inc_mem[4] != pattern + 5) {
+    }
+    while (inc_mem[8] != pattern + 9) {
+    }
+    auto dec_mem = mid;
+    dec_mem--;
+    while (dec_mem[0] != middle_value - 1) {
+    }
+    while (dec_mem[4] != middle_value + 3) {
+    }
+    while (dec_mem[8] != middle_value + 7) {
+    }
+
+    --inc_mem;
+    while (inc_mem[0] != pattern) {
+    }
+    while (inc_mem[4] != pattern + 4) {
+    }
+    while (inc_mem[8] != pattern + 8) {
+    }
+    ++dec_mem;
+    while (dec_mem[0] != middle_value) {
+    }
+    while (dec_mem[4] != middle_value + 4) {
+    }
+    while (dec_mem[8] != middle_value + 8) {
+    }
+
+    // Copy constructor
+    auto copy_mem = mem;
+    if (copy_mem != mem) {
+        while (true) {
+        }
+    }
+    while (copy_mem[0] != pattern) {
+    }
+    while (copy_mem[4] != pattern + 4) {
+    }
+    while (copy_mem[8] != pattern + 8) {
+    }
+
+    // Copy assignment operator
+    auto copy_assign_mem = mem;
+    copy_assign_mem = mem;
+    if (copy_assign_mem != mem) {
+        while (true) {
+        }
+    }
+    while (copy_assign_mem[0] != pattern) {
+    }
+    while (copy_assign_mem[4] != pattern + 4) {
+    }
+    while (copy_assign_mem[8] != pattern + 8) {
+    }
 }

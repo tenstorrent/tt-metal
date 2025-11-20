@@ -3277,7 +3277,7 @@ public:
      *
      * @return The raw pointer to the structure in the core's local memory
      */
-    volatile T* get_unsafe_ptr() const { return reinterpret_cast<T*>(address_); }
+    volatile T* get_unsafe_ptr() const { return reinterpret_cast<volatile T*>(address_); }
 
     /** @brief Get the memory address
      *
@@ -3292,7 +3292,7 @@ public:
      */
     volatile T& operator[](uint32_t index) const {
         // TODO: To be moved to a Watcher sanitize check
-        ASSERT(address_ >= 0 && (address_ + (index * sizeof(T)) < MEM_L1_SIZE));
+        ASSERT((address_ + (index * sizeof(T)) < MEM_L1_SIZE));
         return get_unsafe_ptr()[index];
     }
 
@@ -3302,17 +3302,17 @@ public:
      */
     volatile T& operator*() const {
         // TODO: To be moved to a Watcher sanitize check
-        ASSERT(address_ >= 0 && address_ < MEM_L1_SIZE);
+        ASSERT(address_ < MEM_L1_SIZE);
         return get_unsafe_ptr()[0];
     }
 
     CoreLocalMem& operator+=(difference_type offset) {
-        address_ += offset;
+        address_ += offset * sizeof(T);
         return *this;
     }
 
     CoreLocalMem& operator-=(difference_type offset) {
-        address_ -= offset;
+        address_ -= offset * sizeof(T);
         return *this;
     }
 
@@ -3328,21 +3328,31 @@ public:
 
     CoreLocalMem operator++(int) {
         CoreLocalMem tmp = *this;
-        address_ += sizeof(T);
+        operator++();
         return tmp;
     }
 
     CoreLocalMem operator--(int) {
         CoreLocalMem tmp = *this;
-        --(*this);
+        operator--();
         return tmp;
     }
 
-    CoreLocalMem operator+(difference_type offset) const { return CoreLocalMem(address_ + offset); }
+    CoreLocalMem operator+(difference_type offset) const { return CoreLocalMem(address_ + offset * sizeof(T)); }
 
-    CoreLocalMem operator-(difference_type offset) const { return CoreLocalMem(address_ - offset); }
+    CoreLocalMem operator-(difference_type offset) const { return CoreLocalMem(address_ - offset * sizeof(T)); }
 
-    difference_type operator-(const CoreLocalMem& other) const { return address_ - other.address_; }
+    difference_type operator-(const CoreLocalMem& other) const {
+        difference_type byte_diff =
+            static_cast<difference_type>(address_) - static_cast<difference_type>(other.address_);
+        if constexpr ((sizeof(T) & (sizeof(T) - 1)) == 0) {
+            // Optimized division for of sizeof(T) is a power of 2 for common cases like T = uint32_t
+            constexpr int shift = __builtin_ctz(sizeof(T));
+            return byte_diff >> shift;
+        } else {
+            return byte_diff / sizeof(T);
+        }
+    }
 
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
     bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
@@ -3366,9 +3376,7 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
 
     template <Noc::AddressType address_type>
     static auto src_addr(const CoreLocalMem<T, AddressType>& src, const Noc&, const src_args_type& args) {
-        static_assert(
-            address_type == Noc::AddressType::LOCAL_L1,
-            "CircularBuffer without mcast range can only be used as L1 source");
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 source");
         return src.get_address() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>

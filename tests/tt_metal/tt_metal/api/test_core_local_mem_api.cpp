@@ -114,16 +114,14 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
 
     // Verify data is the pattern
     std::vector<uint32_t> data(num_bytes / sizeof(uint32_t), 0);
+    std::vector<uint32_t> expected_data(num_bytes / sizeof(uint32_t));
+    std::iota(expected_data.begin(), expected_data.end(), pattern);
     mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device->id(), virtual_core), src_addr);
-    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
-        ASSERT_EQ(data[i], pattern);
-    }
+    ASSERT_EQ(data, expected_data);
 
     // Verify neighbor core received the data
     mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device->id(), neighbor_virtual_core), src_addr);
-    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
-        ASSERT_EQ(data[i], pattern);
-    }
+    ASSERT_EQ(data, expected_data);
 }
 
 }  // namespace
