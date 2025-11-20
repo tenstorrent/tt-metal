@@ -70,7 +70,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // b2
         TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset1 | (b2 >> 2));
         // c = mul24_hi(a0, b2)
-        TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, 1);
+        TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, SFPMUL24_MOD1_UPPER);
         // b1 = b1 + a1
         TTI_SFPIADD(0, a1, b1, SFPIADD_MOD1_CC_NONE);
         // c
@@ -89,9 +89,9 @@ inline void mul_int32_init() {
     // Load instruction templates.  This is more efficient than using
     // SFPCONFIG, but requires DISABLE_BACKDOOR_LOAD=false (the default).
 
-    TTI_SFPSHFT2(-23 & 0xfff, 0, 12, 6);
-    TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, 0);
-    TTI_SFPSHFT(23, b1, 14, 1 | 4);
+    TTI_SFPSHFT2(-23 & 0xfff, 0, 12, SFPSHFT2_MOD1_SHFT_IMM);
+    TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, SFPMUL24_MOD1_LOWER);
+    TTI_SFPSHFT(23, b1, 14, 1 | 4);  // SFPSHFT_MOD1_ARG_IMM | SFPSHFT_MOD1_ARG_IMM_USE_VC
     TTI_SFPIADD(0, c, 15, SFPIADD_MOD1_CC_NONE);
 
     // Configure macros.
@@ -147,6 +147,11 @@ inline void mul_int32_init() {
 
         TTI_SFPCONFIG(0, 7, 0);
     }
+    // Misc: {
+    //   StoreMod0: MOD0_FMT_SRCB,
+    //   UsesLoadMod0ForStore: {1,1,1,1},
+    //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
+    // }
     TTI_SFPCONFIG(0xff0, 8, 1);
 }
 
