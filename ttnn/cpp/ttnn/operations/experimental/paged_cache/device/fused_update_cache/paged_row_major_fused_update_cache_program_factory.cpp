@@ -17,13 +17,17 @@ namespace ttnn::operations::experimental::paged_cache::program {
 using namespace tt::constants;
 using namespace tt;
 
-static bool enable_fp32_dest_acc(
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+bool enable_fp32_dest_acc(
     const tt_metal::IDevice* device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     return fp32_dest_acc_en;
 }
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFusedUpdateCacheProgramFactory::create(
     const fused_update_cache::operation_attributes_t& operation_attributes,
@@ -46,7 +50,8 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    const bool fp32_dest_acc_en = enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en =
+        CMAKE_UNIQUE_NAMESPACE::enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
 
     const tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
