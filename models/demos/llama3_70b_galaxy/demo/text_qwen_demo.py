@@ -964,46 +964,65 @@ def test_qwen_demo_text(
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
                         if len(expected_outputs_data) > 0:
-                            expected_text = expected_outputs_data[0]  # Compare with the first entry in the JSON list
                             actual_text_clean = text_after_prompt.strip()
-                            expected_text_clean = expected_text.strip()
 
-                            if actual_text_clean != expected_text_clean:
+                            # Check if actual output matches any of the expected outputs
+                            match_found = False
+                            for idx, expected_text in enumerate(expected_outputs_data):
+                                expected_text_clean = expected_text.strip()
+                                if actual_text_clean == expected_text_clean:
+                                    match_found = True
+                                    logger.info(
+                                        f"Output for user {i} in batch {batch_idx} matches expected output #{idx} from {expected_outputs_file_path_to_load}."
+                                    )
+                                    break
+
+                            if not match_found:
                                 logger.warning(
-                                    f"Output for user {i} in batch {batch_idx} DOES NOT MATCH expected output from {expected_outputs_file_path_to_load}."
+                                    f"Output for user {i} in batch {batch_idx} DOES NOT MATCH any of the {len(expected_outputs_data)} expected outputs from {expected_outputs_file_path_to_load}."
                                 )
-                                logger.info(f"Expected: {repr(expected_text_clean)}")
-                                logger.info(f"Actual  : {repr(actual_text_clean)}")
-                                mismatches_found = 0
-                                # Iterate based on the longer of the two strings to catch all differences
-                                for char_idx in range(min(len(actual_text_clean), len(expected_text_clean))):
-                                    actual_char = (
-                                        actual_text_clean[char_idx]
-                                        if char_idx < len(actual_text_clean)
-                                        else "<END_OF_ACTUAL>"
-                                    )
-                                    expected_char = (
-                                        expected_text_clean[char_idx]
-                                        if char_idx < len(expected_text_clean)
-                                        else "<END_OF_EXPECTED>"
-                                    )
-                                    if actual_char != expected_char:
-                                        logger.info(
-                                            f"Mismatch at position {char_idx}: Actual: '{repr(actual_char)}', Expected: '{repr(expected_char)}'"
+                                logger.info(f"Actual output: {repr(actual_text_clean)}")
+                                logger.info(f"Expected outputs ({len(expected_outputs_data)} total):")
+                                for idx, expected_text in enumerate(expected_outputs_data):
+                                    expected_text_clean = expected_text.strip()
+                                    logger.info(f"  #{idx}: {repr(expected_text_clean)}")
+
+                                # Show detailed comparison with the first expected output for debugging
+                                if len(expected_outputs_data) > 0:
+                                    expected_text_clean = expected_outputs_data[0].strip()
+                                    logger.info(f"Detailed comparison with expected output #0:")
+                                    mismatches_found = 0
+                                    # Iterate based on the longer of the two strings to catch all differences
+                                    for char_idx in range(min(len(actual_text_clean), len(expected_text_clean))):
+                                        actual_char = (
+                                            actual_text_clean[char_idx]
+                                            if char_idx < len(actual_text_clean)
+                                            else "<END_OF_ACTUAL>"
                                         )
-                                        mismatches_found += 1
-                                    if mismatches_found >= 20:  # Limit number of logged mismatches
-                                        logger.info(
-                                            "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                        expected_char = (
+                                            expected_text_clean[char_idx]
+                                            if char_idx < len(expected_text_clean)
+                                            else "<END_OF_EXPECTED>"
                                         )
-                                        assert (
-                                            False
-                                        ), "More mismatches exist but will not be logged for this comparison (limit reached)."
-                                        break
-                        else:
-                            logger.info(
-                                f"Output for user {i} in batch {batch_idx} matches expected output from {expected_outputs_file_path_to_load}."
-                            )
+                                        if actual_char != expected_char:
+                                            logger.info(
+                                                f"Mismatch at position {char_idx}: Actual: '{repr(actual_char)}', Expected: '{repr(expected_char)}'"
+                                            )
+                                            mismatches_found += 1
+                                        if mismatches_found >= 20:  # Limit number of logged mismatches
+                                            logger.info(
+                                                "More mismatches exist but will not be logged for this comparison (limit reached)."
+                                            )
+                                            assert (
+                                                False
+                                            ), "Output does not match any of the expected outputs. See detailed comparison above."
+                                            break
+
+                                # If we reach here without asserting, it means we found mismatches but didn't hit the limit
+                                if mismatches_found > 0:
+                                    assert (
+                                        False
+                                    ), f"Output does not match any of the {len(expected_outputs_data)} expected outputs."
                     else:  # expected_outputs_data is not empty list, but i==0 and len(expected_outputs_data) == 0 (should be caught by outer if)
                         logger.warning(
                             f"Expected outputs data was loaded from {expected_outputs_file_path_to_load} but is an empty list. Cannot compare for user {i}, batch {batch_idx}."
@@ -1093,3 +1112,34 @@ def test_qwen_demo_text(
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
+
+    # Test batch-32, ISL=128, OSL=128 TTFT and decode throughput
+    if batch_size == 32 and len(input_prompts[0]) == 507:
+        target_time_to_first_token = 700
+        assert (
+            avg_time_to_first_token * 1000 < target_time_to_first_token
+        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target_time_to_first_token}."
+        target_decode_tok_s_u = 60
+        target_decode_tok_s = target_decode_tok_s_u * batch_size
+        assert (
+            decode_tok_s_user >= target_decode_tok_s_u
+        ), f"Decode throughput {decode_tok_s_user} tok/s/user is too low, should be < {target_decode_tok_s_u}."
+        assert (
+            decode_tok_s >= target_decode_tok_s
+        ), f"Decode throughput {decode_tok_s} tok/s is too low, should be > {target_decode_tok_s}."
+
+    # Save benchmark data for CI dashboard
+    if is_ci_env and repeat_batches > 1:
+        benchmark_data.add_measurement(
+            profiler,
+            1,  # grab the second repeat batch of prefill
+            "inference_prefill",
+            f"ttft_e2e_{galaxy_type}",
+            round(avg_time_to_first_token * 1000, 2),
+        )  # average TTFT in ms
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg_llama_text_demo_prefill",
+            ml_model_name="llama70b-tg",
+        )

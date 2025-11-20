@@ -31,7 +31,7 @@ from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers (6U Galaxy configuration)
-TSU_THRESHOLDS = {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}}
+TSU_THRESHOLDS = {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 64: {"min": 58, "max": 65}}
 
 
 # Use common functions from demo_common.py
@@ -481,7 +481,7 @@ def run_qwen_demo(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=run_type,
-            ml_model_name="qwen70b-tg",
+            ml_model_name="qwen32b-tg",
         )
 
     if not stress_test and len(all_tokens_per_second_per_user) > 0:
