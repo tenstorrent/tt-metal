@@ -155,7 +155,7 @@ def load_inputs_for__main():
 
 
 class SigmoidConv(nn.Module):
-    def __init__(self):
+    def __init__(self, weights=None, bias=None):
         super().__init__()
         self.conv = nn.Conv2d(
             in_channels=64,
@@ -164,6 +164,11 @@ class SigmoidConv(nn.Module):
             stride=(1, 1),
             padding=(1, 1),
         )
+        # Load provided weights and bias if available
+        if weights is not None:
+            self.conv.weight.data = weights
+        if bias is not None:
+            self.conv.bias.data = bias
 
     def forward(self, x1, x2):
         y1 = torch.sigmoid(x2)
@@ -188,11 +193,20 @@ def test_sig_conv2d():
 
     logger.info("tt_output={}", tt_output)
 
-    ## cpu run
+    ## cpu run - load same weights as ttnn
     x1 = torch.load("input_1.pt")
     x2 = torch.load("input_2.pt")
 
-    cpu_model = SigmoidConv()
+    # Load the actual weights and bias used by ttnn
+    weights_ttnn = ttnn.load_tensor("./tensors/arg2.tensorbin")
+    weights_torch = ttnn.to_torch(weights_ttnn)
+
+    bias_ttnn = ttnn.load_tensor("./tensors/arg1.tensorbin")
+    bias_torch = ttnn.to_torch(bias_ttnn).squeeze()
+
+    logger.info(f"Loaded weights shape: {weights_torch.shape}, bias shape: {bias_torch.shape}")
+
+    cpu_model = SigmoidConv(weights=weights_torch, bias=bias_torch)
 
     with torch.no_grad():
         cpu_output = cpu_model(x1, x2)
