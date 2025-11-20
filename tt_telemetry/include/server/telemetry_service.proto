@@ -10,6 +10,9 @@ package tt.telemetry;
 service TelemetryService {
   // Simple ping/pong to measure RTT
   rpc Ping(PingRequest) returns (PingResponse) {}
+
+  // Query a metric by name
+  rpc QueryMetric(QueryMetricRequest) returns (QueryMetricResponse) {}
 }
 
 // Ping request carrying a timestamp
@@ -20,4 +23,20 @@ message PingRequest {
 // Pong response echoing the timestamp
 message PingResponse {
   int64 timestamp = 1;  // Echo of the client's timestamp
+}
+
+// Query request for a specific metric
+message QueryMetricRequest {
+  string metric_name = 1;  // Name of the metric to query
+}
+
+// Query response with typed value
+message QueryMetricResponse {
+  string metric_name = 1;  // Echo of the metric name
+  oneof value {
+    bool bool_value = 2;
+    uint64 uint_value = 3;
+    string string_value = 4;
+    double double_value = 5;
+  }
 }

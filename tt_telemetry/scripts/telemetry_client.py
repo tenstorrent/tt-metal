@@ -73,6 +73,45 @@ class TelemetryClient:
             print(f"RPC failed: {e.code()}: {e.details()}")
             return False, timestamp_ms, 0
 
+    def query_metric(self, metric_name: str, timeout: float = 5.0) -> tuple[bool, str, Any]:
+        """
+        Query a metric by name.
+
+        Args:
+            metric_name: Name of the metric to query
+            timeout: RPC timeout in seconds
+
+        Returns:
+            Tuple of (success, metric_name, value)
+        """
+        request = telemetry_service_pb2.QueryMetricRequest(metric_name=metric_name)
+
+        try:
+            response = self.stub.QueryMetric(request, timeout=timeout)
+
+            # Determine which field is set in the oneof
+            which = response.WhichOneof("value")
+            if which == "bool_value":
+                value = response.bool_value
+            elif which == "uint_value":
+                value = response.uint_value
+            elif which == "string_value":
+                value = response.string_value
+            elif which == "double_value":
+                value = response.double_value
+            else:
+                print(f"Warning: No value set in response")
+                return False, metric_name, None
+
+            return True, response.metric_name, value
+
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.NOT_FOUND:
+                print(f"Metric not found: {e.details()}")
+            else:
+                print(f"RPC failed: {e.code()}: {e.details()}")
+            return False, metric_name, None
+
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()
@@ -84,6 +123,16 @@ def ping(client: TelemetryClient, params: Dict[str, Any] | None):
         print(f"Ping: {rtt_ms} ms")
     else:
         print("Ping failed")
+
+
+def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
+    metric_name = params["metric_name"]
+    success, name, value = client.query_metric(metric_name)
+    if success:
+        print(f"Metric: {name}")
+        print(f"  Value: {value} (type: {type(value).__name__})")
+    else:
+        print(f"Query failed for metric: {metric_name}")
 
 
 if __name__ == "__main__":
@@ -110,6 +159,12 @@ if __name__ == "__main__":
             handler=lambda params: ping(client, params),
             command="ping",
             description="Measure round-trip time to telemetry service",
+        ),
+        Command(
+            handler=lambda params: query_metric(client, params),
+            command="query",
+            params=[Param(name="metric_name", type=str)],
+            description="Query a metric by name",
         ),
     ]
     CommandConsole(commands=commands).run()
