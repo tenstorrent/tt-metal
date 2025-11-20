@@ -533,37 +533,6 @@ class TTNNSpeechT5DecoderLayer:
         self.encoder_attn_layer_norm_params = parameters["encoder_attn_layer_norm"]
         self.final_layer_norm_params = parameters["final_layer_norm"]
 
-        """
-        # Match the sharding configuration from l1_width_sharded_memory
-        # For hidden_size=768 (24 tiles), l1_width_sharded_memory creates:
-        # CoreGrid(y=3, x=8) with width sharding
-        num_cores = config.hidden_size // ttnn.TILE_SIZE  # 24 cores
-        if num_cores % 8 == 0:
-            core_grid = ttnn.CoreGrid(y=num_cores // 8, x=8)  # (3, 8) for 768
-        else:
-            core_grid = ttnn.CoreGrid(y=1, x=num_cores)
-
-        print("max_sequence_length", self.max_sequence_length)
-        per_core_M = math.ceil(self.max_sequence_length / ttnn.TILE_SIZE)
-
-        # For width sharding, each core gets a portion of the width
-        # Total width in tiles = hidden_size / TILE_SIZE = 24
-        # Width per core = 24 / (3*8) = 1 tile per core
-        K_tiles = config.hidden_size // ttnn.TILE_SIZE
-        total_cores = core_grid.x * core_grid.y
-        block_w = K_tiles // total_cores  # 24 / 24 = 1
-
-        self.program_configs = {
-            "layernorm_1_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-                subblock_w=1,
-                block_h=per_core_M,
-                block_w=block_w,
-                inplace=False,
-            ),
-        }
-        """
-
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
@@ -598,12 +567,7 @@ class TTNNSpeechT5DecoderLayer:
         )
 
         # Dropout skipped for inference
-        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # print("hidden_states", hidden_states.memory_config())
-        # print("residual", residual.memory_config())
-        # print("hidden_states", hidden_states.memory_config())
-        # print("--------------------------------")
+        hidden_states = ttnn.add(residual, hidden_states)
 
         # Match the sharding configuration from l1_width_sharded_memory
         # For hidden_size=768 (24 tiles), l1_width_sharded_memory creates:
@@ -654,7 +618,7 @@ class TTNNSpeechT5DecoderLayer:
         )
 
         # Dropout skipped for inference
-        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.add(residual, hidden_states)
 
         hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -669,16 +633,10 @@ class TTNNSpeechT5DecoderLayer:
         residual = hidden_states
 
         hidden_states = self.feed_forward(hidden_states)
-
-        # Dropout skipped for inference
-        # Ensure both tensors are in L1 before add
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        residual = ttnn.to_memory_config(residual, ttnn.L1_MEMORY_CONFIG)
-
-        hidden_states = ttnn.add(residual, hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        hidden_states = ttnn.add(residual, hidden_states)  # , memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Convert to width sharded for layer norm
-        hidden_states = l1_width_sharded_memory(hidden_states)
+        # hidden_states = l1_width_sharded_memory(hidden_states)
 
         hidden_states = ttnn.layer_norm(
             hidden_states,
