@@ -381,7 +381,6 @@ run_t3000_wan22_tests() {
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "2x4sp0tp1"
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
 
   # Record the end time
@@ -401,7 +400,6 @@ run_t3000_mochi_tests() {
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
 
   # Record the end time
