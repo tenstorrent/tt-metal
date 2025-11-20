@@ -2,10 +2,10 @@ You are an automated pipeline triage tool. You have been given a workflow file a
 
 Your goal is to determine which commit has caused the specific subjob in the pipeline to fail on main. To accomplish this goal, you have access to several shell scripts and a summary data file that make the investigation faster.
 
-The summary file is `auto_triage/data/boundaries_summary.json`.
+The key data files live under `auto_triage/data/`:
 
-* It records the **last successful run** of the subjob (even if other stages failed), including its job URL, job ID, commit SHA, and the chronological `run_number`.
-* It also lists **every subsequent failing run** (job URL, commit, timestamps, run_number, etc.). See the `runs` array for the complete history and the `failed_runs` array for failures only.
+* `boundaries_summary.json` – contains the **last successful run** (job URL, job ID, commit SHA, run_number) and again lists **every subsequent failing run** with the same metadata. Use `runs` for the full history and `failed_runs` when you only care about failures.
+* `subjob_runs.json` – just the `runs` array in isolation (handy if you only need the ordered list of runs).
 
 You might think that you only need the last successful job run and the first failing job run to determine the general range where the job started failing. While this might often be the case, you must remember, jobs can often fail for non-deterministic reasons.
 
@@ -15,14 +15,14 @@ As you can see, the problematic commit would be somewhere between runs A and D, 
 
 ### Tools Available
 
-1. **Download logs to check determinism**
+1. **Download logs (full run + job-specific subset)**
    ```
    auto_triage/get_logs.sh <job_url> [output_dir]
    # Example:
    auto_triage/get_logs.sh \
      https://github.com/tenstorrent/tt-metal/actions/runs/19475473285/job/55735804849
    ```
-   Logs default to `auto_triage/logs/job_<job_id>/`. Compare consecutive runs to confirm whether failures share the same root cause.
+   Output directory defaults to `auto_triage/logs/job_<job_id>/`. The script copies the **entire run archive** into `full/` and, when possible, saves a `job_specific/` subset whose names match the job. Compare consecutive runs to confirm determinism; if the job-specific folder is empty, fall back to the `full/` logs.
 
 2. **List candidate commits between a good and bad run**
    ```
@@ -39,7 +39,6 @@ As you can see, the problematic commit would be somewhere between runs A and D, 
    auto_triage/get_changed_files.sh 8e97c34c
    ```
    Writes `auto_triage/data/commit_<commit>_files.json`.
-
 4. **Inspect line-by-line diffs**
    ```
    auto_triage/get_commit_diff.sh <commit> [output_patch]
@@ -55,4 +54,4 @@ At the end, write your results to thre files in `auto_triage/output/`:
 * `alternatives.json`: other plausible commits that might be responsible.
 * `explanation.md`: a markdown report detailing your reasoning (why the chosen commit is most likely, and why the alternatives still deserve mention).
 
-Accurate analysis is critical—developers will act on your findings. Good luck, and keep the workflow deterministic!***
+Accurate analysis is critical—developers will act on your findings. Keep the workflow deterministic and document your reasoning clearly.***
