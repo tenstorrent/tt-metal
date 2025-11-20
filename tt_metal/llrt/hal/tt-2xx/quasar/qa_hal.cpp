@@ -65,6 +65,7 @@ public:
         std::vector<std::string> objs;
         if (params.is_fw) {
             objs.push_back("runtime/hw/lib/quasar/tt-qsr64-crt0-tls.o");
+            objs.push_back("runtime/hw/lib/quasar/tt-qsr64-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
@@ -137,6 +138,7 @@ public:
             params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64 " : "-mcpu=tt-qsr32-tensixbh ";
         cflags += "-mno-tt-tensix-optimize-replay ";
         cflags += "-fno-extern-tls-init ";
+        cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -151,7 +153,9 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm{}.ld",
+                            params.is_fw ? "firmware" : "kernel",
+                            params.is_fw ? "" : std::to_string(params.processor_id));
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(

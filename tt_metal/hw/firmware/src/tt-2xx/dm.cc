@@ -82,8 +82,7 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-extern "C" [[gnu::section(".start")]]
-uint32_t _start() {
+extern "C" uint32_t _start1() {
     configure_csr();
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
