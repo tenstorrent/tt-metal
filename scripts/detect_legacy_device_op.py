@@ -5,10 +5,10 @@
 """
 Detect classes that implement the legacy concept OldDeviceOperation.
 
-Uses simple pattern matching (no clang) to find classes with all three non-static methods:
+Uses simple pattern matching (no clang) to find classes with any of these non-static methods:
     - validate
     - compute_output_specs
-    - create_program
+    - create_program (or create_program_at)
 
 Checks specified .hpp files. Used by pre-commit hooks to detect legacy patterns in newly added files.
 """
@@ -19,8 +19,8 @@ import re
 import subprocess
 import sys
 
-# Compile regex patterns once at module level for the three methods we check
-_METHOD_NAMES = ["validate", "compute_output_specs", "create_program"]
+# Compile regex patterns once at module level for the methods we check
+_METHOD_NAMES = ["validate", "compute_output_specs", "create_program", "create_program_at"]
 _METHOD_PATTERNS = {name: re.compile(rf"\b{re.escape(name)}\s*[<(]") for name in _METHOD_NAMES}
 
 
@@ -59,12 +59,14 @@ def check_has_non_static_method(filepath, method_name):
 def check_file_for_legacy_class(filepath):
     """
     Check if a file contains a legacy device operation class.
-    Returns True if all three methods are found as non-static.
+    Returns True if any of the methods (validate, compute_output_specs, create_program, or create_program_at)
+    is found as non-static.
     """
+    # Check if any of the methods exists as non-static
     for method_name in _METHOD_NAMES:
-        if not check_has_non_static_method(filepath, method_name):
-            return False
-    return True
+        if check_has_non_static_method(filepath, method_name):
+            return True
+    return False
 
 
 def _file_exists_in_git(filepath, ref):
@@ -180,7 +182,7 @@ def main():
 
     print("❌ ERROR: Detected new classes following legacy concept OldDeviceOperation", file=sys.stderr)
     print(
-        "   (class implements non-static member functions: validate, compute_output_specs, create_program)",
+        "   (class implements non-static member function(s): validate, compute_output_specs, create_program, or create_program_at)",
         file=sys.stderr,
     )
     print("", file=sys.stderr)
