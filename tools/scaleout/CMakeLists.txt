@@ -132,8 +132,8 @@ target_link_libraries(
 # =========================================================================
 add_executable(
     generate_mgd
-    generate_mgd_main.cpp
-    generate_mgd.cpp
+    generate_mgd/generate_mgd_main.cpp
+    generate_mgd/generate_mgd.cpp
 )
 
 set_target_properties(
@@ -159,6 +159,7 @@ add_dependencies(generate_mgd fabric_protos_for_mgd)
 
 # Include directories for headers and generated protobuf files
 target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generate_mgd)
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric)
 
