@@ -85,7 +85,7 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    tensor_id(tensor_id_counter.fetch_add(1, std::memory_order_relaxed)) {
+    id_(tensor_id_counter.fetch_add(1, std::memory_order_relaxed)) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -100,10 +100,7 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor
 }
 
 Tensor& Tensor::operator=(const Tensor& other) {
-    if (this == &other) {
-        return *this;
-    }
-    this->tensor_id = other.tensor_id;
+    this->id_ = other.id_;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = other.tensor_attributes;
     }
@@ -112,8 +109,8 @@ Tensor& Tensor::operator=(const Tensor& other) {
 }
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
-    this->tensor_id = other.tensor_id;
-    other.tensor_id = INVALID_TENSOR_ID;
+    this->id_ = other.id_;
+    other.id_ = INVALID_TENSOR_ID;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -150,7 +147,7 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-std::optional<std::uint64_t> Tensor::get_tensor_id() const {
+std::optional<std::uint64_t> Tensor::get_id() const {
     return tensor_id != INVALID_TENSOR_ID ? std::make_optional(tensor_id) : std::nullopt;
 }
 

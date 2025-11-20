@@ -262,7 +262,7 @@ public:
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    std::optional<std::uint64_t> get_tensor_id() const;
+    std::optional<std::uint64_t> get_id() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
     auto attribute_values() const {
@@ -271,7 +271,7 @@ public:
     }
 
 private:
-    std::uint64_t tensor_id{INVALID_TENSOR_ID};
+    std::uint64_t id_{INVALID_TENSOR_ID};
 
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);

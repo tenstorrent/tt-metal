@@ -310,14 +310,14 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         },
         storage);
 
-    if (t.get_tensor_id() == std::nullopt) {
+    if (t.get_id() == std::nullopt) {
         log_warning(
             tt::LogAlways,
             "Tensor doesn't have a valid ID, this tensor must have been moved and should therefore not be tracked");
         return -1;
     }
 
-    std::uint64_t tensor_id = t.get_tensor_id().value();
+    std::uint64_t tensor_id = t.get_id().value();
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();
 
