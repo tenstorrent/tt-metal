@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compressed_routing_table.hpp"
+#include "compressed_direction_table.hpp"
 
 namespace tt::tt_fabric {
 
 template <std::uint32_t ArraySize>
-void compressed_routing_table_t<ArraySize>::set_direction(std::uint16_t index, std::uint8_t direction) {
+void direction_table_t<ArraySize>::set_direction(std::uint16_t index, std::uint8_t direction) {
     std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
     std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
     std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
@@ -32,7 +32,7 @@ void compressed_routing_table_t<ArraySize>::set_direction(std::uint16_t index, s
 }
 
 template <std::uint32_t ArraySize>
-std::uint8_t compressed_routing_table_t<ArraySize>::compress_value(std::uint8_t original_value) const {
+std::uint8_t direction_table_t<ArraySize>::compress_value(std::uint8_t original_value) const {
     switch (original_value) {
         case eth_chan_directions::EAST: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_EAST);
         case eth_chan_directions::WEST: return static_cast<std::uint8_t>(compressed_routing_values::COMPRESSED_WEST);
@@ -46,13 +46,12 @@ std::uint8_t compressed_routing_table_t<ArraySize>::compress_value(std::uint8_t 
 }
 
 template <std::uint32_t ArraySize>
-void compressed_routing_table_t<ArraySize>::set_original_direction(
-    std::uint16_t index, std::uint8_t original_direction) {
+void direction_table_t<ArraySize>::set_original_direction(std::uint16_t index, std::uint8_t original_direction) {
     set_direction(index, compress_value(original_direction));
 }
 
-// Explicit instantiations for tensix_routing_l1_info_t
-template struct compressed_routing_table_t<MAX_MESH_SIZE>;
-template struct compressed_routing_table_t<MAX_NUM_MESHES>;
+// Explicit instantiations for routing_l1_info_t
+template struct direction_table_t<MAX_MESH_SIZE>;
+template struct direction_table_t<MAX_NUM_MESHES>;
 
 }  // namespace tt::tt_fabric
