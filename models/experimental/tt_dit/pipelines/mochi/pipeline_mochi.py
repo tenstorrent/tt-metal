@@ -27,7 +27,13 @@ from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
-from ...utils.cache import get_and_create_cache_path, cache_dict_exists, save_cache_dict, load_cache_dict
+from ...utils.cache import (
+    get_cache_path,
+    get_and_create_cache_path,
+    cache_dict_exists,
+    save_cache_dict,
+    load_cache_dict,
+)
 
 
 # from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
