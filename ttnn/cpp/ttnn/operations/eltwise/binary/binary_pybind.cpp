@@ -140,11 +140,6 @@ void bind_binary_operation(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -279,11 +274,6 @@ void bind_binary_gcd_lcm_operation(
                  - {5}
 
             {8}
-
-        Example:
-            >>> tensor1 = {6}
-            >>> tensor2 = {7}
-            >>> output = {1}(tensor1, tensor2)
         )doc",
 
         operation.base_name(),
@@ -377,11 +367,6 @@ void bind_binary_unary_max_operation(
                  - 2, 3, 4
 
             {4}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -511,11 +496,6 @@ void bind_binary_unary_operation(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -645,12 +625,6 @@ void bind_binary_with_float_param(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> alpha = 1.0
-            >>> output = {1}(tensor1, tensor2, alpha)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -849,11 +823,6 @@ void bind_logical_binary_ops_operation(
                  - 2, 3, 4
 
             {6}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -943,11 +912,6 @@ void bind_binary_composite(
                  - {5}
 
             {8}
-
-        Example:
-            >>> tensor1 = {6}
-            >>> tensor2 = {7}
-            >>> output = {1}(tensor1, tensor2)
         )doc",
 
         operation.base_name(),
@@ -1015,14 +979,6 @@ void bind_binary_composite_with_rtol_atol(
                * - BFLOAT16
                  - TILE
                  - 2, 3, 4
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> rtol = 1e-4
-            >>> atol = 1e-5
-            >>> equal_nan = False
-            >>> output = {1}(tensor1, tensor2, rtol=rtol, atol=atol, equal_nan=equal_nan)
         )doc",
 
         operation.base_name(),
@@ -1099,11 +1055,6 @@ void bind_binary_composite_overload(
                  - {4}
 
             {7}
-
-        Example:
-            >>> tensor1 = {5}
-            >>> tensor2 = {6}
-            >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1276,14 +1227,6 @@ void bind_div(
                  - TILE
                  - 2, 3, 4
 
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, accurate_mode = false, round_mode = None)
-
-            >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 3
-            >>> output = {1}(tensor, scalar, round_mode = "floor")
         )doc",
 
         operation.base_name(),
@@ -1420,15 +1363,6 @@ void bind_binary_operation_with_fast_approx(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, fast_and_approximate_mode=True)
-
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 3
-            >>> output = {1}(tensor, scalar, fast_and_approximate_mode=False)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1556,12 +1490,6 @@ void bind_polyval(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> coeffs = [1, 2, 3, 4]
-            >>> output = {1}(tensor, coeffs)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1706,11 +1634,6 @@ void bind_inplace_operation(
                   - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1818,11 +1741,6 @@ void bind_inplace_operation_with_fast_approx(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {1}(tensor1, tensor2, fast_and_approximate_mode=True)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1931,11 +1849,6 @@ void bind_logical_inplace_operation(
                  - 2, 3, 4
 
             {5}
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1989,9 +1902,6 @@ void bind_binary_inplace_operation(
                 * :attr:`input_b` (ttnn.Tensor or Number)
             Keyword args:
             * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
-            Example::
-                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -2093,11 +2003,6 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                  - 2, 3, 4
 
             {2}
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> exponent = 2
-            >>> output = {1}(tensor, exponent)
         )doc",
         ttnn::pow.base_name(),
         ttnn::pow.python_fully_qualified_name(),
