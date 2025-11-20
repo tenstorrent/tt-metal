@@ -307,6 +307,26 @@ if [ "$FOUND_SUCCESS" = false ] && [ "$FOUND_FAILURE" = false ]; then
     exit 1
 fi
 
+if [ "$SUBJOB_RUNS_JSON" != "[]" ]; then
+    SUBJOB_RUNS_JSON=$(echo "$SUBJOB_RUNS_JSON" | jq '
+        def normalize(arr):
+          arr | map(.completed_at = (.completed_at // ""));
+        def assign_numbers(order):
+          order
+          | to_entries
+          | map(.value + {run_number: .key});
+        (normalize(.) | map(select(.status == "success")) | sort_by(.completed_at) | first) as $success
+        | (normalize(.) | map(select(.status != "success")) | sort_by(.completed_at)) as $fails
+        | if $success == null then
+              assign_numbers(normalize(.) | sort_by(.completed_at))
+          else
+              assign_numbers([$success] + $fails)
+          end
+    ')
+fi
+
+FAILED_RUNS_JSON=$(echo "$SUBJOB_RUNS_JSON" | jq '[ .[] | select(.status != "success") ]')
+
 if [ "$SUBJOB_RUNS_JSON" = "[]" ]; then
     echo -e "${BLUE}No qualifying subjob runs recorded.${NC}"
 else
@@ -314,7 +334,9 @@ else
     echo "$SUBJOB_RUNS_JSON"
 fi
 
-if [ "$FAILED_RUNS_JSON" != "[]" ]; then
+if [ "$FAILED_RUNS_JSON" = "[]" ]; then
+    :
+else
     echo -e "${BLUE}Failed subjobs (JSON subset):${NC}"
     echo "$FAILED_RUNS_JSON"
 fi
