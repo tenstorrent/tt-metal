@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package tt.telemetry;
+
+// The telemetry gRPC service
+service TelemetryService {
+  // Simple ping/pong to measure RTT
+  rpc Ping(PingRequest) returns (PingResponse) {}
+}
+
+// Ping request carrying a timestamp
+message PingRequest {
+  int64 timestamp = 1;  // Client timestamp (milliseconds since epoch)
+}
+
+// Pong response echoing the timestamp
+message PingResponse {
+  int64 timestamp = 1;  // Echo of the client's timestamp
+}

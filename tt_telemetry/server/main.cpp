@@ -27,6 +27,7 @@
 #include <telemetry/telemetry_collector.hpp>
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
+#include <server/grpc_telemetry_server.hpp>
 #include <utils/hex.hpp>
 
 /**************************************************************************************************
@@ -277,6 +278,15 @@ int main(int argc, char* argv[]) {
         std::promise<bool> promise;  // create promise that immediately resolves to true
         promise.set_value(true);
         websocket_server = promise.get_future();
+    }
+
+    // gRPC server (only in collector mode, not in aggregator mode)
+    std::shared_ptr<GrpcTelemetryServer> grpc_server;
+    if (!aggregator_mode) {
+        log_info(tt::LogAlways, "Starting gRPC telemetry server on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+        grpc_server = std::make_shared<GrpcTelemetryServer>();
+        grpc_server->start();
+        subscribers.push_back(grpc_server);
     }
 
     // Telemetry collection
