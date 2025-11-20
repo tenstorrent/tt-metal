@@ -38,6 +38,11 @@ Conv3dDeviceOperation::program_factory_t Conv3dDeviceOperation::select_program_f
     return program::Conv3dProgramFactory{};
 }
 
+void Conv3dDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
 void Conv3dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& config = args.config;
@@ -182,6 +187,11 @@ spec_return_value_t Conv3dDeviceOperation::compute_output_specs(
     auto dtype = config.dtype;
 
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+}
+
+tensor_return_value_t Conv3dDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
 tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
