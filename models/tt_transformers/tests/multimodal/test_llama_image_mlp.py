@@ -56,23 +56,6 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, ensure_gc):
         dropout=dropout,
         act_layer=act_layer,
     )
-    from transformers.models.mllama.modeling_mllama import MllamaVisionMLP
-
-    hf_name = ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"]
-    meta_name = ["c_fc.weight", "c_fc.bias", "c_proj.weight", "c_proj.bias"]
-    for hf, meta in zip(hf_name, meta_name):
-        partial_state_dict[hf] = partial_state_dict[meta]
-        partial_state_dict.pop(meta)
-
-    class Config:
-        def __init__(self, hidden_size=dim, intermediate_size=int(mlp_ratio * dim), dropout=dropout, hidden_act="gelu"):
-            self.hidden_size = hidden_size
-            self.intermediate_size = intermediate_size
-            self.hidden_dropout_prob = dropout
-            self.hidden_act = hidden_act
-
-    reference_model = MllamaVisionMLP(Config())
-
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)
