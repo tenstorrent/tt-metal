@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <ttnn/tensor/tensor.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt_stl/span.hpp>
 
 #include <variant>
 #include <cstdint>
