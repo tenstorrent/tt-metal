@@ -212,12 +212,12 @@ tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     tt::stl::hash::hash_t hash = 0;
     hash = tt::stl::hash::hash_objects(
         hash,
-        operation_attributes.update_idxs,
-        operation_attributes.batch_offset,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.share_cache,
-        operation_attributes.mesh_coords,
-        program_factory.index(),  // Include program factory variant index
+        // Exclude update_idxs (runtime-only, only used in override_runtime_arguments)
+        // Exclude batch_offset (runtime-only, always 0 per validation)
+        operation_attributes.compute_kernel_config,  // Affects fp32_dest_acc_en in ComputeConfig
+        operation_attributes.share_cache,            // Affects cache_batch_num_tiles in compile-time args
+        operation_attributes.mesh_coords,            // Affects mesh workload filtering
+        program_factory.index(),                     // Include program factory variant index
         cache_tensor.dtype(),
         cache_tensor.layout(),
         cache_tensor.memory_config(),
