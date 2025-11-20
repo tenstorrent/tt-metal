@@ -73,28 +73,7 @@ void MAIN {
         DeviceZoneScopedN("craqmm_block");
         // UNPACK: Single call with MOP looping over kt_dim (in0_block_w) internally
         // The MOP replay buffer handles unpacking both SrcA and SrcB in a tight hardware loop
-        // for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-        //     craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, 1);
-        //     in0_index++;
-        //     in1_index += in1_block_w;
-        // }
-        if constexpr (in0_block_w > 128) {
-            // Doesn't work yet
-            uint32_t inner_dim_count = in0_block_w / 128;
-            uint32_t inner_dim_last = in0_block_w % 128;
-
-            for (uint32_t inner_dim_chunk_idx = 0; inner_dim_chunk_idx < inner_dim_count; ++inner_dim_chunk_idx) {
-                craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, 128);
-                in0_index += 128;                // stride right by 128 tiles in K
-                in1_index += 128 * in1_block_w;  // stride down by 128 rows, each row is in1_block_w tiles wide
-            }
-            if (inner_dim_last > 0) {
-                craqmm_block_unpack(
-                    in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, inner_dim_last);
-            }
-        } else {
-            craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
-        }
+        craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
         // MATH: Outer loop around ckernel_template::run() to execute math operations
         // Each iteration processes one tile from the K dimension
         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
