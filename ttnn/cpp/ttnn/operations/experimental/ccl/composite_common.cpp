@@ -102,6 +102,8 @@ ttnn::Tensor composite_reduce_scatter(
         input_tensor = ttnn::to_memory_config(input_tensor, native_rs_output_memory_config);
     } else if (!output_memory_config.is_sharded() && input_tensor.memory_config() != output_memory_config) {
         native_rs_output_memory_config = output_memory_config;
+    } else {
+        native_rs_output_memory_config = input_tensor.memory_config();
     }
 
     // split the input tensor so we can insert internal padding
@@ -124,7 +126,7 @@ ttnn::Tensor composite_reduce_scatter(
         split_tensors[i] = ttnn::pad(split_tensors[i], padding, 0, true, split_tensors[i].memory_config());
     }
 
-    // cancat back into a single input tensor, now with internal padding
+    // concat back into a single input tensor, now with internal padding
     ttnn::Tensor padded_native_rs_input_tensor = ttnn::concat(split_tensors, scatter_dim);
 
     // execute native RS
