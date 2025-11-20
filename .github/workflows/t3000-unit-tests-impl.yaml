@@ -151,7 +151,7 @@ jobs:
               "arch": "wormhole_b0",
               "cmd": "run_t3000_grok_tests",
               "timeout": 30,
-              "owner_id": "U03HY7MK4BT" # Mark O'Connor
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
             },
             {
               "name": "t3k unet shallow tests",

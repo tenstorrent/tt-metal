@@ -141,7 +141,7 @@ jobs:
               "arch": "wormhole_b0",
               "cmd": "run_t3000_qwen3_tests",
               "timeout": 60,
-              "owner_id": "U03HY7MK4BT" # Mark O'Connor
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
             },
             {
               "name": "t3k_qwen25_tests",
@@ -149,7 +149,7 @@ jobs:
               "arch": "wormhole_b0",
               "cmd": "run_t3000_qwen25_tests",
               "timeout": 60,
-              "owner_id": "U03HY7MK4BT" # Mark O'Connor
+              "owner_id": "U03HY7MK4BT" # Mark O'\''Connor
             },
             {
               "name": "t3k_qwen25_vl_tests",
