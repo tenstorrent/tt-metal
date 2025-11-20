@@ -40,6 +40,7 @@ struct BinaryNgDeviceOperation {
         std::optional<DataType> dtype;
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        std::optional<CoreRangeSet> sub_core_grids;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         bool is_sfpu = false;
         bool is_quant_op = false;
@@ -101,7 +102,8 @@ struct BinaryNgDeviceOperation {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value);
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -115,7 +117,8 @@ struct BinaryNgDeviceOperation {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-        std::optional<unary::ScalarVariant> scalar_value);
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng
