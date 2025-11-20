@@ -1,4 +1,4 @@
-The C++ version of this example depends on the training dataset to be pre-tokenized; it will not work otherwise!
+The C++ version of this example depends on the training dataset to be pre-tokenized if using byte-pair encoding (BPE); it will not work otherwise! (Character-level tokenizing works natively)
 
 To pre-tokenize the Shakespeare dataset (as an example), use the `dataset_to_tokens.py` script found in tt-train/tools.
 
@@ -16,4 +16,4 @@ Arguments:
 
 `--output_file` : output filename (defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data.csv`)
 
-Once you have a pre-tokenized dataset, ensure that the data_path in your chosen YAML config matches the path to the tokenized dataset!
+Once you have a pre-tokenized dataset, ensure that the data_path in your chosen YAML config matches the path to the tokenized dataset. If using a pre-tokenized dataset, ensure that the vocab size in your chosen model's YAML config matches the vocab size of the tokenizer you used. (This will be updated in a future PR to be more automatic)
