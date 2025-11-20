@@ -89,7 +89,7 @@ firmware and TLS kernels globals have an LMA directly after TLS's LMA.
 #error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined"
 #endif
 
-#define LOAD_AFTER(NEW,PREV) AT(LOADADDR(PREV) + (ADDR(NEW) - ADDR(PREV)))
+#define LOAD_AFTER(PREV) AT(LOADADDR(PREV) + SIZEOF(PREV))
 
 #if ARCH_QUASAR && defined(COMPILE_FOR_DM)
 OUTPUT_FORMAT("elf64-littleriscv", "elf64-littleriscv",
@@ -108,6 +108,7 @@ PHDRS {
   tdata PT_LOAD;
   tls PT_TLS;
   data PT_LOAD;
+  firmdata PT_LOAD;
 }
 
 SECTIONS {
@@ -137,18 +138,16 @@ SECTIONS {
   : IF_KERNEL(AT(__tdata_lma))
   {
     IF_KERNEL(*_object.o(.tdata .tbss))
+    . = ALIGN(4);
     __ldm_tdata_init = .;
-    IF_NOT_TLS(__ldm_data_start = .;)
     *(.tdata.start) /* define __tdata_start as TLS symbol) */
     *(.tdata .tdata.* .gnu.linkonce.td.*)
     . = ALIGN(4);
     *(.tdata.end)
   } :tdata :tls
   .tbss
-  : IF_KERNEL(LOAD_AFTER(.tbss,.tdata))
+  : IF_KERNEL(LOAD_AFTER(.tdata))
   {
-    IF_NOT_TLS(LONG(0);) /* Force PROGBITS to be in effect.  */
-    *(.tbss.start)
     *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
     *(.tbss.end)
@@ -163,14 +162,15 @@ SECTIONS {
   : AT(DATA_START)
   {
     *object.o(.data .bss)
-  } :data
+  } :firmdata
 #endif
-
+   IF_KERNEL(__data_lma = __tdata_lma + SIZEOF(.tdata) - (__ldm_tdata_init - ADDR(.tdata)));
   .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
-  : IF_KERNEL(LOAD_AFTER(.data,IF_TLS(.tdata)IF_NOT_TLS(.tbss)))
+  : IF_KERNEL(LOAD_AFTER(.tdata))
   {
     *_object.o(.data .bss)
-    IF_TLS(__ldm_data_init = .;)
+    . = ALIGN(4);
+    __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
 
@@ -184,16 +184,16 @@ SECTIONS {
     *(.data1)
 
     . = ALIGN(4);
-    IF_NOT_TLS(__ldm_data_end = .;)
-  } IF_TLS(:data)IF_NOT_TLS(:tdata)
+    __ldm_data_end = .;
+  } :data
   .empty.ctors.dtors
-  : LOAD_AFTER(.empty.ctors.dtors,.data)
+  : LOAD_AFTER(.data)
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
   } IF_TLS(:data)IF_NOT_TLS(:tdata)
   .empty.init_array.fini_array
-  : LOAD_AFTER(.empty.init_array.fini_array,.empty.ctors.dtors)
+  : LOAD_AFTER(.empty.ctors.dtors)
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -201,11 +201,10 @@ SECTIONS {
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-  } IF_TLS(:data)IF_NOT_TLS(:tdata)
+  } :data
   .bss
-  : LOAD_AFTER(.bss,.empty.init_array.fini_array)
+  : LOAD_AFTER(.empty.init_array.fini_array)
   {
-    __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
@@ -215,7 +214,7 @@ SECTIONS {
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } IF_TLS(:data)IF_NOT_TLS(:tdata)
+  } :data
 
 #if TYPE_KERNEL
   /DISCARD/ : { *_object.o(*) }
@@ -229,7 +228,7 @@ SECTIONS {
     LONG(ADDR(.text)) LONG(ADDR(.text)) LONG(TEXT_SIZE)
     LONG(ADDR(.tdata)) LONG(__ldm_tdata_init)
        LONG(TLS_SIZE - STACK_MIN_SIZE - (__ldm_tdata_init - TLS_START))
-    IF_TLS(LONG(ADDR(.data)) LONG(__ldm_data_init) LONG(DATA_SIZE - (__ldm_data_init - DATA_START)))
+    LONG(ADDR(.data)) LONG(__ldm_data_init) LONG(DATA_SIZE - (__ldm_data_init - DATA_START))
     IF_NOT_TLS(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
   }
 

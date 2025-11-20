@@ -21,16 +21,15 @@
 // For development of this functionality
 #if __has_include(<format>)
 #include <format>
+using std::format;
 #else
-namespace std {
 template <typename... Args>
 std::string format(std::string m, Args&&...) {
     return m;
 }
-}  // namespace std
 #endif
 #define TT_THROW(A, ...) (log_debug(_, A __VA_OPT__(, ) __VA_ARGS__), abort())
-#define log_debug(_, A, ...) (fprintf(stderr, "%s\n", std::format(A __VA_OPT__(, ) __VA_ARGS__).c_str()), (void)0)
+#define log_debug(_, A, ...) (fprintf(stderr, "%s\n", format(A __VA_OPT__(, ) __VA_ARGS__).c_str()), (void)0)
 #else
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>

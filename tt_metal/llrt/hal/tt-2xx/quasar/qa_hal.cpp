@@ -63,18 +63,20 @@ class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr-32";
+        std::string_view dir = "runtime/hw/lib/quasar";
+        objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
         if (params.is_fw) {
-            objs.push_back("runtime/hw/lib/quasar/tt-qsr64-crt0-tls.o");
-            objs.push_back("runtime/hw/lib/quasar/tt-qsr64-crt0.o");
+            objs.push_back(fmt::format("{}/{}-crt0.o", dir, cpu));
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back("runtime/hw/lib/quasar/tt-qsr64-noc.o");
+            objs.push_back(fmt::format("{}/{}-noc.o", dir, cpu));
         }
-        objs.push_back("runtime/hw/lib/quasar/tt-qsr64-substitutes.o");
+        objs.push_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
         return objs;
     }
 
