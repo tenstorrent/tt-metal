@@ -20,9 +20,10 @@ graph_templates {
       key: "QSFP_DD"
       value {
         # T3K1 to T3K2 connections (8 channels total, 2 per chip pair)
+        # N300 LB: tray 1/4 use port 2, tray 2/3 use port 1
         connections {
-          port_a { path: ["t3k1"] tray_id: 1 port_id: 1 }
-          port_b { path: ["t3k2"] tray_id: 1 port_id: 1 }
+          port_a { path: ["t3k1"] tray_id: 1 port_id: 2 }
+          port_b { path: ["t3k2"] tray_id: 1 port_id: 2 }
         }
         connections {
           port_a { path: ["t3k1"] tray_id: 2 port_id: 1 }
@@ -31,22 +32,6 @@ graph_templates {
         connections {
           port_a { path: ["t3k1"] tray_id: 3 port_id: 1 }
           port_b { path: ["t3k2"] tray_id: 3 port_id: 1 }
-        }
-        connections {
-          port_a { path: ["t3k1"] tray_id: 4 port_id: 1 }
-          port_b { path: ["t3k2"] tray_id: 4 port_id: 1 }
-        }
-        connections {
-          port_a { path: ["t3k1"] tray_id: 1 port_id: 2 }
-          port_b { path: ["t3k2"] tray_id: 1 port_id: 2 }
-        }
-        connections {
-          port_a { path: ["t3k1"] tray_id: 2 port_id: 2 }
-          port_b { path: ["t3k2"] tray_id: 2 port_id: 2 }
-        }
-        connections {
-          port_a { path: ["t3k1"] tray_id: 3 port_id: 2 }
-          port_b { path: ["t3k2"] tray_id: 3 port_id: 2 }
         }
         connections {
           port_a { path: ["t3k1"] tray_id: 4 port_id: 2 }
@@ -69,4 +54,5 @@ root_instance {
     value { host_id: 1 }
   }
 }
+
 
