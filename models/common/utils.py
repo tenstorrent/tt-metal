@@ -5,6 +5,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+import ttnn
+
 
 def top_k_top_p_filtering(
     logits: Tensor,
@@ -45,3 +47,63 @@ def top_k_top_p_filtering(
         indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
         logits[indices_to_remove] = filter_value
     return logits
+
+
+class LogProbsCalculator:
+    """
+    Class to calculate log-probs for a given logits tensor and indices tensor.
+
+    Args:
+        mesh_device: MeshDevice to use for all-gather operations
+        vocab_size: Vocabulary size
+    """
+
+    def __init__(self, vocab_size: int, mesh_device: ttnn.MeshDevice):
+        self.global_max = None
+        self.global_exp_sum = None
+        self.vocab_size = vocab_size
+        self.mesh_device = mesh_device
+
+    def compute_global_stats(
+        self,
+        logits_tensor: ttnn.Tensor,
+    ):
+        """
+        To calculate log-probs, we need to calculate the global max and global sum(exp(logits - global_max)) for each chip.
+        This is done by all-gathering the max and sum(exp(logits - global_max)) for each chip and then taking the max and sum of the gathered tensors.
+        log-prob formula: log-prob(x) = logits(x) - global_max - log(sum(exp(logits - global_max)))
+
+        Args:
+            logits_tensor (ttnn.Tensor): Logits as model output (batch_size, vocab_size)
+        """
+        # Calculate local max
+        local_max_tensor = ttnn.max(logits_tensor, dim=-1)
+        # All-gather local max to get global max
+        gathered_max_tensors = ttnn.all_gather(
+            local_max_tensor, dim=-1, mesh_device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self.global_max = ttnn.max(gathered_max_tensors, dim=-1)
+
+        # Calculate stable local sum-exp using subtract of global-max from each local logit
+        subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max)
+        sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1)
+        # All-gather stable local sum-exp to get global sum-exp
+        gathered_sum_exp_tensors = ttnn.all_gather(
+            sum_exp_tensor, dim=-1, mesh_device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1)
+
+    def calculate_log_probs(self, logits_tensor: ttnn.Tensor):
+        """
+        Calculate log-probs for a given logits tensor and indices tensor.
+        """
+        if self.global_max is None or self.global_exp_sum is None:
+            raise ValueError("Global max or global exp sum is not calculated yet. Call compute_global_stats first.")
+
+        # Calculate log-probs with formula:
+        # logits_tensor - self.global_max - ttnn.log(self.global_exp_sum)
+
+        out = ttnn.subtract(logits_tensor, self.global_max)
+        out = ttnn.subtract(out, ttnn.log(self.global_exp_sum))
+
+        return out
