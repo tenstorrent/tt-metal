@@ -10,7 +10,7 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::repeat_mul {
 
 namespace {
 constexpr uint32_t HIDDEN_SIZE = 5120;
@@ -174,4 +174,4 @@ RepeatAndInterleaveEltwiseMulDeviceOperation::invoke(
     return {attrs, tensor_args};
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::repeat_mul

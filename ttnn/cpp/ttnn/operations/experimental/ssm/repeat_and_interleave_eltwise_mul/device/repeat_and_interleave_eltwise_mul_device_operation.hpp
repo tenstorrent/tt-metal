@@ -15,13 +15,13 @@
 
 #include "repeat_and_interleave_eltwise_mul_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::repeat_mul {
 
 struct RepeatAndInterleaveEltwiseMulDeviceOperation {
-    using operation_attributes_t = ssm::operation_attributes_t;
-    using tensor_args_t = ssm::tensor_args_t;
-    using spec_return_value_t = ssm::spec_return_value_t;
-    using tensor_return_value_t = ssm::tensor_return_value_t;
+    using operation_attributes_t = repeat_mul::operation_attributes_t;
+    using tensor_args_t = repeat_mul::tensor_args_t;
+    using spec_return_value_t = repeat_mul::spec_return_value_t;
+    using tensor_return_value_t = repeat_mul::tensor_return_value_t;
     using program_factory_t = std::variant<program::RepeatAndInterleaveEltwiseMulProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -45,10 +45,10 @@ struct RepeatAndInterleaveEltwiseMulDeviceOperation {
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::repeat_mul
 
 namespace ttnn::prim {
 constexpr auto repeat_and_interleave_eltwise_mul = ttnn::register_operation<
     "ttnn::prim::repeat_and_interleave_eltwise_mul",
-    ttnn::operations::experimental::ssm::RepeatAndInterleaveEltwiseMulDeviceOperation>();
+    ttnn::operations::experimental::ssm::repeat_mul::RepeatAndInterleaveEltwiseMulDeviceOperation>();
 }  // namespace ttnn::prim
