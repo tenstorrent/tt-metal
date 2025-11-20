@@ -129,14 +129,6 @@ void bind_normalization_layernorm_operation(py::module& module) {
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-
-
-        Example:
-            .. code-block:: python
-
-                input_tensor = ttnn.rand([32, 64], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                output_tensor = ttnn.layer_norm(input_tensor)
-
         )doc",
 
         ttnn::pybind_arguments_t{
