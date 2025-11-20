@@ -157,8 +157,7 @@ consteval void assert_operation_in_correct_namespace() {
             static_assert(
                 not tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace),
                 "Composite operations must not be in the `ttnn::prim` namespace. You may have forgotten to implement "
-                "one of: validate_on_program_cache_hit, validate_on_program_cache_miss, create_output_tensors, or "
-                "select_program_factory.");
+                "one of: validate_on_program_cache_miss, compute_output_specs, or select_program_factory.");
         }
     }
 }
