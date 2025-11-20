@@ -3236,6 +3236,16 @@ struct noc_traits_t<tensor_accessor::Page> {
 
 /**
  * @brief Provides a safe pointer to a structure of type T in the core's local memory
+ *
+ * Pointers are tagged with tt_l1_ptr to give the compiler latency information.
+ *
+ * Usage:
+ * - For non-volatile access with compiler optimizations: CoreLocalMem<uint32_t>
+ * - For volatile access (prevents optimization): CoreLocalMem<volatile uint32_t>
+ *
+ * Note: When using non-volatile types with NOC operations, you must ensure proper
+ * memory ordering with compiler barriers (e.g., asm volatile("" ::: "memory"))
+ * or L1 cache invalidation as needed.
  */
 template <typename T, typename AddressType = uintptr_t>
 class CoreLocalMem {
@@ -3256,9 +3266,9 @@ public:
 
     /** @brief Construct a CoreLocalMem instance from a raw pointer
      *
-     * @param ptr The volatile pointer to the structure in the core's local memory
+     * @param ptr The pointer to the structure in the core's local memory
      */
-    CoreLocalMem(volatile T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+    CoreLocalMem(T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
 
     /** @brief Copy constructor
      *
@@ -3277,7 +3287,7 @@ public:
      *
      * @return The raw pointer to the structure in the core's local memory
      */
-    volatile T* get_unsafe_ptr() const { return reinterpret_cast<volatile T*>(address_); }
+    tt_l1_ptr T* get_unsafe_ptr() const { return reinterpret_cast<tt_l1_ptr T*>(address_); }
 
     /** @brief Get the memory address
      *
@@ -3288,29 +3298,29 @@ public:
     /** @brief Get the element at the given index
      *
      * @param index The index of the element to get
-     * @return The element at the given index
+     * @return Reference to the element at the given index
      */
-    volatile T& operator[](uint32_t index) const {
+    T& operator[](uint32_t index) const {
         // TODO: To be moved to a Watcher sanitize check
         ASSERT((address_ + (index * sizeof(T)) < MEM_L1_SIZE));
         return get_unsafe_ptr()[index];
     }
 
-    /** @brief Get a reference to the value
+    /** @brief Dereference operator to get reference to the value
      *
-     * @return The value at the address
+     * @return Reference to the value at the address
      */
-    volatile T& operator*() const {
+    T& operator*() const {
         // TODO: To be moved to a Watcher sanitize check
         ASSERT(address_ < MEM_L1_SIZE);
         return get_unsafe_ptr()[0];
     }
 
-    /** @brief Dereference operator
+    /** @brief Arrow operator for struct/class member access
      *
      * @return Pointer to the structure in the core's local memory
      */
-    volatile T* operator->() const {
+    tt_l1_ptr T* operator->() const {
         // TODO: To be moved to a Watcher sanitize check
         ASSERT(address_ < MEM_L1_SIZE);
         return get_unsafe_ptr();
