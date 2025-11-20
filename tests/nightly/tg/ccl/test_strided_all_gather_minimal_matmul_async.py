@@ -8,7 +8,7 @@ import ttnn
 from tests.nightly.t3000.ccl.test_strided_all_gather_minimal_matmul_async import (
     run_strided_all_gather_minimal_matmul_impl,
 )
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link
