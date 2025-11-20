@@ -1700,8 +1700,21 @@ class VADCustomNuScenesDataset(CustomNuScenesDataset):
         gt_anns = mmengine.load(self.map_ann_file)
         map_annotations = gt_anns["GTs"]
 
-        # Filter map annotations to match the subset if we're evaluating on fewer samples
-        if len(map_results) < len(map_annotations):
+        # Filter map annotations to match the subset of tokens we actually evaluated
+        if isinstance(map_results, dict):
+            valid_tokens = set(map_results.keys())
+        elif isinstance(map_results, list):
+            valid_tokens = {
+                item.get("sample_token") for item in map_results if isinstance(item, dict) and item.get("sample_token")
+            }
+        else:
+            valid_tokens = set()
+
+        if valid_tokens:
+            before = len(map_annotations)
+            map_annotations = [ann for ann in map_annotations if ann.get("sample_token") in valid_tokens]
+            print(f"Filtered map annotations from {before} to {len(map_annotations)} samples using predicted tokens")
+        elif len(map_results) < len(map_annotations):
             print(f"Filtering map annotations from {len(map_annotations)} to {len(map_results)} samples")
             map_annotations = map_annotations[: len(map_results)]
 
