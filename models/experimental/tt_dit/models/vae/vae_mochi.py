@@ -205,7 +205,7 @@ class ResBlock:
             if torch_ref.in_channels == 768
             else mesh_device.core_grid.y
         )
-        self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
+        self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=8)  # Fix x grid size to 8 due to GroupNorm restrictions.
 
         self.norm1 = GroupNorm(
             num_groups=32,

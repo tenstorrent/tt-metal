@@ -373,7 +373,7 @@ class GroupNorm(Module):
         self.num_groups = (num_groups or torch_ref.num_groups) // self.num_devices
         self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
-            self.mesh_device.core_grid, self.num_channels, self.num_groups
+            core_grid, self.num_channels, self.num_groups
         )
 
         # Assert group norm parameters

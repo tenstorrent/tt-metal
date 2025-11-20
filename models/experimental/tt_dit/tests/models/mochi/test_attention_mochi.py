@@ -38,6 +38,8 @@ def stack_cos_sin(cos, sin):
         [(2, 4), 1, 0, 1],
         [(4, 8), 0, 1, 4],
         [(4, 8), 1, 0, 4],
+        [(4, 8), 0, 1, 2],
+        [(4, 8), 1, 0, 2],
     ],
     ids=[
         "1x1sp0tp1",
@@ -49,8 +51,10 @@ def stack_cos_sin(cos, sin):
         "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp0tp1",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp0tp1",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
