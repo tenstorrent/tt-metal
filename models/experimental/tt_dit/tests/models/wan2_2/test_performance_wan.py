@@ -13,6 +13,7 @@ from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ....utils.test import line_params, ring_params
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -241,24 +242,32 @@ def test_pipeline_performance(
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "text_encoding_time": 14.8,
-            "denoising_time": 909,
+            "denoising_time": 909.0,
             "vae_decoding_time": 64.6,
-            "total_time": 990,
+            "total_time": 990.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "text_encoding_time": 15.0,
-            "denoising_time": 163,
+            "denoising_time": 163.0,
             "vae_decoding_time": 18.2,
-            "total_time": 192,
+            "total_time": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        expected_metrics = {
-            "text_encoding_time": 15.0,
-            "denoising_time": 502,
-            "vae_decoding_time": 39.6,
-            "total_time": 556,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "text_encoding_time": 15.0,
+                "denoising_time": 290.0,
+                "vae_decoding_time": 36.0,
+                "total_time": 341.0,
+            }
+        else:
+            expected_metrics = {
+                "text_encoding_time": 15.0,
+                "denoising_time": 440.0,
+                "vae_decoding_time": 42.0,
+                "total_time": 497.0,
+            }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
