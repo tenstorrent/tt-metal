@@ -3386,7 +3386,9 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
     struct src_args_type {
         AddressType offset_bytes = 0;
     };
-    struct dst_args_type {};
+    struct dst_args_type {
+        AddressType offset_bytes = 0;
+    };
     struct dst_args_mcast_type {};
 
     template <Noc::AddressType address_type>
@@ -3396,7 +3398,8 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(false, "CoreLocalMem cannot be used as NoC destination");
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 dest");
+        return dst.get_address() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(

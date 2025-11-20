@@ -60,14 +60,10 @@ void kernel_main() {
     while (struct_mem->bar != pattern + 1) {
     }
 
-    // Try writing and reading with operator[]
+    // Try writing with operator[]
     experimental::CoreLocalMem<std::uint32_t> mem(src_addr);
     for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
         mem[i] = pattern + i;
-        if (mem[i] != pattern + i) {
-            while (true) {
-            }
-        }
     }
 
     // Try sending with NoC API
@@ -85,6 +81,32 @@ void kernel_main() {
         },
         0);
     noc.async_write_barrier();
+
+    // Try clear data here before reading from neighbor core
+    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
+        mem[i] = 0;
+    }
+
+    // Try reading from neighbor core
+    noc.async_read(
+        unicast_endpoint,
+        mem,
+        num_bytes,
+        {
+            .noc_x = neighbor_worker_core_x,
+            .noc_y = neighbor_worker_core_y,
+            .addr = src_addr,
+        },
+        {});
+    noc.async_read_barrier();
+
+    // Try reading with operator[]
+    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
+        if (mem[i] != pattern + i) {
+            while (true) {
+            }
+        }
+    }
 
     // Pointer arithmetic (hangs if incorrect)
     while (mem[0] != pattern) {
