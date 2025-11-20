@@ -377,18 +377,35 @@ void EmbeddingProgramFactory::override_runtime_arguments(
 
 Hash is based on operation attributes and input arguments and helps reuse already compiled programs.
 
-**What to include in hash:**
+Know, the default legacy implementation hashes both operation attributes and input tensors.
+Tensor hash includes:
+ - Storage variant index (0 or 1)
+- Logical shape dimensions (vector of uint32_t)
+- Data type (DataType enum)
+- Page config variant index (0 or 1)
+- Tile configuration (from page config)
+- Memory layout (TensorMemoryLayout enum)
+- Buffer type (BufferType enum)
+- Shard spec (optional ShardSpec)
+- ND shard spec (optional NdShardSpec)
+- Created with ND shard spec flag (bool)
+- Alignment dimensions (vector of uint32_t)
+
+**If the legacy operation does not implement `compute_program_hash`**,
+Simply hash operation_attributes and tensors_args
+
+**What must be included in hash:**
+Anything that affects the compiled kernel binary:
 - Setup of Circular Buffers
 - Kernels and cores used
 - Compile-time arguments/defines
 - Operation attributes that affect program structure
 
 **What to exclude from hash:**
+Anything that has no affect on compiled binaries (runtime arguments)
 - Buffer addresses
 - Offsets
 - Number of tiles to process (runtime arguments)
-
-**If the legacy operation does not implement `compute_program_hash`**, the default behavior is to hash both attributes and input tensors. The new operation works the same, so no need to implement this function if it wasn't implemented before.
 
 **Example migration:**
 
