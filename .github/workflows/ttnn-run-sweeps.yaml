@@ -660,7 +660,7 @@ jobs:
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
-            should_run: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') }}
+            should_run: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || (github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' )) }}
           # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" (but NOT Model Traced) - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: N150
@@ -802,17 +802,32 @@ jobs:
         run: |
           # Create final vectors directory
           mkdir -p /tmp/vectors
-          # Move all JSON files from subdirectories to /tmp/vectors (if directory exists and has files)
-          if [ -d "/tmp/vectors-download" ]; then
-            find /tmp/vectors-download -name "*.json" -type f -exec mv {} /tmp/vectors/ \; 2>/dev/null || true
-            # Check if any files were moved
-            if [ -z "$(ls -A /tmp/vectors 2>/dev/null)" ]; then
-              echo "⚠️  No vector files found in artifacts"
-            else
-              echo "✅ Merged $(ls -1 /tmp/vectors/*.json 2>/dev/null | wc -l) vector file(s)"
-            fi
+
+          # Check if artifacts directory exists
+          if [ ! -d "/tmp/vectors-download" ]; then
+            echo "⚠️  No artifacts directory found - checking if any matrix entries ran..."
+            echo "This could mean:"
+            echo "  1. All matrix entries were skipped (should_run=false)"
+            echo "  2. Artifact download failed"
+            echo "  3. No vectors were generated"
+            exit 1
+          fi
+
+          # Move all JSON files from subdirectories to /tmp/vectors
+          find /tmp/vectors-download -name "*.json" -type f -exec mv {} /tmp/vectors/ \; 2>/dev/null || true
+
+          # Check if any files were moved
+          if [ -z "$(ls -A /tmp/vectors 2>/dev/null)" ]; then
+            echo "❌ ERROR: No vector files found in artifacts directory"
+            echo "Artifacts directory structure:"
+            find /tmp/vectors-download -type f -o -type d | head -20 || true
+            echo ""
+            echo "This indicates that the vector generation step produced no output."
+            echo "Please check the 'ttnn-generate-sweeps' job logs for errors."
+            exit 1
           else
-            echo "⚠️  No artifacts directory found - some matrix entries may have been skipped"
+            file_count=$(ls -1 /tmp/vectors/*.json 2>/dev/null | wc -l)
+            echo "✅ Merged $file_count vector file(s)"
           fi
       - id: set-matrix
         shell: bash
