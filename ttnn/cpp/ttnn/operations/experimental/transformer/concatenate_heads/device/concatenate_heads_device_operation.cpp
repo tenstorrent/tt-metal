@@ -84,8 +84,6 @@ tt::stl::hash::hash_t ConcatenateHeadsDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
     auto program_factory = select_program_factory(args, tensor_args);
-    // Note: compute_with_storage_grid_size is excluded from hash as it's validation-only
-    // and doesn't affect program structure. Only output_mem_config affects the program.
     operation::Hash hash = operation::hash_operation<ConcatenateHeadsDeviceOperation>(
         args.output_mem_config,
         program_factory.index(),
