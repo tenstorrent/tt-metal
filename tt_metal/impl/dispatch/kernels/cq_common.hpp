@@ -312,7 +312,6 @@ public:
             constexpr uint32_t buffer_size = buffer_end - buffer_base;
             if constexpr (buffer_size != 0) {
                 if (n != 0) {
-                    //   uint32_t aligned_ptr = writer_ptr & ~(buffer_page_size - 1);
                     uint64_t bytes = n * buffer_page_size;
                     uint32_t expected = watch_released_ptr_ + bytes;
                     if (expected > buffer_end) {
