@@ -11,14 +11,25 @@
 #include <string>
 #include <chrono>
 #include <fstream>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
-    int ret;
     static std::mutex io_mutex;
+
+    // Emit at ERROR log level so CI log always captures the full command, even when normal verbose output is off.
+    log_error(tt::LogAlways, "JIT_BUILD_CMD: {}", cmd);
+
+    // Optional: when TT_METAL_FAIL_AFTER_CMD_DUMP is set, abort immediately so CI keeps the log artifact.
+    if (std::getenv("TT_METAL_FAIL_AFTER_CMD_DUMP") != nullptr) {
+        log_error(tt::LogAlways, "Aborting after command dump because TT_METAL_FAIL_AFTER_CMD_DUMP is set");
+        return false;  // caller treats this as command failure
+    }
+
+    int ret = 0;  // Initialize to success
     if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
@@ -35,7 +46,15 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
         std::string redirected_cmd = cmd + " >> " + log_file + " 2>&1";
         ret = system(redirected_cmd.c_str());
     }
-
+    // Always append the raw command into a side-car file next to the normal log
+    if (!log_file.empty()) {
+        try {
+            std::ofstream cmd_log_stream(log_file + ".cmd", std::ios::app);
+            cmd_log_stream << cmd << std::endl;
+        } catch (...) {
+            // Best-effort; do not fail build on logging error
+        }
+    }
     return (ret == 0);
 }
 

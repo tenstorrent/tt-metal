@@ -86,6 +86,8 @@ jobs:
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 45
+        env:
+          TT_METAL_FAIL_AFTER_CMD_DUMP: 1
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports
