@@ -33,6 +33,8 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         # Full tests
         ([1, 1, 4096, 2048], 3, 1, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
         ([1, 1, 4096, 2048], 3, 4, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
+        # Wan tests
+        ([1, 1, 75776, 5120], 3, 4, 2, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 6, 256, 256),
     ],
     ids=[
         "1tile1chunk1worker1row1link",
@@ -50,6 +52,8 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         # Full tests
         "fulltest",
         "fulltest4link",
+        # Wan tests
+        "wan1",
     ],
 )
 @pytest.mark.parametrize(
