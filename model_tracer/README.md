@@ -121,9 +121,8 @@ python3 tests/sweep_framework/sweeps_parameter_generator.py \
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
   --module-name model_traced.pad_model_traced \
-  --suite-name model_traced \
-  --vector-source file \
-  --file-path tests/sweep_framework/vectors_export/model_traced.pad_model_traced.json \
+  --suite model_traced \
+  --vector-source vectors_export \
   --result-dest results_export
 ```
 
