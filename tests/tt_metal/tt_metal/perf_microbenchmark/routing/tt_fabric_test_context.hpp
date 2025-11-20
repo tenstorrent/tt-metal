@@ -1368,7 +1368,7 @@ private:
         // Write data rows
         for (const auto& result : bandwidth_results_summary_) {
             // Write upload columns if present
-            if (include_upload_columns && has_upload_data) {
+            if (include_upload_columns) {
                 csv_stream << result.file_name.value() << ","
                           << result.machine_type.value() << ","
                           << result.test_ts.value() << ",";
