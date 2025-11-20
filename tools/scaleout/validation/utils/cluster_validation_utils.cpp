@@ -20,7 +20,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/control_plane.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -1246,6 +1245,8 @@ void reset_cross_node_ethernet_links(
         }
     }
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    // Barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding.
+    // This is critical because cross-node resets involve coordination between paired hosts.
     distributed_context.barrier();
 }
 
@@ -1254,6 +1255,9 @@ void reset_ethernet_links(
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
     reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
+    // This prevents race conditions where one host might start cross-node reset while another is still
+    // resetting local links.
     distributed_context.barrier();
 
     // Reset All Cross-Node Ethernet Links, specified in the topology.
@@ -1365,29 +1369,25 @@ tt::tt_metal::AsicTopology build_reset_topology(
         reset_host, tt::tt_metal::TrayID(reset_tray_id), tt::tt_metal::ASICLocation(reset_asic_location));
     uint8_t src_channel = static_cast<uint8_t>(reset_channel);
 
-    log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(*src_asic_id));
-
     auto [dst_asic_id, dst_channel] =
         physical_system_descriptor.get_connected_asic_and_channel(src_asic_id, src_channel);
-
-    log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(*dst_asic_id));
-    log_output_rank0("  Discovered Destination Channel: " + std::to_string(dst_channel));
 
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
         asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
         "Could not find ASIC descriptor for destination ASIC ID: {}",
         dst_asic_id);
-    std::string dst_host = asic_descriptors.at(dst_asic_id).host_name;
+
+    const auto& dst_asic_descriptor = asic_descriptors.at(dst_asic_id);
+    std::string dst_host = dst_asic_descriptor.host_name;
     bool is_local = (reset_host == dst_host);
 
-    log_output_rank0("  Destination Host: " + dst_host);
+    log_output_rank0("  Discovered Destination:");
+    log_output_rank0("    Host: " + dst_host);
+    log_output_rank0("    Tray ID: " + std::to_string(*dst_asic_descriptor.tray_id));
+    log_output_rank0("    ASIC Location: " + std::to_string(*dst_asic_descriptor.asic_location));
+    log_output_rank0("    Channel: " + std::to_string(dst_channel));
     log_output_rank0("  Connection Type: " + std::string(is_local ? "Local" : "Remote"));
-
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    if (!is_local && *distributed_context.size() < 2) {
-        TT_THROW("Cross-node link reset requires running with both hosts.");
-    }
 
     tt::tt_metal::AsicTopology asic_topology;
 

@@ -37,8 +37,8 @@ const std::unordered_map<std::string_view, std::string_view> VALIDATION_ARGS = {
     {"--packet-size-bytes", "Packet size (bytes) sent across each link"},
     {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"}};
 
-// restart_cable subcommand arguments and their descriptions
-const std::unordered_map<std::string_view, std::string_view> RESTART_CABLE_ARGS = {
+// link_reset subcommand arguments and their descriptions
+const std::unordered_map<std::string_view, std::string_view> LINK_RETRAIN_ARGS = {
     {"--host", "Host name of the source ASIC"},
     {"--tray-id", "Tray ID of the source ASIC"},
     {"--asic-location", "ASIC location of the source ASIC"},
@@ -49,7 +49,7 @@ using tt::tt_metal::PhysicalSystemDescriptor;
 
 enum class CommandMode {
     VALIDATE,
-    RESTART_CABLE,
+    LINK_RETRAIN,
 };
 
 // Captures current list of supported input args
@@ -71,7 +71,7 @@ struct InputArgs {
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
 
-    // restart_cable subcommand args
+    // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
     std::optional<uint32_t> reset_tray_id = std::nullopt;
     std::optional<uint32_t> reset_asic_location = std::nullopt;
@@ -91,8 +91,8 @@ std::filesystem::path generate_output_dir() {
     return output_dir_path;
 }
 
-void parse_restart_cable_args(const std::vector<std::string>& args_vec, InputArgs& input_args) {
-    input_args.mode = CommandMode::RESTART_CABLE;
+void parse_link_reset_args(const std::vector<std::string>& args_vec, InputArgs& input_args) {
+    input_args.mode = CommandMode::LINK_RETRAIN;
 
     // Check for help flag first
     if (test_args::has_command_option(args_vec, "--help")) {
@@ -100,17 +100,17 @@ void parse_restart_cable_args(const std::vector<std::string>& args_vec, InputArg
         return;
     }
 
-    // Validate that only restart_cable arguments are provided
+    // Validate that only link_reset arguments are provided
     for (size_t i = 2; i < args_vec.size(); ++i) {
         const auto& arg = args_vec[i];
         if (arg.rfind("--", 0) == 0) {  // Assuming all args start with "--"
             TT_FATAL(
-                RESTART_CABLE_ARGS.count(arg) > 0,
-                "Invalid argument '{}' for restart_cable subcommand. Allowed arguments: {}",
+                LINK_RETRAIN_ARGS.count(arg) > 0,
+                "Invalid argument '{}' for link_reset subcommand. Allowed arguments: {}",
                 arg,
                 [&]() {
                     std::string args_list;
-                    for (const auto& [name, _] : RESTART_CABLE_ARGS) {
+                    for (const auto& [name, _] : LINK_RETRAIN_ARGS) {
                         if (!args_list.empty()) {
                             args_list += ", ";
                         }
@@ -130,8 +130,7 @@ void parse_restart_cable_args(const std::vector<std::string>& args_vec, InputArg
         input_args.reset_asic_location = std::stoi(test_args::get_command_option(args_vec, "--asic-location"));
         input_args.reset_channel = std::stoi(test_args::get_command_option(args_vec, "--channel"));
     } else {
-        TT_FATAL(
-            false, "All restart_cable parameters must be specified: --host, --tray-id, --asic-location, --channel");
+        TT_FATAL(false, "All link_reset parameters must be specified: --host, --tray-id, --asic-location, --channel");
     }
 }
 
@@ -200,8 +199,8 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     }
 
     // Check for subcommand and dispatch to appropriate parser
-    if (args_vec.size() > 1 && args_vec[1] == "restart_cable") {
-        parse_restart_cable_args(args_vec, input_args);
+    if (args_vec.size() > 1 && args_vec[1] == "link_reset") {
+        parse_link_reset_args(args_vec, input_args);
     } else {
         parse_validation_args(args_vec, input_args);
     }
@@ -305,8 +304,8 @@ void print_usage_info() {
               << std::endl;
 
     std::cout << "Usage:" << std::endl;
-    std::cout << "  run_cluster_validation [OPTIONS]                   # Run validation (default)" << std::endl;
-    std::cout << "  run_cluster_validation restart_cable [OPTIONS]     # Restart a specific cable/link" << std::endl;
+    std::cout << "  run_cluster_validation [OPTIONS]                # Run validation (default)" << std::endl;
+    std::cout << "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link" << std::endl;
     std::cout << std::endl;
 
     std::cout << "Validation Mode Options:" << std::endl;
@@ -315,8 +314,8 @@ void print_usage_info() {
     }
     std::cout << std::endl;
 
-    std::cout << "restart_cable Subcommand Options:" << std::endl;
-    for (const auto& [arg, description] : RESTART_CABLE_ARGS) {
+    std::cout << "link_reset Subcommand Options:" << std::endl;
+    for (const auto& [arg, description] : LINK_RETRAIN_ARGS) {
         if (arg != "--help") {  // help is a not subcommand specific argument currently
             std::cout << "  " << arg << ": " << description << std::endl;
         }
@@ -364,8 +363,8 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    // Handle restart_cable subcommand
-    if (input_args.mode == CommandMode::RESTART_CABLE) {
+    // Handle link_reset subcommand
+    if (input_args.mode == CommandMode::LINK_RETRAIN) {
         perform_link_reset(
             input_args.reset_host.value(),
             input_args.reset_tray_id.value(),
@@ -389,7 +388,7 @@ int main(int argc, char* argv[]) {
         links_reset = true;
         num_retrains++;
 
-        physical_system_descriptor.run_discovery(true);
+        physical_system_descriptor.run_discovery();
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
