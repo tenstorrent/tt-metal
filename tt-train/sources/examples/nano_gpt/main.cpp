@@ -90,7 +90,6 @@ using DataLoader = ttml::datasets::DataLoader<
 
 struct TrainingConfig {
     std::string project_name;
-    std::string model_type;  // one of "gpt2", "llama"
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
@@ -117,7 +116,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
-    config.model_type = training_config["model_type"].as<std::string>();
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
     config.batch_size = training_config["batch_size"].as<uint32_t>();
@@ -226,16 +224,17 @@ struct ModelConfig {
 
 ModelConfig parse_model_config(const YAML::Node &yaml_config) {
     ModelConfig config;
-    config.model_type = yaml_config["model_type"].as<std::string>();
-    config.model_path = yaml_config["model_path"].as<std::string>("");
+    auto model_config = yaml_config["transformer_config"];
+    config.model_type = model_config["model_type"].as<std::string>();
+    config.model_path = model_config["model_path"].as<std::string>("");
 
     if(config.model_type == "gpt2")
     {
-        config.transformer_config = ttml::models::gpt2::read_config(yaml_config);
+        config.transformer_config = ttml::models::gpt2::read_config(model_config);
     }
     else if(config.model_type == "llama")
     {
-        config.transformer_config = ttml::models::llama::read_config(yaml_config);
+        config.transformer_config = ttml::models::llama::read_config(model_config);
     }
     else
     {
@@ -305,7 +304,7 @@ int main(int argc, char **argv) {
 
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -324,9 +323,10 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
-    TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
-    DeviceConfig device_config = parse_device_config(YAML::LoadFile(training_config_name));
+    auto yaml_config = YAML::LoadFile(training_config_name);
 
+    TrainingConfig training_config = parse_config(yaml_config);
+    DeviceConfig device_config = parse_device_config(yaml_config);
     ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
     MultihostConfig multihost_config;
