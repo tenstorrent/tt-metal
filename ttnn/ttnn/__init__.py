@@ -95,6 +95,7 @@ from ttnn._ttnn.multi_device import (
     PlacementShard,
     MeshMapperConfig,
     MeshComposerConfig,
+    TensorTopology,
     get_device_tensors,
     from_host_shards,
     combine_device_tensors,
