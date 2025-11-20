@@ -308,6 +308,9 @@ PYBIND11_MODULE(_ttnn, module) {
         "Increment tensor id and return the previously held id");
 
     module.def(
+        "next_tensor_id", &ttnn::tensor::Tensor::next_id, "Atomically fetch and increment the tensor ID counter");
+
+    module.def(
         "get_device_operation_id",
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().get_device_operation_id(); },
         "Get device operation id");

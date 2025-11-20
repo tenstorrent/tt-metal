@@ -84,8 +84,7 @@ Tensor::Tensor(
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
     Tensor(Storage(HostStorage(std::move(buffer))), std::move(tensor_spec), TensorTopology{}) {}
 
-Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    id_(tensor_id_counter.fetch_add(1, std::memory_order_relaxed)) {
+Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) : id_(next_id()) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
 }
 
@@ -148,8 +147,10 @@ void Tensor::deallocate_impl(bool force) {
 }
 
 std::optional<std::uint64_t> Tensor::get_id() const {
-    return tensor_id != INVALID_TENSOR_ID ? std::make_optional(tensor_id) : std::nullopt;
+    return id_ != INVALID_TENSOR_ID ? std::make_optional(id_) : std::nullopt;
 }
+
+std::uint64_t Tensor::next_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 template <typename T>
 Tensor Tensor::from_span(
