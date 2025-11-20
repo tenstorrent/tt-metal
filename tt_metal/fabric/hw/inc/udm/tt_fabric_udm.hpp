@@ -257,8 +257,10 @@ FORCE_INLINE void fabric_fast_write(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+
+    noc_async_writes_flushed();
 }
 
 /**
@@ -352,12 +354,14 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     }
 
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     if (!posted) {
         fabric_nonposted_writes_acked += num_dests;
     }
+
+    noc_async_writes_flushed();
 }
 
 /**
@@ -392,12 +396,14 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(dest_addr, incr_val, flush));
 
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     if (!posted) {
         fabric_nonposted_atomics_acked += 1;
     }
+
+    noc_async_writes_flushed();
 }
 
 /**
@@ -440,9 +446,9 @@ FORCE_INLINE void fabric_fast_ack(
     fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
 
     connection.wait_for_empty_write_slot();
+    // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
+    // and to reg (credit) is not guaranteed.
     connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
-
-    noc_async_writes_flushed();
 }
 
 /**
@@ -498,13 +504,13 @@ FORCE_INLINE void fabric_fast_read_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
-    // TODO: remove the 16B once we properly support reads in fabric router
-    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 16);
+    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 0);
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     fabric_reads_num_acked++;
+    noc_async_writes_flushed();
 }
 
 /**
@@ -535,6 +541,8 @@ FORCE_INLINE void fabric_fast_read_ack(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
+    // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
+    // and to reg (credit) is not guaranteed.
     connection.send_payload_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
@@ -579,8 +587,6 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
         size_bytes -= max_fabric_payload_size;
     }
     fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
-
-    noc_async_writes_flushed();
 }
 
 }  // namespace tt::tt_fabric::udm
