@@ -107,7 +107,7 @@ struct operation_attributes_t {
 struct tensor_args_t {
     Tensor input_tensor;
     Tensor weight_tensor;
-    const std::optional<const Tensor>& bias_tensor;
+    std::optional<const Tensor> bias_tensor;
 };
 
 using tensor_return_value_t = Tensor;
