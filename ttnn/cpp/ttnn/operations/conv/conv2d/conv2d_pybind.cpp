@@ -257,51 +257,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
-    auto py_conv_slice_attr = py::class_<Conv2dSliceAttr>(
-        module,
-        "Conv2dSliceAttr",
-        R"doc(
-        Conv2dSliceAttr is a class that implements the OpSliceAttr interface for Conv2D operations.
-        It is used to determine how the input tensor should be sliced based on the output slice.
-        )doc");
-
-    py_conv_slice_attr.def(
-        py::init<
-            uint32_t,
-            Conv2dSliceAttr::IOShape,
-            uint32_t,
-            uint32_t,
-            std::array<uint32_t, 2>,
-            std::array<uint32_t, 2>,
-            std::array<uint32_t, 4>,
-            std::array<uint32_t, 2>,
-            uint32_t,
-            Layout,
-            DataType,
-            DataType,
-            ttnn::Tensor&,
-            std::optional<std::reference_wrapper<ttnn::Tensor>>,
-            Conv2dConfig&,
-            DeviceComputeKernelConfig&,
-            MeshDevice*>(),
-        py::arg("batch_size"),
-        py::arg("input_shape"),
-        py::arg("input_channels"),
-        py::arg("output_channels"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding_n4"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("input_layout"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype"),
-        py::arg("weight_tensor"),
-        py::arg("bias_tensor") = std::nullopt,
-        py::arg("conv_config") = Conv2dConfig(),
-        py::arg("compute_config") = std::nullopt,
-        py::arg("device"));
-    py_conv_slice_attr.def("__repr__", [](const Conv2dSliceConfig& config) { return fmt::format("{}", config); });
 
     auto py_conv_slice_config = py::class_<Conv2dSliceConfig>(
         module,
@@ -560,6 +515,53 @@ void py_bind_conv2d(py::module& module) {
     )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
+
+    auto py_conv_slice_attr = py::class_<Conv2dSliceAttr, op_slicing::OpSliceAttr>(
+        module,
+        "Conv2dSliceAttr",
+        R"doc(
+        Conv2dSliceAttr is a class that implements the OpSliceAttr interface for Conv2D operations.
+        It is used to determine how the input tensor should be sliced based on the output slice.
+        )doc");
+
+    py_conv_slice_attr.def(
+        py::init<
+            uint32_t,
+            std::array<uint32_t, 2>,
+            uint32_t,
+            uint32_t,
+            std::array<uint32_t, 2>,
+            std::array<uint32_t, 2>,
+            std::array<uint32_t, 4>,
+            std::array<uint32_t, 2>,
+            uint32_t,
+            Layout,
+            DataType,
+            DataType,
+            ttnn::Tensor&,
+            std::optional<std::reference_wrapper<ttnn::Tensor>>,
+            Conv2dConfig&,
+            DeviceComputeKernelConfig&,
+            MeshDevice*>(),
+        py::kw_only(),
+        py::arg("batch_size") = 0,
+        py::arg("input_shape") = std::array<uint32_t, 2>({0, 0}),
+        py::arg("input_channels") = 0,
+        py::arg("output_channels") = 0,
+        py::arg("kernel_size") = std::array<uint32_t, 2>{0, 0},
+        py::arg("stride") = std::array<uint32_t, 2>{1, 1},
+        py::arg("padding_n4") = std::array<uint32_t, 4>{0, 0, 0, 0},
+        py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+        py::arg("groups") = 1,
+        py::arg("input_layout") = Layout::TILE,
+        py::arg("input_dtype") = DataType::BFLOAT16,
+        py::arg("output_dtype") = DataType::BFLOAT16,
+        py::arg("weight_tensor"),
+        py::arg("bias_tensor") = std::nullopt,
+        py::arg("conv_config") = Conv2dConfig(),
+        py::arg("compute_config") = std::nullopt,
+        py::arg("device") = nullptr);
+    py_conv_slice_attr.def("__repr__", [](const Conv2dSliceAttr& slice_attr) { return fmt::format("{}", slice_attr); });
 }
 
 }  // namespace ttnn::operations::conv::conv2d

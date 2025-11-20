@@ -39,6 +39,7 @@ public:
     virtual ttnn::Tensor run_L1_op(
         const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
     virtual std::string name() = 0;
+    virtual std::string str() = 0;
 };
 
 void run_sliced_op(

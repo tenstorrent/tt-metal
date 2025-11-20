@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "op_slicing.hpp"
+#include <cstdint>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -54,6 +55,7 @@ void run_sliced_op(
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
+        std::vector<std::tuple<OpSliceAttr::IOShape, OpSliceAttr::IOShape>> output_slice_coords;
         if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
@@ -63,8 +65,15 @@ void run_sliced_op(
             OpSliceAttr::IOShape input_slice_end = {output_slice_height_end, output_slice_width_end};
             for (auto op_attributes_iter = op_slice_attr.rbegin(); op_attributes_iter != op_slice_attr.rend();
                  op_attributes_iter++) {
+                output_slice_coords.push_back({input_slice_start, input_slice_end});
                 std::tie(input_slice_start, input_slice_end) =
                     (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
+                log_info(
+                    tt::LogOp,
+                    "Input Slice Start: {}, End: {} for op {}",
+                    input_slice_start,
+                    input_slice_end,
+                    (*op_attributes_iter)->str());
             }
             std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
             std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
@@ -106,7 +115,7 @@ void run_sliced_op(
                 continue;
             }
         }
-
+        std::reverse(output_slice_coords.begin(), output_slice_coords.end());
         // log_trace(
         //     tt::LogOp,
         //     "Op {} DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
@@ -132,16 +141,15 @@ void run_sliced_op(
 
         log_debug(
             tt::LogOp,
-            "Input Slice : {},{} ->  {},{}, Output Slice {} x {}",
+            "Input Slice : {},{} ->  {},{}, Output Slice {}",
             input_slice_height_start,
             input_slice_width_start,
             input_slice_height_end,
             input_slice_width_end,
-            output_slice_height,
-            output_slice_width);
+            output_slice_coords);
 
         auto sliced_input_tensor_memory_config = op_slice_attr[0]->get_input_memory_config(
-            {output_slice_height_start, output_slice_width_start}, {output_slice_height_end, output_slice_width_end});
+            std::get<0>(output_slice_coords[0]), std::get<1>(output_slice_coords[0]));
 
         const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor,
@@ -151,11 +159,12 @@ void run_sliced_op(
             sliced_input_tensor_memory_config);
 
         ttnn::Tensor sliced_output_tensor = sliced_input_tensor;
-        for (auto this_op_slice_attr : op_slice_attr) {
-            sliced_output_tensor = this_op_slice_attr->run_L1_op(
-                sliced_output_tensor,
-                {output_slice_height_start, output_slice_width_start},
-                {output_slice_height_end, output_slice_width_end});
+
+        for (int op_index = 0; op_index < op_slice_attr.size(); op_index++) {
+            auto this_op_slice_attr = op_slice_attr[op_index];
+            auto [output_slice_start, output_slice_end] = output_slice_coords[op_index];
+            sliced_output_tensor =
+                this_op_slice_attr->run_L1_op(sliced_output_tensor, output_slice_start, output_slice_end);
         }
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are

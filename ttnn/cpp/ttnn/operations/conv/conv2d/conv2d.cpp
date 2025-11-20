@@ -397,7 +397,7 @@ Result conv2d_DRAM(
     bias_tensor_on_device = bias_tensor;
     auto slice_attr = Conv2dSliceAttr(
         batch_size,
-        {input_height, input_width},
+        std::array<uint32_t, 2>{input_height, input_width},
         in_channels,
         out_channels,
         kernel_size,
@@ -838,6 +838,43 @@ Conv2dSliceAttr::Conv2dSliceAttr(
 
     };
 
+Conv2dSliceAttr::Conv2dSliceAttr(
+    uint32_t batch_size,
+    std::array<uint32_t, 2> input_shape,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType output_dtype,
+    Tensor& weight_tensor,
+    OptionalRefTensor bias_tensor,
+    Conv2dConfig& conv_config,
+    DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device) :
+    Conv2dSliceAttr(
+        batch_size,
+        IOShape{input_shape[0], input_shape[1]},
+        input_channels,
+        output_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation,
+        groups,
+        input_layout,
+        input_dtype,
+        output_dtype,
+        weight_tensor,
+        bias_tensor,
+        conv_config,
+        compute_config,
+        device) {};
+
 std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::get_input_slice(
     IOShape output_slice_start, IOShape output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
@@ -936,7 +973,7 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 }
 
 std::string Conv2dSliceAttr::name() { return "Conv2D"; }
-
+std::string Conv2dSliceAttr::str() { return fmt::format("Conv2D Slice Attr {}", *this); }
 ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
