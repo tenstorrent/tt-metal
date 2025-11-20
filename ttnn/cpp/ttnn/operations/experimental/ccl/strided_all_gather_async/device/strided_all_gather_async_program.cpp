@@ -349,8 +349,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
-            uint32_t mux_core_offset =
-                link * num_cores_per_link + dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
             CoreCoord mux_logical_core = all_cores[mux_core_offset];
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
             auto num_full_size_channels = num_workers_per_direction;
@@ -394,12 +394,12 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
                 CoreCoord supplemental_core = all_cores
-                    [link * num_cores_per_link +
-                     (1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction) +
+                    [(link * num_cores_per_link) +
+                     ((1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction)) +
                      num_mux_cores_per_direction_per_link + worker];
                 CoreCoord opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
-                uint32_t global_worker_id = link * num_workers_per_direction + worker;
+                uint32_t global_worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t global_worker_count = num_links * num_workers_per_direction;
                 uint32_t base_pages_per_worker = single_batch_head_num_pages / global_worker_count;
                 uint32_t remainder = single_batch_head_num_pages % global_worker_count;
@@ -459,13 +459,13 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
                             reader_rt_args,
                             num_workers_per_direction * num_links,
-                            worker + link * num_workers_per_direction,
+                            worker + (link * num_workers_per_direction),
                             1);
                     } else {
                         fused_op_signaler_backward->push_all_gather_fused_op_rt_args(
                             reader_rt_args,
                             num_workers_per_direction * num_links,
-                            worker + link * num_workers_per_direction,
+                            worker + (link * num_workers_per_direction),
                             0);
                     }
                 }
@@ -556,7 +556,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                         writer_rt_args,
                         num_workers_per_direction * num_links,
-                        worker + link * num_workers_per_direction,
+                        worker + (link * num_workers_per_direction),
                         2);
                 }
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
@@ -588,8 +588,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
                     for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                         uint32_t mux_core_offset =
-                            link * num_cores_per_link +
-                            dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+                            (link * num_cores_per_link) +
+                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                         CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
                         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);

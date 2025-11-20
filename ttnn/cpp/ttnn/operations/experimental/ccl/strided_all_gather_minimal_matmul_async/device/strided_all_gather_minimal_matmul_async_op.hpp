@@ -100,8 +100,8 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
     CoreCoord core_grid_offset,
 
     /* Matmul Params */
-    std::optional<const Tensor> bias,
-    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<const Tensor>& bias,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     operations::experimental::minimal_matmul::MinimalMatmulConfig config,
     DeviceComputeKernelConfig compute_kernel_config);
 
