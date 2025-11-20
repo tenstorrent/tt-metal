@@ -560,7 +560,7 @@ int main(int argc, char **argv) {
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::MsgPackFile serializer;
-        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "gpt2";
         ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
@@ -569,7 +569,7 @@ int main(int argc, char **argv) {
 
     // Load model parameters if in eval mode and model path exists
     if (!safetensors_path.empty() && !model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
-        std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
         fmt::print("Loading model parameters\n");
         load_model_parameters(model_config.model_path, model, model_name);
         fmt::print("Model loaded\n");
@@ -623,7 +623,7 @@ int main(int argc, char **argv) {
         // otherwise proceed with normal loading training state if necessary
         if (!model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
             fmt::print("Loading model from {}\n", model_config.model_path);
-            std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
+            std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
             fmt::print("Loading training state\n");
             std::string optimizer_name = "adamw";
             load_training_state(model_config.model_path, model, scheduler, model_name, optimizer_name);
