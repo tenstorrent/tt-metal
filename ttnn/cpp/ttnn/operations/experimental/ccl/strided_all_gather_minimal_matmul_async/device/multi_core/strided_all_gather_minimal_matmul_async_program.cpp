@@ -116,7 +116,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_minimal_matmul_
             std::nullopt,
             num_workers_per_direction_opt,
             num_buffers_per_channel,
-            config.compute_with_storage_grid_size.y,
+            matmul_fused_op_signaler->num_fused_op_cores_to_signal,
             config.M_block_size,
             config.K_block_size,
             core_grid_offset);
