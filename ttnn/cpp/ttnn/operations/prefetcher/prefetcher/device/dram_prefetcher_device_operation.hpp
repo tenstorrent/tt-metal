@@ -10,7 +10,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "dram_prefetcher_operation_types.hpp"
+#include "dram_prefetcher_device_operation_types.hpp"
 #include "dram_prefetcher_program_factory.hpp"
 
 namespace ttnn::operations::dram_prefetcher {

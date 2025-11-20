@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "dram_prefetcher_operation_types.hpp"
+#include "dram_prefetcher_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::dram_prefetcher::program {

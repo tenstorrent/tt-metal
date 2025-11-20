@@ -18,7 +18,7 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const std::vector<Tensor>& input_tensors;
+    const std::vector<Tensor> input_tensors;
 };
 
 using tensor_return_value_t = Tensor;

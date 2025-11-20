@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dram_prefetcher_operation.hpp"
+#include "dram_prefetcher_device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <optional>
 
