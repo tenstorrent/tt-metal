@@ -389,7 +389,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
-            cb_reserve_back(cb_out, blk);
+            cb_reserve_back(cb_xmm, blk);
             cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_in, blk);
 #ifdef RMSNORM
@@ -405,6 +405,29 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
+
+            // cb_reserve_back(cb_xmm, blk);
+            // tile_regs_commit();
+            // for (uint32_t j = 0; j < blk; j++) {
+            //     pack_tile(j, cb_xmm);
+            // }
+            // cb_push_back(cb_xmm, blk);
+            // tile_regs_release();
+
+            // tile_regs_acquire();
+            // tile_regs_wait();
+            // cb_wait_front(cb_xmm, blk);
+            // mul_tiles_init(cb_xmm, cb_ex2pe);
+            // for (uint32_t j = 0; j < blk; j++) {
+            //     mul_tiles(cb_xmm, cb_ex2pe, j, 0, j);
+            // }
+            // tile_regs_commit();
+            // for (uint32_t j = 0; j < blk; j++) {
+            //     pack_tile(j, cb_xmm);
+            // }
+            // cb_push_back(cb_xmm, blk);
+            // tile_regs_release();
+            // cb_pop_front(cb_xmm, blk);
 #endif
             cb_pop_front(cb_in, blk);
             reconfig_data_format_srca(cb_in, cb_ex2pe);
@@ -420,8 +443,20 @@ void MAIN {
 #endif
             cb_wait_front(cb_ex2pe, 1);
             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
+            if (wt == 0) {
+                DPRINT << "cb_ex2pe before binary_dest_reuse_tiles" << ENDL();
+                tt::compute::common::print_full_tile(cb_ex2pe, 0, true);
+            }
             for (uint32_t j = 0; j < blk; j++) {
+                if (wt == 0 && j == 0) {
+                    DPRINT << "dst0 before binary_dest_reuse_tiles" << ENDL();
+                    dprint_tensix_dest_reg<true>(dst0);
+                }
                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0, j);
+                if (wt == 0 && j == 0) {
+                    DPRINT << "dst0 after binary_dest_reuse_tiles" << ENDL();
+                    dprint_tensix_dest_reg<true>(dst0);
+                }
             }
             tile_regs_commit();
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
@@ -433,11 +468,6 @@ void MAIN {
                 pack_tile(j, cb_xmm);
             }
             cb_push_back(cb_xmm, blk);
-            // if (wt == 0) {
-            //     cb_wait_front(cb_xmm, blk);
-            //     DPRINT << "large final first tile" << ENDL();
-            //     tt::compute::common::print_full_tile(cb_xmm, 0, true);
-            // }
             tile_regs_release();
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();

@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-
+import os
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -370,3 +370,64 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [(21 * 4 + 1) * 32])
+def test_dest_reuse_tiles(device, h, w):
+    def fa_rand(*shape):
+        torch.manual_seed(18)
+        normal_1 = torch.randn(shape)
+        normal_2 = torch.randn(shape)
+        bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+        return normal_1 + normal_2 * bernoulli
+
+    def generate_input_tensor(h, w, dtype, tensor_type):
+        torch.manual_seed(12)
+        if tensor_type == "minus_plus_one":
+            # Make the left half -1 and the right half 1
+            return torch.tensor([[-1 if j % 2 == 0 else 1 for j in range(w)] for _ in range(h)], dtype=dtype)
+        elif tensor_type == "ones":
+            return torch.ones((h, w), dtype=dtype)
+        elif tensor_type == "repeating":
+            return torch.arange(w).repeat(h, 1).to(dtype)
+        elif tensor_type == "ascending":
+            return torch.arange(h * w).reshape(h, w).to(dtype)
+        elif tensor_type == "random":
+            return torch.rand((h, w), dtype=dtype)
+        elif tensor_type == "random_normal":
+            return torch.randn((h, w), dtype=dtype)
+        elif tensor_type == "random_normal_skewed_mean":
+            return torch.randn((h, w), dtype=dtype) + 10.0
+        elif tensor_type == "random_normal_high_variance":
+            return torch.randn((h, w), dtype=dtype) * 10.0
+        elif tensor_type == "random_normal_very_high_variance":
+            return torch.randn((h, w), dtype=dtype) * 100.0
+        elif tensor_type == "random_normal_skewed_mean_high_variance":
+            return torch.randn((h, w), dtype=dtype) * 10.0 + 10.0
+        elif tensor_type == "random_normal_negative_skewed_mean_and_very_high_variance":
+            return torch.randn((h, w), dtype=dtype) * 100.0 - 10.0
+        elif tensor_type == "fa_rand":
+            return fa_rand(h, w).to(dtype)
+        else:
+            raise ValueError(f"Invalid tensor type: {tensor_type}")
+
+    input_tensor = generate_input_tensor(h, w, torch.float64, "fa_rand")
+
+    torch.manual_seed(1)
+    input_tensor = ttnn.from_torch(input_tensor.to(torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False, legacy_reduction=False, legacy_rsqrt=False)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    output_tensor = ttnn.layer_norm(
+        input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    assert True

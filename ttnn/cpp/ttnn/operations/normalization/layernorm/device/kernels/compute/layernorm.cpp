@@ -284,7 +284,6 @@ void MAIN {
         cb_reserve_back(cb_ex2pe, 1);  // 1
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);
-        pack_reconfig_data_format(cb_ex2pe);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();
@@ -295,6 +294,7 @@ void MAIN {
          * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
          * just need to bcast_mul xmm with cb_ex2pe
          */
+        cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
