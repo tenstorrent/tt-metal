@@ -64,7 +64,7 @@ For more information on training with the C++ version, please see the [NanoGPT E
 
 For both training and evaluation, we encourage you to use the Python version of NanoGPT, which can be used via Jupyter Notebook found in the NanoGPT example directory.
 
-```
+More information on available configuration options can be found in the [configs directory](configs/README.md).
 
 ### Nightly only tests
 If CI fails, but local tests pass as expected, please consider changing the
