@@ -10,6 +10,7 @@
 #include "cq_helpers.hpp"
 
 #include "debug/sanitize_noc.h"
+#include "debug/assert.h"
 #include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
@@ -312,25 +313,14 @@ public:
             if constexpr (buffer_size != 0) {
                 if (n != 0) {
                     uint32_t aligned_ptr = writer_ptr & ~(buffer_page_size - 1);
-                    if (!watch_initialized_) {
-                        watch_released_ptr_ = aligned_ptr;
-                        watch_initialized_ = true;
-                    } else {
-                        uint64_t bytes = static_cast<uint64_t>(n) * buffer_page_size;
-                        uint32_t advance_bytes = static_cast<uint32_t>(bytes % buffer_size);
-                        uint32_t expected = watch_released_ptr_ + advance_bytes;
-                        uint32_t ring_end = buffer_base + buffer_size;
-                        if (expected >= ring_end) {
-                            expected -= buffer_size;
-                        }
-                        TT_ASSERT(
-                            aligned_ptr == expected,
-                            "Prefetch downstream pointer mismatch: released {} pages, expected ptr 0x{:x}, actual 0x{:x}",
-                            n,
-                            expected,
-                            aligned_ptr);
-                        watch_released_ptr_ = aligned_ptr;
+                    uint64_t bytes = n * buffer_page_size;
+                    uint32_t advance_bytes = bytes % buffer_size;
+                    uint32_t expected = watch_released_ptr_ + advance_bytes;
+                    if (expected >= buffer_end) {
+                        expected -= buffer_size;
                     }
+                    ASSERT(aligned_ptr == expected);
+                    watch_released_ptr_ = aligned_ptr;
                 }
             }
         }
@@ -339,12 +329,17 @@ public:
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
+    void initialize() {
+        #if defined(WATCHER_ENABLED)
+        watch_released_ptr_ = buffer_base;
+        #endif
+    }
+
     uint32_t additional_count{0};
 
 #if defined(WATCHER_ENABLED)
 private:
-    static inline uint32_t watch_released_ptr_ = buffer_base;
-    static inline bool watch_initialized_ = false;
+    static inline uint32_t watch_released_ptr_ = 0;
 #endif
 };
 
