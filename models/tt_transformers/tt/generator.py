@@ -43,6 +43,7 @@ class SamplingParams:
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] = 0
+    enable_log_probs: bool | list[bool] = False
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -546,8 +547,7 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
-        tt_logits = []
-
+        tt_output = []
         tt_tokens = []
         tt_current_pos = []
         tt_rot_mat_idxs = []
@@ -568,7 +568,7 @@ class Generator:
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
@@ -576,9 +576,9 @@ class Generator:
                 kv_cache=user_kv_cache,
                 sampling_on_device=sampling_on_device,
             )
-            tt_logits.append(tt_logits_i)
+            tt_output.append((tt_logits_i, tt_log_probs_i))
 
-        return tt_logits
+        return tt_output
 
     def _capture_decode_trace_text(
         self,
@@ -1031,7 +1031,7 @@ class Generator:
         read_from_device=True,
     ):
         if not self.model_args[0].is_llama_vision():
-            return self.decode_forward_text(
+            output = self.decode_forward_text(
                 tokens,
                 start_pos,
                 enable_trace=enable_trace,
@@ -1039,7 +1039,7 @@ class Generator:
                 kv_cache=kv_cache,
             )
         else:
-            return self.decode_forward_llama_vision(
+            output = self.decode_forward_llama_vision(
                 start_pos,
                 tokens,
                 prefill_cross_attention_masks,
@@ -1053,19 +1053,38 @@ class Generator:
                 enable_trace,
                 read_from_device,
             )
+        # skip returning log-probs
+        if isinstance(output, tuple):
+            return output[0]
+        else:
+            return output
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
         """
-        Input tt_out is a list of ttnn device tensors
+        Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
+
         """
         if not async_read:
-            return [out.cpu() for out in tt_out]
+            # output is a tuple of (tt_out_tok, tt_log_probs)
+            if isinstance(tt_out[0], tuple):
+                return [
+                    (out[0].cpu(), out[1].cpu() if out[1] is not None else None)  # logits should never be None
+                    for out in tt_out
+                ]
+            elif isinstance(tt_out[0], ttnn.Tensor):
+                return [out.cpu() for out in tt_out]
 
         host_outputs = []
         read_events = []
         for i in range(self.data_parallel):
-            host_outputs.append(tt_out[i].cpu(blocking=False))
+            if isinstance(tt_out[i], tuple):
+                outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+                host_outputs.append(outputs)
+            elif isinstance(tt_out[i], ttnn.Tensor):
+                outputs = tt_out[i].cpu(blocking=False)
+                host_outputs.append(outputs)
+
             read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
 
         return host_outputs, read_events
@@ -1079,13 +1098,31 @@ class Generator:
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
+        log_probs = []
         for i in range(self.data_parallel):
-            logits_i = self.model[i].process_output_decode(
-                tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
-            )
-            logits.append(logits_i)
-
-        return torch.cat(logits, 0)
+            if isinstance(tt_out[i], tuple):
+                logits_i = self.model[i].process_output_decode(
+                    tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
+                )
+                log_probs_i = (
+                    self.model[i].process_output_decode(
+                        tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
+                    )
+                    if tt_out[i][1] is not None
+                    else torch.ones(logits_i.shape)
+                )
+                logits.append(logits_i)
+                log_probs.append(log_probs_i)
+            elif isinstance(tt_out[i], ttnn.Tensor):
+                logits_i = self.model[i].process_output_decode(
+                    tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
+                )
+                logits.append(logits_i)
+                # add dummy tensor for log_probs
+                log_probs.append(torch.ones(logits_i.shape))
+            else:
+                raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
+        return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
     def _decode_forward_no_trace(
         self,
@@ -1152,10 +1189,11 @@ class Generator:
             tt_cross_page_table.append(tt_cross_page_table_i)
 
         tt_logits = []
+        tt_log_probs = []
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            tt_logits_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1168,8 +1206,9 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits.append(tt_logits_i)
+            tt_log_probs.append(tt_log_probs_i)
 
-        return tt_logits
+        return tt_logits, tt_log_probs
 
     def _capture_trace(
         self,
@@ -1231,8 +1270,8 @@ class Generator:
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            # tt_logits_rm unused later, no need to make a list
-            tt_logits_rm = self.model[i].ttnn_decode_forward(
+            # tt_logits_rm and tt_log_probs_rm unused later, no need to make a list
+            tt_logits_rm, tt_log_probs_rm = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1313,6 +1352,7 @@ class Generator:
         tt_h_trace_input = tt_h
 
         tt_logits_rm = []
+        tt_log_probs_rm = []
         trace_ids = {}
         # Do on-device transformations of inputs before forward
         for i in range(self.data_parallel):
@@ -1336,7 +1376,7 @@ class Generator:
                 B=B,
             )
 
-            tt_logits_rm_i = self.model[i].ttnn_decode_forward(
+            tt_logits_rm_i, tt_log_probs_rm_i = self.model[i].ttnn_decode_forward(
                 tt_h_transform,
                 tt_xattn_mask_transform,
                 tt_full_text_mask_expand_1NSH_transform,
@@ -1349,12 +1389,14 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits_rm.append(tt_logits_rm_i)
+            tt_log_probs_rm.append(tt_log_probs_rm_i)
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
         return (
             trace_ids,
             tt_logits_rm,
+            tt_log_probs_rm,
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
