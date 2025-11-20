@@ -17,12 +17,13 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         constexpr uint dst_tile_size_sfpi = 32;
         sfpi::vInt in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vInt in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vInt result;
 
         sfpi::vFloat float_in0 = sfpi::int32_to_float(in0, 0);
         sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
-        sfpi::vFloat float_result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<3>(float_in1), float_in1);
-        result = sfpu::_float_to_int32_(float_result);
+        sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
+
+        // If the result is expected to be integer, this function can be used.
+        // vInt int_result = sfpu::_float_to_int32_(result);
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
