@@ -80,6 +80,7 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
+        self.model_global = 0
 
     def warmup_prefill_traces(
         self,
@@ -247,7 +248,7 @@ class Generator:
         out_list = []
         for idx, user_id in enumerate(empty_slots):
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
-            model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
+            model_id = self.model_global if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
@@ -323,6 +324,8 @@ class Generator:
                     logits, last_token_idx=(last_token_idx % 32)
                 )
                 del logits
+
+            self.model_global = (self.model_global + 1) % self.data_parallel
 
         # Process the logits after all the prefill are done in data parallel mode
         if self.data_parallel > 1:
