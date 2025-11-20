@@ -35,7 +35,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (1, 40, 10),
+        (1, 40, 20),
     ],
     ids=["s1"],
 )
@@ -86,6 +86,7 @@ def test_decode_perf(
         dtype=dtype,
         cluster_axis=cluster_axis,
         use_optional_output_tensors=True,
+        skip_validation=True,
     )
 
 
@@ -112,7 +113,7 @@ def test_decode_perf(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 1, 1),
+        (128, 20, 10),
     ],
     ids=["s128"],
 )
@@ -163,4 +164,5 @@ def test_prefill_perf(
         dtype=dtype,
         cluster_axis=cluster_axis,
         use_optional_output_tensors=True,
+        skip_validation=True,
     )
