@@ -21,7 +21,7 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     const std::optional<const Tensor>& bias,
-    std::optional<operations::unary::UnaryWithParam> fused_activation,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<const minimal_matmul::MinimalMatmulConfig>& config,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
