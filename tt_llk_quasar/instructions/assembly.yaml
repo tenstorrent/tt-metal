@@ -3,7 +3,7 @@
 #   LOCAL_CREGS  -
 #   PC_MODIFYING -
 #   COMPUTE      -
-#   COMMON_CREGS - ???? Jel se ovo koristi? Nema ga us assembler.cpp
+#   COMMON_CREGS -
 #
 #
 # Functional Coverage:
