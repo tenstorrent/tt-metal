@@ -95,8 +95,8 @@ class MLP(LightweightModule):
         # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
             self.prefetcher.insert_tensor(self.w1)
-            self.prefetcher.insert_tensor(self.w3)
-            self.prefetcher.insert_tensor(self.w2)
+            # self.prefetcher.insert_tensor(self.w3)
+            # self.prefetcher.insert_tensor(self.w2)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

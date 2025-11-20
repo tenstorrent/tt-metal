@@ -140,18 +140,22 @@ void kernel_main() {
         DPRINT << "dram_read_offset_bytes: " << dram_read_offset_bytes << ENDL();
     }
 
+    DPRINT << "Reader in1: Starting batch loop" << ENDL();
+    DPRINT << "Reader in1: batch: " << batch << ENDL();
     for (uint32_t b = 0; b < batch; ++b) {
         cb_reserve_back(sync_cb2, 1);
 
-        DPRINT << "Waiting to push sync_cb2" << ENDL();
+        DPRINT << "Waiting to push sync_cb2" << ENDL();  // 32
+        DPRINT << "Reader in1: num_blocks: " << num_blocks << ENDL();
 #ifdef ENABLE_GLOBAL_CB
-        experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
-        DPRINT << "Received in1 block" << ENDL();
+        experimental::remote_cb_wait_front(remote_cb_id, 16);
+        DPRINT << "Reader in1: Received in1 block in reader in1" << ENDL();
 #endif
 
         cb_push_back(sync_cb2, 1);
-
+        DPRINT << "Pushed sync_cb2 in reader in1" << ENDL();
         if constexpr (in1_is_dram_interleaved) {
+            DPRINT << "Reading in1 blocks from DRAM interleaved" << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
 

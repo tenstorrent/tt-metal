@@ -251,12 +251,12 @@ void MAIN {
         // Wait to receive in1
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
-        DPRINT << "Received in1 block" << ENDL();
+        DPRINT << "Received in1 block in compute" << ENDL();
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
-            DPRINT << "Waiting for in1 block" << ENDL();
+            DPRINT << "Waiting for in1 block in compute" << ENDL();
             DPRINT << "curr_ring_idx: " << curr_ring_idx << ENDL();
             DPRINT << "unpadded_in0_block_w: " << unpadded_in0_block_w << ENDL();
 
@@ -275,15 +275,17 @@ void MAIN {
             }
 #endif
 
-            DPRINT << "Waiting for in0 block" << ENDL();
+            DPRINT << "Waiting for in0 block in compute" << ENDL();
             DPRINT << "block: " << block << ENDL();
             DPRINT << "input0_cb_id: " << input0_cb_id << ENDL();
             DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
 
             // Wait to receive in0 block
             if (block == 0) {
+                DPRINT << "Reserving and pushing in0 block in compute" << ENDL();
                 cb_reserve_back(input0_cb_id, in0_block_num_tiles);
                 cb_push_back(input0_cb_id, in0_block_num_tiles);
+                DPRINT << "Pushed in0 block in compute" << ENDL();
             }
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
