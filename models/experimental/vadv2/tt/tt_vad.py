@@ -136,7 +136,6 @@ class TtVAD:
                 B, N, C, H, W = img.shape
                 img = ttnn.reshape(img, (B * N, C, H, W))
             img = ttnn.permute(img, (0, 2, 3, 1))
-
             N, H, W, C = img.shape
             batch_size = img.shape[0]
             img = ttnn.reshape(img, (1, 1, N * H * W, C))
@@ -207,7 +206,6 @@ class TtVAD:
         else:
             img_metas[0][0][0]["can_bus"][-1] = 0
             img_metas[0][0][0]["can_bus"][:3] = 0
-
         img = ttnn.unsqueeze(img[0][0], 0)
         new_prev_bev, bbox_results = self.simple_test(
             img_metas=img_metas[0][0],
@@ -225,9 +223,6 @@ class TtVAD:
         # During inference, we save the BEV features and ego motion of each timestamp.
         self.prev_frame_info["prev_pos"] = tmp_pos
         self.prev_frame_info["prev_angle"] = tmp_angle
-        # Deallocate old prev_bev before replacing it to avoid memory accumulation
-        if self.prev_frame_info["prev_bev"] is not None and isinstance(self.prev_frame_info["prev_bev"], ttnn.Tensor):
-            ttnn.deallocate(self.prev_frame_info["prev_bev"])
         self.prev_frame_info["prev_bev"] = new_prev_bev
 
         return bbox_results
@@ -288,42 +283,15 @@ class TtVAD:
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
 
-        # Convert ttnn tensors to torch and deallocate the ttnn versions to free device memory
-        ttnn_bev_embed = outs["bev_embed"]
-        outs["bev_embed"] = ttnn.to_torch(ttnn_bev_embed).float()
-        ttnn.deallocate(ttnn_bev_embed)
-
-        ttnn_all_cls_scores = outs["all_cls_scores"]
-        outs["all_cls_scores"] = ttnn.to_torch(ttnn_all_cls_scores).float()
-        ttnn.deallocate(ttnn_all_cls_scores)
-
-        ttnn_all_bbox_preds = outs["all_bbox_preds"]
-        outs["all_bbox_preds"] = ttnn.to_torch(ttnn_all_bbox_preds).float()
-        ttnn.deallocate(ttnn_all_bbox_preds)
-
-        ttnn_all_traj_preds = outs["all_traj_preds"]
-        outs["all_traj_preds"] = ttnn.to_torch(ttnn_all_traj_preds).float()
-        ttnn.deallocate(ttnn_all_traj_preds)
-
-        ttnn_all_traj_cls_scores = outs["all_traj_cls_scores"]
-        outs["all_traj_cls_scores"] = ttnn.to_torch(ttnn_all_traj_cls_scores).float()
-        ttnn.deallocate(ttnn_all_traj_cls_scores)
-
-        ttnn_map_all_cls_scores = outs["map_all_cls_scores"]
-        outs["map_all_cls_scores"] = ttnn.to_torch(ttnn_map_all_cls_scores).float()
-        ttnn.deallocate(ttnn_map_all_cls_scores)
-
-        ttnn_map_all_bbox_preds = outs["map_all_bbox_preds"]
-        outs["map_all_bbox_preds"] = ttnn.to_torch(ttnn_map_all_bbox_preds).float()
-        ttnn.deallocate(ttnn_map_all_bbox_preds)
-
-        ttnn_map_all_pts_preds = outs["map_all_pts_preds"]
-        outs["map_all_pts_preds"] = ttnn.to_torch(ttnn_map_all_pts_preds).float()
-        ttnn.deallocate(ttnn_map_all_pts_preds)
-
-        ttnn_ego_fut_preds = outs["ego_fut_preds"]
-        outs["ego_fut_preds"] = ttnn.to_torch(ttnn_ego_fut_preds).float()
-        ttnn.deallocate(ttnn_ego_fut_preds)
+        outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
+        outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
+        outs["all_bbox_preds"] = ttnn.to_torch(outs["all_bbox_preds"]).float()
+        outs["all_traj_preds"] = ttnn.to_torch(outs["all_traj_preds"]).float()
+        outs["all_traj_cls_scores"] = ttnn.to_torch(outs["all_traj_cls_scores"]).float()
+        outs["map_all_cls_scores"] = ttnn.to_torch(outs["map_all_cls_scores"]).float()
+        outs["map_all_bbox_preds"] = ttnn.to_torch(outs["map_all_bbox_preds"]).float()
+        outs["map_all_pts_preds"] = ttnn.to_torch(outs["map_all_pts_preds"]).float()
+        outs["ego_fut_preds"] = ttnn.to_torch(outs["ego_fut_preds"]).float()
 
         save_path = "models/experimental/vadv2/tt/dumps"
         os.makedirs(save_path, exist_ok=True)

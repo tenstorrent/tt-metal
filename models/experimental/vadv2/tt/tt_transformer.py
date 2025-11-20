@@ -134,36 +134,34 @@ class TtVADPerceptionTransformer:
         shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
         if prev_bev is not None:
-            # Convert prev_bev from torch to ttnn if it's a torch tensor (from previous iteration)
-            if not isinstance(prev_bev, ttnn.Tensor):
-                if isinstance(prev_bev, torch.Tensor):
-                    # Use ROW_MAJOR_LAYOUT to avoid padding issues with TILE_LAYOUT
-                    prev_bev = ttnn.from_torch(
-                        prev_bev, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                    )
-
             if prev_bev.shape[1] == bev_h * bev_w:
                 prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
-                # Save original layout to restore after rotation
-                original_layout = prev_bev.layout
-
-                # Convert entire prev_bev to torch for rotation operations (ttnn doesn't support item assignment)
-                prev_bev_torch = ttnn.to_torch(prev_bev)
+                # Convert to PyTorch for the rotation loop because:
+                # 1. rotate() is a torchvision function that requires PyTorch tensors
+                # 2. We need item assignment (prev_bev[:, i] = ...) which ttnn doesn't support
+                # 3. Doing conversion once (before loop) is more efficient than per-iteration
+                if isinstance(prev_bev, ttnn.Tensor):
+                    prev_bev_torch = ttnn.to_torch(prev_bev)
+                else:
+                    # Already a PyTorch tensor
+                    prev_bev_torch = prev_bev
 
                 for i in range(bs):
                     rotation_angle = kwargs["img_metas"][i]["can_bus"][-1]
+                    # Extract and process slice (all in PyTorch)
                     tmp_prev_bev = prev_bev_torch[:, i]
                     tmp_prev_bev = tmp_prev_bev.reshape(bev_h, bev_w, -1)
                     tmp_prev_bev = tmp_prev_bev.permute(2, 0, 1)
                     tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle, center=self.rotate_center)
                     tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0)
-                    tmp_prev_bev = tmp_prev_bev.reshape(bev_h * bev_w, 1, -1)
-                    prev_bev_torch[:, i] = tmp_prev_bev[:, 0]
+                    tmp_prev_bev = tmp_prev_bev.reshape(bev_h * bev_w, -1)
+                    # Update the slice (PyTorch supports assignment)
+                    prev_bev_torch[:, i] = tmp_prev_bev
 
-                # Convert back to ttnn with original layout
+                # Convert back to ttnn after all rotations are done
                 prev_bev = ttnn.from_torch(
-                    prev_bev_torch, dtype=ttnn.bfloat16, layout=original_layout, device=self.device
+                    prev_bev_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
                 )
 
         # add can bus signals

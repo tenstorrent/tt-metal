@@ -258,41 +258,20 @@ class TtBEVFormerEncoder:
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
         shift_ref_2d = shift_ref_2d + shift
 
-        import torch
-
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
         bs, len_bev, num_bev_level, _ = ref_2d.shape
         if prev_bev is not None:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
-
-            # Stack in torch domain to avoid TILE layout padding complications
-            prev_bev_torch = ttnn.to_torch(prev_bev)
-            bev_query_torch = ttnn.to_torch(bev_query)
-
-            # Stack in torch (no padding issues)
-            stacked = torch.stack([prev_bev_torch, bev_query_torch], dim=1)
-            stacked = stacked.reshape(bs * 2, len_bev, -1)
-
-            # Convert back to ttnn with ROW_MAJOR_LAYOUT to preserve exact shape
-            prev_bev = ttnn.from_torch(stacked, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-
-            # Stack ref_2d in torch domain to avoid TILE layout padding issues
-            shift_ref_2d_torch = ttnn.to_torch(shift_ref_2d)
-            ref_2d_torch = ttnn.to_torch(ref_2d)
-            hybird_ref_2d_torch = torch.stack([shift_ref_2d_torch, ref_2d_torch], dim=1)
-            hybird_ref_2d_torch = hybird_ref_2d_torch.reshape(bs * 2, len_bev, num_bev_level, 2)
-            hybird_ref_2d = ttnn.from_torch(
-                hybird_ref_2d_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+            prev_bev = ttnn.stack([prev_bev, bev_query], 1)
+            prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
+            # Ensure both tensors have the same layout for stack
+            shift_ref_2d = ttnn.to_layout(shift_ref_2d, ref_2d.layout)
+            hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
+            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         else:
-            # Stack ref_2d in torch domain
-            ref_2d_torch = ttnn.to_torch(ref_2d)
-            hybird_ref_2d_torch = torch.stack([ref_2d_torch, ref_2d_torch], dim=1)
-            hybird_ref_2d_torch = hybird_ref_2d_torch.reshape(bs * 2, len_bev, num_bev_level, 2)
-            hybird_ref_2d = ttnn.from_torch(
-                hybird_ref_2d_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-            )
+            hybird_ref_2d = ttnn.stack([ref_2d, ref_2d], 1)
+            hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         ttnn.deallocate(ref_2d)
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
@@ -468,7 +447,6 @@ class TtBEVFormerLayer:
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                # Don't deallocate model weights - they need to persist across iterations
                 # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
                 # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1

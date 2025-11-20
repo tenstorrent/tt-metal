@@ -133,6 +133,8 @@ class TtBaseTransformerLayer:
         attn_index = 0
         ffn_index = 0
         identity = query
+        original_query = query  # Track original input to avoid deallocating it
+
         if attn_masks is None:
             attn_masks = [None for _ in range(self.num_attn)]
         elif isinstance(attn_masks, ttnn.Tensor):
@@ -149,6 +151,8 @@ class TtBaseTransformerLayer:
         for layer in self.operation_order:
             if layer == "self_attn":
                 temp_key = temp_value = query
+                prev_query = query
+
                 query = self.attentions[attn_index](
                     query,
                     temp_key,
@@ -161,20 +165,32 @@ class TtBaseTransformerLayer:
                     **kwargs,
                 )
                 attn_index += 1
+
+                # Deallocate previous query if it's an intermediate tensor
+                # Don't deallocate if it's the original input or current identity
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
                 identity = query
 
             elif layer == "norm":
+                prev_query = query
+
                 query = ttnn.layer_norm(
                     query,
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                # Don't deallocate model weights - they need to persist across iterations
-                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
+                # Deallocate previous query if it's an intermediate tensor
+                # Don't deallocate model weights - they need to persist across iterations
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
             elif layer == "cross_attn":
+                prev_query = query
+
                 query = self.attentions[attn_index](
                     query,
                     key,
@@ -187,10 +203,23 @@ class TtBaseTransformerLayer:
                     **kwargs,
                 )
                 attn_index += 1
+
+                # Deallocate previous query if it's an intermediate tensor
+                if prev_query is not original_query and prev_query is not identity:
+                    ttnn.deallocate(prev_query)
+
                 identity = query
 
             elif layer == "ffn":
-                query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
+                prev_query = query
+                prev_identity = identity if self.pre_norm else None
+
+                query = self.ffns[ffn_index](query, prev_identity)
                 ffn_index += 1
+
+                # FFN internally deallocates identity, so we only deallocate prev_query
+                # Don't deallocate if it's the original input or was the identity
+                if prev_query is not original_query and prev_query is not prev_identity:
+                    ttnn.deallocate(prev_query)
 
         return query
