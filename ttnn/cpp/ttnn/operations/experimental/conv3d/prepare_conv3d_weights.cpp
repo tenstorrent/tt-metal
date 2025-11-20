@@ -21,7 +21,6 @@ ttnn::Tensor prepare_conv3d_weights(
     uint32_t in_channels,
     uint32_t out_channels,
     const Conv3dConfig& conv_config,
-    MeshDevice* device,
     uint32_t alignment) {
     TT_FATAL(weight_tensor.layout() == Layout::ROW_MAJOR, "Weight tensor must be in ROW_MAJOR layout");
     TT_FATAL(
@@ -92,7 +91,7 @@ ttnn::Tensor prepare_conv3d_weights(
     return ttnn::to_layout(w, Layout::TILE);
 }
 
-ttnn::Tensor prepare_conv3d_bias(const ttnn::Tensor& bias_tensor, uint32_t out_channels, MeshDevice* device) {
+ttnn::Tensor prepare_conv3d_bias(const ttnn::Tensor& bias_tensor, uint32_t out_channels) {
     TT_FATAL(bias_tensor.layout() == Layout::ROW_MAJOR, "Bias tensor must be in ROW_MAJOR layout");
     TT_FATAL(
         bias_tensor.logical_volume() == out_channels,

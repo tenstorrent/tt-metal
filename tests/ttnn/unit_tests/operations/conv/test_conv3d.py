@@ -151,13 +151,11 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
         in_channels=C,
         out_channels=out_channels,
         conv_config=config,
-        device=device,
         alignment=ALIGNMENT,
     )
     tt_bias = ttnn.prepare_conv3d_bias(
         bias_tensor=ttnn.from_torch(conv3d_module.bias.data, dtype=ttnn.bfloat16, device=device),
         out_channels=out_channels,
-        device=device,
     )
 
     tt_output = ttnn.experimental.conv3d(

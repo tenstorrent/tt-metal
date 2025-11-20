@@ -129,7 +129,6 @@ void py_bind_conv3d(py::module& module) {
         py::arg("in_channels"),
         py::arg("out_channels"),
         py::arg("conv_config"),
-        py::arg("device"),
         py::arg("alignment") = 16,
         R"doc(
         Prepares conv3d weight tensor for device execution.
@@ -142,7 +141,6 @@ void py_bind_conv3d(py::module& module) {
             in_channels (int): Number of input channels.
             out_channels (int): Number of output channels.
             conv_config (ttnn.Conv3dConfig): Conv3d configuration containing C_in_block and other parameters.
-            device (ttnn.MeshDevice): Device to prepare weights for.
             alignment (int, optional): Channel alignment boundary. Defaults to 16.
 
         Returns:
@@ -156,7 +154,6 @@ void py_bind_conv3d(py::module& module) {
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("out_channels"),
-        py::arg("device"),
         R"doc(
         Prepares conv3d bias tensor for device execution.
 
@@ -165,7 +162,6 @@ void py_bind_conv3d(py::module& module) {
         Args:
             bias_tensor (ttnn.Tensor): Bias tensor.
             out_channels (int): Number of output channels.
-            device (ttnn.MeshDevice): Device to prepare bias for.
 
         Returns:
             ttnn.Tensor: Prepared bias tensor in tile layout, shape [1, out_channels].

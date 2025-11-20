@@ -27,13 +27,12 @@ ttnn::Tensor prepare_conv3d_weights(
     uint32_t in_channels,
     uint32_t out_channels,
     const Conv3dConfig& conv_config,
-    MeshDevice* device,
     uint32_t alignment = 16);
 
 // Prepares conv3d bias tensor for device
 // Reshapes bias to [1, -1] format and converts to tile layout
 // Returns a new tensor with layout=Tile
-ttnn::Tensor prepare_conv3d_bias(const ttnn::Tensor& bias_tensor, uint32_t out_channels, MeshDevice* device);
+ttnn::Tensor prepare_conv3d_bias(const ttnn::Tensor& bias_tensor, uint32_t out_channels);
 
 }  // namespace detail
 }  // namespace operations::experimental::conv3d
