@@ -133,7 +133,7 @@ jobs:
           path: ./wheels
 
       - name: Publish wheels to internal PyPI
-        if: ${{ !inputs.dry-run }}
+        if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
         run: |
           found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
           for wheel in $found_wheel_files; do
