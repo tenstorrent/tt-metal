@@ -4,29 +4,30 @@
 
 #include "tar_writer.hpp"
 
+#include <fcntl.h>
+#include <fmt/format.h>
 #include <tar.h>
+#include <unistd.h>
+#include <zstd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <ctime>
-#include <fstream>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
-
-// Include zstd for compression
-#define ZSTD_STATIC_LINKING_ONLY
-#include <zstd.h>
+#include <vector>
 
 namespace ttml::serialization {
 
 TarWriter::TarWriter() = default;
 
-void TarWriter::add_file(std::string_view filename, const void* data, size_t size) {
+void TarWriter::add_file(std::string_view filename, std::vector<uint8_t>&& data) {
     FileEntry entry;
     entry.filename = std::string(filename);
-    entry.data.resize(size);
-    std::memcpy(entry.data.data(), data, size);
+    entry.data = std::move(data);
     m_files.push_back(std::move(entry));
 }
 
@@ -37,94 +38,67 @@ std::string TarWriter::to_octal(uint64_t value, size_t width) const {
 }
 
 void TarWriter::write_header(std::vector<uint8_t>& tarball, const FileEntry& entry) const {
-    using namespace tar_format;
-    using namespace tar_format::header;
-    using namespace tar_format::defaults;
+    std::vector<uint8_t> header(tar_format::header::HEADER_SIZE, 0);
 
-    std::vector<uint8_t> header(HEADER_SIZE, 0);
-
-    // Filename
     std::string filename = entry.filename;
-    if (filename.size() > FILENAME_SIZE) {
+    if (filename.size() > tar_format::header::FILENAME_SIZE) {
         throw std::runtime_error("Filename too long for tar format: " + filename);
     }
-    std::memcpy(header.data() + FILENAME_OFFSET, filename.c_str(), filename.size());
+    std::memcpy(header.data() + tar_format::header::FILENAME_OFFSET, filename.c_str(), filename.size());
 
-    // File mode (null-terminated, padded with nulls)
-    size_t mode_len = std::min(strlen(MODE), MODE_SIZE - 1);
-    std::memcpy(header.data() + MODE_OFFSET, MODE, mode_len);
-    header[MODE_OFFSET + MODE_SIZE - 1] = '\0';
+    size_t mode_len = std::min(strlen(tar_format::defaults::MODE), tar_format::header::MODE_SIZE - 1);
+    std::memcpy(header.data() + tar_format::header::MODE_OFFSET, tar_format::defaults::MODE, mode_len);
+    header[tar_format::header::MODE_OFFSET + tar_format::header::MODE_SIZE - 1] = '\0';
 
-    // UID (null-terminated, padded with nulls)
-    size_t uid_len = std::min(strlen(UID), UID_SIZE - 1);
-    std::memcpy(header.data() + UID_OFFSET, UID, uid_len);
-    header[UID_OFFSET + UID_SIZE - 1] = '\0';
+    size_t uid_len = std::min(strlen(tar_format::defaults::UID), tar_format::header::UID_SIZE - 1);
+    std::memcpy(header.data() + tar_format::header::UID_OFFSET, tar_format::defaults::UID, uid_len);
+    header[tar_format::header::UID_OFFSET + tar_format::header::UID_SIZE - 1] = '\0';
 
-    // GID (null-terminated, padded with nulls)
-    size_t gid_len = std::min(strlen(GID), GID_SIZE - 1);
-    std::memcpy(header.data() + GID_OFFSET, GID, gid_len);
-    header[GID_OFFSET + GID_SIZE - 1] = '\0';
+    size_t gid_len = std::min(strlen(tar_format::defaults::GID), tar_format::header::GID_SIZE - 1);
+    std::memcpy(header.data() + tar_format::header::GID_OFFSET, tar_format::defaults::GID, gid_len);
+    header[tar_format::header::GID_OFFSET + tar_format::header::GID_SIZE - 1] = '\0';
 
-    // File size (octal, null-terminated, padded with nulls)
-    std::string size_str = to_octal(entry.data.size(), SIZE_SIZE - 1);
-    size_t size_len = std::min(size_str.size(), SIZE_SIZE - 1);
-    std::memcpy(header.data() + SIZE_OFFSET, size_str.c_str(), size_len);
-    // Ensure null termination and padding
-    header[SIZE_OFFSET + SIZE_SIZE - 1] = '\0';
+    std::string size_str = to_octal(entry.data.size(), tar_format::header::SIZE_SIZE - 1);
+    size_t size_len = std::min(size_str.size(), tar_format::header::SIZE_SIZE - 1);
+    std::memcpy(header.data() + tar_format::header::SIZE_OFFSET, size_str.c_str(), size_len);
+    header[tar_format::header::SIZE_OFFSET + tar_format::header::SIZE_SIZE - 1] = '\0';
 
-    // Modification time (octal, null-terminated, padded with nulls)
-    // Use current time (Unix timestamp)
     std::time_t current_time = std::time(nullptr);
-    std::string mtime_str = to_octal(static_cast<uint64_t>(current_time), MTIME_SIZE - 1);
-    size_t mtime_len = std::min(mtime_str.size(), MTIME_SIZE - 1);
-    std::memcpy(header.data() + MTIME_OFFSET, mtime_str.c_str(), mtime_len);
-    // Ensure null termination and padding
-    header[MTIME_OFFSET + MTIME_SIZE - 1] = '\0';
+    std::string mtime_str = to_octal(static_cast<uint64_t>(current_time), tar_format::header::MTIME_SIZE - 1);
+    size_t mtime_len = std::min(mtime_str.size(), tar_format::header::MTIME_SIZE - 1);
+    std::memcpy(header.data() + tar_format::header::MTIME_OFFSET, mtime_str.c_str(), mtime_len);
+    header[tar_format::header::MTIME_OFFSET + tar_format::header::MTIME_SIZE - 1] = '\0';
 
-    // Link name - empty (already zero-initialized)
+    std::memcpy(header.data() + tar_format::header::MAGIC_OFFSET, TMAGIC, TMAGLEN - 1);
+    header[tar_format::header::MAGIC_OFFSET + TMAGLEN - 1] = '\0';
 
-    // Magic (use TMAGIC and TMAGLEN directly from tar.h)
-    std::memcpy(header.data() + MAGIC_OFFSET, TMAGIC, TMAGLEN - 1);
-    header[MAGIC_OFFSET + TMAGLEN - 1] = '\0';
+    std::memcpy(header.data() + tar_format::header::VERSION_OFFSET, TVERSION, TVERSLEN);
 
-    // Version (use TVERSION and TVERSLEN directly from tar.h)
-    // TVERSLEN is 2, copy exactly 2 bytes (no null terminator needed)
-    std::memcpy(header.data() + VERSION_OFFSET, TVERSION, TVERSLEN);
+    header[tar_format::header::TYPE_FLAG_OFFSET] = REGTYPE;
 
-    // User name, Group name, Device major/minor, Prefix - empty (already zero-initialized)
-
-    // Type flag - regular file (use REGTYPE directly from tar.h)
-    // Must be set BEFORE checksum calculation
-    header[TYPE_FLAG_OFFSET] = REGTYPE;
-
-    // Calculate checksum (checksum field bytes are treated as spaces during calculation)
     uint32_t checksum = 0;
-    for (size_t i = 0; i < HEADER_SIZE; ++i) {
-        if (i >= CHECKSUM_OFFSET && i < CHECKSUM_OFFSET + CHECKSUM_SIZE) {
-            // Checksum field treated as spaces during calculation
+    for (size_t i = 0; i < tar_format::header::HEADER_SIZE; ++i) {
+        if (i >= tar_format::header::CHECKSUM_OFFSET &&
+            i < tar_format::header::CHECKSUM_OFFSET + tar_format::header::CHECKSUM_SIZE) {
             checksum += static_cast<uint8_t>(' ');
         } else {
             checksum += static_cast<uint8_t>(header[i]);
         }
     }
 
-    // Write checksum (octal, null-terminated, space-terminated)
-    // Format: 6 octal digits + null + space = 8 bytes total
-    std::string checksum_str = to_octal(checksum, CHECKSUM_SIZE - 2);
-    size_t checksum_len = std::min(checksum_str.size(), CHECKSUM_SIZE - 2);
-    std::memcpy(header.data() + CHECKSUM_OFFSET, checksum_str.c_str(), checksum_len);
-    // Ensure proper formatting: null terminator at position CHECKSUM_SIZE - 2, space at CHECKSUM_SIZE - 1
-    header[CHECKSUM_OFFSET + CHECKSUM_SIZE - 2] = '\0';
-    header[CHECKSUM_OFFSET + CHECKSUM_SIZE - 1] = ' ';  // Space after checksum
+    std::string checksum_str = to_octal(checksum, tar_format::header::CHECKSUM_SIZE - 2);
+    size_t checksum_len = std::min(checksum_str.size(), tar_format::header::CHECKSUM_SIZE - 2);
+    std::memcpy(header.data() + tar_format::header::CHECKSUM_OFFSET, checksum_str.c_str(), checksum_len);
+    header[tar_format::header::CHECKSUM_OFFSET + tar_format::header::CHECKSUM_SIZE - 2] = '\0';
+    header[tar_format::header::CHECKSUM_OFFSET + tar_format::header::CHECKSUM_SIZE - 1] = ' ';
 
     tarball.insert(tarball.end(), header.begin(), header.end());
 }
 
 void TarWriter::pad_to_block(std::vector<uint8_t>& data) const {
-    using namespace tar_format;
-    size_t remainder = data.size() % BLOCK_SIZE;
+    size_t remainder = data.size() % tar_format::BLOCK_SIZE;
     if (remainder != 0) {
-        size_t padding = BLOCK_SIZE - remainder;
+        size_t padding = tar_format::BLOCK_SIZE - remainder;
         data.insert(data.end(), padding, 0);
     }
 }
@@ -132,53 +106,176 @@ void TarWriter::pad_to_block(std::vector<uint8_t>& data) const {
 std::vector<uint8_t> TarWriter::get_tarball() const {
     std::vector<uint8_t> tarball;
 
-    // Write each file
     for (const auto& entry : m_files) {
-        // Write header
         write_header(tarball, entry);
-
-        // Write file data
         tarball.insert(tarball.end(), entry.data.begin(), entry.data.end());
-
-        // Pad to 512-byte boundary
         pad_to_block(tarball);
     }
 
-    // Write two empty blocks at the end
-    using namespace tar_format;
-    tarball.insert(tarball.end(), BLOCK_SIZE * END_BLOCKS, 0);
+    tarball.insert(tarball.end(), tar_format::BLOCK_SIZE * tar_format::END_BLOCKS, 0);
 
     return tarball;
 }
 
-void TarWriter::write_to_file(std::string_view filename) const {
-    auto tarball = get_tarball();
+void TarWriter::write_to_file(std::string_view filename, bool compress) const {
+    const auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Compress tarball with zstd
-    const size_t compressed_bound = ZSTD_compressBound(tarball.size());
-    std::vector<uint8_t> compressed_data(compressed_bound);
+    constexpr size_t chunk_size = 20 * 1024 * 1024;
+    const int compression_level = 3;
 
-    const int compression_level = 3;  // Default compression level (balanced speed/ratio)
-    size_t compressed_size =
-        ZSTD_compress(compressed_data.data(), compressed_bound, tarball.data(), tarball.size(), compression_level);
-
-    if (ZSTD_isError(compressed_size)) {
-        throw std::runtime_error("ZSTD compression failed: " + std::string(ZSTD_getErrorName(compressed_size)));
-    }
-
-    // Resize to actual compressed size
-    compressed_data.resize(compressed_size);
-
-    // Write compressed data to file
-    std::ofstream ofs(std::string(filename), std::ios::binary);
-    if (!ofs.is_open()) {
+    const int fd = open(std::string(filename).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
         throw std::runtime_error("Unable to open file for writing: " + std::string(filename));
     }
-    ofs.write(
-        reinterpret_cast<const char*>(compressed_data.data()), static_cast<std::streamsize>(compressed_data.size()));
-    if (!ofs.good()) {
-        throw std::runtime_error("Error writing compressed tarball to file: " + std::string(filename));
+
+    off_t file_offset = 0;
+
+    if (compress) {
+        auto cctx = std::unique_ptr<ZSTD_CCtx, decltype(&ZSTD_freeCCtx)>(ZSTD_createCCtx(), ZSTD_freeCCtx);
+        if (cctx == nullptr) {
+            close(fd);
+            throw std::runtime_error("Failed to create ZSTD compression context");
+        }
+
+        size_t zresult = ZSTD_CCtx_setParameter(cctx.get(), ZSTD_c_compressionLevel, compression_level);
+        if (ZSTD_isError(zresult)) {
+            close(fd);
+            throw std::runtime_error("Failed to set compression level: " + std::string(ZSTD_getErrorName(zresult)));
+        }
+
+        std::vector<uint8_t> output_buffer(chunk_size);
+
+        auto compress_and_write = [&](const void* data, size_t size, ZSTD_EndDirective end_op = ZSTD_e_continue) {
+            ZSTD_inBuffer input = {data, size, 0};
+
+            while (input.pos < input.size) {
+                ZSTD_outBuffer output = {output_buffer.data(), output_buffer.size(), 0};
+                size_t remaining = ZSTD_compressStream2(cctx.get(), &output, &input, ZSTD_e_continue);
+
+                if (ZSTD_isError(remaining)) {
+                    close(fd);
+                    throw std::runtime_error("ZSTD compression failed: " + std::string(ZSTD_getErrorName(remaining)));
+                }
+
+                if (output.pos > 0) {
+                    ssize_t written = pwrite(fd, output_buffer.data(), output.pos, file_offset);
+                    if (written < 0 || static_cast<size_t>(written) != output.pos) {
+                        close(fd);
+                        throw std::runtime_error("Failed to write compressed data to file");
+                    }
+                    file_offset += output.pos;
+                }
+            }
+
+            if (end_op == ZSTD_e_end) {
+                ZSTD_inBuffer final_input = {nullptr, 0, 0};
+                while (true) {
+                    ZSTD_outBuffer output = {output_buffer.data(), output_buffer.size(), 0};
+                    size_t remaining = ZSTD_compressStream2(cctx.get(), &output, &final_input, ZSTD_e_end);
+
+                    if (ZSTD_isError(remaining)) {
+                        close(fd);
+                        throw std::runtime_error(
+                            "ZSTD compression failed: " + std::string(ZSTD_getErrorName(remaining)));
+                    }
+
+                    if (output.pos > 0) {
+                        ssize_t written = pwrite(fd, output_buffer.data(), output.pos, file_offset);
+                        if (written < 0 || static_cast<size_t>(written) != output.pos) {
+                            close(fd);
+                            throw std::runtime_error("Failed to write compressed data to file");
+                        }
+                        file_offset += output.pos;
+                    }
+
+                    if (remaining == 0) {
+                        break;
+                    }
+                }
+            }
+        };
+
+        for (const auto& entry : m_files) {
+            std::vector<uint8_t> header;
+            write_header(header, entry);
+            compress_and_write(header.data(), header.size());
+
+            compress_and_write(entry.data.data(), entry.data.size());
+
+            const size_t remainder = entry.data.size() % tar_format::BLOCK_SIZE;
+            if (remainder != 0) {
+                const size_t padding_size = tar_format::BLOCK_SIZE - remainder;
+                std::vector<uint8_t> padding(padding_size, 0);
+                compress_and_write(padding.data(), padding_size);
+            }
+        }
+
+        const size_t end_blocks_size = tar_format::BLOCK_SIZE * tar_format::END_BLOCKS;
+        std::vector<uint8_t> end_blocks(end_blocks_size, 0);
+        compress_and_write(end_blocks.data(), end_blocks_size, ZSTD_e_end);
+    } else {
+        auto write_direct = [&](const void* data, size_t size) {
+            ssize_t written = pwrite(fd, data, size, file_offset);
+            if (written < 0 || static_cast<size_t>(written) != size) {
+                close(fd);
+                throw std::runtime_error("Failed to write data to file");
+            }
+            file_offset += size;
+        };
+
+        for (const auto& entry : m_files) {
+            std::vector<uint8_t> header;
+            write_header(header, entry);
+            write_direct(header.data(), header.size());
+
+            const uint8_t* file_data = entry.data.data();
+            size_t file_data_size = entry.data.size();
+            size_t file_data_offset = 0;
+
+            while (file_data_offset < file_data_size) {
+                const size_t write_size = std::min(chunk_size, file_data_size - file_data_offset);
+                write_direct(file_data + file_data_offset, write_size);
+                file_data_offset += write_size;
+            }
+
+            const size_t remainder = entry.data.size() % tar_format::BLOCK_SIZE;
+            if (remainder != 0) {
+                const size_t padding_size = tar_format::BLOCK_SIZE - remainder;
+                std::vector<uint8_t> padding(padding_size, 0);
+                write_direct(padding.data(), padding_size);
+            }
+        }
+
+        const size_t end_blocks_size = tar_format::BLOCK_SIZE * tar_format::END_BLOCKS;
+        std::vector<uint8_t> end_blocks(end_blocks_size, 0);
+        write_direct(end_blocks.data(), end_blocks_size);
     }
+
+    close(fd);
+
+    const auto end_time = std::chrono::high_resolution_clock::now();
+    const auto duration = end_time - start_time;
+    const auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+
+    constexpr int64_t ns_per_second = 1'000'000'000LL;
+    constexpr int64_t ns_per_minute = 60LL * ns_per_second;
+    constexpr int64_t ns_per_hour = 60LL * ns_per_minute;
+
+    const int64_t hours = total_ns / ns_per_hour;
+    const int64_t minutes = (total_ns % ns_per_hour) / ns_per_minute;
+    const int64_t seconds = (total_ns % ns_per_minute) / ns_per_second;
+    const int64_t milliseconds = (total_ns % ns_per_second) / 1'000'000LL;
+    const int64_t microseconds = (total_ns % 1'000'000LL) / 1'000LL;
+    const int64_t nanoseconds = total_ns % 1'000LL;
+
+    fmt::print(
+        "Serialization time: {:02d}:{:02d}:{:02d}.{:03d}{:03d}{:03d}\n",
+        hours,
+        minutes,
+        seconds,
+        milliseconds,
+        microseconds,
+        nanoseconds);
 }
 
 }  // namespace ttml::serialization

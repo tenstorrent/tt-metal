@@ -208,7 +208,8 @@ TEST_F(FlatBufferFileTest, InvalidDataDeserialization) {
 TEST_F(FlatBufferFileTest, InvalidTarballMissingFlatbufferFiles) {
     // Create a tarball without any .flatbuffer files using TarWriter
     ttml::serialization::TarWriter tar_writer;
-    tar_writer.add_file("other_file.txt", "test", 4);
+    std::vector<uint8_t> test_data{'t', 'e', 's', 't'};
+    tar_writer.add_file("other_file.txt", std::move(test_data));
     tar_writer.write_to_file(test_filename);
 
     // Try to deserialize - should throw because no .flatbuffer files found

@@ -361,12 +361,12 @@ public:
 
     // Serialization method - tarball version
     void serialize_tarball(
-        std::string_view filename, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
+        std::string_view filename, std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
         // Create tarball in memory with multiple files
         TarWriter tar_writer;
 
-        for (const auto& [file_name, flatbuffer_data] : flatbuffer_files) {
-            tar_writer.add_file(file_name, flatbuffer_data.data(), flatbuffer_data.size());
+        for (auto& [file_name, flatbuffer_data] : flatbuffer_files) {
+            tar_writer.add_file(file_name, std::move(flatbuffer_data));
         }
 
         // Write tarball to file (single write operation)

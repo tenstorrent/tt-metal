@@ -19,14 +19,15 @@ public:
     TarWriter();
     ~TarWriter() = default;
 
-    // Add a file to the tarball
-    void add_file(std::string_view filename, const void* data, size_t size);
+    // Add a file to the tarball (takes ownership of data)
+    void add_file(std::string_view filename, std::vector<uint8_t>&& data);
 
     // Get the complete tarball as a byte vector
     std::vector<uint8_t> get_tarball() const;
 
     // Write tarball to file
-    void write_to_file(std::string_view filename) const;
+    // If compress is true, compresses with ZSTD; otherwise writes uncompressed tar
+    void write_to_file(std::string_view filename, bool compress = false) const;
 
 private:
     struct FileEntry {
