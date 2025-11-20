@@ -19,7 +19,9 @@ void kernel_main() {
 
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr bool fused_op_sync get_compile_time_arg_val(1) == 1;
     const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
+    constexpr auto num_ct_args = 2;
 
     uint64_t base_dst_noc_addr[tile_height];
 
@@ -41,13 +43,28 @@ void kernel_main() {
     uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
-            for (uint32_t j = stick_id; j < (tile_height + stick_id); j++) {
-                base_dst_noc_addr[j] = get_noc_addr(j, s, curr_offset);
+            for (uint32_t j = 0; j < tile_height; j++) {
+                base_dst_noc_addr[j] = get_noc_addr(j + stick_id, s, curr_offset);
             }
             write_tiles(1, tile_width_size, stick_size - curr_offset - tile_width_size);
             curr_offset += tile_width_size;
         }
 
         stick_id += tile_height;
+    }
+
+    if constexpr (fused_op_sync) {
+        constexpr uint32_t noc_start_x = get_compile_time_arg_val(num_ct_args);
+        constexpr uint32_t noc_start_y = get_compile_time_arg_val(num_ct_args + 1);
+        constexpr uint32_t noc_end_x = get_compile_time_arg_val(num_ct_args + 2);
+        constexpr uint32_t noc_end_y = get_compile_time_arg_val(num_ct_args + 3);
+
+        volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
+
+        uint64_t mcast_receiver_semaphore_noc_addr =
+            get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_semaphore);
+
+        noc_semaphore_wait()
     }
 }

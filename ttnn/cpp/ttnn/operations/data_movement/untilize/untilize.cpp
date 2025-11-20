@@ -39,7 +39,8 @@ ttnn::Tensor ExecuteUntilize::invoke(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool _internal_row_wise) {
     bool fp32_dest_acc_en =
         input_tensor.dtype() ==
         DataType::UINT32;  // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
@@ -68,7 +69,8 @@ ttnn::Tensor ExecuteUntilize::invoke(
                 enough_space_height,
                 ttnn::operations::data_movement::get_pf_type(
                     memory_config.has_value() ? memory_config.value().is_sharded() : input_tensor.is_sharded(),
-                    input_tensor)},
+                    input_tensor),
+                _internal_row_wise},
             {input_tensor},
             {},
             {})[0];

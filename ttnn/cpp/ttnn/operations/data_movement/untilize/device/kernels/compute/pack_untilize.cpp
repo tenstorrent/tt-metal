@@ -15,7 +15,13 @@ void MAIN {
 #else
     constexpr uint32_t max_bct = 8;
 #endif
+
+#ifndef VARIABLE_BLOCK_COUNT
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+#else
+    const auto per_core_block_cnt = get_arg_val<uint32_t>(0);
+#endif
+
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
