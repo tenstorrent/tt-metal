@@ -258,7 +258,14 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
+template <
+    uint32_t my_sem_id,
+    uint8_t noc_idx,
+    uint32_t downstream_noc_xy,
+    uint32_t downstream_sem_id,
+    uint32_t buffer_base = 0,
+    uint32_t buffer_end = 0,
+    uint32_t buffer_page_size = 0>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
@@ -298,12 +305,47 @@ public:
     }
 
     // Inform the consumer that n pages are available.
-    FORCE_INLINE void release_pages(uint32_t n) {
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0) {
+#if defined(WATCHER_ENABLED)
+        if constexpr (buffer_page_size != 0) {
+            constexpr uint32_t buffer_size = buffer_end - buffer_base;
+            if constexpr (buffer_size != 0) {
+                if (n != 0) {
+                    uint32_t aligned_ptr = writer_ptr & ~(buffer_page_size - 1);
+                    if (!watch_initialized_) {
+                        watch_released_ptr_ = aligned_ptr;
+                        watch_initialized_ = true;
+                    } else {
+                        uint64_t bytes = static_cast<uint64_t>(n) * buffer_page_size;
+                        uint32_t advance_bytes = static_cast<uint32_t>(bytes % buffer_size);
+                        uint32_t expected = watch_released_ptr_ + advance_bytes;
+                        uint32_t ring_end = buffer_base + buffer_size;
+                        if (expected >= ring_end) {
+                            expected -= buffer_size;
+                        }
+                        TT_ASSERT(
+                            aligned_ptr == expected,
+                            "Prefetch downstream pointer mismatch: released {} pages, expected ptr 0x{:x}, actual 0x{:x}",
+                            n,
+                            expected,
+                            aligned_ptr);
+                        watch_released_ptr_ = aligned_ptr;
+                    }
+                }
+            }
+        }
+#endif
         noc_semaphore_inc(
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
     uint32_t additional_count{0};
+
+#if defined(WATCHER_ENABLED)
+private:
+    static inline uint32_t watch_released_ptr_ = buffer_base;
+    static inline bool watch_initialized_ = false;
+#endif
 };
 
 // CBReader
