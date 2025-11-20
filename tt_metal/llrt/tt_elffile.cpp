@@ -103,7 +103,6 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
-    //    virtual std::span<const std::uint32_t> GetSegmentInfo() = 0;
 
 private:
     [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }

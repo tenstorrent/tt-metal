@@ -1,3 +1,8 @@
+/* SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+**
+** SPDX-License-Identifier: Apache-2.0
+*/
+
 #if TYPE_FIRMWARE + TYPE_KERNEL != 1
 #error "Exactly one of TYPE_FIRMWARE and TYPE_KERNEL must be defined"
 #endif
