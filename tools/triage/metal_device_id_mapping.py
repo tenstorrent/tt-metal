@@ -29,12 +29,12 @@ script_config = ScriptConfig(
 
 class MetalDeviceIdMapping:
     def __init__(self, inspector_data: InspectorData):
-        unique_ids_result = inspector_data.getChipUniqueIds()
+        unique_ids_result = inspector_data.getMetalDeviceIdMappings()
         self._metal_device_id_to_unique_id: dict[int, int] = {}
         self._unique_id_to_metal_device_id: dict[int, int] = {}
 
         for mapping in unique_ids_result.mappings:
-            metal_device_id = mapping.chipId
+            metal_device_id = mapping.metalDeviceId
             unique_id = mapping.uniqueId
             log_check(
                 metal_device_id not in self._metal_device_id_to_unique_id, "Invalid Inspector data. Duplicated chip id"

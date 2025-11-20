@@ -120,10 +120,10 @@ struct CoreEntriesByCategory {
     entries @1 :List(CoreEntry);
 }
 
-# Mapping from logical chip ID to unique ID
-struct ChipIdToUniqueId {
-    chipId @0 :UInt64;      # Logical chip ID (device_id)
-    uniqueId @1 :UInt64;    # Hardware unique ID
+# Mapping from logical metal ID to unique ID
+struct MetalDeviceIdToUniqueId {
+    metalDeviceId @0 :UInt64;
+    uniqueId @1 :UInt64;
 }
 
 interface Inspector {
@@ -151,8 +151,6 @@ interface Inspector {
     # Get all core Info
     getAllDispatchCoreInfos @6 () -> (coresByCategory :List(CoreEntriesByCategory));
 
-    # Get mapping from logical chip ID to unique ID for all devices
-    # This enables clients to map between logical device IDs (affected by TT_VISIBLE_DEVICES)
-    # and hardware unique IDs
-    getChipUniqueIds @7 () -> (mappings :List(ChipIdToUniqueId));
+    # Get mapping from metal device ID to unique ID for all devices
+    getMetalDeviceIdMappings @7 () -> (mappings :List(MetalDeviceIdToUniqueId));
 }

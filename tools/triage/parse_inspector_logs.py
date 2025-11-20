@@ -263,7 +263,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
         elif "program_binary_status_change" in entry:
             info = entry["program_binary_status_change"]
             program_id = int(info.get("id"))
-            device_id = int(info.get("metalDeviceId"))
+            device_id = int(info.get("device_id"))
             if program_id in programs:
                 programs[program_id].binary_status_per_device[device_id] = info.get("status")
             if verbose:
