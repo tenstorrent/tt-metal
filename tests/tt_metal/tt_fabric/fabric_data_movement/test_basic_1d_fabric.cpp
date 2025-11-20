@@ -2268,7 +2268,9 @@ void FabricUnicastCommon(
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::tuple<RoutingDirection, uint32_t>& pair_ordered_dir) {
+    const std::variant<
+        std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
+        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -2277,32 +2279,52 @@ void UDMFabricUnicastCommon(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
-    // Single direction configuration
-    auto [dir, num_hops] = pair_ordered_dir;
-
-    // Find a source device and receiver for the selected direction
+    // Determine source and destination based on routing_info variant
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
-    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    fabric_hops[dir] = num_hops;
-
-    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+    FabricNodeId dest_fabric_node_id(MeshId{0}, 0);
     ChipId src_physical_device_id;
-    std::unordered_map<RoutingDirection, std::vector<ChipId>> physical_end_device_ids_by_dir;
-    if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
-            src_fabric_node_id,
-            end_fabric_node_ids_by_dir,
-            src_physical_device_id,
-            physical_end_device_ids_by_dir,
-            fabric_hops)) {
-        GTEST_SKIP() << "No path found for requested direction";
+    ChipId dst_physical_device_id;
+
+    if (std::holds_alternative<std::tuple<RoutingDirection, uint32_t>>(routing_info)) {
+        // Original behavior: use direction and hops
+        auto [dir, num_hops] = std::get<std::tuple<RoutingDirection, uint32_t>>(routing_info);
+
+        std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+        fabric_hops[dir] = num_hops;
+
+        std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
+        std::unordered_map<RoutingDirection, std::vector<ChipId>> physical_end_device_ids_by_dir;
+        if (!find_device_with_neighbor_in_multi_direction(
+                fixture,
+                src_fabric_node_id,
+                end_fabric_node_ids_by_dir,
+                src_physical_device_id,
+                physical_end_device_ids_by_dir,
+                fabric_hops)) {
+            GTEST_SKIP() << "No path found for requested direction";
+        }
+
+        // Get destination device at the num_hops-th neighbor
+        uint32_t dst_index = num_hops - 1;
+        dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
+        dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+    } else {
+        // New behavior: use explicit src and dest node IDs
+        auto [src_node, dest_node] = std::get<std::tuple<uint32_t, uint32_t>>(routing_info);
+
+        src_fabric_node_id = FabricNodeId(MeshId{0}, src_node);
+        dest_fabric_node_id = FabricNodeId(MeshId{0}, dest_node);
+
+        src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+        dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dest_fabric_node_id);
+
+        // Verify devices exist in fixture
+        if (!fixture->get_device(src_physical_device_id) || !fixture->get_device(dst_physical_device_id)) {
+            GTEST_SKIP() << "Source or destination device not available in fixture";
+        }
     }
 
-    // Get destination device at the num_hops-th neighbor
-    uint32_t dst_index = num_hops - 1;
-    auto dst_physical_device_id = physical_end_device_ids_by_dir[dir][dst_index];
     auto receiver_device = fixture->get_device(dst_physical_device_id);
-    auto dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
     auto sender_device = fixture->get_device(src_physical_device_id);
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);

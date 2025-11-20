@@ -407,6 +407,39 @@ FORCE_INLINE void fabric_fast_atomic_inc(
 }
 
 /**
+ * @brief Select the appropriate mux connection index based on relay direction and destination
+ *
+ * For EW relays, determines if ACK needs NS routing and selects the appropriate perpendicular connection.
+ * For NS relays, always returns local connection (index 0).
+ *
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
+ * @param dst_chip_id Destination chip ID
+ * @return Mux connection index: 0=local, 1=downstream_en, 2=downstream_ws
+ */
+template <uint32_t Direction>
+FORCE_INLINE uint32_t select_mux_connection(uint16_t dst_chip_id) {
+    uint32_t mux_idx = 0;  // Default: use local connection (index 0)
+    if constexpr (Direction == eth_chan_directions::EAST || Direction == eth_chan_directions::WEST) {
+        // For EW relays, check if ACK packet needs NS routing by querying routing info
+        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+        uint16_t my_chip_id = routing_table->my_device_id;
+
+        const auto& compressed_route = routing_info->paths[dst_chip_id];
+        uint8_t ns_hops = compressed_route.get_ns_hops();
+        if (ns_hops > 0) {
+            // is there another way to know whether it's north or south hops?
+            if (dst_chip_id < my_chip_id) {
+                mux_idx = 1;
+            } else {
+                mux_idx = 2;
+            }
+        }
+    }
+    return mux_idx;
+}
+
+/**
  * @brief Send an acknowledgment back to the sender using atomic increment
  *
  * This function sends an atomic increment to the sender's counter to acknowledge
@@ -414,16 +447,23 @@ FORCE_INLINE void fabric_fast_atomic_inc(
  * the received packet's UDM control fields and sends an atomic increment to the
  * appropriate counter based on the FabricBarrierType template parameter.
  *
+ * For 2D fabrics with multiple mux connections, this function intelligently routes the ACK:
+ * - If relay is NS-oriented: use local connection (same NS dimension)
+ * - If relay is EW-oriented and ACK needs NS routing: use perpendicular NS connection
+ * - Otherwise: use local connection
+ *
  * @tparam BarrierType The type of barrier counter to increment (e.g., NONPOSTED_WRITES_ACKED, NONPOSTED_ATOMICS_ACKED)
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
  * @tparam FabricConnectionType The connection type
- * @param connection adaptor connection to mux kernel
+ * @tparam NumConnections Number of mux connections (1 for single connection, 3 for mux array)
+ * @param connections Array of mux connections [local, downstream_en, downstream_ws] or single connection
  * @param received_header Pointer to the received packet header containing UDM control fields
  * @param increment_value The value to increment the counter by (default 1)
  * @param flush Whether to flush the atomic operation (default false)
  */
-template <FabricBarrierType BarrierType, typename FabricConnectionType>
+template <FabricBarrierType BarrierType, uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
 FORCE_INLINE void fabric_fast_ack(
-    FabricConnectionType& connection,
+    std::array<FabricConnectionType, NumConnections>& connections,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
     uint32_t increment_value = 1,
     bool flush = false) {
@@ -445,10 +485,14 @@ FORCE_INLINE void fabric_fast_ack(
         NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
     fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
 
-    connection.wait_for_empty_write_slot();
+    // Determine which mux connection to use for sending the ACK
+    uint32_t mux_idx = select_mux_connection<Direction>(src_chip_id);
+
+    connections[mux_idx].wait_for_empty_write_slot();
     // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
     // and to reg (credit) is not guaranteed.
-    connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+    connections[mux_idx].send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
 }
 
 /**
@@ -456,13 +500,14 @@ FORCE_INLINE void fabric_fast_ack(
  *
  * Wrapper function that calls fabric_fast_ack with NONPOSTED_WRITES_ACKED barrier type.
  */
-template <typename FabricConnectionType>
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
 FORCE_INLINE void fabric_fast_write_ack(
-    FabricConnectionType& connection,
+    std::array<FabricConnectionType, NumConnections>& connections,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
     uint32_t increment_value = 1,
     bool flush = false) {
-    fabric_fast_ack<FabricBarrierType::NONPOSTED_WRITES_ACKED>(connection, received_header, increment_value, flush);
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_WRITES_ACKED, Direction>(
+        connections, received_header, increment_value, flush);
 }
 
 /**
@@ -470,13 +515,14 @@ FORCE_INLINE void fabric_fast_write_ack(
  *
  * Wrapper function that calls fabric_fast_ack with NONPOSTED_ATOMICS_ACKED barrier type.
  */
-template <typename FabricConnectionType>
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
 FORCE_INLINE void fabric_fast_atomic_ack(
-    FabricConnectionType& connection,
+    std::array<FabricConnectionType, NumConnections>& connections,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
     uint32_t increment_value = 1,
     bool flush = false) {
-    fabric_fast_ack<FabricBarrierType::NONPOSTED_ATOMICS_ACKED>(connection, received_header, increment_value, flush);
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_ATOMICS_ACKED, Direction>(
+        connections, received_header, increment_value, flush);
 }
 
 /**
@@ -555,12 +601,18 @@ FORCE_INLINE void fabric_fast_read_ack(
  * the source. It handles breaking up large data into multiple packets if needed,
  * and uses a fused atomic increment on the last packet to signal completion.
  *
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
+ * @tparam FabricConnectionType The connection type
+ * @tparam NumConnections Number of mux connections
+ * @param connections Array of mux connections [local, downstream_en, downstream_ws]
  * @param received_header Pointer to the received read request packet header
  * @param src_addr Local source address where the requested data is stored
  */
-template <typename FabricConnectionType>
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
 FORCE_INLINE void fabric_fast_read_any_len_ack(
-    FabricConnectionType& connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
+    std::array<FabricConnectionType, NumConnections>& connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t src_addr) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();
 
     // Extract read request parameters from the received header
@@ -578,15 +630,20 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::READS_NUM_ACKED>(src_risc_id);
     uint64_t counter_noc_addr = get_noc_addr(src_noc_x, src_noc_y, counter_addr);
 
+    // Determine which mux connection to use
+    uint32_t mux_idx = select_mux_connection<Direction>(src_chip_id);
+
     fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
     while (size_bytes > max_fabric_payload_size) {
-        fabric_fast_read_ack<false>(connection, response_header, src_addr, dest_addr, max_fabric_payload_size);
+        fabric_fast_read_ack<false>(
+            connections[mux_idx], response_header, src_addr, dest_addr, max_fabric_payload_size);
 
         src_addr += max_fabric_payload_size;
         dest_addr += max_fabric_payload_size;
         size_bytes -= max_fabric_payload_size;
     }
-    fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
+    fabric_fast_read_ack<true>(
+        connections[mux_idx], response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
 }
 
 }  // namespace tt::tt_fabric::udm

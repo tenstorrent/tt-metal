@@ -323,7 +323,9 @@ void FabricUnicastCommon(
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::tuple<RoutingDirection, uint32_t /*num_hops*/>& pair_ordered_dir);
+    const std::variant<
+        std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
+        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
