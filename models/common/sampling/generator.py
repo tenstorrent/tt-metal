@@ -106,7 +106,10 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     def reset_sampling_params(self, sampling_params):
         self.tt_sampling.reset_params(
-            k=sampling_params.top_k, p=sampling_params.top_p, temp=sampling_params.temperature
+            k=sampling_params.top_k,
+            p=sampling_params.top_p,
+            temp=sampling_params.temperature,
+            enable_log_probs=sampling_params.enable_log_probs,
         )
         self.tt_penalties.reset_params(
             sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
@@ -126,11 +129,18 @@ class SamplingGenerator:
                 "The provided logits tensor does not match the tensor used during trace capture. "
                 "Call `reset_trace()` before tracing with new tensors."
             )
-        if tt_out_tok is not None and tt_out_tok is not slot["output"]:
-            raise ValueError(
-                "The provided output tensor does not match the tensor used during trace capture. "
-                "Call `reset_trace()` before tracing with new tensors."
-            )
+        if isinstance(slot["output"], tuple):
+            if tt_out_tok is not None and tt_out_tok is not slot["output"][0]:
+                raise ValueError(
+                    "The provided output tensor does not match the tensor used during trace capture. "
+                    "Call `reset_trace()` before tracing with new tensors."
+                )
+        else:
+            if tt_out_tok is not None and tt_out_tok is not slot["output"]:
+                raise ValueError(
+                    "The provided output tensor does not match the tensor used during trace capture. "
+                    "Call `reset_trace()` before tracing with new tensors."
+                )
 
     def _run_sampling(
         self,
@@ -141,8 +151,8 @@ class SamplingGenerator:
     ):
         if penalties_on:
             self.tt_penalties.apply(logits)
-        tt_tokens = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
-        return tt_tokens
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
+        return tt_tokens, tt_log_probs
 
     def capture_trace(
         self,
@@ -173,10 +183,18 @@ class SamplingGenerator:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
 
+        if tt_out_tok is not None:
+            if isinstance(sampled, tuple):
+                output = (tt_out_tok, sampled[-1])
+            else:
+                output = (tt_out_tok, sampled)
+        else:
+            output = sampled
+
         slot["id"] = trace_id
         slot["input"] = logits
-        slot["output"] = tt_out_tok or sampled
-        slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+        slot["output"] = output
+        slot["kwargs"] = {"seed": seed, "tt_out_tok": tt_out_tok}
 
         return slot["output"]
 
