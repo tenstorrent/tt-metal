@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// debug/sanitize_noc.h
+// debug/sanitize.h
 //
 // This file implements a method sanitize noc addresses.
 // Malformed addresses (out of range offsets, bad XY, etc) are stored in L1
@@ -227,7 +227,7 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index
-void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
+void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t l1_addr,
@@ -284,7 +284,7 @@ inline void debug_sanitize_check_linked_transactions(
         // Submitting a non-mcast transaction if there's a linked transaction on any cmd_buf will cause a deadlock.
         auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
         if (watcher_msg->noc_linked_status[noc_id]) {
-            debug_sanitize_post_noc_addr_and_hang(
+            debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
                 l1_addr,
@@ -352,7 +352,7 @@ uint32_t debug_sanitize_noc_addr(
                 return_code = DebugSanitizeNocMulticastInvalidRange;
             }
         }
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, return_code);
     }
 #if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
@@ -370,7 +370,7 @@ uint32_t debug_sanitize_noc_addr(
     if (core_type == AddressableCoreType::PCIE) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
             l1_addr,
@@ -382,7 +382,7 @@ uint32_t debug_sanitize_noc_addr(
     } else if (core_type == AddressableCoreType::DRAM) {
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
             l1_addr,
@@ -393,7 +393,7 @@ uint32_t debug_sanitize_noc_addr(
             debug_valid_dram_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::ETH) {
         if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(
+            debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
                 l1_addr,
@@ -405,7 +405,7 @@ uint32_t debug_sanitize_noc_addr(
         }
     } else if (core_type == AddressableCoreType::TENSIX) {
         if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(
+            debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
                 l1_addr,
@@ -417,7 +417,7 @@ uint32_t debug_sanitize_noc_addr(
         }
     } else {
         // Bad XY
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
             l1_addr,
@@ -450,11 +450,11 @@ void debug_sanitize_noc_and_worker_addr(
 #else
         uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
 
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
-            debug_sanitize_post_noc_addr_and_hang(
+            debug_sanitize_post_addr_and_hang(
                 noc_id,
                 noc_addr,
                 worker_addr,
@@ -473,7 +473,7 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     bool is_virtual_coord = true;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
     if (core_type == AddressableCoreType::DRAM) {
-        debug_sanitize_post_noc_addr_and_hang(
+        debug_sanitize_post_addr_and_hang(
             noc_id,
             addr,
             0,
@@ -482,6 +482,20 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
             DEBUG_SANITIZE_NOC_WRITE,
             DEBUG_SANITIZE_NOC_TARGET,
             DebugSanitizeInlineWriteDramUnsupported);
+    }
+}
+
+void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
+    constexpr uint64_t l1_size = MEM_L1_SIZE;
+    if (addr + len > l1_size) {
+        debug_sanitize_post_addr_and_hang(
+            addr,
+            0,
+            len,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeL1AddrOverflow);
     }
 }
 
@@ -579,6 +593,7 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast) \
     debug_sanitize_check_linked_transactions(noc_id, 0, 0, 0, multicast, DEBUG_SANITIZE_NOC_WRITE);
+#define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_addr(addr, l) debug_sanitize_l1_access(addr, l);
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
@@ -620,5 +635,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_INSERT_DELAY(transaction_type)
 #define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id, multicast)
+
+#define DEBUG_SANITIZE_L1_ADDR(addr, l)
 
 #endif  // WATCHER_ENABLED
