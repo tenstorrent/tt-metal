@@ -40,8 +40,8 @@ struct RepeatAndInterleaveEltwiseMulDeviceOperation {
         const Tensor& a,
         const Tensor& b,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DataType> dtype,
-        const std::optional<MathFidelity> math_fidelity,
+        std::optional<DataType> dtype,
+        std::optional<MathFidelity> math_fidelity,
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
