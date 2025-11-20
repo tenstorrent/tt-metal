@@ -113,18 +113,11 @@ tensor_return_value_t PaddedSliceDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.padded_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     // Include input shape last dimension as it affects pad_output_row decision (RM factory)
     // and max_num_tiles_per_row calculation (Tile factory), which affect kernel selection and CB configs
-    operation::Hash hash = operation::hash_operation<PaddedSliceDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_shape.volume(),
-        input_shape[-1]);  // Last dimension affects pad_output_row and max_num_tiles_per_row
+    operation::Hash hash =
+        operation::hash_operation<PaddedSliceDeviceOperation>(args, program_factory.index(), tensor_args);
 
     return hash;
 }
