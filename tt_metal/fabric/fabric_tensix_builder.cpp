@@ -198,6 +198,28 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
         }
     }
 
+    // Third pass: Build the fabric_router_direction_map_ to track which routers/tensix exist in each direction
+    // for each fabric node and routing plane (link index)
+    for (const auto& device : all_active_devices) {
+        auto dev_id = device->id();
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+        // For each active ethernet channel, record its direction info in the map
+        // By looping through all channels, we naturally cover all directions that have active routers
+        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+
+            // Get the tensix NOC coordinates for this channel
+            auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
+
+            // Record this direction's router/tensix NOC coordinates for this fabric node + routing plane
+            fabric_router_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
+        }
+    }
+
     return true;
 }
 
@@ -219,8 +241,8 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     size_t l1_alignment = hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     // Reserve space for both core types with proper alignment
-    size_t space_per_risc = l1_size / num_used_riscs_per_tensix_;     // Split between MUX and RELAY
-    space_per_risc = (space_per_risc / l1_alignment) * l1_alignment;  // Align down to L1 alignment
+    space_per_risc_ = l1_size / num_used_riscs_per_tensix_;             // Split between MUX and RELAY
+    space_per_risc_ = (space_per_risc_ / l1_alignment) * l1_alignment;  // Align down to L1 alignment
 
     // Get the maximum number of channels per core type based on fabric topology and mode
     auto topology = fabric_context.get_fabric_topology();
@@ -230,18 +252,21 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    num_buffers_per_channel_ = std::bit_floor(space_per_risc_ / space_needed_for_max_channels);
     TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ msut be non-zero");
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
         FabricTensixCoreType core_id = static_cast<FabricTensixCoreType>(i);
-        base_l1_addresses_[core_id] = l1_base + (i * space_per_risc);
+        base_l1_addresses_[core_id] = l1_base + (i * space_per_risc_);
     }
 }
 
 std::shared_ptr<FabricTensixDatamoverMuxConfig> FabricTensixDatamoverConfig::create_mux_config(
     FabricTensixCoreType core_id) {
+    // Calculate the end address for this core's allocated L1 space
+    size_t l1_end_address = base_l1_addresses_[core_id] + space_per_risc_;
+
     return std::make_shared<FabricTensixDatamoverMuxConfig>(
         static_cast<uint8_t>(num_channels_for_mux_),     // num_full_size_channels
         0,                                               // num_header_only_channels
@@ -249,16 +274,21 @@ std::shared_ptr<FabricTensixDatamoverMuxConfig> FabricTensixDatamoverConfig::cre
         0,                                               // num_buffers_header_only_channel
         buffer_size_bytes_full_size_channel_,            // buffer_size_bytes_full_size_channel
         base_l1_addresses_[core_id],                     // base_l1_address
+        l1_end_address,                                  // l1_end_address
         CoreType::WORKER                                 // core_type
     );
 }
 
 std::shared_ptr<FabricTensixDatamoverRelayConfig> FabricTensixDatamoverConfig::create_relay_config(
     FabricTensixCoreType core_id) {
+    // Calculate the end address for this core's allocated L1 space
+    size_t l1_end_address = base_l1_addresses_[core_id] + space_per_risc_;
+
     return std::make_shared<FabricTensixDatamoverRelayConfig>(
         static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_per_channel
         buffer_size_bytes_full_size_channel_,            // buffer_size_bytes
         base_l1_addresses_[core_id],                     // base_l1_address
+        l1_end_address,                                  // l1_end_address
         CoreType::WORKER                                 // core_type
     );
 }
@@ -399,6 +429,26 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
     auto config = get_config(core_id);
     return std::make_pair(
         config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_router_noc_coords(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    auto node_it = fabric_router_noc_coords_map_.find(fabric_node_id);
+    if (node_it == fabric_router_noc_coords_map_.end()) {
+        return nullptr;
+    }
+
+    auto plane_it = node_it->second.find(routing_plane_id);
+    if (plane_it == node_it->second.end()) {
+        return nullptr;
+    }
+
+    auto dir_it = plane_it->second.find(direction);
+    if (dir_it == plane_it->second.end()) {
+        return nullptr;
+    }
+
+    return &(dir_it->second);
 }
 
 // FabricTensixDatamoverBuilder implementation

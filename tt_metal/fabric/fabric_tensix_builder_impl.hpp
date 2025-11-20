@@ -33,10 +33,12 @@ enum class FabricTensixCoreType : uint8_t;
  * - Channel 2: Inter-mux channel (for forwarding traffic between muxes)
  */
 enum class UdmMuxChannelId : uint32_t {
-    WORKER_CHANNEL_BASE = 0,  // Local worker traffic
-    RELAY_CHANNEL = 1,        // Relay connects to mux on this channel
-    INTER_MUX_CHANNEL = 2,    // Inter-mux forwarding channel
-    NUM_CHANNELS = 3
+    WORKER_CHANNEL_BASE = 0,          // Local worker traffic
+    LOCAL_RELAY_CHANNEL = 1,          // Relay connects to mux on this channel
+    EAST_OR_NORTH_RELAY_CHANNEL = 2,  // Upstream East or North Relay connects to mux on this channel
+    WEST_OR_SOUTH_RELAY_CHANNEL = 3,  // Upstream West or South Relay connects to mux on this channel
+    INTER_MUX_CHANNEL = 4,            // Inter-mux forwarding channel
+    NUM_CHANNELS = 5
 };
 
 /**
@@ -106,9 +108,6 @@ public:
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
-    // Pure virtual methods to be implemented by derived classes
-    virtual std::vector<uint32_t> get_compile_time_args() const = 0;
-
     virtual std::vector<uint32_t> get_run_time_args(
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
@@ -130,6 +129,7 @@ protected:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
     // Helper methods
@@ -235,6 +235,7 @@ public:
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
     std::vector<uint32_t> get_compile_time_args() const override;
@@ -252,19 +253,12 @@ public:
         uint8_t num_buffers_per_channel,
         size_t buffer_size_bytes,
         size_t base_l1_address,
+        size_t l1_end_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args() const override;
-
-    size_t get_mux_relay_flow_control_semaphore_address() const {
-        return mux_relay_flow_control_semaphore_region_.get_address();
-    }
-    size_t get_mux_relay_teardown_semaphore_address() const {
-        return mux_relay_teardown_semaphore_region_.get_address();
-    }
-    size_t get_mux_relay_buffer_index_semaphore_address() const {
-        return mux_relay_buffer_index_semaphore_region_.get_address();
-    }
+    // Get compile-time args with fabric node, link, and direction for downstream mux connection info
+    std::vector<uint32_t> get_compile_time_args(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Get relay termination signal address (for mux to write during teardown)
     size_t get_relay_termination_signal_address() const { return termination_signal_region_.get_address(); }
@@ -275,30 +269,53 @@ public:
 
 private:
     // ==================================================================================
-    // Relay-specific memory regions for relay → mux connection
-    // The relay acts as a CLIENT connecting to the mux (both kernels run on same core)
+    // Relay-specific: Support for multiple relay → mux connections
+    // The relay acts as a CLIENT connecting to mux(es) (both kernels run on same core)
     // ==================================================================================
 
-    // Flow control semaphore/counter (relay → mux direction)
-    // - Stored in RELAY's L1 memory
-    // - Relay writes this address to mux's connection_info.worker_semaphore_address during connection setup
-    // - Relay reads from this address to check how many packets mux has consumed
-    // - Mux updates this counter when it consumes a packet from relay
-    // - This acts as a read-counter: tracks how many packets mux has processed from relay's channel
-    MemoryRegion mux_relay_flow_control_semaphore_region_{};
+    // Helper struct to collect mux connection info
+    struct MuxConnectionInfo {
+        uint32_t active;
+        uint32_t noc_x;
+        uint32_t noc_y;
+        size_t buffer_base_addr;
+        size_t connection_handshake_addr;
+        size_t worker_location_info_addr;
+        size_t buffer_index_addr;
+        size_t relay_flow_control_semaphore_addr;
+        size_t relay_teardown_semaphore_addr;
+        size_t relay_buffer_index_semaphore_addr;
+        size_t stream_id;  // Mux's stream ID for credit tracking
+    };
 
-    // Teardown semaphore (relay → mux direction)
+    // Helper to collect mux connection info
+    MuxConnectionInfo get_mux_connection_info(
+        const std::pair<uint32_t, uint32_t>* noc_coords,
+        uint32_t mux_channel_id,
+        uint32_t mux_idx,
+        uint32_t stream_id) const;
+
+    // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws
+    static constexpr uint32_t NUM_MUX_CONNECTIONS = 3;
+
+    // Flow control semaphores (relay → mux direction) for each mux connection
     // - Stored in RELAY's L1 memory
-    // - Relay writes this address to mux's connection_info.worker_teardown_semaphore_address during setup
-    // - Relay writes teardown request, then polls this address waiting for acknowledgment
+    // - Relay reads from these addresses to check how many packets each mux has consumed
+    // - Mux updates its counter when it consumes a packet from relay
+    // - Acts as read-counters: track how many packets each mux has processed from relay's channel
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_flow_control_semaphore_regions_{};
+
+    // Teardown semaphores (relay → mux direction) for each mux connection
+    // - Stored in RELAY's L1 memory
+    // - Relay writes teardown request, then polls these addresses waiting for acknowledgment
     // - Mux writes (via NoC) acknowledgment value when it completes teardown processing
-    MemoryRegion mux_relay_teardown_semaphore_region_{};
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_teardown_semaphore_regions_{};
 
-    // Buffer index synchronization (relay → mux direction) - CURRENTLY UNUSED
+    // Buffer index synchronization (relay → mux direction) - CURRENTLY UNUSED for each mux connection
     // - Stored in RELAY's L1 memory
     // - Unused: Passed to relay's adapter constructor but never stored or accessed
     // - The relay only uses mux's buffer_index_region_ (edm_copy_of_wr_counter_addr) for sync
-    MemoryRegion mux_relay_buffer_index_semaphore_region_{};
+    std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_buffer_index_semaphore_regions_{};
 
     // Memory pool for storing read response data temporarily
     MemoryRegion udm_memory_pool_region_{};

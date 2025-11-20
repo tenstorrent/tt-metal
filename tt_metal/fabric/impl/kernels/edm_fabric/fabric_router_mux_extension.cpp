@@ -220,6 +220,9 @@ void kernel_main() {
     constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
         fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
 
+    // Direction (last compile-time argument)
+    constexpr size_t direction = get_compile_time_arg_val(IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS);
+
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
