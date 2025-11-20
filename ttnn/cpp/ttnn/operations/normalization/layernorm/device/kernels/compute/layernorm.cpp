@@ -147,8 +147,8 @@ void MAIN {
             // we don't pop cb_x until we compute Ex
         }
         // Divide by W
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst0, one_over_W);
+        // binop_with_scalar_tile_init();
+        // mul_unary_tile(dst0, one_over_W);
         pack_tile(dst0, cb_ex);
         reduce_uninit();
         REL();
@@ -258,8 +258,8 @@ void MAIN {
         }
         cb_pop_front(cb_xmm2, Wt);
         // Divide by W
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst0, one_over_W);
+        // binop_with_scalar_tile_init();
+        // mul_unary_tile(dst0, one_over_W);
         pack_reconfig_data_format(cb_ex2);
         pack_tile(dst0, cb_ex2);
         reduce_uninit();
