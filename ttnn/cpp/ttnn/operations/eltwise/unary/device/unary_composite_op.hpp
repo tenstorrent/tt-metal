@@ -28,7 +28,6 @@ enum class UnaryCompositeOpType {
     TRIL,
     TRIU,
     POLYGAMMA,
-    LOGIT,
     LOGICAL_NOT_,
     NORMALIZE_GLOBAL,
     FRAC,
@@ -51,7 +50,6 @@ Tensor _swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
@@ -157,13 +155,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::SWIGLU> {
     static Tensor handle(const Tensor& t1, int32_t dim, const std::optional<MemoryConfig>& mem_cfg) {
         return _swiglu(t1, dim, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::LOGIT> {
-    static Tensor handle(const Tensor& t1, float eps, const std::optional<MemoryConfig>& mem_cfg) {
-        return _logit(t1, eps, mem_cfg);
     }
 };
 
