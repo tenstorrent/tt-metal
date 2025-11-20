@@ -238,7 +238,7 @@ static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
 TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
     const auto& pc = GetParam();
     // Run 3 steps to ensure momentum buffers are properly exercised
-    const uint32_t steps = 1;
+    const uint32_t steps = 2;
     run_steps_and_compare(pc, steps);
 }
 

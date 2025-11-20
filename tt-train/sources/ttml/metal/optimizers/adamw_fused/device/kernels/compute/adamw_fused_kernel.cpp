@@ -122,8 +122,8 @@ void MAIN {
 
         // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
         cb_wait_front(cb_v_t, block_size);
+        copy_tile_to_dst_init_short(cb_v_t);
         reconfig_data_format(cb_v_t, cb_v_t);
-        copy_tile_init(cb_v_t);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_v_t, block_idx, block_size + block_idx);
@@ -144,8 +144,8 @@ void MAIN {
             add_unary_tile(block_size + block_idx, epsilon);
         }
         cb_wait_front(cb_m_t, block_size);
+        copy_tile_to_dst_init_short(cb_m_t);
         reconfig_data_format(cb_m_t, cb_m_t);
-        copy_tile_init(cb_m_t);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_m_t, block_idx, block_idx);
         }
