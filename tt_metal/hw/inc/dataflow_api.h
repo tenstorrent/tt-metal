@@ -3302,7 +3302,7 @@ public:
      */
     T& operator[](uint32_t index) const {
         // TODO: To be moved to a Watcher sanitize check
-        ASSERT((address_ + (index * sizeof(T)) < MEM_L1_SIZE));
+        ASSERT(address_ + (index + 1) * sizeof(T) <= MEM_L1_SIZE);
         return get_unsafe_ptr()[index];
     }
 
@@ -3312,7 +3312,7 @@ public:
      */
     T& operator*() const {
         // TODO: To be moved to a Watcher sanitize check
-        ASSERT(address_ < MEM_L1_SIZE);
+        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
         return get_unsafe_ptr()[0];
     }
 
@@ -3322,7 +3322,7 @@ public:
      */
     tt_l1_ptr T* operator->() const {
         // TODO: To be moved to a Watcher sanitize check
-        ASSERT(address_ < MEM_L1_SIZE);
+        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
         return get_unsafe_ptr();
     }
 
