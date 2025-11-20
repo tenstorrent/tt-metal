@@ -87,6 +87,7 @@ The guide includes:
 1. **Forgetting to register the prim**: Always register in `ttnn::prim` namespace and use it instead of direct calls
 2. **Including runtime-only values in hash**: Only hash compile-time constants that affect program structure
 3. **Not including values that affect the program structure in hash**: Every parameter that has an effect on program structure must be taken into account in the hash
+4. **Redundant tensors in tensor_args_t**: Do not add reduntant arguments like preallocated_output, if legacy operation did not handle that explicitly in create_output_tensors
 
 ## Example Reference
 
