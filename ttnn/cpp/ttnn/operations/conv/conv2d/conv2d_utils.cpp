@@ -1611,7 +1611,8 @@ Tensor fold_input_tensor_if_required(
     if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        auto folded_input_tensor =
+            fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, input_height, input_width, in_channels);
         if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
             auto tensor_to_deallocate = input_tensor;
             tensor_to_deallocate.deallocate(true);
@@ -1636,7 +1637,10 @@ ttnn::Tensor fold_tensor(
     MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4) {
+    std::array<uint32_t, 4> padding_n4,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels) {
     // Validation checks
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
@@ -1646,6 +1650,16 @@ ttnn::Tensor fold_tensor(
     ttnn::Tensor tensor_on_device = tensor;
     if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    // Reshape tensor if needed before folding
+    const auto& current_shape = tensor_on_device.logical_shape();
+    uint32_t batch_size = current_shape[0];
+    bool needs_reshape =
+        (current_shape.rank() == 4 && (current_shape[1] != input_height || current_shape[2] != input_width));
+    if (needs_reshape) {
+        const auto unflattened_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
+        tensor_on_device = ttnn::reshape(tensor_on_device, unflattened_shape, unflattened_shape);
     }
 
     // Core folding operation

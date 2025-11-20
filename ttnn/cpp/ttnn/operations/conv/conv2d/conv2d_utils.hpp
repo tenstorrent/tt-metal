@@ -222,7 +222,10 @@ ttnn::Tensor fold_tensor(
     MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4);
+    std::array<uint32_t, 4> padding_n4,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;
