@@ -513,8 +513,8 @@ public:
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
-    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
-    void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
+    void connect_to_downstream_edm(
+        FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
 
     size_t get_configured_risc_count() const;
 
