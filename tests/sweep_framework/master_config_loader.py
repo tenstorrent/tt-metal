@@ -57,6 +57,7 @@ class TensorConfig:
     dtype: str
     layout: str
     memory_config: Dict
+    storage_type: str = "StorageType::DEVICE"  # Default to DEVICE for backward compatibility
 
 
 class MasterConfigLoader:
@@ -751,12 +752,20 @@ class MasterConfigLoader:
                             # For most unary ops, output matches input
                             output_mem_config = parsed_mem_config
 
+                        # Extract storage_type from tensor_config
+                        storage_type_str = (
+                            tensor_config.storage_type
+                            if hasattr(tensor_config, "storage_type")
+                            else "StorageType::DEVICE"
+                        )
+
                         config_dict = {
                             "shape": tensor_config.shape,
                             "dtype": parsed_dtype,
                             "layout": parsed_layout,
                             "memory_config": parsed_mem_config,
                             "output_memory_config": output_mem_config,
+                            "storage_type": storage_type_str,
                         }
 
                         # Extract operation-specific parameters using registry extractors
@@ -878,14 +887,18 @@ class MasterConfigLoader:
                 input_a_layouts = []
                 input_a_memory_configs = []
                 output_memory_configs = []
+                storage_types = []
                 traced_config_names = []
                 dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
                 end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
                 dim0_list = [] if operation_name == "transpose" else None
                 dim1_list = [] if operation_name == "transpose" else None
                 target_shape_list = [] if operation_name == "reshape" else None
-                padding_list = [] if operation_name == "pad" else None
-                value_list = [] if operation_name == "pad" else None
+                # pad specific parameters (support both padding and output_padded_shape formats)
+                padding_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                output_padded_shape_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                input_tensor_start_list = [] if operation_name in ["pad", "ttnn::pad"] else None
+                value_list = [] if operation_name in ["pad", "ttnn::pad"] else None
                 padded_shape_list = [] if operation_name == "tilize_with_val_padding" else None
                 pad_value_list = [] if operation_name == "tilize_with_val_padding" else None
                 num_heads_list = (
@@ -992,6 +1005,7 @@ class MasterConfigLoader:
                     input_a_layouts.append(cfg["layout"])
                     input_a_memory_configs.append(cfg["memory_config"])
                     output_memory_configs.append(cfg["output_memory_config"])
+                    storage_types.append(cfg.get("storage_type", "StorageType::DEVICE"))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     if (operation_name == "permute" or operation_name == "ttnn::permute") and "dims" in cfg:
                         dims_list.append(cfg["dims"])
@@ -1003,10 +1017,17 @@ class MasterConfigLoader:
                             dim1_list.append(cfg["dim1"])
                     if operation_name == "reshape" and "target_shape" in cfg:
                         target_shape_list.append(cfg["target_shape"])
-                    if operation_name == "pad":
+                    if operation_name == "pad" or operation_name == "ttnn::pad":
                         if "padding" in cfg and "value" in cfg:
+                            # Using padding format
                             padding_list.append(cfg["padding"])
                             value_list.append(cfg["value"])
+                        elif "output_padded_shape" in cfg and "input_tensor_start" in cfg and "value" in cfg:
+                            # Using output_padded_shape format
+                            output_padded_shape_list.append(cfg["output_padded_shape"])
+                            input_tensor_start_list.append(cfg["input_tensor_start"])
+                            value_list.append(cfg["value"])
+                        # Note: If neither format matches, this config will be skipped (no pad params added)
                     if operation_name == "tilize_with_val_padding":
                         if "padded_shape" in cfg and "pad_value" in cfg:
                             padded_shape_list.append(cfg["padded_shape"])
@@ -1064,6 +1085,7 @@ class MasterConfigLoader:
                     "input_a_layout",
                     "input_a_memory_config",
                     "output_memory_config",
+                    "storage_type",
                 ]
                 param_lists = [
                     input_shapes,
@@ -1071,6 +1093,7 @@ class MasterConfigLoader:
                     input_a_layouts,
                     input_a_memory_configs,
                     output_memory_configs,
+                    storage_types,
                 ]
 
                 # Add operation-specific parameters
@@ -1086,9 +1109,34 @@ class MasterConfigLoader:
                 if operation_name == "reshape" and target_shape_list:
                     param_names.append("target_shape")
                     param_lists.append(target_shape_list)
-                if operation_name == "pad" and padding_list and value_list:
-                    param_names.extend(["padding", "value"])
-                    param_lists.extend([padding_list, value_list])
+                if operation_name == "pad" or operation_name == "ttnn::pad":
+                    # Handle both formats - separate value lists for each format
+                    padding_value_list = []
+                    output_shape_value_list = []
+
+                    # Extract values matching each format from paired_configs
+                    for idx, cfg in enumerate(paired_configs):
+                        if "padding" in cfg and "value" in cfg:
+                            padding_value_list.append(cfg["value"])
+                        elif "output_padded_shape" in cfg and "input_tensor_start" in cfg and "value" in cfg:
+                            output_shape_value_list.append(cfg["value"])
+
+                    # Use the format that has the most configs
+                    padding_count = len(padding_list) if padding_list else 0
+                    output_shape_count = len(output_padded_shape_list) if output_padded_shape_list else 0
+
+                    if output_shape_count > padding_count:
+                        # Use output_padded_shape format (has more configs)
+                        if len(output_shape_value_list) == output_shape_count:
+                            param_names.extend(["output_padded_shape", "input_tensor_start", "value"])
+                            param_lists.extend(
+                                [output_padded_shape_list, input_tensor_start_list, output_shape_value_list]
+                            )
+                    elif padding_count > 0:
+                        # Use padding format
+                        if len(padding_value_list) == padding_count:
+                            param_names.extend(["padding", "value"])
+                            param_lists.extend([padding_list, padding_value_list])
                 if operation_name == "tilize_with_val_padding" and padded_shape_list and pad_value_list:
                     param_names.extend(["padded_shape", "pad_value"])
                     param_lists.extend([padded_shape_list, pad_value_list])
@@ -2619,10 +2667,23 @@ class MasterConfigLoader:
         dtype_str = tensor_layout.get("dtype", "DataType::BFLOAT16")
         memory_config = tensor_layout.get("memory_config", {})
 
-        # Determine layout (simplified - would need more logic for accurate detection)
-        layout = "TILE"  # Default assumption for most ops
+        # Extract layout from tensor_data (top level, added by graph tracer)
+        layout_str = tensor_data.get("layout", "")
+        if layout_str:
+            # Clean up layout string: "Layout::ROW_MAJOR" -> "ROW_MAJOR"
+            layout = layout_str.replace("Layout::", "")
+        else:
+            # Fallback: Determine layout (simplified - would need more logic for accurate detection)
+            layout = "TILE"  # Default assumption for most ops
 
-        return TensorConfig(shape=shape, dtype=dtype_str, layout=layout, memory_config=memory_config)
+        # Extract storage_type from tensor_data (top level, added by graph tracer)
+        storage_type = tensor_data.get("storage_type", "StorageType::DEVICE")
+        if not storage_type:
+            storage_type = "StorageType::DEVICE"  # Default to DEVICE
+
+        return TensorConfig(
+            shape=shape, dtype=dtype_str, layout=layout, memory_config=memory_config, storage_type=storage_type
+        )
 
     def convert_to_sweep_parameters(self, operation_name: str, max_configs: int = 50) -> Dict[str, Dict]:
         """Convert master JSON configs to sweep test parameters"""

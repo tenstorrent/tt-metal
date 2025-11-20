@@ -837,42 +837,75 @@ class OperationParameterExtractors:
 
     @staticmethod
     def _extract_pad_parameters(config: List) -> Optional[Dict]:
-        """Extract parameters for pad operation"""
+        """Extract parameters for pad operation
+
+        ttnn.pad has two overloads:
+        1. pad(input, padding, value) - padding is list[Tuple[int,int]]
+        2. pad(input, output_padded_shape, input_tensor_start, value) - output_padded_shape is Array4D
+
+        We need to detect which format is used based on arg1:
+        - If arg1 is nested list (e.g., [[0,0], [0,13], [0,0], [0,0]]), it's padding format
+        - If arg1 is flat 4-element list (e.g., [32, 16, 3, 3]), it's output_padded_shape format
+        """
         try:
             padding = None
+            output_padded_shape = None
+            input_tensor_start = None
             value = None
+
             for arg in config:
                 if isinstance(arg, dict):
                     if "arg1" in arg:
-                        padding = OperationParameterExtractors._parse_list_from_string(arg["arg1"])
-                        # Normalize padding format
-                        if padding and isinstance(padding, list):
-                            # Check if it's a flat list that needs conversion
-                            if len(padding) == 4 and all(isinstance(x, int) for x in padding):
-                                # Convert [front_H, back_H, front_W, back_W] to [[0,0], [0,0], [front_H, back_H], [front_W, back_W]]
-                                padding = [
-                                    [0, 0],
-                                    [0, 0],
-                                    [padding[0], padding[1]],
-                                    [padding[2], padding[3]],
-                                ]
+                        arg1_parsed = OperationParameterExtractors._parse_list_from_string(arg["arg1"])
+                        if arg1_parsed and isinstance(arg1_parsed, list):
+                            # Check if it's nested list (padding format) or flat list (output_padded_shape format)
+                            if len(arg1_parsed) > 0 and isinstance(arg1_parsed[0], list):
+                                # Nested list - this is padding format
+                                padding = arg1_parsed
+                            elif len(arg1_parsed) == 4 and all(isinstance(x, int) for x in arg1_parsed):
+                                # Flat 4-element list - this is output_padded_shape format
+                                output_padded_shape = arg1_parsed
+
                     if "arg2" in arg:
-                        value = OperationParameterExtractors._parse_numeric_value(arg["arg2"])
-                        # Value must be a single float, not a list
+                        arg2_parsed = OperationParameterExtractors._parse_list_from_string(arg["arg2"])
+                        if padding is not None:
+                            # Padding format: arg2 is value
+                            value = OperationParameterExtractors._parse_numeric_value(arg["arg2"])
+                            if isinstance(value, list):
+                                if len(set(value)) == 1:
+                                    value = float(value[0])
+                                else:
+                                    value = float(value[0])
+                            elif value is not None:
+                                value = float(value)
+                        elif output_padded_shape is not None:
+                            # Output shape format: arg2 is input_tensor_start
+                            if arg2_parsed and isinstance(arg2_parsed, list) and len(arg2_parsed) == 4:
+                                input_tensor_start = arg2_parsed
+
+                    if "arg3" in arg and output_padded_shape is not None:
+                        # Output shape format: arg3 is value
+                        value = OperationParameterExtractors._parse_numeric_value(arg["arg3"])
                         if isinstance(value, list):
-                            # If all elements are the same, use that value
                             if len(set(value)) == 1:
                                 value = float(value[0])
                             else:
-                                # Use the first element (or could skip this config)
                                 value = float(value[0])
                         elif value is not None:
                             value = float(value)
 
+            # Return appropriate format
             if padding is not None and value is not None:
                 return {"padding": padding, "value": value}
+            elif output_padded_shape is not None and input_tensor_start is not None and value is not None:
+                # Return output_padded_shape format - sweep test will handle conversion
+                return {
+                    "output_padded_shape": output_padded_shape,
+                    "input_tensor_start": input_tensor_start,
+                    "value": value,
+                }
             return None
-        except Exception:
+        except Exception as e:
             return None
 
     @staticmethod

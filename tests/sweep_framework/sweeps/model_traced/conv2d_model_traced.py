@@ -50,6 +50,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_specs,
     is_conv1d=False,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:

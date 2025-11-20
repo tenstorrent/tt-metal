@@ -6,7 +6,7 @@ import ttnn
 
 
 def default_device():
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
     device_name = ttnn.get_arch_name()
 
     yield (device, device_name)

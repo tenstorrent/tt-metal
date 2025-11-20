@@ -31,6 +31,7 @@ parameters = {
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -45,6 +46,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:

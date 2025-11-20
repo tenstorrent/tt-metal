@@ -73,6 +73,7 @@ def run(
     input_memory_config,
     weight_memory_config,
     output_memory_config,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:

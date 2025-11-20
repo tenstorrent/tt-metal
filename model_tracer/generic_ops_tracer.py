@@ -84,6 +84,7 @@ class OperationsTracingPlugin:
         self.trace_active = False
         self.output_dir = "OUTPUT_DIR_PLACEHOLDER"
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.test_counter = 0  # Counter to make each trace file unique
         self.valid_operations = self.load_valid_operations()
         self.current_test_source = None  # Will be set in pytest_runtest_setup
 
@@ -312,12 +313,30 @@ class OperationsTracingPlugin:
         # Load existing master data with grouped structure
         master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
 
-        if os.path.exists(master_file_path):
-            try:
-                with open(master_file_path, 'r') as f:
-                    master_data = json.load(f)
+        # Load existing master file with retry logic for file locking
+        max_retries = 5
+        retry_delay = 0.1  # 100ms
 
-                # Handle legacy format conversion
+        if os.path.exists(master_file_path):
+            for attempt in range(max_retries):
+                try:
+                    with open(master_file_path, 'r') as f:
+                        master_data = json.load(f)
+                    break  # Success, exit retry loop
+                except (IOError, json.JSONDecodeError) as e:
+                    if attempt < max_retries - 1:
+                        # Wait and retry (another test might be writing)
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        # Last attempt failed
+                        print(f"⚠️ Could not load existing master file after {max_retries} attempts: {str(e)}. Starting fresh.")
+                        master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
+                        break
+
+            # Handle legacy format conversion
+            try:
                 if 'content' in master_data and 'operations' not in master_data:
                     print("🔄 Converting legacy format to grouped format...")
                     operations_dict = {}
@@ -367,8 +386,11 @@ class OperationsTracingPlugin:
                         master_data['operations'][op_name]['configurations'] = converted_configs
 
             except (json.JSONDecodeError, IOError) as e:
-                print(f"⚠️ Could not load existing master file: {str(e)}. Starting fresh.")
+                print(f"⚠️ Error processing master file format: {str(e)}. Starting fresh.")
                 master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
+        else:
+            # File doesn't exist, start fresh
+            master_data = {"operations": {}, "metadata": {"models": [], "total_operations": 0, "unique_operations": 0}}
 
         # Group new operations by operation name and collect unique configurations
         new_configs_added = 0
@@ -430,12 +452,28 @@ class OperationsTracingPlugin:
 
         master_data['metadata']['operation_types'] = op_types
 
-        # Save updated master file
+        # Save updated master file with file locking to prevent race conditions
+        # Use atomic write (write to temp file, then rename) to prevent corruption
+        import tempfile
+        import shutil
+
         try:
-            with open(master_file_path, 'w') as f:
+            # Write to temporary file first (atomic operation)
+            temp_file = master_file_path + '.tmp'
+            with open(temp_file, 'w') as f:
                 json.dump(master_data, f, indent=2, default=str)
-        except (IOError, TypeError) as e:
+
+            # Atomic rename (replaces existing file atomically)
+            shutil.move(temp_file, master_file_path)
+        except (IOError, TypeError, OSError) as e:
             print(f"❌ Error saving master file: {e}")
+            # Clean up temp file if it exists
+            temp_file = master_file_path + '.tmp'
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
             # Try to save without problematic data
             try:
                 # Create a simplified version if full serialization fails
@@ -443,11 +481,20 @@ class OperationsTracingPlugin:
                     "operations": {},
                     "metadata": master_data.get('metadata', {})
                 }}
-                with open(master_file_path, 'w') as f:
+                temp_file = master_file_path + '.tmp'
+                with open(temp_file, 'w') as f:
                     json.dump(simplified_data, f, indent=2, default=str)
+                shutil.move(temp_file, master_file_path)
                 print("💾 Saved simplified master file without problematic operations")
             except Exception as e2:
                 print(f"❌ Failed to save even simplified master file: {e2}")
+                # Clean up temp file
+                temp_file = master_file_path + '.tmp'
+                if os.path.exists(temp_file):
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
 
         return new_configs_added
 
@@ -495,6 +542,7 @@ class OperationsTracingPlugin:
 
         print(f"\\n🔍 Starting operations trace for: {item.name}")
         print(f"📝 Source tag: {self.current_test_source}")
+        print(f"🔢 Test number: {self.test_counter + 1}")  # Show which test number this is
         if hf_model:
             print(f"🤗 HuggingFace Model: {hf_model}")
         if llama_dir:
@@ -573,13 +621,17 @@ class OperationsTracingPlugin:
 
                 new_configs_added = self.update_master_file(master_file, filtered_operations, test_source)
                 print(f"📝 Added {new_configs_added} new unique configurations to master file (source: {test_source})")
+                print(f"   📊 Captured {len(filtered_operations)} operations from this test")
 
             # Generate trace filename - sanitize the test name
             test_name = item.name.replace("[", "_").replace("]", "_").replace(":", "_").replace("/", "_").replace("-", "_")
             # Limit filename length
             if len(test_name) > 100:
                 test_name = test_name[:100]
-            trace_file = os.path.join(self.output_dir, f"{test_name}_filtered_ops_{self.timestamp}.json")
+            # Increment counter for each test to ensure unique filenames
+            self.test_counter += 1
+            trace_file = os.path.join(self.output_dir, f"{test_name}_filtered_ops_{self.timestamp}_{self.test_counter:03d}.json")
+            print(f"📁 Creating trace file #{self.test_counter}: {os.path.basename(trace_file)}")
 
             # Save trace data (clean it first to ensure JSON serialization)
             try:
@@ -701,26 +753,67 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False):
         text=True,
     )
 
-    # Check for created trace files - get the most recent one
+    # Check for created trace files - get all files from current run
+    # Use timestamp in filename to group files from same run (more reliable than mtime)
     trace_files = []
     if os.path.exists(output_dir):
-        files_with_time = []
+        import time
+        import re
+
+        current_time = time.time()
+        files_with_timestamp = []
+
+        # Extract timestamp from filename pattern: name_filtered_ops_TIMESTAMP_COUNTER.json
+        timestamp_pattern = r"_filtered_ops_(\d{8}_\d{6})_(\d{3})\.(json|txt)$"
+
         for f in os.listdir(output_dir):
             if ("_ops_" in f and (f.endswith(".json") or f.endswith(".txt"))) and f != "conftest.py":
                 file_path = os.path.join(output_dir, f)
                 file_time = os.path.getmtime(file_path)
-                files_with_time.append((file_time, file_path))
 
-        # Sort by modification time (most recent first) and take only recent files
-        files_with_time.sort(reverse=True)
-        if files_with_time:
-            # Only include files from the last 30 seconds (current run)
-            import time
+                # Try to extract timestamp from filename
+                match = re.search(timestamp_pattern, f)
+                if match:
+                    file_timestamp_str = match.group(1)  # e.g., "20251120_070439"
+                    file_counter = match.group(2)  # e.g., "001"
+                    files_with_timestamp.append((file_timestamp_str, file_counter, file_time, file_path))
+                else:
+                    # Fallback: use modification time for files without timestamp pattern
+                    # Only include if created in last 60 seconds
+                    if current_time - file_time < 60:
+                        files_with_timestamp.append((None, None, file_time, file_path))
 
-            current_time = time.time()
-            for file_time, file_path in files_with_time:
-                if current_time - file_time < 30:  # Files created in last 30 seconds
-                    trace_files.append(file_path)
+        if files_with_timestamp:
+            # Group files by timestamp (files with same timestamp are from same run)
+            timestamp_groups = {}
+            for ts_str, counter, mtime, file_path in files_with_timestamp:
+                if ts_str:
+                    if ts_str not in timestamp_groups:
+                        timestamp_groups[ts_str] = []
+                    timestamp_groups[ts_str].append((int(counter), mtime, file_path))
+
+            # Get the most recent timestamp group (current run)
+            if timestamp_groups:
+                # Sort by modification time of first file in each group
+                sorted_groups = sorted(
+                    timestamp_groups.items(), key=lambda x: max(f[1] for f in x[1]), reverse=True  # Max mtime in group
+                )
+
+                # Take files from the most recent timestamp group
+                most_recent_timestamp, files_in_group = sorted_groups[0]
+                # Sort by counter to maintain test order
+                files_in_group.sort(key=lambda x: x[0])  # Sort by counter
+                trace_files = [f[2] for f in files_in_group]  # Extract file paths
+                print(f"🔍 Found {len(trace_files)} trace file(s) with timestamp {most_recent_timestamp}")
+            else:
+                # Fallback: use modification time for files without timestamp
+                files_with_time = [(mtime, file_path) for _, _, mtime, file_path in files_with_timestamp]
+                files_with_time.sort(reverse=True)
+                if files_with_time:
+                    most_recent_time = files_with_time[0][0]
+                    trace_files = [
+                        file_path for file_time, file_path in files_with_time if most_recent_time - file_time < 60
+                    ]
 
     return {
         "success": result.returncode == 0,
@@ -776,44 +869,50 @@ Examples:
 
         print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
 
-        # Show current trace file details only
+        # Show all trace files if multiple tests ran
         if result["trace_files"]:
-            trace_file = result["trace_files"][0]  # Show only the latest/current file
-            file_size = os.path.getsize(trace_file)
+            total_operations = 0
+            all_op_counts = {}
 
-            # Try to show operation count and types
-            if trace_file.endswith(".json"):
-                try:
-                    with open(trace_file, "r") as f:
-                        data = json.load(f)
-                    if isinstance(data, dict) and "content" in data:
-                        operations = data["content"]
-                        op_counts = {}
-                        for op in operations:
-                            if isinstance(op, dict) and "operation" in op:
-                                op_name = op["operation"]
-                                op_counts[op_name] = op_counts.get(op_name, 0) + 1
+            print(f"📊 Found {len(result['trace_files'])} trace file(s) from {len(result['trace_files'])} test(s):")
 
-                        print(f"📊 Captured: {len(operations)} operations, {len(op_counts)} unique types")
-                        print(f"💾 File: {os.path.basename(trace_file)} ({file_size:,} bytes)")
+            # Aggregate operations from all trace files
+            for idx, trace_file in enumerate(result["trace_files"], 1):
+                file_size = os.path.getsize(trace_file)
+                print(f"\n   Test {idx}: {os.path.basename(trace_file)} ({file_size:,} bytes)")
 
-                        # Count unique configurations in current test only
-                        if op_counts:
-                            print("🔧 Unique Configurations (current test):")
-                            sorted_ops = sorted(op_counts.items(), key=lambda x: x[1], reverse=True)
-                            for op_name, exec_count in sorted_ops:
-                                # Count unique argument signatures in current test
-                                unique_args = set()
-                                for op in operations:
-                                    if isinstance(op, dict) and op.get("operation") == op_name:
-                                        args_signature = str(op.get("arguments", []))
-                                        unique_args.add(args_signature)
+                # Try to show operation count and types
+                if trace_file.endswith(".json"):
+                    try:
+                        with open(trace_file, "r") as f:
+                            data = json.load(f)
+                        if isinstance(data, dict) and "content" in data:
+                            operations = data["content"]
+                            total_operations += len(operations)
 
-                                unique_count = len(unique_args)
-                                print(f"   • {op_name}: {unique_count} unique configs ({exec_count}x executed)")
+                            op_counts = {}
+                            for op in operations:
+                                if isinstance(op, dict) and "operation" in op:
+                                    op_name = op["operation"]
+                                    op_counts[op_name] = op_counts.get(op_name, 0) + 1
+                                    # Aggregate across all tests
+                                    all_op_counts[op_name] = all_op_counts.get(op_name, 0) + op_counts[op_name]
 
-                except:
-                    print(f"💾 File: {os.path.basename(trace_file)} ({file_size:,} bytes)")
+                            print(f"      📊 Captured: {len(operations)} operations, {len(op_counts)} unique types")
+
+                    except Exception as e:
+                        print(f"      ⚠️ Could not read trace file: {e}")
+
+            # Show aggregated summary if multiple tests
+            if len(result["trace_files"]) > 1:
+                print(f"\n📊 Total across all tests: {total_operations} operations, {len(all_op_counts)} unique types")
+
+            # Show unique configurations from the last test (or aggregate if multiple)
+            if all_op_counts:
+                print("\n🔧 Unique Configurations:")
+                sorted_ops = sorted(all_op_counts.items(), key=lambda x: x[1], reverse=True)
+                for op_name, exec_count in sorted_ops:
+                    print(f"   • {op_name}: {exec_count}x executed")
 
         if result["success"] and result["trace_files"]:
             print("\\n✅ Operations extracted successfully!")

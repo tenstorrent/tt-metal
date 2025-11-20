@@ -40,6 +40,7 @@ parameters = {
         "transpose_a": [False],
         "transpose_b": [False],
         "has_bias": [True],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -62,6 +63,7 @@ def run(
     transpose_a,
     transpose_b,
     has_bias,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:

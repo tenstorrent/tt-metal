@@ -26,6 +26,7 @@ parameters = {
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -40,6 +41,7 @@ def run(
     input_a_memory_config,
     output_memory_config,
     num_heads,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:
@@ -83,13 +85,21 @@ def run(
     else:
         torch_output_tensor = torch_input_tensor_a.clone()
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    # Check if storage_type is HOST - if so, don't pass device to from_torch
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    # Build from_torch arguments based on storage_type
+    from_torch_kwargs = {
+        "dtype": input_a_dtype,
+        "layout": input_a_layout,
+    }
+
+    # Only add device and memory_config if not HOST storage
+    if not is_host:
+        from_torch_kwargs["device"] = device
+        from_torch_kwargs["memory_config"] = input_a_memory_config
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.experimental.nlp_concat_heads_decode(

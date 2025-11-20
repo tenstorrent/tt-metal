@@ -32,6 +32,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
     },
 }
 
@@ -49,6 +50,7 @@ def run(
     input_b_layout,
     input_b_memory_config,
     output_memory_config,
+    storage_type="StorageType::DEVICE",
     *,
     device,
 ) -> list:
@@ -96,13 +98,21 @@ def run(
     # If direct creation fails, try creating interleaved first then converting to sharded
     # This matches how models typically create sharded tensors
     try:
-        input_tensor_a = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
+        # Check if storage_type is HOST - if so, don't pass device to from_torch
+        is_host = storage_type and "HOST" in str(storage_type)
+
+        # Build from_torch arguments based on storage_type
+        from_torch_kwargs = {
+            "dtype": input_a_dtype,
+            "layout": input_a_layout,
+        }
+
+        # Only add device and memory_config if not HOST storage
+        if not is_host:
+            from_torch_kwargs["device"] = device
+            from_torch_kwargs["memory_config"] = input_a_memory_config
+
+        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
     except RuntimeError:
         # If direct creation fails, try interleaved->sharded conversion
         input_tensor_a_interleaved = ttnn.from_torch(
@@ -139,13 +149,21 @@ def run(
     else:
         # Use the traced config directly if it's already INTERLEAVED
         try:
-            input_tensor_b = ttnn.from_torch(
-                torch_input_tensor_b,
-                dtype=input_b_dtype,
-                layout=input_b_layout,
-                device=device,
-                memory_config=input_b_memory_config,
-            )
+            # Check if storage_type is HOST - if so, don't pass device to from_torch
+            is_host = storage_type and "HOST" in str(storage_type)
+
+            # Build from_torch arguments based on storage_type
+            from_torch_kwargs = {
+                "dtype": input_b_dtype,
+                "layout": input_b_layout,
+            }
+
+            # Only add device and memory_config if not HOST storage
+            if not is_host:
+                from_torch_kwargs["device"] = device
+                from_torch_kwargs["memory_config"] = input_b_memory_config
+
+            input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
         except RuntimeError:
             # If direct creation fails, try interleaved->sharded conversion
             input_tensor_b_interleaved = ttnn.from_torch(
