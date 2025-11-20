@@ -18,6 +18,9 @@ Conv2dDRAMSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnu
 Conv2dL1Full = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.L1Full
 Conv2dL1FullSliceConfig = Conv2dSliceConfig(slice_type=Conv2dL1Full)
 
+Conv2dSliceAttr = ttnn._ttnn.operations.conv.Conv2dSliceAttr
+run_sliced_op = ttnn._ttnn.operations.op_slicing.run_sliced_op
+
 
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     """
