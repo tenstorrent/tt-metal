@@ -164,6 +164,24 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
             False,
             (0, 5),
         ),
+        (
+            75776,
+            5120,
+            1280,
+            3,
+            4,
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            256,
+            256,
+            256,
+            2,
+            2,
+            ttnn.CoreCoord(8, 5),
+            False,
+            (0, 6),
+        ),
     ],
     ids=[
         "base1link",  # 1 forward pass through K
@@ -174,6 +192,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         "4x4mmcores4link",
         "fulltest1link",
         "fulltest4link",
+        "wan1",
     ],
 )
 @pytest.mark.parametrize(
