@@ -32,6 +32,199 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     return 1;
 }
 
+std::vector<uint32_t> get_fuse_sync_ct_args(const CoreRangeSet& sync_core_grids) {}
+
+void validate_fuse_sync_args(
+    const CoreRangeSet& sub_core_grids,
+    const std::optional<GlobalSemaphore>& semaphore,
+    const std::optional<CoreRangeSet>& sync_core_grids) {
+    if (sync_core_grids.has_value()) {
+        TT_FATAL(semaphore.has_value(), "Expected a semaphore with sync cores");
+        TT_FATAL(
+            sync_core_grids.contains(sub_core_grids), "synchronized cores must be a superset of untilize worker cores");
+
+        auto core_range = sync_core_grids.ranges().back();
+        for(for auto cr_iter =sync_core_grids.ranges().begin()+1; cr_iter!= core_range_iter.ranges().end(); ++cr_iter){
+            // This optional is empty if the ranges are not contiguous
+            auto maybe_merged_range = core_range.merge(*cr_iter);
+            TT_FATAL(maybe_merged_range.has_value(), "Sync core ranges must all be contiguous");
+            core_range = maybe_merged_range.value();
+        }
+    }
+}
+
+operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const CoreRangeSet& sub_core_grids,
+    const std::optional<GlobalSemaphore>& semaphore,
+    const std::optional<CoreRangeSet>& sync_core_grids,
+    uint32_t max_tiles_per_block) {
+    tt::tt_metal::Program program{};
+
+    const auto input_dtype = input_tensor.dtype();
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_dtype);
+    const uint32_t input_tile_size_bytes = tt::tile_size(input_cb_data_format);
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    const uint32_t output_tile_size_bytes = tt::tile_size(output_cb_data_format);
+
+    const auto& padded_shape = input_tensor.padded_shape();
+
+    const uint32_t ntiles_per_row = padded_shape[-1] / TILE_WIDTH;
+    const uint32_t ntiles_per_block = std::min(max_tiles_per_block, ntiles_per_row);
+
+    const uint32_t ntiles_per_column = padded_shape[-2] / TILE_HEIGHT;
+    const auto upper_dim =
+        std::accumulate(padded_shape.cbegin(), padded_shape.cend() - 2, 1u, std::multiplies<uint32_t>());
+    const auto total_column_tiles = ntiles_per_column*upper_dim;
+    const uint32_t ncores = std::min(sub_core_grids.num_cores(), total_column_tiles);
+
+    const uint32_t num_col_tiles_per_core = tt::div_up(total_column_tiles, ncores);
+
+    const auto cores = corerange_to_cores(sub_core_grids, ncores, true);
+    std::variant<CoreCoord, CoreRange, CoreRangeSet> all_cores;
+    if (ncores == 1) {
+        all_cores = cores.at(0);
+    } else {
+        all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
+    }
+
+    const uint32_t num_pages_cb = ntiles_per_block * 2;
+    auto [src0_cb_index, cb_src0] = create_cb(
+        tt::CBIndex::c_0, program, all_cores, input_tile_size_bytes, num_pages_cb, input_cb_data_format, nullptr);
+
+    auto [output_cb_index, cb_output] = create_cb(
+        tt::CBIndex::c_16,
+        program,
+        all_cores,
+        output_tile_size_bytes,
+        num_pages_cb,
+        output_cb_data_format,
+        nullptr);
+
+    Buffer* input_buffer = input_tensor.buffer();
+    Buffer* output_buffer = output_tensor.buffer();
+    std::vector<uint32_t> reader_ct_args;
+    TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+
+    auto reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        all_cores,
+        ReaderDataMovementConfig(reader_ct_args));
+
+    const uint32_t output_page_size_bytes = padded_shape[-1] * output_tensor.element_size();
+    std::vector<uint32_t> writer_ct_args = {output_page_size_bytes};
+    TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
+
+    auto writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+        "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
+        all_cores,
+        WriterDataMovementConfig(writer_ct_args));
+
+    /** compute
+     */
+    std::vector<uint32_t> compute_args = {
+        0,                 // unused
+        ntiles_per_block,  // per_block_ntiles
+        src0_cb_index,
+        output_cb_index};
+    std::map<std::string, std::string> compute_kernel_defines = {{"VARIABLE_BLOCK_COUNT", "1"}};
+    if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    if (!use_pack_untilize || input_dtype == DataType::UINT16 ||
+        (input_dtype == DataType::FLOAT32 && ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
+        log_debug(tt::LogOp, "Using slow untilize.");
+        compute_kernel =
+            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+    } else {
+        log_debug(tt::LogOp, "Using fast pack untilize.");
+    }
+
+    auto compute_kernel_id = CreateKernel(
+        program,
+        compute_kernel,
+        all_cores,
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
+
+    std::vector<CoreCoord> cores_with_rtargs;
+
+    constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 6;
+    uint32_t column_tile_start_id = 0;
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        const CoreCoord& core = cores[i];
+
+        // reader runtime args
+        const auto num_col_tiles_this_core =
+            std::min(num_col_tiles_per_core, total_column_tiles - column_tile_start_id);
+        const auto ntiles_total_per_core = num_col_tiles_this_core * ntiles_per_row;
+        const auto nblocks_per_core = ntiles_total_per_core / ntiles_per_block;
+        const auto tile_start_id = column_tile_start_id * ntiles_per_row;
+        const std::array<uint32_t, num_rt_args_reader> reader_rt_args = {
+            input_buffer->address(),  // src_addr
+            ntiles_total_per_core,    // ntiles
+            tile_start_id             // start_id
+        };
+
+        const auto start_stick_id = column_tile_start_id * TILE_HEIGHT;
+        const auto nsticks_per_core = num_col_tiles_this_core * TILE_HEIGHT;
+        const std::array<uint32_t, num_rt_args_writer> writer_rt_args = {
+            output_buffer->address(),                   // dst_addr
+            nsticks_per_core,                           // nsticks
+            ntiles_per_row,                             // ntiles_per_core
+            TILE_WIDTH * output_tensor.element_size(),  // tile_width_size
+            start_stick_id,                             // start stick id
+            0u  // offset_within_stick each core starts from the beginning of the row
+        };
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {nblocks_per_core});
+
+        cores_with_rtargs.push_back(core);
+        column_tile_start_id += num_col_tiles_this_core;
+    }
+
+    auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
+                                                writer_kernel_id = writer_kernel_id,
+                                                cb_src0 = cb_src0,
+                                                cb_output = cb_output,
+                                                cores_with_rtargs](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&,
+                                                   const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+        {
+            auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            for (const CoreCoord& core : cores_with_rtargs) {
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
+            }
+        }
+
+        {
+            auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            for (const CoreCoord& core : cores_with_rtargs) {
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
 operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     const Tensor& a,
     Tensor& output,

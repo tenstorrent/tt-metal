@@ -1317,3 +1317,23 @@ def test_untilize_multi_core_buffer_type_variations(
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 128, 7168], [1, 1, 2048, 7168], [1, 1, 4096, 7168]])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.DRAM])
+def test_untilize_deepseek(
+    device,
+    dtype,
+    tensor_shape,
+    input_buffer_type,
+    output_buffer_type,
+):
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    sub_core_range = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))])
+
+    ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, sub_core_grids=sub_core_range, _internal_row_wise=True)
+
+    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)

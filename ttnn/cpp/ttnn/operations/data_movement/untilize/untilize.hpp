@@ -16,7 +16,8 @@ struct ExecuteUntilize {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         bool use_multicore = true,
         bool use_pack_untilize = true,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+        bool _internal_row_wise = false);
 };
 
 }  // namespace operations::data_movement

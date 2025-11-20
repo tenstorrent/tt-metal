@@ -232,6 +232,15 @@ operation::ProgramWithCallbacks Untilize::create_program(
         return detail::untilize_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
+    if (this->sub_core_grids.has_value() && this->_internal_row_wise) {
+        // implementation for op fusing. Exposed here for testing.
+        return detail::untilize_row_wise_fuseable(
+            input_tensor_a,
+            output_tensor,
+            this->use_pack_untilize,
+            this->fp32_dest_acc_en,
+            this->sub_core_grids.value());
+    }
     if (this->sub_core_grids.has_value()) {
         // If sub_core_grids parameter is provided, use custom sub_core_grid implementation instead
         // of the standard multicore implementation or the block multicore implementation.
