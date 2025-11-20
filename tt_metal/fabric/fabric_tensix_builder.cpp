@@ -252,6 +252,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
     num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ msut be non-zero");
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
