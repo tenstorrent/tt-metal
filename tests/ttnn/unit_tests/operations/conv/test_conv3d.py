@@ -228,6 +228,7 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
+    num_program_cache_entries = []
     for _ in range(3):
         for i in range(2):
             new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
@@ -235,5 +236,10 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
             run_conv3d_test(
                 device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
             )
+            num_program_cache_entries.append(device.num_program_cache_entries())
 
-    assert device.num_program_cache_entries() == 2
+    # check if first two different inputs have different cache entries, and rest have the same cache entries
+    # because inputs are same as already processed ones
+    assert num_program_cache_entries[0] != num_program_cache_entries[1] and all(
+        x == num_program_cache_entries[1] for x in num_program_cache_entries[1:]
+    )
