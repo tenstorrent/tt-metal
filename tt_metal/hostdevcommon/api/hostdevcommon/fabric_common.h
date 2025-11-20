@@ -227,13 +227,13 @@ struct routing_l1_info_t {
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
     intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
-    std::uint8_t exit_node_table[MAX_NUM_MESHES];                           // 1024 bytes
+    std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
     uint8_t padding[12] = {};  // pad to 16-byte alignment
 } __attribute__((packed));
 
 struct worker_routing_l1_info_t {
-    routing_l1_info_t routing_info;
-    tensix_fabric_connections_l1_info_t fabric_connections;
+    routing_l1_info_t routing_info{};
+    tensix_fabric_connections_l1_info_t fabric_connections{};
 };
 
 struct fabric_routing_l1_info_t {
