@@ -24,7 +24,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["learning_rate"].as<float>();
+    config.learning_rate = training_config["lr"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);

@@ -6,7 +6,7 @@ This directory contains YAML configuration files for training transformer models
 
 There are four main configuration types:
 - **Training Config**: Training hyperparameters and optimization settings
-- **Device Config**: Device mesh and distributed training setup
+- **Device Config**: Device mesh and distributed training setup; *this is expected to be in the same file as the training config*
 - **Model Config**: Model type and architecture configuration
 - **MultiHost Config**: Multi-process execution and pipeline parallelism settings
 
@@ -18,12 +18,11 @@ Training hyperparameters and optimization settings.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `project_name` | str | "tt_train_nano_gpt" | Project name for tracking |
-| `model_type` | str | required | Model architecture type ("gpt2" or "llama") |
 | `seed` | int | 5489 | Random seed for reproducibility |
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
 | `num_epochs` | int | 1 | Number of training epochs |
-| `max_steps` | int | 5000 | Maximum number of training steps |
+| `max_steps` | int | 1000 | Maximum number of training steps |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
@@ -33,7 +32,10 @@ Training hyperparameters and optimization settings.
 ### Optimizer Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `learning_rate` | float | 3e-4 | Learning rate for optimizer |
+| `learning_rate` | float | 3e-4 | Learning rate |
+| `beta1` | float | 0.9 | Adam beta1 parameter |
+| `beta2` | float | 0.999 | Adam beta2 parameter |
+| `eps` | float | 1e-8 | Adam epsilon parameter |
 | `weight_decay` | float | 1e-2 | Weight decay for regularization |
 | `use_no_op` | bool | false | Use no-op optimizer (no parameter updates) |
 | `use_moreh_adamw` | bool | false | Use Moreh AdamW optimizer |
@@ -85,9 +87,14 @@ Device mesh and distributed training configuration.
 
 ### Constraints
 - DDP and TP cannot both be enabled simultaneously
-- Only `[1, N]` mesh shapes are currently supported (single row)
 - For DDP: batch_size must be divisible by number of devices
 - For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
+
+### Device Mesh Shapes
+- Single-device (N150, P150): [1, 1]
+- Dual-device (N300, P300): [1, 2]
+- LoudBox: [1, 8]
+- Single Galaxy: [1, 32]
 
 ### Example
 ```yaml
@@ -106,16 +113,48 @@ Model type and architecture configuration loaded from separate files.
 |-----------|------|---------|-------------|
 | `model_type` | str | "gpt2" | Model architecture ("gpt2" or "llama") |
 | `model_path` | str | "" | Path to saved model parameters (as HF SafeTensors) |
+| `runner_type` | str | "default" | Type of model runner (`default` or `memory_efficient`)|
+| `num_heads` | int | 6 | Number of attention heads |
+| `embedding_dim` | int | 384 | Embedding/hidden dimension |
+| `dropout_prob` | float | 0.2 | Dropout probability |
+| `num_blocks` | int | 6 | Number of transformer blocks |
+| `vocab_size` | int | 96 | Vocabulary size |
+| `max_sequence_length` | int | 128 | Maximum sequence length |
+| `weight_tying` | any | false | Weight tying configuration |
 
-### Transformer Config (varies by model type)
-The transformer configuration is loaded based on the `model_type`:
-- For `"gpt2"`: Uses `ttml::models::gpt2::TransformerConfig`
-- For `"llama"`: Uses `ttml::models::llama::LlamaConfig`
+### LLaMA-Specific Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `intermediate_dim` | int | null | Feed-forward intermediate dimension |
+| `theta` | float | null | RoPE theta parameter |
+| `num_groups` | int | 3 | Number of groups for grouped attention |
+
+### RoPE Scaling (`rope_scaling`)
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `scaling_factor` | float | null | Scaling factor for RoPE |
+| `high_freq_factor` | float | null | High frequency scaling factor |
+| `low_freq_factor` | float | null | Low frequency scaling factor |
+| `original_context_length` | int | null | Original context length for scaling |
 
 ### Example
 ```yaml
-model_type: "llama"
-model_path: "saved_models/my_model.safetensors"
+transformer_config:
+  model_type: "llama"
+  model_path: "saved_models/my_model.safetensors"
+  num_heads: 32
+  embedding_dim: 2048
+  num_blocks: 22
+  vocab_size: 32000
+  max_sequence_length: 2048
+  intermediate_dim: 5632
+  theta: 10000.0
+  rope_scaling:
+    scaling_factor: 1.0
+    high_freq_factor: 4.0
+    low_freq_factor: 1.0
+    original_context_length: 8192
+
 # Additional transformer-specific configuration follows...
 ```
 
@@ -182,7 +221,6 @@ The main executable accepts these command line arguments:
 tt-train/configs/
 ├── training_configs/          # Training configuration files
 ├── model_configs/            # Model architecture configurations
-├── device_configs/           # Device mesh configurations (if separated)
 ├── multihost_configs/        # MultiHost execution configurations (if separated)
 └── README.md                 # This file
 ```
