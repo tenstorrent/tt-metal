@@ -662,6 +662,8 @@ class DeepseekGenerator:
         }
 
         # RowBatchedModel forward prefill
+        logger.info(f"Running prefill for user_id: {user_id}")
+        logger.info(f"tt_tokens.shape: {tt_tokens.shape}")
         logits_tt = RowBatchedModel.forward_prefill(
             x=tt_tokens,
             user_id=user_id,
@@ -679,6 +681,7 @@ class DeepseekGenerator:
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
+        logger.info(f"Finished prefill for user_id: {user_id}, logits.shape: {logits.shape}")
         return logits  # [1, 1, seq_len, V]
 
     def _capture_decode_trace(
