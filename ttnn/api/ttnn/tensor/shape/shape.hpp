@@ -8,4 +8,14 @@
 
 namespace ttnn {
 using tt::tt_metal::Shape;
+
+template <class T>
+uint32_t get_batch_size(const T& shape) {
+    uint32_t result = 1;
+    for (int i = 0; i < (int)shape.rank() - 2; i++) {
+        result *= shape[i];
+    }
+    return result;
+}
+
 }  // namespace ttnn

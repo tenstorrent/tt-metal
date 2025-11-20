@@ -39,15 +39,6 @@ bool is_cpu_tensor(const Tensor& tensor);
 // Returns true if tensor is on device.
 bool is_device_tensor(const Tensor& tensor);
 
-template <class T>
-uint32_t get_batch_size(const T& shape) {
-    uint32_t result = 1;
-    for (int i = 0; i < (int)shape.rank() - 2; i++) {
-        result *= shape[i];
-    }
-    return result;
-}
-
 // Useful information about how a shard_shape cuts a 2D shape
 // - num_shards_height: Number of shards along the height (including partial last shard, if any)
 // - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)

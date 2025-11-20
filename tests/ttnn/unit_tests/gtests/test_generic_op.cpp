@@ -21,6 +21,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::generic::test {
 
@@ -461,7 +462,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t c_batch_size = get_batch_size(cshape);
+    uint32_t c_batch_size = ttnn::get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / tt::constants::TILE_HW;
     auto
         [num_cores,
@@ -480,7 +481,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto &ashape = input_tensor_a.logical_shape(), bshape = input_tensor_b.logical_shape();
-    uint32_t B = get_batch_size(ashape);
+    uint32_t B = ttnn::get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / tt::constants::TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / tt::constants::TILE_WIDTH;
     uint32_t Nt = bshape[-1] / tt::constants::TILE_WIDTH;

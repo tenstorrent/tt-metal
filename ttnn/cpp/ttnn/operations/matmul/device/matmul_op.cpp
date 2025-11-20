@@ -15,6 +15,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -88,7 +89,7 @@ bool get_broadcast_batch(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const MatmulProgramConfig>& matmul_program_config) {
-    uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
+    uint32_t batch_size_b = ttnn::get_batch_size(input_tensor_b.padded_shape());
     bool broadcast_batch = batch_size_b == 1;
     if (!matmul_program_config.has_value()) {
         return broadcast_batch;
@@ -101,7 +102,7 @@ bool get_broadcast_batch(
         },
         matmul_program_config.value());
     if (is_multi_core_reuse) {
-        uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
+        uint32_t batch_size_a = ttnn::get_batch_size(input_tensor_a.padded_shape());
         broadcast_batch &= batch_size_a > 1;
     }
     return broadcast_batch;
@@ -129,7 +130,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     // Calculate number of mul/add operations
     // TODO: add bias modeling
     int64_t num_mul_adds_per_elem = in_a_shape[-1] * 2;  // 1 multiply and 1 add per element
-    uint32_t batch_size = get_batch_size(out_shape);
+    uint32_t batch_size = ttnn::get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
@@ -365,8 +366,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    uint32_t batch_size_a = ttnn::get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = ttnn::get_batch_size(b_padded_shape);
     TT_FATAL(
         batch_size_b == 1,
         "Second input cannot be currently batched when running matmul using "
@@ -674,8 +675,8 @@ MatmulProgramConfig create_matmul_program_config(
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    uint32_t batch_size_a = ttnn::get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = ttnn::get_batch_size(b_padded_shape);
     bool input_b_is_batched = batch_size_b > 1;
     bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
     const auto& input_tensor_a_memory_config = input_tensor_a.memory_config();
@@ -1063,8 +1064,8 @@ MatmulProgramConfig get_matmul_program_config(
         auto out_subblock_w = std::get<1>(subblock_hw);
 
         // TODO: Temporarily allow for single core; should support bcast_batch in general
-        uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
-        uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
+        uint32_t batch_size_a = ttnn::get_batch_size(input_tensor_a.padded_shape());
+        uint32_t batch_size_b = ttnn::get_batch_size(input_tensor_b.padded_shape());
         bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
         TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
 
@@ -1693,7 +1694,7 @@ void Matmul::validate(
     TT_FATAL(this->output_tile.has_value(), "Error: output_tile field should have been automatically populated");
     if (this->bcast_batch.value()) {
         TT_FATAL(
-            get_batch_size(b_shape) == 1,
+            ttnn::get_batch_size(b_shape) == 1,
             "matmul (batch bcast variant) expects input tensors of shapes "
             "BCMK*11KN=BCMN or equivalent");
     } else {
@@ -1770,7 +1771,7 @@ void Matmul::validate(
         TT_FATAL(bias.layout() == Layout::TILE, "Unsupported input layout");
         const auto& bias_shape = bias.logical_shape();
         const auto& bias_shape_aligned = bias.padded_shape();
-        uint32_t bias_batch_size = get_batch_size(bias_shape);
+        uint32_t bias_batch_size = ttnn::get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
         TT_FATAL(
             bias_shape_aligned[-2] == in0_tile_shape[0],
@@ -2323,8 +2324,8 @@ void Matmul::validate(
                     }
                 }
 
-                uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
-                uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
+                uint32_t batch_size_a = ttnn::get_batch_size(input_tensor_a.padded_shape());
+                uint32_t batch_size_b = ttnn::get_batch_size(input_tensor_b.padded_shape());
                 bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
                 TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
 
