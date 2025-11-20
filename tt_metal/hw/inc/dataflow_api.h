@@ -3235,10 +3235,10 @@ struct noc_traits_t<tensor_accessor::Page> {
 };
 
 /**
- * @brief Provides a safe pointer to a structure of type T in local L1 memory
+ * @brief Provides a safe pointer to a structure of type T in the core's local memory
  */
 template <typename T, typename AddressType = uintptr_t>
-class L1Memory {
+class CoreLocalMem {
     using difference_type = std::ptrdiff_t;
 
     static_assert(std::is_integral<AddressType>::value, "AddressType must be an integral type");
@@ -3248,37 +3248,41 @@ class L1Memory {
         "AddressType must be large enough to hold difference_type for safe pointer arithmetic");
 
 public:
-    /** @brief Construct a L1Memory instance from a raw address
+    /** @brief Construct a CoreLocalMem instance from a raw address
      *
-     * @param address The raw address of the structure in local L1 memory
+     * @param address The raw address of the structure in the core's local memory
      */
-    L1Memory(AddressType address) : address_(address) {}
+    CoreLocalMem(AddressType address) : address_(address) {}
 
-    /** @brief Construct a L1Memory instance from a raw pointer
+    /** @brief Construct a CoreLocalMem instance from a raw pointer
      *
-     * @param ptr The volatile pointer to the structure in local L1 memory
+     * @param ptr The volatile pointer to the structure in the core's local memory
      */
-    L1Memory(volatile T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+    CoreLocalMem(volatile T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
 
     /** @brief Copy constructor
      *
-     * @param other The other L1Memory to copy from
+     * @param other The other CoreLocalMem to copy from
      */
-    L1Memory(const L1Memory&) = default;
+    CoreLocalMem(const CoreLocalMem&) = default;
 
     /** @brief Copy assignment operator
      *
-     * @param other The other L1Memory to copy from
-     * @return A reference to the assigned L1Memory
+     * @param other The other CoreLocalMem to copy from
+     * @return A reference to the assigned CoreLocalMem
      */
-    L1Memory& operator=(const L1Memory&) = default;
+    CoreLocalMem& operator=(const CoreLocalMem&) = default;
 
-    /** @brief Get the raw pointer to the structure in local L1 memory
+    /** @brief Get the raw pointer to the structure in the core's local memory
      *
-     * @return The raw pointer to the structure in local L1 memory
+     * @return The raw pointer to the structure in the core's local memory
      */
     volatile T* get_unsafe_ptr() const { return reinterpret_cast<T*>(address_); }
 
+    /** @brief Get the memory address
+     *
+     * @return The address
+     */
     AddressType get_address() const { return address_; }
 
     /** @brief Get the element at the given index
@@ -3287,7 +3291,8 @@ public:
      * @return The element at the given index
      */
     volatile T& operator[](uint32_t index) const {
-        ASSERT(address >= 0 && (address_ + (index * sizeof(T)) < MEM_L1_SIZE));
+        // TODO: To be moved to a Watcher sanitize check
+        ASSERT(address_ >= 0 && (address_ + (index * sizeof(T)) < MEM_L1_SIZE));
         return get_unsafe_ptr()[index];
     }
 
@@ -3296,54 +3301,55 @@ public:
      * @return The value at the address
      */
     volatile T& operator*() const {
-        ASSERT(address >= 0 && address_ < MEM_L1_SIZE);
+        // TODO: To be moved to a Watcher sanitize check
+        ASSERT(address_ >= 0 && address_ < MEM_L1_SIZE);
         return get_unsafe_ptr()[0];
     }
 
-    L1Memory& operator+=(difference_type offset) {
+    CoreLocalMem& operator+=(difference_type offset) {
         address_ += offset;
         return *this;
     }
 
-    L1Memory& operator-=(difference_type offset) {
+    CoreLocalMem& operator-=(difference_type offset) {
         address_ -= offset;
         return *this;
     }
 
-    L1Memory& operator++() {
+    CoreLocalMem& operator++() {
         address_ += sizeof(T);
         return *this;
     }
 
-    L1Memory& operator--() {
+    CoreLocalMem& operator--() {
         address_ -= sizeof(T);
         return *this;
     }
 
-    L1Memory operator++(int) {
-        L1Memory tmp = *this;
+    CoreLocalMem operator++(int) {
+        CoreLocalMem tmp = *this;
         address_ += sizeof(T);
         return tmp;
     }
 
-    L1Memory operator--(int) {
-        L1Memory tmp = *this;
+    CoreLocalMem operator--(int) {
+        CoreLocalMem tmp = *this;
         --(*this);
         return tmp;
     }
 
-    L1Memory operator+(difference_type offset) const { return L1Memory(address_ + offset); }
+    CoreLocalMem operator+(difference_type offset) const { return CoreLocalMem(address_ + offset); }
 
-    L1Memory operator-(difference_type offset) const { return L1Memory(address_ - offset); }
+    CoreLocalMem operator-(difference_type offset) const { return CoreLocalMem(address_ - offset); }
 
-    difference_type operator-(const L1Memory& other) const { return address_ - other.address_; }
+    difference_type operator-(const CoreLocalMem& other) const { return address_ - other.address_; }
 
-    bool operator==(const L1Memory& other) const { return address_ == other.address_; }
-    bool operator!=(const L1Memory& other) const { return address_ != other.address_; }
-    bool operator<(const L1Memory& other) const { return address_ < other.address_; }
-    bool operator<=(const L1Memory& other) const { return address_ <= other.address_; }
-    bool operator>(const L1Memory& other) const { return address_ > other.address_; }
-    bool operator>=(const L1Memory& other) const { return address_ >= other.address_; }
+    bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
+    bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
+    bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
+    bool operator<=(const CoreLocalMem& other) const { return address_ <= other.address_; }
+    bool operator>(const CoreLocalMem& other) const { return address_ > other.address_; }
+    bool operator>=(const CoreLocalMem& other) const { return address_ >= other.address_; }
     explicit operator bool() const { return address_ != 0; }
 
 private:
@@ -3351,7 +3357,7 @@ private:
 };
 
 template <typename T, typename AddressType>
-struct noc_traits_t<L1Memory<T, AddressType>> {
+struct noc_traits_t<CoreLocalMem<T, AddressType>> {
     struct src_args_type {
         AddressType offset_bytes = 0;
     };
@@ -3359,19 +3365,20 @@ struct noc_traits_t<L1Memory<T, AddressType>> {
     struct dst_args_mcast_type {};
 
     template <Noc::AddressType address_type>
-    static auto src_addr(const L1Memory<T, AddressType>& src, const Noc&, const src_args_type& args) {
+    static auto src_addr(const CoreLocalMem<T, AddressType>& src, const Noc&, const src_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "CircularBuffer without mcast range can only be used as L1 source");
         return src.get_address() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr(const L1Memory<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(false, "L1Memory cannot be used as NoC destination");
+    static auto dst_addr(const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(false, "CoreLocalMem cannot be used as NoC destination");
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(const L1Memory<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
-        static_assert(false, "L1Memory cannot be used as NoC mcast destination");
+    static auto dst_addr_mcast(
+        const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
 
