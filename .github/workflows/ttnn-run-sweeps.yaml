@@ -656,21 +656,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Entry 1: Manual dispatch with single sweep only
+          # Entry 1: Manual dispatch with single sweep OR "ALL SWEEPS (Model Traced)" (uses --model-traced flag)
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
             generate_mode: all
-            should_run: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' }}
-          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - N150 for non-CCL modules
+            should_run: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') }}
+          # Entry 2: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" (but NOT Model Traced) - N150 for non-CCL modules
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: N150
             generate_mode: non_ccl
-            should_run: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
-          # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" - n300-llmbox for CCL modules only
+            should_run: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
+          # Entry 3: Scheduled/comprehensive OR manual dispatch with "ALL SWEEPS" (but NOT Model Traced) - n300-llmbox for CCL modules only
           - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
             runner_label: n300-llmbox
             generate_mode: ccl_only
-            should_run: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' }}
+            should_run: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -822,16 +822,10 @@ jobs:
           d = '/tmp/vectors'
           # Check if directory exists and has files
           if not os.path.exists(d) or not os.listdir(d):
-              print("⚠️  No vector files found - cannot compute module matrix", file=sys.stderr)
-              # Return empty matrix
-              result = {
-                  "module": [],
-                  "batches": [],
-                  "ccl_batches": [],
-                  "include": [],
-              }
-              print(json.dumps(result))
-              sys.exit(0)
+              print("❌ ERROR: No vector files found - cannot compute module matrix", file=sys.stderr)
+              print("This indicates that the vector generation step failed or produced no output.", file=sys.stderr)
+              print("Please check the 'ttnn-generate-sweeps' job logs for errors.", file=sys.stderr)
+              sys.exit(1)
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
           # Helper for chunking modules into batches
