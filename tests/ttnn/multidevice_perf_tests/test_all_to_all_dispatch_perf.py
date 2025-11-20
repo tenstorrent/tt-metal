@@ -34,17 +34,22 @@ def test_all_to_all_dispatch_perf(
     subdir = "moe_perf"
     if arch_type == "6U":
         file = f"pytest tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py"
+        if stage == "decode":
+            command = file + "::test_decode_galaxy_perf"
+        elif stage == "prefill":
+            command = file + "::test_prefill_galaxy_perf"
+        else:
+            raise ValueError(f"Invalid stage: {stage}")
     elif arch_type == "T3K":
         file = f"pytest tests/ttnn/multidevice_perf_tests/test_all_to_all_dispatch_decode_prefill_perf.py"
+        if stage == "decode":
+            command = file + "::test_decode_perf"
+        elif stage == "prefill":
+            command = file + "::test_prefill_perf"
+        else:
+            raise ValueError(f"Invalid stage: {stage}")
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")
-
-    if stage == "decode":
-        command = file + "::test_decode_perf"
-    elif stage == "prefill":
-        command = file + "::test_prefill_perf"
-    else:
-        raise ValueError(f"Invalid stage: {stage}")
 
     cols = ["DEVICE KERNEL"]
     op_name = "AllToAllDispatchDeviceOperation"
