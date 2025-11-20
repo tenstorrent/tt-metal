@@ -439,14 +439,21 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        xqkv = ttnn.linear(
-            x_11SH,
-            self.wqkv_interleaved,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        xqkv = ttnn.experimental.minimal_matmul(
+            input_tensor=x_11SH,
+            weight_tensor=self.wqkv_interleaved,
+            config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # xqkv = ttnn.linear(
+        #     x_11SH,
+        #     self.wqkv_interleaved,
+        #     dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     compute_kernel_config=self.compute_kernel_config_hifi2,
+        #     program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        # )
 
         ttnn.deallocate(x_11SH)
 
@@ -641,14 +648,21 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo_interleaved,
+        output_11SH = ttnn.experimental.minimal_matmul(
+            input_tensor=attn_output_11SH,
+            weight_tensor=self.wo_interleaved,
+            config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
             compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
+        # output_11SH = ttnn.linear(
+        #     attn_output_11SH,
+        #     self.wo_interleaved,
+        #     compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+        #     dtype=ttnn.bfloat8_b,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+        # )
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
