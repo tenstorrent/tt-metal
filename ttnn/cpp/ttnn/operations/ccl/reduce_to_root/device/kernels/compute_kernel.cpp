@@ -23,6 +23,7 @@
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#define EXP_APPROX_MODE false
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -33,7 +34,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
-#include "compute_common.hpp"
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -57,7 +58,7 @@ constexpr uint32_t vDHt = get_compile_time_arg_val(14);
 constexpr uint32_t loop_size = get_compile_time_arg_val(15);
 
 void MAIN {
-    bool use_half_tile = true;
+    const bool use_half_tile = false;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 

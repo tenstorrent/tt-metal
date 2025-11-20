@@ -12,8 +12,8 @@ void kernel_main() {
     const uint32_t src_addr_s = get_arg_val<uint32_t>(2);
     const uint32_t src_addr_m = get_arg_val<uint32_t>(3);
 
-    constexpr core_noc_x = get_compile_time_arg_val(0);
-    constexpr core_noc_y = get_compile_time_arg_val(1);
+    constexpr uint32_t core_noc_x = get_compile_time_arg_val(0);
+    constexpr uint32_t core_noc_y = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in_l = 0;
     constexpr uint32_t cb_id_in_s = 1;
     constexpr uint32_t cb_id_in_m = 2;
@@ -38,7 +38,7 @@ void kernel_main() {
 
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
-    l1_write_addr = get_write_ptr(cb_id_in_s);
+    uint32_t l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();

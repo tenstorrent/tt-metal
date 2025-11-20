@@ -28,15 +28,15 @@ void kernel_main() {
 
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
     const uint32_t receiver_base_address_2 = get_arg_val<uint32_t>(1);
-    const auto page_idx_start = get_arg_val<uint32_t>(2);
-    const auto page_idx_end = get_arg_val<uint32_t>(3);
+    const uint32_t page_idx_start = get_arg_val<uint32_t>(2);
+    const uint32_t page_idx_end = get_arg_val<uint32_t>(3);
     const uint8_t dst_num_hops = 1;  // get_arg_val<uint32_t>(3);
     const auto page_size_bytes = get_arg_val<uint32_t>(4);
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const auto max_pages_per_packet_l = 8;  // get_arg_val<uint32_t>(6);
-    const auto max_pages_per_packet_ms = 2;
+    const uint32_t max_pages_per_packet_l = 8;  // get_arg_val<uint32_t>(6);
+    const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(6);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
     const bool dst_is_forward = get_arg_val<uint32_t>(8);
@@ -65,8 +65,8 @@ void kernel_main() {
     cb_push_back(packet_cb_id, 1);
 
     // initial packet size
-    uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
-    uint32_t packet_idx = page_idx_start / max_pages_per_packet;
+    uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
+    uint32_t packet_idx = page_idx_start / max_pages_per_packet_l;
 
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
@@ -83,7 +83,7 @@ void kernel_main() {
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(cb_id_l, 1);
-        const uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
+        uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             const uint32_t page_offset = page_segment_idx * payload_size_bytes;
             const uint32_t src_addr = src_page_base_addr + page_offset;
@@ -99,14 +99,14 @@ void kernel_main() {
                 // align(payload_size_bytes, alignment)); perform_payload_send(connection_direction, packet_base_addr,
                 // payload_size_bytes, packet_header_ptr); dst_noc_addr += packet_size_bytes;
 
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
+                const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
                 // reset counters
                 packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
+                curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx - 1);
 
                 ++packet_idx;
             }
@@ -137,7 +137,7 @@ void kernel_main() {
     const auto dst_buffer_2 = TensorAccessor(dst_buffer_2_args, receiver_base_address_2, payload_size_bytes);
 
     uint32_t packet_idx_sm = 0;  // separate index for m and s packet
-    const uint64_t dst_noc_addr = get_noc_addr(packet_idx_sm, dst_buffer_2, 0, 0);
+    const uint64_t dst_noc_addr = dst_buffer_2.get_noc_addr(packet_idx_sm, 0, 0);
     tt::tt_fabric::linear::to_noc_unicast_write(
         align(payload_size_bytes, alignment), packet_header_ptr, packet_idx_sm, dst_buffer_2);
     perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);

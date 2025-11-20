@@ -102,33 +102,49 @@ FabricRoute fabric_routing(
 using cached_workload_t = device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t>;
 
 void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_l = input_tensor[0];
-    const auto& input_s = input_tensor[1];
-    const auto& input_m = input_tensor[2];
+    const auto& input_l = tensor_args.input_tensor_l;
 
     auto mesh_device = input_l.device();
 
-    const auto& optional_output_tensor = tensor_args.optional_output_tensor;
-    if (optional_output_tensor.has_value()) {
+    const auto& optional_output_tensor_l = tensor_args.optional_output_tensor_l;
+    const auto& optional_output_tensor_s = tensor_args.optional_output_tensor_s;
+    const auto& optional_output_tensor_m = tensor_args.optional_output_tensor_m;
+    if (optional_output_tensor_l.has_value()) {
         const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
-        const auto& output_tensor = optional_output_tensor.value();
 
-        TT_FATAL(output_tensor[0].layout() == input_l.layout(), "Output tensor must have same layout as input");
-        TT_FATAL(output_tensor[1].layout() == input_s.layout(), "Output tensor must have same layout as input");
-        TT_FATAL(output_tensor[2].layout() == input_m.layout(), "Output tensor must have same layout as input");
+        TT_FATAL(
+            output_spec[0] == optional_output_tensor_l.value().tensor_spec(),
+            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            optional_output_tensor_l.value().tensor_spec(),
+            output_spec[0]);
 
-        for (size_t i = 0; i < output_tensor.size(); ++i) {
-            TT_FATAL(
-                output_spec[i] == output_tensor[i].tensor_spec(),
-                "Optional sparse output token tensor spec {} does not match computed output spec {}",
-                output_tensor[i].tensor_spec(),
-                output_spec[i]);
+        TT_FATAL(
+            optional_output_tensor_l.value().device() == mesh_device,
+            "Output tensor must be allocated on same mesh device as input tensor");
+    }
+    if (optional_output_tensor_s.has_value()) {
+        const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
+        TT_FATAL(
+            output_spec[1] == optional_output_tensor_s.value().tensor_spec(),
+            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            optional_output_tensor_s.value().tensor_spec(),
+            output_spec[1]);
 
-            TT_FATAL(
-                output_tensor[i].device() == mesh_device,
-                "Output tensor must be allocated on same mesh device as input tensor");
-        }
+        TT_FATAL(
+            optional_output_tensor_s.value().device() == mesh_device,
+            "Output tensor must be allocated on same mesh device as input tensor");
+    }
+    if (optional_output_tensor_m.has_value()) {
+        const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
+        TT_FATAL(
+            output_spec[2] == optional_output_tensor_m.value().tensor_spec(),
+            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            optional_output_tensor_m.value().tensor_spec(),
+            output_spec[2]);
+
+        TT_FATAL(
+            optional_output_tensor_m.value().device() == mesh_device,
+            "Output tensor must be allocated on same mesh device as input tensor");
     }
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t input_page_size_bytes = input_l.tensor_spec().compute_page_size_bytes();
@@ -142,33 +158,75 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // !Maybe todo. Support output with different config/layout than input
 
-    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor_l = tensor_args.input_tensor_l;
+    const auto& input_tensor_s = tensor_args.input_tensor_s;
+    const auto& input_tensor_m = tensor_args.input_tensor_m;
 
     std::vector<TensorSpec> final_output_spec = {
-        input_tensor[0].tensor_spec(), input_tensor[1].tensor_spec(), input_tensor[2].tensor_spec()};
+        input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
     // TODO:fix that to have only two intermediate tensors: one for l and one for sm
-    for (uint32_t i = 0; i < 3; i++) {
-        uint32_t input_num_pages = data_movement::get_num_pages(tensor_args.input_tensor[i]);
-        if (i > 0) {
-            input_num_pages *= 2;
-        }
+    uint32_t input_num_pages_l = data_movement::get_num_pages(tensor_args.input_tensor_l);
+    uint32_t input_num_pages_sm = data_movement::get_num_pages(tensor_args.input_tensor_s) * 2;
+    printf("before intermediate specs calculation\n");
+    if (tensor_args.optional_intermediate_tensor_l.has_value()) {
+        printf(
+            "shape of optional intermediate tensor l: %u %u \n",
+            tensor_args.optional_intermediate_tensor_l.value().logical_shape()[0],
+            tensor_args.optional_intermediate_tensor_l.value().logical_shape()[1]);
+    }
+    if (tensor_args.optional_intermediate_tensor_s_m.has_value()) {
+        printf(
+            "shape of optional intermediate tensor s_m: %u %u %u\n",
+            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[0],
+            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[1],
+            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[2]);
+    }
+    if (tensor_args.optional_intermediate_tensor_l.has_value() &&
+        tensor_args.optional_intermediate_tensor_s_m.has_value()) {
+        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor_l.value().tensor_spec());
+        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor_s_m.value().tensor_spec());
+        return {intermediate_specs, final_output_spec};
+    }
+    for (uint32_t i = 0; i < 2; i++) {
+        uint32_t input_num_pages = (i == 0) ? input_num_pages_l : input_num_pages_sm;
+        printf("input num pages: %u for i %d \n", input_num_pages, i);
         auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
             detail::compute_aligned_packet_dims(
-                input_tensor[i].dtype(),
+                input_tensor_l.dtype(),
                 final_output_spec[i].compute_page_size_bytes(),
                 input_num_pages,
                 ::hal::get_l1_alignment());
 
         uint32_t packet_page_dim =
-            packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor[i].dtype()));
+            packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor_l.dtype()));
 
+        printf(
+            "packet size bytes: %u, num pages per packet: %u, num page segments: %u, total packets: %u, packet page "
+            "dim: %u for i %d \n",
+            packet_size_bytes,
+            num_pages_per_packet,
+            num_page_segments,
+            total_packets,
+            packet_page_dim,
+            i);
         Shape intermediate_shape{total_packets, packet_page_dim};
+        if (i == 0) {
+            intermediate_shape = Shape{
+                final_output_spec[i].memory_config().shard_spec()->shape[0],
+                final_output_spec[i].memory_config().shard_spec()->shape[1]};
+        } else {
+            intermediate_shape = Shape{
+                2 * final_output_spec[i].memory_config().shard_spec()->shape[0],
+                final_output_spec[i].memory_config().shard_spec()->shape[1]};
+        }
+        printf("intermediate shape: [%u, %u] for i %d \n", intermediate_shape[0], intermediate_shape[1], i);
 
         TensorSpec intermediate_spec(intermediate_shape, final_output_spec[i].tensor_layout());
         intermediate_specs.push_back(intermediate_spec);
     }
+    printf("after intermediate specs calculation\n");
 
     return {intermediate_specs, final_output_spec};
 }
@@ -177,23 +235,37 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    auto mesh_device = tensor_args.input_tensor[0].device();
+    auto mesh_device = tensor_args.input_tensor_l.device();
 
     std::vector<ttnn::Tensor> intermediate_output_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
-    for (size_t i = 0; i < 3; ++i) {
-        auto intermediate_output_tensor = create_device_tensor(output_specs.at(0)[i], mesh_device);
-        if (tensor_args.optional_intermediate_tensor.has_value()) {
-            intermediate_output_tensor = tensor_args.optional_intermediate_tensor.value()[i];
-        }
 
-        auto final_output_tensor = create_device_tensor(output_specs.at(1)[i], mesh_device);
-        if (tensor_args.optional_output_tensor.has_value()) {
-            final_output_tensor = tensor_args.optional_output_tensor.value()[i];
-        }
-        intermediate_output_tensors.push_back(intermediate_output_tensor);
-        final_output_tensors.push_back(final_output_tensor);
+    auto intermediate_output_tensor_l = create_device_tensor(output_specs.at(0)[0], mesh_device);
+    if (tensor_args.optional_intermediate_tensor_l.has_value()) {
+        intermediate_output_tensor_l = tensor_args.optional_intermediate_tensor_l.value();
     }
+    auto intermediate_output_tensor_s_m = create_device_tensor(output_specs.at(0)[1], mesh_device);
+    if (tensor_args.optional_intermediate_tensor_s_m.has_value()) {
+        intermediate_output_tensor_s_m = tensor_args.optional_intermediate_tensor_s_m.value();
+    }
+
+    auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
+    if (tensor_args.optional_output_tensor_l.has_value()) {
+        final_output_tensor_l = tensor_args.optional_output_tensor_l.value();
+    }
+
+    auto final_output_tensor_s = create_device_tensor(output_specs.at(1)[1], mesh_device);
+    if (tensor_args.optional_output_tensor_s.has_value()) {
+        final_output_tensor_s = tensor_args.optional_output_tensor_s.value();
+    }
+
+    auto final_output_tensor_m = create_device_tensor(output_specs.at(1)[2], mesh_device);
+    if (tensor_args.optional_output_tensor_m.has_value()) {
+        final_output_tensor_m = tensor_args.optional_output_tensor_m.value();
+    }
+
+    intermediate_output_tensors = {intermediate_output_tensor_l, intermediate_output_tensor_s_m};
+    final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
 
     return {intermediate_output_tensors, final_output_tensors};
 }
@@ -206,7 +278,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor[0].device();
+    auto mesh_device = tensor_args.input_tensor_l.device();
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;

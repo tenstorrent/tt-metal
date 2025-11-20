@@ -9,7 +9,7 @@
 //  first from device 0 where we write to the intermediate buffers
 //  second from device 1 where we write to the final output buffers
 
-inline write_data(
+inline void write_data(
     uint32_t dst_addr_l,
     uint32_t num_tiles_l,
     uint32_t dst_addr_s,
@@ -57,8 +57,8 @@ void kernel_main() {
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(5);
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(6);
 
-    constexpr core_noc_x = get_compile_time_arg_val(0);
-    constexpr core_noc_y = get_compile_time_arg_val(1);
+    constexpr uint32_t core_noc_x = get_compile_time_arg_val(0);
+    constexpr uint32_t core_noc_y = get_compile_time_arg_val(1);
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(2);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(3);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(4);
@@ -83,10 +83,10 @@ void kernel_main() {
         onetile);
     // write l, s, m from device 2 to final buffers
     write_data(
-        dst_addr_l,
+        final_dst_addr_l,
         num_tiles_l,
-        dst_addr_s,
-        dst_addr_m,
+        final_dst_addr_s,
+        final_dst_addr_m,
         page_bytes,
         core_noc_x,
         core_noc_y,

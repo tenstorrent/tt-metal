@@ -74,7 +74,7 @@ void kernel_main() {
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
+                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
                 noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
                 noc_async_read_barrier();
 
