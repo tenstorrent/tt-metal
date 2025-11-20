@@ -31,7 +31,12 @@ SUBJOB_NAME="$2"
 
 REPO="tenstorrent/tt-metal"
 BASE_URL="https://github.com/${REPO}"
-SUMMARY_JSON_PATH="${BOUNDARIES_SUMMARY_JSON:-}"
+DATA_DIR="auto_triage/data"
+SUMMARY_JSON_PATH="${DATA_DIR}/boundaries_summary.json"
+RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
+
+mkdir -p "$DATA_DIR"
+rm -f "$SUMMARY_JSON_PATH" "$RUNS_JSON_PATH"
 
 echo -e "${BLUE}Searching for workflow: ${GREEN}${WORKFLOW_NAME}${NC}"
 echo -e "${BLUE}Looking for subjob: ${GREEN}${SUBJOB_NAME}${NC}"
@@ -76,6 +81,8 @@ MOST_RECENT_FAILURE_RUN=""
 MOST_RECENT_FAILURE_RUN_ID=""
 MOST_RECENT_FAILURE_COMMIT=""
 MOST_RECENT_FAILURE_JOB_URL=""
+FAILED_RUNS_JSON='[]'
+SUBJOB_RUNS_JSON='[]'
 
 while true; do
     PAGE_RESPONSE=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?branch=main&per_page=${PER_PAGE}&page=${PAGE}" 2>/dev/null || echo "")
@@ -173,6 +180,18 @@ while true; do
                 LAST_SUCCESSFUL_COMMIT="$RUN_COMMIT"
                 LAST_SUCCESSFUL_JOB_URL="$JOB_URL"
                 FOUND_SUCCESS=true
+                SUBJOB_RUNS_JSON=$(jq -n \
+                    --arg status "success" \
+                    --arg run_url "$RUN_URL" \
+                    --arg job_url "$JOB_URL" \
+                    --arg run_id "$RUN_ID" \
+                    --arg job_id "$JOB_ID" \
+                    --arg commit "$RUN_COMMIT" \
+                    --arg completed_at "$RUN_COMPLETED_AT" \
+                    --argjson arr "$SUBJOB_RUNS_JSON" \
+                    --argjson run_number "$PROCESSED" \
+                    '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, run_number:$run_number}]' \
+                )
 
                 if [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
                     FIRST_FAILING_RUN="$MOST_RECENT_FAILURE_RUN"
@@ -192,6 +211,30 @@ while true; do
             MOST_RECENT_FAILURE_COMMIT="$RUN_COMMIT"
             MOST_RECENT_FAILURE_JOB_URL="$JOB_URL"
             echo -e "${RED}✗ FAILURE${NC}"
+            FAILED_RUNS_JSON=$(jq -n \
+                --arg run_url "$RUN_URL" \
+                --arg job_url "$JOB_URL" \
+                --arg run_id "$RUN_ID" \
+                --arg job_id "$JOB_ID" \
+                --arg commit "$RUN_COMMIT" \
+                --arg completed_at "$RUN_COMPLETED_AT" \
+                --arg conclusion "$JOB_CONCLUSION" \
+                --argjson arr "$FAILED_RUNS_JSON" \
+                --argjson run_number "$PROCESSED" \
+                '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, conclusion:$conclusion, run_number:$run_number}]' \
+            )
+            SUBJOB_RUNS_JSON=$(jq -n \
+                --arg status "failure" \
+                --arg run_url "$RUN_URL" \
+                --arg job_url "$JOB_URL" \
+                --arg run_id "$RUN_ID" \
+                --arg job_id "$JOB_ID" \
+                --arg commit "$RUN_COMMIT" \
+                --arg completed_at "$RUN_COMPLETED_AT" \
+                --argjson arr "$SUBJOB_RUNS_JSON" \
+                --argjson run_number "$PROCESSED" \
+                '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, run_number:$run_number}]' \
+            )
         else
             echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
         fi
@@ -264,6 +307,18 @@ if [ "$FOUND_SUCCESS" = false ] && [ "$FOUND_FAILURE" = false ]; then
     exit 1
 fi
 
+if [ "$SUBJOB_RUNS_JSON" = "[]" ]; then
+    echo -e "${BLUE}No qualifying subjob runs recorded.${NC}"
+else
+    echo -e "${BLUE}Recorded subjob runs (success + failure):${NC}"
+    echo "$SUBJOB_RUNS_JSON"
+fi
+
+if [ "$FAILED_RUNS_JSON" != "[]" ]; then
+    echo -e "${BLUE}Failed subjobs (JSON subset):${NC}"
+    echo "$FAILED_RUNS_JSON"
+fi
+
 if [ -n "$SUMMARY_JSON_PATH" ]; then
     tmp_summary="$(mktemp)"
     jq -n \
@@ -279,6 +334,8 @@ if [ -n "$SUMMARY_JSON_PATH" ]; then
         --arg first_fail_job "${FIRST_FAILING_JOB_URL:-}" \
         --arg compare_url "${COMPARE_URL:-}" \
         --arg commit_count "${COMMIT_COUNT:-}" \
+        --argjson runs "$SUBJOB_RUNS_JSON" \
+        --argjson failed_runs "$FAILED_RUNS_JSON" \
         '{
             workflow: $workflow,
             subjob: $subjob,
@@ -300,7 +357,10 @@ if [ -n "$SUMMARY_JSON_PATH" ]; then
                 elif ($commit_count | length) > 0 then $commit_count
                 else null
                 end
-            )
+            ),
+            runs: $runs,
+            failed_runs: $failed_runs
         }' > "$tmp_summary"
     mv "$tmp_summary" "$SUMMARY_JSON_PATH"
+    echo "$SUBJOB_RUNS_JSON" > "$RUNS_JSON_PATH"
 fi
