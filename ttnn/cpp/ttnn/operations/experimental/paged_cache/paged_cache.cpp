@@ -76,17 +76,11 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const uint32_t batch_idx_fallback,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
-    std::vector<std::optional<const Tensor>> optional_inputs_for_run;
-    tt::tt_metal::operation::run(
-        PagedFillCacheDeviceOperation{
-            batch_idx_fallback,  // .batch_idx_fallback (used by FILL if tensor not present)
-            batch_idx_tensor,    // .batch_idx_tensor_opt (used by FILL if present)
-            mesh_coords,  // .mesh_coords (optional, can be used to restrict operation to specific mesh coordinates)
-        },
-        {cache_tensor, input_tensor, page_table},  // Mandatory inputs for FILL
-        {std::nullopt, std::nullopt});
+    // Note: compute_kernel_config is not used by fill_cache operation
+    (void)compute_kernel_config;
 
-    return cache_tensor;  // Updated cache tensor in-place
+    return ttnn::prim::paged_fill_cache(
+        cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx_fallback, mesh_coords);
 }
 
 }  // namespace operations::experimental::paged_cache

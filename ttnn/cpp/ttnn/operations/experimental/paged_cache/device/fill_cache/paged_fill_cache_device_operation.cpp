@@ -1,23 +1,31 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "paged_fill_cache_device_operation.hpp"
 
-#include "paged_fill_cache_program_factory.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::paged_cache {
 
-void PagedFillCacheDeviceOperation::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 3, "Expect 3 input tensors for fill_cache");
+PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return program::PagedFillCacheProgramFactory{};
+}
 
-    const auto& cache_tensor = input_tensors.at(0);
-    const auto& input_tensor = input_tensors.at(1);
-    const auto& page_table_tensor = input_tensors.at(2);
+void PagedFillCacheDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& page_table_tensor = tensor_args.page_table;
 
     // Data type validation
     TT_FATAL(
@@ -37,12 +45,12 @@ void PagedFillCacheDeviceOperation::validate(
     auto input_shape = input_tensor.padded_shape();
     auto page_table_shape = page_table_tensor.padded_shape();
 
-    TT_FATAL(batch_idx_fallback <= cache_shape[0], "Batch idx must fit in cache batch size");
+    TT_FATAL(args.batch_idx_fallback <= cache_shape[0], "Batch idx must fit in cache batch size");
     TT_FATAL(
         input_shape[2] <= cache_shape[2] * page_table_shape[1], "Input seq_len must fit in max_num_blocks_per_seq");
 
-    if (this->batch_idx_tensor_opt.has_value()) {
-        const auto& tensor = this->batch_idx_tensor_opt.value();
+    if (tensor_args.batch_idx_tensor_opt.has_value()) {
+        const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
         TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
@@ -50,69 +58,61 @@ void PagedFillCacheDeviceOperation::validate(
     }
 }
 
-std::vector<ttnn::TensorSpec> PagedFillCacheDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
+spec_return_value_t PagedFillCacheDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // In-place operation, return cache tensor's spec
+    return tensor_args.cache_tensor.tensor_spec();
 }
 
-operation::MeshWorkloadWithCallbacks PagedFillCacheDeviceOperation::create_mesh_workload(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    operation::MeshWorkloadWithCallbacks workload_with_callbacks;
-    for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            // If mesh_coords is provided, check if the coordinate is in the set
-            if (this->mesh_coords.has_value()) {
-                bool enable_on_coord =
-                    std::find(this->mesh_coords->begin(), this->mesh_coords->end(), coord) != this->mesh_coords->end();
-                if (!enable_on_coord) {
-                    continue;  // Skip this coordinate if it's not in the mesh_coords set
-                }
-            }
-
-            // Create the program for the coordinate
-            const ttnn::MeshCoordinateRange program_range(coord, coord);
-            auto program_with_callbacks = PagedFillCacheDeviceOperation::create_program_at(
-                {0, 0}, input_tensors, optional_input_tensors, output_tensors);
-            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
-            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-                workload_with_callbacks.per_program_callbacks.emplace(
-                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
-            }
-        }
-    }
-    return workload_with_callbacks;
+tensor_return_value_t PagedFillCacheDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // In-place operation, return the cache tensor
+    return tensor_args.cache_tensor;
 }
 
-operation::ProgramWithCallbacks PagedFillCacheDeviceOperation::create_program_at(
-    const ttnn::MeshCoordinate& _,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    switch (this->get_parallelization_strategy(input_tensors)) {
-        case PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE:
-        default:
-            const auto& cache_tensor = input_tensors.at(0);
-            const auto& input_tensor = input_tensors.at(1);
-            const auto& page_table = input_tensors.at(2);
-            return detail::paged_fill_cache_multi_core(
-                cache_tensor, input_tensor, page_table, this->batch_idx_tensor_opt, this->batch_idx_fallback);
-    }
+tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& page_table_tensor = tensor_args.page_table;
+
+    auto program_factory = select_program_factory(args, tensor_args);
+    operation::Hash hash = operation::hash_operation<PagedFillCacheDeviceOperation>(
+        args,
+        program_factory.index(),
+        cache_tensor.dtype(),
+        input_tensor.dtype(),
+        page_table_tensor.dtype(),
+        cache_tensor.memory_config(),
+        input_tensor.memory_config(),
+        page_table_tensor.memory_config(),
+        cache_tensor.padded_shape(),
+        input_tensor.padded_shape(),
+        page_table_tensor.padded_shape(),
+        tensor_args.batch_idx_tensor_opt.has_value());
+
+    return hash;
 }
 
-PagedUpdateCacheOpParallelizationStrategy PagedFillCacheDeviceOperation::get_parallelization_strategy(
-    const std::vector<Tensor>& input_tensors) const {
-    return PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE;
-}
-
-operation::Hash PagedFillCacheDeviceOperation::compute_program_hash(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<PagedFillCacheDeviceOperation>(
-        input_tensors, optional_input_tensors, this->mesh_coords);
+std::tuple<PagedFillCacheDeviceOperation::operation_attributes_t, PagedFillCacheDeviceOperation::tensor_args_t>
+PagedFillCacheDeviceOperation::invoke(
+    const Tensor& cache_tensor,
+    const Tensor& input_tensor,
+    const Tensor& page_table,
+    const std::optional<Tensor>& batch_idx_tensor,
+    uint32_t batch_idx_fallback,
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords) {
+    return {
+        operation_attributes_t{
+            .batch_idx_fallback = batch_idx_fallback,
+            .mesh_coords = mesh_coords,
+        },
+        tensor_args_t{
+            .cache_tensor = cache_tensor,
+            .input_tensor = input_tensor,
+            .page_table = page_table,
+            .batch_idx_tensor_opt = batch_idx_tensor,
+        }};
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache

@@ -1,51 +1,55 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <functional>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "../update_cache/paged_update_cache_device_operation.hpp"  // For PagedUpdateCacheOpParallelizationStrategy
+#include "paged_fill_cache_program_factory.hpp"
+
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "paged_fill_cache_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::paged_cache {
 
 struct PagedFillCacheDeviceOperation {
-    uint32_t batch_idx_fallback;
-    std::optional<Tensor>
-        batch_idx_tensor_opt;  // This will be handled by create_program, not directly in attributes for simple hashing
-    const std::optional<std::set<ttnn::MeshCoordinate>>
-        mesh_coords;  // Optional mesh coordinates to use for the operation
+    using operation_attributes_t = operation_attributes_t;
+    using tensor_args_t = tensor_args_t;
+    using spec_return_value_t = spec_return_value_t;
+    using tensor_return_value_t = tensor_return_value_t;
+    using program_factory_t = std::variant<program::PagedFillCacheProgramFactory>;
+    using shared_variables_t = program::PagedFillCacheProgramFactory::shared_variables_t;
 
-    PagedUpdateCacheOpParallelizationStrategy get_parallelization_strategy(
-        const std::vector<Tensor>& input_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& _,  // Unused
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static constexpr auto attribute_names = std::forward_as_tuple("batch_idx_fallback", "mesh_coords");
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    auto attribute_values() const { return std::forward_as_tuple(batch_idx_fallback, mesh_coords); }
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    tt::tt_metal::operation::Hash compute_program_hash(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& cache_tensor,
+        const Tensor& input_tensor,
+        const Tensor& page_table,
+        const std::optional<Tensor>& batch_idx_tensor,
+        uint32_t batch_idx_fallback,
+        const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::paged_cache
+
+namespace ttnn::prim {
+constexpr auto paged_fill_cache = ttnn::register_operation<
+    "ttnn::prim::paged_fill_cache",
+    ttnn::operations::experimental::paged_cache::PagedFillCacheDeviceOperation>();
+}  // namespace ttnn::prim
