@@ -37,7 +37,10 @@ public:
     virtual tt::tt_metal::MemoryConfig get_input_memory_config(
         IOShape output_slice_start, IOShape output_slice_end) = 0;
     virtual ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) = 0;
+        const ttnn::Tensor& sliced_input_tensor,
+        IOShape output_slice_start,
+        IOShape output_slice_end,
+        bool pad_output_width) = 0;
     virtual std::string name() = 0;
     virtual std::string str() = 0;
 };

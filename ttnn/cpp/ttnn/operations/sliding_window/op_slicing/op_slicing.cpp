@@ -98,8 +98,15 @@ void run_sliced_op(
             OpSliceAttr::IOShape input_slice_end = {output_slice_height_end, output_slice_width_end};
             for (auto op_attributes_iter = op_slice_attr.rbegin(); op_attributes_iter != op_slice_attr.rend();
                  op_attributes_iter++) {
+                output_slice_coords.push_back({input_slice_start, input_slice_end});
                 std::tie(input_slice_start, input_slice_end) =
                     (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
+                log_info(
+                    tt::LogOp,
+                    "Input Slice Start: {}, End: {} for op {}",
+                    input_slice_start,
+                    input_slice_end,
+                    (*op_attributes_iter)->str());
             }
             std::tie(input_slice_height_start, input_slice_width_start) = input_slice_start;
             std::tie(input_slice_height_end, input_slice_width_end) = input_slice_end;
@@ -163,8 +170,9 @@ void run_sliced_op(
         for (int op_index = 0; op_index < op_slice_attr.size(); op_index++) {
             auto this_op_slice_attr = op_slice_attr[op_index];
             auto [output_slice_start, output_slice_end] = output_slice_coords[op_index];
-            sliced_output_tensor =
-                this_op_slice_attr->run_L1_op(sliced_output_tensor, output_slice_start, output_slice_end);
+            bool pad_output_width = (op_index == (op_slice_attr.size() - 1));
+            sliced_output_tensor = this_op_slice_attr->run_L1_op(
+                sliced_output_tensor, output_slice_start, output_slice_end, pad_output_width);
         }
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are

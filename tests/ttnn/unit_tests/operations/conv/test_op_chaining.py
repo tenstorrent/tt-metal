@@ -182,7 +182,7 @@ def test_multi_conv(
         input_tensor=tt_input_tensor,
         output_tensor=tt_output_tensor,
         op_slice_attr=op_slicing_attrs,
-        dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8),
+        dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=8),
     )
     threshold = 0.5
     tt_output_tensor_host = ttnn.from_device(tt_output_tensor)

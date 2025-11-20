@@ -187,7 +187,10 @@ public:
     uint32_t get_L1_usage() override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
     ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
+        const ttnn::Tensor& sliced_input_tensor,
+        IOShape output_slice_start,
+        IOShape output_slice_end,
+        bool pad_output_width = true) override;
     std::string name() override;
     std::string str() override;
     static constexpr auto attribute_names = std::make_tuple(

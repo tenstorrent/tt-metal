@@ -975,7 +975,10 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 std::string Conv2dSliceAttr::name() { return "Conv2D"; }
 std::string Conv2dSliceAttr::str() { return fmt::format("Conv2D Slice Attr {}", *this); }
 ttnn::Tensor Conv2dSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+    const ttnn::Tensor& sliced_input_tensor,
+    IOShape output_slice_start,
+    IOShape output_slice_end,
+    bool pad_output_width) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
     auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
     int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
@@ -1025,7 +1028,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     uint32_t width_rounding_value =
         (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
-    if (output_slice_width % width_rounding_value != 0) {
+    if (pad_output_width && (output_slice_width % width_rounding_value != 0)) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
         log_trace(
             LogOp, "Conv2d DRAM Slicing: Additional padding of {} added to the right side.", additional_padded_width);
