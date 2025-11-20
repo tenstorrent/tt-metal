@@ -4,14 +4,12 @@
 
 import torch
 import pytest
-import math
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
 
-from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tracy import signpost
 
 
@@ -94,22 +92,6 @@ def run_strided_all_gather_impl(
         ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    ### Create persistent output buffers
-    logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
-
-    logger.info("Done creating persistent buffers")
-
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
     logger.info(f"All gather dim: {dim}")
@@ -161,7 +143,7 @@ def run_strided_all_gather_impl(
 
     if enable_trace:
         # Compile the op
-        tt_all_gather_out_tensor = run_op(0)
+        run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
@@ -201,7 +183,9 @@ def run_strided_all_gather_impl(
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out,
-                mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims
+                ),
             )
 
             tt_ag_out = tt_ag_out[:, :, :, 0 : expected_tensor.shape[3]]
