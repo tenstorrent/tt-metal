@@ -34,6 +34,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/experimental/lazy/evaluation_manager.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 using LazyTensor = ttnn::experimental::lazy::LazyTensor;
 
@@ -158,7 +159,8 @@ Tensor Tensor::to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const tt::tt_metal::MemoryConfig> mem_config,
     std::optional<ttnn::QueueId> cq_id) const {
-    return Tensor(get_materialized_tensor().to_device(mesh_device, mem_config, cq_id));
+    auto memory_config = mem_config.has_value() ? std::move(mem_config.value()) : ttnn::types::DRAM_MEMORY_CONFIG;
+    return ttnn::to_device(*this, mesh_device, std::move(memory_config), cq_id);
 }
 
 Tensor Tensor::to_layout(tt::tt_metal::Layout target_layout) const {
@@ -649,6 +651,6 @@ namespace ops {
         return tensor_ops::tensor_view(input_tensor, new_shape);
     }
     Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
-    
+
 }  // namespace ops
 }  // namespace tt::tt_metal

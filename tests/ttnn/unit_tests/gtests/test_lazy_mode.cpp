@@ -39,7 +39,7 @@
 #include "ttnn/operations/data_movement/gather/gather.hpp"
 #include "ttnn/operations/data_movement/sort/sort.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
-
+#include "ttnn/operations/data_movement/move/move.hpp"
 namespace ttnn {
 namespace test {
 
@@ -1553,5 +1553,17 @@ TEST_F(LazyModeFixture, NlpCreateQKVHeadsOperationLazy) {
     log_info(tt::LogTest, "==== Finished NlpCreateQKVHeadsOperationLazy test ====");
 }
 
+TEST_F(LazyModeFixture, LazyMoveOperation) {
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    auto tensor = ttnn::random::random(Shape({32, 32}), DataType::BFLOAT16, Layout::TILE);
+    ASSERT_TRUE(tensor.lazy()->is_materialized()) << "tensor should be materialized";
+    auto device_tensor = tensor.to_device(device_, std::nullopt);
+    ASSERT_FALSE(device_tensor.lazy()->is_materialized()) << "device_tensor should not be materialized";
+    auto move_tensor = ttnn::move(device_tensor, std::nullopt);
+    ASSERT_FALSE(move_tensor.lazy()->is_materialized()) << "move_tensor should not be materialized";
+    auto move_tensor_to_cpu = move_tensor.cpu();
+    ASSERT_TRUE(move_tensor_to_cpu.lazy()->is_materialized()) << "move_tensor_to_cpu should be materialized";
+}
 }  // namespace test
 }  // namespace ttnn

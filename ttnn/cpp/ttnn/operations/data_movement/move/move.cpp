@@ -160,7 +160,40 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         .at(0);
 }
 
+struct LazyMoveOperation : public ttnn::experimental::lazy::LazyOperation {
+    using tensor_args_t = const ttnn::Tensor;
+    const MemoryConfig mem_config_;
+
+    LazyMoveOperation(MemoryConfig&& mem_config) : mem_config_(std::move(mem_config)) {}
+
+    virtual std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
+        const ttnn::experimental::lazy::LazyOperationInputs& inputs) override {
+        if (inputs.at(0)->tensor_spec().memory_config().is_sharded()) {
+            return {move_sharded(inputs.at(0)->materialized_tensor(), mem_config_).get_materialized_tensor()};
+        }
+
+        return {move(inputs.at(0)->materialized_tensor(), mem_config_).get_materialized_tensor()};
+    }
+
+    virtual std::string_view name() const override { return "ToDeviceOperation"; }
+
+    virtual tt::stl::hash::hash_t operation_type_id() const override {
+        return tt::stl::hash::type_hash<LazyMoveOperation>;
+    }
+
+    virtual ~LazyMoveOperation() = default;
+};
+
 ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    // This case is one of those weird exceptions... If lazy is enabled, move has to be lazy because it only can happen
+    // on device
+    if (ttnn::experimental::lazy::is_lazy_enabled()) {
+        auto mem_config = output_mem_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+        auto lazy_move_operation = std::make_shared<LazyMoveOperation>(std::move(mem_config));
+        auto lazy_inputs = ttnn::experimental::lazy::make_lazy_device_operation_inputs<LazyMoveOperation>(input_tensor);
+        return tt::tt_metal::Tensor::make_lazy_tensor(lazy_inputs, lazy_move_operation, input_tensor.tensor_spec());
+    }
+
     if (input_tensor.memory_config().is_sharded()) {
         return move_sharded(input_tensor, output_mem_config);
     }
