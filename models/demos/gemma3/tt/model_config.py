@@ -1259,8 +1259,9 @@ class ModelArgs:
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
+            # for gemma we have different default supported seq lens than in tt_transformers
+            "N150": [128, 256],
+            "N300": [128, 256],
             "T3K": [128, 256, 512, 1024],
             "TG": [128, 256, 512, 1024],
         }
@@ -1292,15 +1293,8 @@ class ModelArgs:
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
-        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
-        There is no support to pass them as a tensor, and then inside the trace read it as a number.
-        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
         """
-        # Trace in prefill is currently supported only for Llama-3.1-8B
-        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
-
-        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
-            return False
 
         allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
