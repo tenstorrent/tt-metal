@@ -139,8 +139,6 @@ tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     const auto& input_shape = input_tensor.padded_shape();
     auto program_factory = select_program_factory(args, tensor_args);
 
-    // Note: output_mem_config is intentionally excluded from the hash because it only affects
-    // output tensor creation in compute_output_specs, not the program structure itself.
     operation::Hash hash = operation::hash_operation<CreateQKVHeadsDeviceOperation>(
         args.num_q_heads,
         args.num_kv_heads,
