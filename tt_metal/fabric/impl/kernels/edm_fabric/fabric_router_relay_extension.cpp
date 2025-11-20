@@ -165,9 +165,10 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-template <typename RelayToMuxSenderType>
+template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections>
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
-    RelayToMuxSenderType& local_mux_connection, volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
+    std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
     const auto& header = *packet_header;
     uint16_t payload_size_bytes = header.payload_size_bytes;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
@@ -180,7 +181,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -191,7 +192,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             }
             noc_semaphore_inc(noc_addr, increment);
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_atomic_ack(local_mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_atomic_ack<Direction>(mux_connections, packet_header);
 
         } break;
 
@@ -202,7 +203,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
@@ -216,7 +217,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             }
             noc_semaphore_inc(semaphore_dest_address, increment);
             // writes done, send ack back - Do we also need to send atomic inc response back?
-            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
@@ -235,7 +236,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // writes done, send ack back
-            tt::tt_fabric::udm::fabric_fast_write_ack(local_mux_connection, packet_header);
+            tt::tt_fabric::udm::fabric_fast_write_ack<Direction>(mux_connections, packet_header);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
@@ -247,8 +248,8 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
             // temporarily place here until we have txn id support
             noc_async_read_barrier();
             // reads done, send ack back
-            tt::tt_fabric::udm::fabric_fast_read_any_len_ack(
-                local_mux_connection, packet_header, read_response_memory_pool_addr);
+            tt::tt_fabric::udm::fabric_fast_read_any_len_ack<Direction>(
+                mux_connections, packet_header, read_response_memory_pool_addr);
             // free memory chunk
             tt::tt_fabric::udm::UDMMemoryPool::deallocate_memory(size_bytes);
         } break;
@@ -258,11 +259,11 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
     };
 }
 
-template <uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS>
+template <uint32_t Direction, uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
-    tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>& local_mux_connection,
+    std::array<tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>, NUM_MUX_CONNECTIONS>& mux_connections,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
@@ -271,7 +272,7 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        execute_noc_txn_to_local_chip(local_mux_connection, packet_header);
+        execute_noc_txn_to_local_chip<Direction>(mux_connections, packet_header);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -386,10 +387,10 @@ void kernel_main() {
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            forward_data<NUM_BUFFERS, mux_num_buffers>(
+            forward_data<direction, NUM_BUFFERS, mux_num_buffers>(
                 channel,
                 worker_interface,
-                mux_connections[0],
+                mux_connections,
                 channel_connection_established,
                 StreamId{channel_stream_id});
         }
