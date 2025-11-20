@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -132,8 +131,6 @@ void TarWriter::pad_to_block(std::vector<uint8_t>& data) const {
 }
 
 std::vector<uint8_t> TarWriter::get_tarball() const {
-    const auto start_time = std::chrono::high_resolution_clock::now();
-
     std::vector<uint8_t> tarball;
 
     for (const auto& entry : m_files) {
@@ -144,36 +141,10 @@ std::vector<uint8_t> TarWriter::get_tarball() const {
 
     tarball.insert(tarball.end(), tar_format::BLOCK_SIZE * tar_format::END_BLOCKS, 0);
 
-    const auto end_time = std::chrono::high_resolution_clock::now();
-    const auto duration = end_time - start_time;
-    const auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-
-    constexpr int64_t ns_per_second = 1'000'000'000LL;
-    constexpr int64_t ns_per_minute = 60LL * ns_per_second;
-    constexpr int64_t ns_per_hour = 60LL * ns_per_minute;
-
-    const int64_t hours = total_ns / ns_per_hour;
-    const int64_t minutes = (total_ns % ns_per_hour) / ns_per_minute;
-    const int64_t seconds = (total_ns % ns_per_minute) / ns_per_second;
-    const int64_t milliseconds = (total_ns % ns_per_second) / 1'000'000LL;
-    const int64_t microseconds = (total_ns % 1'000'000LL) / 1'000LL;
-    const int64_t nanoseconds = total_ns % 1'000LL;
-
-    fmt::print(
-        "Tarball serialization time: {:02d}:{:02d}:{:02d}.{:03d}{:03d}{:03d}\n",
-        hours,
-        minutes,
-        seconds,
-        milliseconds,
-        microseconds,
-        nanoseconds);
-
     return tarball;
 }
 
 void TarWriter::write_to_file(std::string_view filename, bool use_tarball, bool compress) const {
-    const auto start_time = std::chrono::high_resolution_clock::now();
-
     if (!use_tarball) {
         std::filesystem::path dir_path(filename);
         std::filesystem::create_directories(dir_path);
@@ -212,30 +183,6 @@ void TarWriter::write_to_file(std::string_view filename, bool use_tarball, bool 
                 throw std::runtime_error("Failed to sync file: " + file_path.string());
             }
         }
-
-        const auto end_time = std::chrono::high_resolution_clock::now();
-        const auto duration = end_time - start_time;
-        const auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-
-        constexpr int64_t ns_per_second = 1'000'000'000LL;
-        constexpr int64_t ns_per_minute = 60LL * ns_per_second;
-        constexpr int64_t ns_per_hour = 60LL * ns_per_minute;
-
-        const int64_t hours = total_ns / ns_per_hour;
-        const int64_t minutes = (total_ns % ns_per_hour) / ns_per_minute;
-        const int64_t seconds = (total_ns % ns_per_minute) / ns_per_second;
-        const int64_t milliseconds = (total_ns % ns_per_second) / 1'000'000LL;
-        const int64_t microseconds = (total_ns % 1'000'000LL) / 1'000LL;
-        const int64_t nanoseconds = total_ns % 1'000LL;
-
-        fmt::print(
-            "File serialization time (individual files): {:02d}:{:02d}:{:02d}.{:03d}{:03d}{:03d}\n",
-            hours,
-            minutes,
-            seconds,
-            milliseconds,
-            microseconds,
-            nanoseconds);
 
         return;
     }
@@ -423,31 +370,6 @@ void TarWriter::write_to_file(std::string_view filename, bool use_tarball, bool 
         std::vector<uint8_t> end_blocks(end_blocks_size, 0);
         write_direct(end_blocks.data(), end_blocks_size);
     }
-
-    const auto end_time = std::chrono::high_resolution_clock::now();
-    const auto duration = end_time - start_time;
-    const auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-
-    constexpr int64_t ns_per_second = 1'000'000'000LL;
-    constexpr int64_t ns_per_minute = 60LL * ns_per_second;
-    constexpr int64_t ns_per_hour = 60LL * ns_per_minute;
-
-    const int64_t hours = total_ns / ns_per_hour;
-    const int64_t minutes = (total_ns % ns_per_hour) / ns_per_minute;
-    const int64_t seconds = (total_ns % ns_per_minute) / ns_per_second;
-    const int64_t milliseconds = (total_ns % ns_per_second) / 1'000'000LL;
-    const int64_t microseconds = (total_ns % 1'000'000LL) / 1'000LL;
-    const int64_t nanoseconds = total_ns % 1'000LL;
-
-    fmt::print(
-        "Tarball serialization time ({}){:02d}:{:02d}:{:02d}.{:03d}{:03d}{:03d}\n",
-        compress ? "compressed" : "uncompressed",
-        hours,
-        minutes,
-        seconds,
-        milliseconds,
-        microseconds,
-        nanoseconds);
 }
 
 }  // namespace ttml::serialization
