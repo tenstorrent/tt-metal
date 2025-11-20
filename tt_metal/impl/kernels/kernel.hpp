@@ -48,7 +48,7 @@ class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
-    virtual ~Kernel() = default;
+    ~Kernel() override = default;
 
     std::string name() const;
 
