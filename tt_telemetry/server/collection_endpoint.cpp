@@ -39,25 +39,6 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     uint16_t port_;
 
-    // Accumulated telemetry data
-    TelemetrySnapshot telemetry_state_;
-
-    // Telemetry data
-    std::mutex snapshot_mutex_;
-    std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
-
-    // Get snapshot if one is ready
-    std::shared_ptr<TelemetrySnapshot> get_next_snapshot() {
-        std::lock_guard<std::mutex> lock(snapshot_mutex_);
-
-        std::shared_ptr<TelemetrySnapshot> snapshot;
-        if (!pending_snapshots_.empty()) {
-            snapshot = std::move(pending_snapshots_.front());
-            pending_snapshots_.pop();
-        }
-        return snapshot;
-    }
-
     void send_message_to_clients(const std::string& message) {
         std::lock_guard<std::mutex> lock(connections_mutex_);
 
@@ -72,24 +53,12 @@ private:
         }
     }
 
-    // Main telemetry processing thread
-    void process_telemetry() {
-        while (running_) {
-            std::shared_ptr<TelemetrySnapshot> snapshot = get_next_snapshot();
-            if (!snapshot) {
-                // No snapshot, sleep a while
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-
-            // Merge snapshot into telemetry state
-            telemetry_state_.merge_from(*snapshot);
-
-            // Send the delta snapshot directly to clients
-            json j = *snapshot;
-            std::string message = j.dump();
-            send_message_to_clients(message);
-        }
+    // Called after telemetry has been merged into the state
+    void on_telemetry_updated(const TelemetrySnapshot& delta) override {
+        // Send the delta snapshot directly to clients
+        json j = delta;
+        std::string message = j.dump();
+        send_message_to_clients(message);
     }
 
     // WebSocket event handlers
@@ -101,7 +70,11 @@ private:
 
         // Send full snapshot to the new client
         try {
-            TelemetrySnapshot full_snapshot = telemetry_state_;
+            TelemetrySnapshot full_snapshot;
+            {
+                std::lock_guard<std::mutex> state_lock(state_mutex_);
+                full_snapshot = telemetry_state_;
+            }
             json j = full_snapshot;
             std::string message = j.dump();
             ws_server_.send(hdl, message, websocketpp::frame::opcode::text);
@@ -148,9 +121,8 @@ public:
     void start() {
         log_info(tt::LogAlways, "Starting WebSocket telemetry server on port {}...", port_);
 
-        // Start telemetry processing thread
+        // Note: The base class TelemetrySubscriber already started the processing thread in its constructor
         running_ = true;
-        server_thread_ = std::thread(&TelemetryCollectionEndpoint::process_telemetry, this);
 
         try {
             // Set reuse address
@@ -188,15 +160,7 @@ public:
             log_error(tt::LogAlways, "Error stopping WebSocket server: {}", e.what());
         }
 
-        // Wait for telemetry thread to finish
-        if (server_thread_.joinable()) {
-            server_thread_.join();
-        }
-    }
-
-    void on_telemetry_ready(std::shared_ptr<TelemetrySnapshot> telemetry) override {
-        std::lock_guard<std::mutex> lock(snapshot_mutex_);
-        pending_snapshots_.push(std::move(telemetry));
+        // Note: The base class destructor will handle stopping the processing thread
     }
 
     ~TelemetryCollectionEndpoint() { stop(); }
