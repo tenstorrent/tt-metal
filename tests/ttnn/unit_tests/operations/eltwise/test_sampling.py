@@ -8,12 +8,14 @@ import pytest
 import ttnn
 import numpy as np
 from loguru import logger
+from models.common.utils import LogProbsCalculator
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
     get_lib_dtype,
 )
+from models.common.utility_functions import comp_pcc
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -228,3 +230,70 @@ def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [  # TODO: Add llama3.1-8b T3K shapes
+        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_calculation(shape, mesh_device):
+    seed = 1234
+    torch.manual_seed(seed)
+
+    log_probs_calculator = LogProbsCalculator(shape[-1], mesh_device)
+
+    torch_tensor = torch.randn(shape)
+    # shuffle the tensor in last 2 dimensions
+    for i in range(shape[-2]):
+        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
+
+    logits_tensor = ttnn.from_torch(
+        torch_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    log_probs_calculator.set_log_probs_mode(True)
+    log_probs_calculator.compute_global_stats(logits_tensor)
+
+    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    indices_tensor = argmax_tensor.reshape(
+        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    )
+
+    ttnn_indices_tensor = ttnn.from_torch(
+        indices_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # prepare relevant logits
+    relevant_logits_tensor = log_probs_calculator.prepare_relevant_logits(logits_tensor, ttnn_indices_tensor)
+    tt_log_probs = log_probs_calculator.calculate_log_probs(relevant_logits_tensor)
+
+    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
+
+    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
+    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
+    log_probs_torch_argmax = torch.reshape(log_probs_torch_argmax, (1, 1, 1, 32))
+
+    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    print(f"pcc={pcc}")
+
+    assert passing, f"Assertion failed, PCC={pcc}"
