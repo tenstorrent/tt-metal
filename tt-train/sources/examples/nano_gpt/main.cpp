@@ -107,6 +107,7 @@ struct TrainingConfig {
     std::string model_config;
     std::string data_path;
     std::string scheduler_type = "identity";
+    std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
 
@@ -135,6 +136,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
+    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
 
     return config;
 }
@@ -304,8 +306,6 @@ int main(int argc, char **argv) {
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
     std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_gpt2s.yaml";
-    std::string device_config_name = std::string(tt_metal_home) + "/tt-train/device_configs/n150.yaml";
-    std::string model_config_name = std::string(tt_metal_home) + "/tt-train/model_configs/gpt2s.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -313,8 +313,7 @@ int main(int argc, char **argv) {
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
 
-    app.add_option("--training", training_config_name, "Training Config name")->default_val(training_config_name);
-    app.add_option("--device", device_config_name, "Device Config name")->default_val(device_config_name);
+    app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
 
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -326,10 +325,9 @@ int main(int argc, char **argv) {
     CLI11_PARSE(app, argc, argv);
 
     TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
-    DeviceConfig device_config = parse_device_config(YAML::LoadFile(device_config_name));
+    DeviceConfig device_config = parse_device_config(YAML::LoadFile(training_config_name));
 
-    model_config_name = std::string(tt_metal_home) + "/tt-train/configs/model_configs/" + training_config.model_config;
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_name));
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty())
@@ -384,19 +382,44 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
-    std::vector<uint32_t> tokens_vector;
-
-    try
-    {
-        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    try {
+        text = read_file_to_str(training_config.data_path);
+        // check file extension:
+        if (training_config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(training_config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+        }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
-        std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
         return -1;
     }
 
-    auto dataset = ttml::datasets::InMemoryTokenDataset(
-        std::move(tokens_vector), sequence_length);
+    auto create_dataset =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<0>(text), sequence_length);
+            } 
+            else if (tokenizer_type == "bpe") {
+                try
+                {
+                    return ttml::datasets::InMemoryTokenDataset(std::move(std::get<1>(text)), sequence_length);
+
+                } catch (const std::exception &e) {
+                    std::cerr << e.what() << std::endl;
+                    std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
+                    return -1;
+                }
+            } 
+            else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
+
+    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config.tokenizer_type);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
