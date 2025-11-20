@@ -16,9 +16,11 @@ class TtBottleneck:
         blk_sharded=False,
         activation_dtype=ttnn.bfloat16,
         conv3_blk_sharded=False,
+        prefer_l1=False,
     ):
         self.is_downsample = is_downsample
         self.activation_dtype = activation_dtype
+        self.prefer_l1 = prefer_l1
 
         self.conv1 = TtConv2D(
             conv_args.conv1, conv_pth.conv1, device=device, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
@@ -44,18 +46,19 @@ class TtBottleneck:
 
     def __call__(self, x_identity):
         x, out_ht, out_wdth = self.conv1(x_identity)
+        mem_cfg = ttnn.L1_MEMORY_CONFIG if self.prefer_l1 else ttnn.DRAM_MEMORY_CONFIG
         if self.activation_dtype == ttnn.bfloat8_b:
-            x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            x_identity = ttnn.to_memory_config(x_identity, mem_cfg, dtype=ttnn.bfloat8_b)
             x_identity = ttnn.add(x_identity, 0.0, dtype=ttnn.bfloat8_b)
 
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, mem_cfg)
         x, out_ht, out_wdth = self.conv2(x)
         x, out_ht, out_wdth = self.conv3(x)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, mem_cfg)
 
         if self.is_downsample:
             x_identity, _, _ = self.downsample(x_identity)
-        x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG)
+        x_identity = ttnn.to_memory_config(x_identity, mem_cfg)
 
         x = ttnn.add(x, x_identity)
         x = ttnn.relu(x)

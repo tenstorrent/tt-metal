@@ -133,7 +133,6 @@ class TtResnet50:
         outputs = []
         # Layer 1
         x = self.layer1_0(x)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.layer1_1(x)
         x = self.layer1_2(x)
 
