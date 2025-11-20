@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
 
-namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
+namespace ttnn::operations::experimental::ssm::repeat_mul {
 
 struct operation_attributes_t {
     const tt::tt_metal::MemoryConfig memory_config;
@@ -16,11 +16,13 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    Tensor input;
+    const Tensor& a;
+    const Tensor& b;
+    std::optional<Tensor> preallocated_output;
 };
 
 using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
+}  // namespace ttnn::operations::experimental::ssm::repeat_mul

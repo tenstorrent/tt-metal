@@ -13,7 +13,7 @@ target_sources(
         prefix_scan/device/prefix_scan_op.cpp
         prefix_scan/device/prefix_scan_program_factory.cpp
         prefix_scan/prefix_scan.cpp
-        repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_op.cpp
+        repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_device_operation.cpp
         repeat_and_interleave_eltwise_mul/device/repeat_and_interleave_eltwise_mul_program_factory.cpp
         repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul.cpp
 )
