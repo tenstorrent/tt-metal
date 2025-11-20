@@ -162,6 +162,7 @@ def generate_speech_ttnn(
 
         # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
         decoder_inference_start = time.time()
+        print("output_sequence_ttnn", output_sequence_ttnn.shape)
         if enable_trace and generator is not None:
             # Use trace execution for faster inference
             current_seq_len = output_sequence_ttnn.shape[1]
@@ -361,7 +362,7 @@ def main():
         ttnn.device.EnablePersistentKernelCache()
 
         # Initialize device
-        device = ttnn.open_device(device_id=0, l1_small_size=150000, trace_region_size=10000000)
+        device = ttnn.open_device(device_id=0, l1_small_size=300000, trace_region_size=10000000)
 
         # Enable program cache for faster inference
         device.enable_program_cache()

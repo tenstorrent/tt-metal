@@ -128,6 +128,7 @@ def test_end_to_end_pcc():
         speech_decoder_prenet_layers=2,
         speech_decoder_prenet_dropout=0.5,
     )
+    max_sequence_length = 384
 
     # Create speaker embeddings for precomputation (random but deterministic)
     torch.manual_seed(42)
@@ -135,7 +136,9 @@ def test_end_to_end_pcc():
     decoder_params = preprocess_decoder_parameters(
         hf_model.speecht5.decoder, ttnn_decoder_config, device, speaker_embeddings
     )
-    ttnn_decoder = TTNNSpeechT5Decoder(device=device, parameters=decoder_params, config=ttnn_decoder_config)
+    ttnn_decoder = TTNNSpeechT5Decoder(
+        device=device, parameters=decoder_params, config=ttnn_decoder_config, max_sequence_length=max_sequence_length
+    )
 
     # TTNN Postnet
     ttnn_postnet_config = TTNNPostNetConfig(
@@ -193,7 +196,7 @@ def test_end_to_end_pcc():
 
     # Create decoder inputs using PyTorch encoder output
     batch_size, seq_len, hidden_size = pytorch_encoder_output.shape
-    decoder_seq_len = 10  # Same as in other tests
+    decoder_seq_len = max_sequence_length  # Same as in other tests
 
     # Create mel input (random but deterministic)
     torch.manual_seed(42)
