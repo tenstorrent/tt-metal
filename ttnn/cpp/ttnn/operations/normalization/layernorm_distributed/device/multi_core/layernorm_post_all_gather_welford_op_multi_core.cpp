@@ -65,6 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     using tt::tt_metal::CircularBufferConfig;
 
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
+    TT_FATAL(!is_rmsnorm, "Welford algorithm is not supported for RMSNorm. Use legacy reduction instead.");
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
@@ -314,14 +315,28 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     };
 
     uint32_t gamma_stick_size = 0;
+    uint32_t gamma_is_row_major = 0;
+    uint32_t beta_is_row_major = 0;
+
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
+        gamma_is_row_major = 1;
     } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
         gamma_stick_size = 2048;  // size of tile in bytes bf16
+        gamma_is_row_major = 0;
     }
+
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        beta_is_row_major = 1;
+    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
+        beta_is_row_major = 0;
+    }
+
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
+    reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
+    reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);

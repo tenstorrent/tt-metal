@@ -91,6 +91,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     LayerNormDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
+    TT_FATAL(!is_rmsnorm, "Welford algorithm is not supported for RMSNorm. Use legacy reduction instead.");
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;

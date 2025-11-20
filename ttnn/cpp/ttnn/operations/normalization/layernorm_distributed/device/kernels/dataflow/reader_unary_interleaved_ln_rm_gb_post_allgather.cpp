@@ -42,7 +42,11 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
     constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(3);
+    constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(4);
+    DPRINT << "gamma_is_row_major" << gamma_is_row_major << ENDL();
+    DPRINT << "beta_is_row_major" << beta_is_row_major << ENDL();
+    constexpr auto src_args = TensorAccessorArgs<5>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -52,7 +56,6 @@ void kernel_main() {
 
 #ifdef FUSE_GAMMA
     const auto addrg = TensorAccessor(gamma_args, gamma_addr, get_tile_size(cb_gamma));
-    DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
@@ -103,9 +106,8 @@ void kernel_main() {
                 for (uint32_t r = 0; r < blk; r++) {
                     cb_reserve_back(cb_gamma, 1);
                     uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                    DPRINT << "tile id: " << wt + r << ENDL();
                     uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
-                    async_read_row_to_tile<0>(gamma_noc_addr, l1_write_addr);
+                    async_read_row_to_tile<gamma_is_row_major>(gamma_noc_addr, l1_write_addr);
                     noc_async_read_barrier();
                     cb_push_back(cb_gamma, 1);
                 }
@@ -125,7 +127,7 @@ void kernel_main() {
                     cb_reserve_back(cb_beta, 1);
                     uint32_t l1_write_addr = get_write_ptr(cb_beta);
                     uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                    async_read_row_to_tile<0>(beta_noc_addr, l1_write_addr);
+                    async_read_row_to_tile<beta_is_row_major>(beta_noc_addr, l1_write_addr);
                     noc_async_read_barrier();
                     cb_push_back(cb_beta, 1);
                 }

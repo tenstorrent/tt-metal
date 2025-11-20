@@ -59,6 +59,7 @@ struct x_minus_mean_node {
         .CB_OUT = cb_x_minus_mean,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 0,
     };
 };
 constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
@@ -74,6 +75,7 @@ struct normed_output_node {
         .CB_OUT = normed_output_cb,
         .fixed_CB_B_index = 0,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 0,
     };
 };
 constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
@@ -88,6 +90,7 @@ struct gamma_optional_node {
         .CB_OUT = cb_times_gamma_out,
         .fixed_CB_B_index = 0xFFFF,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 constexpr uint32_t cb_in_beta = do_gamma ? cb_times_gamma_out : normed_output_cb;
@@ -101,6 +104,7 @@ struct beta_optional_node {
         .CB_OUT = cb_out,
         .fixed_CB_B_index = 0xFFFF,
         .fixed_dest_reg = 0xFFFF,
+        .debug_mode = 1,
     };
 };
 

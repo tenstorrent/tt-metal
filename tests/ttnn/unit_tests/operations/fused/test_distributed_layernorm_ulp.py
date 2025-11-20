@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# t  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -74,9 +74,19 @@ def setup_ccl_semaphores(mesh_device):
     return ccl_semaphore_handles
 
 
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("seq_len", [1024])
-@pytest.mark.parametrize("hidden_dim", [4096])
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        # (1, 1, 2048, 8192),
+        (1, 1, 1024, 8192),
+        # (1, 1, 32, 32*8),
+    ],
+    ids=[
+        # "shape_2048x8192",
+        "shape_128x8192",
+        # "shape_2x128x8192",
+    ],
+)
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(
     "mean, var, outlier_pct, outlier_var",
@@ -87,7 +97,44 @@ def setup_ccl_semaphores(mesh_device):
         "case1",
     ],
 )
-@pytest.mark.parametrize("norm_type", ["layer_norm"])
+@pytest.mark.parametrize(
+    "norm_type",
+    [
+        "layer_norm",
+        # "rms_norm"
+    ],
+    ids=[
+        "layernorm",
+        # "rmsnorm"
+    ],
+)
+@pytest.mark.parametrize(
+    "gamma_layout, beta_layout",
+    [
+        # (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        # (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        # (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+    ],
+    ids=[
+        # "tile_tile",
+        "rm_rm",
+        # "tile_rm",
+        # "rm_tile"
+    ],
+)
+@pytest.mark.parametrize(
+    "program_config",
+    [
+        ttnn.LayerNormDefaultProgramConfig(legacy_reduction=False, legacy_rsqrt=False, use_welford=True),
+        # ttnn.LayerNormDefaultProgramConfig(legacy_reduction=False, legacy_rsqrt=False, use_welford=False),
+        # ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True, use_welford=False),
+    ],
+    ids=[
+        "welford",
+        # "fp32_reduce", "legacy"
+    ],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -97,12 +144,26 @@ def setup_ccl_semaphores(mesh_device):
     indirect=True,
 )
 def test_distributed_norm_comparison(
-    mesh_device, batch_size, seq_len, hidden_dim, eps, mean, var, outlier_pct, outlier_var, norm_type
+    mesh_device,
+    input_shape,
+    eps,
+    mean,
+    var,
+    outlier_pct,
+    outlier_var,
+    norm_type,
+    gamma_layout,
+    beta_layout,
+    program_config,
 ):
+    # Skip RMSNorm with Welford - not supported
+    if norm_type == "rms_norm" and program_config.use_welford:
+        pytest.skip("RMSNorm with Welford is not supported")
+
     torch.manual_seed(42)
 
     # Generate random input data
-    input_shape = (batch_size, 1, seq_len, hidden_dim)
+    hidden_dim = input_shape[-1]
     torch_input = torch.randn(input_shape) * var + mean
     if outlier_pct > 0:
         # fa_rand - style input distribution. addition of two gaussian distributions, one with higher variance
@@ -112,6 +173,8 @@ def test_distributed_norm_comparison(
     logger.info(
         f"Input shape: {input_shape}, Mean: {mean}, Var: {var}, Outlier Pct: {outlier_pct}, Outlier Var: {outlier_var}"
     )
+    logger.info(f"Norm type: {norm_type}, Gamma layout: {gamma_layout}, Beta layout: {beta_layout}")
+
     torch_weight = torch.randn(hidden_dim)
     torch_bias = torch.randn(hidden_dim)
 
@@ -143,31 +206,49 @@ def test_distributed_norm_comparison(
     )
 
     N_DEV = 8
-    ttnn_weight = ttnn.from_torch(
-        torch_weight.reshape(1, 1, 1, hidden_dim),
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-    )
-    # breakpoint()
-    ttnn_weight_back = ttnn.to_torch(ttnn_weight, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-    torch.set_printoptions(profile="full")
 
-    with open("pre_ttnn.txt", "w") as f:
-        f.write(str(torch_weight))
-    with open("post_ttnn.txt", "w") as f:
-        f.write(str(ttnn_weight_back))
-
-    ttnn.visualize_tensor(ttnn_weight)
-    if norm_type == "layer_norm":
-        ttnn_bias = ttnn.from_torch(
-            torch_bias.reshape(1, 1, 1, hidden_dim),
+    # Create gamma/weight tensor with specified layout
+    if gamma_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # For row major, reshape to (N_DEV, 1, -1, 32) and shard on device dimension (dim=0)
+        # Each device gets hidden_dim // N_DEV elements, arranged as rows of 32 elements
+        weight_per_device = hidden_dim // N_DEV
+        ttnn_weight = ttnn.from_torch(
+            torch_weight.reshape(N_DEV, 1, -1, 32),
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+    else:
+        # For tile layout, shard along the last dimension
+        ttnn_weight = ttnn.from_torch(
+            torch_weight.reshape(1, 1, 1, hidden_dim),
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
+
+    # Create beta/bias tensor with specified layout
+    if norm_type == "layer_norm":
+        if beta_layout == ttnn.ROW_MAJOR_LAYOUT:
+            # For row major, reshape to (N_DEV, 1, -1, 32) and shard on device dimension (dim=0)
+            ttnn_bias = ttnn.from_torch(
+                torch_bias.reshape(N_DEV, 1, -1, 32),
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
+        else:
+            # For tile layout, shard along the last dimension
+            ttnn_bias = ttnn.from_torch(
+                torch_bias.reshape(1, 1, 1, hidden_dim),
+                dtype=ttnn.bfloat16,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            )
 
     # Use highest precision compute kernel config for comparison
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -184,29 +265,19 @@ def test_distributed_norm_comparison(
     2. Gather stats tensor across devices.
     3. Reduce stats tensor. Compute variance and mean. Do normalization.
     """
-    use_new = ttnn.LayerNormDefaultProgramConfig(
-        legacy_reduction=False,
-        legacy_rsqrt=False,
-        use_welford=True,
-    )
-    use_old = ttnn.LayerNormDefaultProgramConfig(
-        legacy_reduction=True,
-        legacy_rsqrt=True,
-        use_welford=False,
-    )
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            program_config=use_new,
+            program_config=program_config,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            program_config=use_new,
+            program_config=program_config,
         )
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -229,7 +300,7 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             bias=ttnn_bias,
             compute_kernel_config=compute_kernel_config,
-            program_config=use_new,
+            program_config=program_config,
         )
     elif norm_type == "rms_norm":
         ttnn_output = ttnn.rms_norm_post_all_gather(
@@ -238,7 +309,7 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            program_config=use_new,
+            program_config=program_config,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

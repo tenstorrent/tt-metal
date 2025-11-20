@@ -7,6 +7,8 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
+#include "debug/dprint_pages.h"
+
 using fn_init = void(uint32_t, uint32_t);
 using fn_compute = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 struct LLK_Node {
@@ -23,6 +25,9 @@ struct LLK_Node {
     // Note: These values were chosen for readability, and can be changed if wanted
     // If we do not want a fixed index 0xFFFF is the default value
     uint32_t fixed_dest_reg;
+    // Debug mode: 0 false
+    // Debug mode: 1 print all data in and out
+    uint32_t debug_mode;
 };
 // chain_llk(add_node,sub_node,mul_node);
 // chain_llk(add_node,sub_node);
@@ -39,6 +44,15 @@ struct LLK_Node {
 //     };
 // };
 // chain_llk()
+template <typename cur_llk_type>
+uint32_t cb_b_index_policy(uint32_t j) {
+    constexpr auto cur_llk = cur_llk_type::node;
+    if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
+        return j;
+    } else {
+        return cur_llk.fixed_CB_B_index;
+    }
+}
 
 template <uint32_t cb_length, bool is_fp_32, typename cur_llk_type>
 void unroll_llk();
@@ -50,9 +64,7 @@ template <uint32_t total_tiles, uint32_t cb_length, bool is_fp_32, typename... l
 void chain_llk(llk_nodes...) {
     constexpr uint32_t iterations = total_tiles / cb_length;
     constexpr uint32_t leftovers = total_tiles % cb_length;
-    DPRINT << "YOOOOOOOOOO" << ENDL();
     for (uint32_t i = 0; i < iterations; i++) {
-        DPRINT << "YO iterations" << ENDL();
         (..., unroll_llk<cb_length, is_fp_32, llk_nodes>());
     }
     (..., unroll_llk<leftovers, is_fp_32, llk_nodes>());
@@ -79,24 +91,34 @@ void unroll_llk() {
     }
     unroll_inner_loop<cb_leftovers, cur_llk_type>();
 }
+
+template <typename cur_llk_type>
+void print_input_CBs(uint32_t j) {
+    constexpr auto cur_llk = cur_llk_type::node;
+    UNPACK(DPRINT << "=============CB_A==============" << ENDL());
+    UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
+    UNPACK(DPRINT << "=============CB_B==============" << ENDL());
+    UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j), true));
+}
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop() {
     constexpr auto cur_llk = cur_llk_type::node;
     tile_regs_acquire();
-    DPRINT << "pre_wait_front" << ENDL();
     cb_wait_front(cur_llk.CB_A, num_dst_regs);
     if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
         cb_wait_front(cur_llk.CB_B, num_dst_regs);
     } else {
         cb_wait_front(cur_llk.CB_B, cur_llk.fixed_CB_B_index + 1);
     }
-    DPRINT << "post_wait_front" << ENDL();
     for (uint32_t j = 0; j < num_dst_regs; j++) {
         // TODO Add path for fixed dest reg
-        if constexpr (cur_llk.fixed_CB_B_index != 0xFFFF) {
-            cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cur_llk.fixed_CB_B_index, j);
-        } else {
-            cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, j, j);
+        if constexpr (cur_llk.debug_mode == 1) {
+            print_input_CBs<cur_llk_type>(j);
+        }
+        cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cb_b_index_policy<cur_llk_type>(j), j);
+        if constexpr (cur_llk.debug_mode == 1) {
+            MATH(DPRINT << "=============DEST_OUT==============" << ENDL());
+            dprint_tensix_dest_reg(j);
         }
     }
     cb_pop_front(cur_llk.CB_A, num_dst_regs);
