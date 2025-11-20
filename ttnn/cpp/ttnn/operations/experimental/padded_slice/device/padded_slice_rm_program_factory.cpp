@@ -25,11 +25,10 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
-#include "padded_slice_op.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::detail {
+namespace ttnn::operations::experimental::padded_slice::program {
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
@@ -49,7 +48,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    [[maybe_unused]] uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
+    [[maybe_unused]] uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
@@ -192,8 +191,14 @@ get_padded_slice_runtime_args_rm_sharded_output(
     return ret_val;
 }
 
-operation::ProgramWithCallbacks padded_slice_rm_multi_core(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& output_tensor_start = operation_attributes.padded_slice_start;
+    const auto& output_tensor_end = operation_attributes.padded_slice_end;
+
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
     for (int i = 0; i < output_shape.rank(); i++) {
@@ -221,7 +226,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
+    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output);
 
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
@@ -333,36 +338,45 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         i++;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id,
-                                           unary_writer_kernel_id,
-                                           output_tensor_start,
-                                           actual_output_shape,
-                                           compute_with_storage_grid_size,
-                                           max_read_size,
-                                           iter_cores,
-                                           cb_output](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& src_tensor = input_tensors.at(0);
-        auto dst_tensor = output_tensors.at(0);
-        TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_tensor.buffer());
-
-        auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
-            src_tensor, dst_tensor, output_tensor_start, actual_output_shape, iter_cores, max_read_size);
-
-        uint32_t i = 0;
-        for (const auto& core : iter_cores) {
-            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-            i++;
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    shared_variables_t shared_vars{
+        /* unary_reader_kernel_id = */ unary_reader_kernel_id,
+        /* unary_writer_kernel_id = */ unary_writer_kernel_id,
+        /* output_tensor_start = */ output_tensor_start,
+        /* actual_output_shape = */ actual_output_shape,
+        /* compute_with_storage_grid_size = */ compute_with_storage_grid_size,
+        /* max_read_size = */ max_read_size,
+        /* iter_cores = */ iter_cores,
+        /* cb_output = */ cb_output};
+    return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-}  // namespace ttnn::operations::experimental::detail
+void PaddedSliceRMProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& shared_vars = cached_program.shared_variables;
+    const auto& src_tensor = tensor_args.input;
+    auto& dst_tensor = output;
+    TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
+    UpdateDynamicCircularBufferAddress(cached_program.program, shared_vars.cb_output, *dst_tensor.buffer());
+
+    auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
+        src_tensor,
+        dst_tensor,
+        shared_vars.output_tensor_start,
+        shared_vars.actual_output_shape,
+        shared_vars.iter_cores,
+        shared_vars.max_read_size);
+
+    uint32_t i = 0;
+    for (const auto& core : shared_vars.iter_cores) {
+        tt::tt_metal::SetRuntimeArgs(
+            cached_program.program, shared_vars.unary_reader_kernel_id, core, all_runtime_args[i].first);
+        tt::tt_metal::SetRuntimeArgs(
+            cached_program.program, shared_vars.unary_writer_kernel_id, core, all_runtime_args[i].second);
+        i++;
+    }
+}
+
+}  // namespace ttnn::operations::experimental::padded_slice::program

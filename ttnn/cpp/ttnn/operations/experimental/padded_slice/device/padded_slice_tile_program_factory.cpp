@@ -25,11 +25,10 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
-#include "padded_slice_op.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::detail {
+namespace ttnn::operations::experimental::padded_slice::program {
 
 // Circular buffer indices
 const uint32_t cb_buffer_size = 4;
@@ -59,7 +58,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
+    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     const uint32_t input_num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
 
     uint32_t num_tiles_per_channel = tt::div_up(input_num_tiles_per_channel, num_cores_channels);
@@ -347,8 +346,14 @@ get_padded_slice_runtime_args_tile_sharded_output(
     return ret_val;
 }
 
-operation::ProgramWithCallbacks padded_slice_tile_multi_core(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& output_tensor_start = operation_attributes.padded_slice_start;
+    const auto& output_tensor_end = operation_attributes.padded_slice_end;
+
     const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
     for (int i = 0; i < output_shape.rank(); i++) {
@@ -387,7 +392,7 @@ operation::ProgramWithCallbacks padded_slice_tile_multi_core(
 
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
+    uint32_t num_cores_channels = detail::get_num_cores_channels_from_sharded_tensor(output);
     uint32_t max_num_tiles_per_row = 0;
     for (uint32_t channel_index = 0; channel_index < num_cores_channels; channel_index++) {
         const uint32_t width_offset_elems = channel_index * output_row_size_elems;
@@ -529,47 +534,54 @@ operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         i++;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id,
-                                           unary_writer_kernel_id,
-                                           untilize_compute_kernel_id,
-                                           output_tensor_start,
-                                           actual_output_shape,
-                                           compute_with_storage_grid_size,
-                                           max_read_size,
-                                           max_num_tiles_per_row,
-                                           iter_cores,
-                                           cb_output_tuple](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& src_tensor = input_tensors.at(0);
-        auto dst_tensor = output_tensors.at(0);
-        TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_output_tuple), *dst_tensor.buffer());
-        uint32_t output_row_size_bytes = dst_tensor.shard_spec()->shape[1] * dst_tensor.element_size();
-        auto alignment = TILE_WIDTH * dst_tensor.element_size();
-        auto is_non_aligned = output_row_size_bytes % alignment;
-        auto all_runtime_args = get_padded_slice_runtime_args_tile_sharded_output(
-            src_tensor,
-            dst_tensor,
-            output_tensor_start,
-            actual_output_shape,
-            iter_cores,
-            max_read_size,
-            max_num_tiles_per_row,
-            is_non_aligned);
-
-        uint32_t i = 0;
-        for (const auto& core : iter_cores) {
-            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, std::get<0>(all_runtime_args[i]));
-            tt::tt_metal::SetRuntimeArgs(program, untilize_compute_kernel_id, core, std::get<1>(all_runtime_args[i]));
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::get<2>(all_runtime_args[i]));
-            i++;
-        }
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    shared_variables_t shared_vars{
+        /* unary_reader_kernel_id = */ unary_reader_kernel_id,
+        /* unary_writer_kernel_id = */ unary_writer_kernel_id,
+        /* untilize_compute_kernel_id = */ untilize_compute_kernel_id,
+        /* output_tensor_start = */ output_tensor_start,
+        /* actual_output_shape = */ actual_output_shape,
+        /* compute_with_storage_grid_size = */ compute_with_storage_grid_size,
+        /* max_read_size = */ max_read_size,
+        /* max_num_tiles_per_row = */ max_num_tiles_per_row,
+        /* iter_cores = */ iter_cores,
+        /* cb_output_tuple = */ cb_output_tuple};
+    return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-}  // namespace ttnn::operations::experimental::detail
+void PaddedSliceTileProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& shared_vars = cached_program.shared_variables;
+    const auto& src_tensor = tensor_args.input;
+    auto& dst_tensor = output;
+    TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
+    UpdateDynamicCircularBufferAddress(
+        cached_program.program, std::get<1>(shared_vars.cb_output_tuple), *dst_tensor.buffer());
+    uint32_t output_row_size_bytes = dst_tensor.shard_spec()->shape[1] * dst_tensor.element_size();
+    auto alignment = TILE_WIDTH * dst_tensor.element_size();
+    auto is_non_aligned = output_row_size_bytes % alignment;
+    auto all_runtime_args = get_padded_slice_runtime_args_tile_sharded_output(
+        src_tensor,
+        dst_tensor,
+        shared_vars.output_tensor_start,
+        shared_vars.actual_output_shape,
+        shared_vars.iter_cores,
+        shared_vars.max_read_size,
+        shared_vars.max_num_tiles_per_row,
+        is_non_aligned);
+
+    uint32_t i = 0;
+    for (const auto& core : shared_vars.iter_cores) {
+        tt::tt_metal::SetRuntimeArgs(
+            cached_program.program, shared_vars.unary_reader_kernel_id, core, std::get<0>(all_runtime_args[i]));
+        tt::tt_metal::SetRuntimeArgs(
+            cached_program.program, shared_vars.untilize_compute_kernel_id, core, std::get<1>(all_runtime_args[i]));
+        tt::tt_metal::SetRuntimeArgs(
+            cached_program.program, shared_vars.unary_writer_kernel_id, core, std::get<2>(all_runtime_args[i]));
+        i++;
+    }
+}
+
+}  // namespace ttnn::operations::experimental::padded_slice::program
