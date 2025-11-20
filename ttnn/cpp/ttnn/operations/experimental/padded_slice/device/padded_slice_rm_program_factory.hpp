@@ -19,7 +19,7 @@ struct PaddedSliceRMProgramFactory {
         tt::tt_metal::CoreCoord compute_with_storage_grid_size;
         uint32_t max_read_size = 0;
         std::vector<tt::tt_metal::CoreCoord> iter_cores;
-        tt::tt_metal::CBHandle cb_output;
+        tt::tt_metal::CBHandle cb_output = 0;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
