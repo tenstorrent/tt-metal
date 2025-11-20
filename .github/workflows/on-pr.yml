@@ -179,7 +179,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: ${{ matrix.runs_on }}
-      test_splits: 4
+      test_splits: 8
       pytest_markers: "perf"
       timeout_minutes: 240
 
