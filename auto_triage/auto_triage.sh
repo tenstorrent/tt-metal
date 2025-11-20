@@ -29,6 +29,8 @@ fi
 echo "=== Cleaning auto_triage/data and auto_triage/logs ==="
 rm -rf "$DATA_DIR" "$LOGS_DIR"
 mkdir -p "$DATA_DIR" "$LOGS_DIR"
+rm -rf "$ROOT/auto_triage/output"
+mkdir -p "$ROOT/auto_triage/output"
 
 cd "$ROOT"
 echo "=== Running find_boundaries.sh for workflow '${WORKFLOW}' / job '${SUBJOB}' ==="
@@ -42,4 +44,4 @@ fi
 PROMPT="complete the instructions defined in auto_triage/instructions_for_opencode.txt for workflow '${WORKFLOW}' and job '${SUBJOB}'. do not wait for approval as this is a test run for a CI environment where you will not have access to a user"
 
 echo "=== Launching OpenCode ==="
-opencode run -m opencode/gemini-3-pro "$PROMPT"
+# opencode run -m opencode/gemini-3-pro "$PROMPT"
