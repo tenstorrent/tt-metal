@@ -39,5 +39,6 @@ inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
 
 inline void zero_dst_reg(const uint32_t i) {
     constexpr float zero = 0.0f;
+    fill_tile_init();
     fill_tile(i, zero);
 }

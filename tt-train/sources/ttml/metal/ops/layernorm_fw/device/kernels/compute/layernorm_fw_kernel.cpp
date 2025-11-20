@@ -58,8 +58,8 @@ constexpr bool return_mean_rstd = true;
 constexpr bool return_mean_rstd = false;
 #endif
 
-// Compute sum of all input tiles in the row
-// Result is stored in cb_sum_idx (before reduction across tile dimension)
+// Step 1: Compute sum of all input tiles in the row, then scale by 1/N to get mean
+// When EVERYTHING_FITS_IN_L1: all Wt tiles are available, process them directly
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_sum() {
     const uint32_t sum_register = 0U;
@@ -67,6 +67,7 @@ inline void compute_sum() {
 
     tile_regs_acquire();
 
+    // Accumulate all input tiles: sum = x0 + x1 + x2 + ... + x_{Wt-1}
     for (uint32_t col = 0; col < Wt; ++col) {
         auto target_register = (col == 0) ? sum_register : working_register;
 
@@ -93,6 +94,23 @@ inline void compute_sum() {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_sum_idx);
+
+    // Reduce the resulting tile and scale by 1/N to get mean: mean = (1/N) * sum
+    const uint32_t mean_register = 0U;
+    tile_regs_acquire();
+    cb_wait_front(cb_sum_idx, onetile);
+    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
+    matmul_tiles(
+        cb_sum_idx,
+        cb_scaler_idx,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        /* idst */ mean_register,
+        /* transpose */ 0);
+
+    tile_regs_commit();
+    cb_pop_front(cb_sum_idx, onetile);
+    pack_and_push(mean_register, cb_mean_bcast_idx);
 }
 #else
 inline void compute_sum() {
@@ -135,17 +153,10 @@ inline void compute_sum() {
 
     tile_regs_commit();
     pack_and_push(sum_register, cb_sum_idx);
-}
-#endif
-
-// Reduce sum across inner dimension and scale by 1/N using matmul
-// Result is stored in cb_mean_bcast_idx
-inline void reduce_and_scale_to_mean() {
-    cb_wait_front(cb_sum_idx, onetile);
 
     const uint32_t mean_register = 0U;
-
     tile_regs_acquire();
+    cb_wait_front(cb_sum_idx, onetile);
     mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
@@ -159,10 +170,12 @@ inline void reduce_and_scale_to_mean() {
     cb_pop_front(cb_sum_idx, onetile);
     pack_and_push(mean_register, cb_mean_bcast_idx);
 }
+#endif
 
-// Compute sum of (x - mean)^2 for variance calculation
+// Step 2a: Compute variance = (1/N) * sum((x - mean)^2)
+// Accumulate squared deviations across all tiles
 #ifdef EVERYTHING_FITS_IN_L1
-inline void compute_variance_sum() {
+inline void compute_variance_reduced_to_one_tile() {
     cb_wait_front(cb_mean_bcast_idx, onetile);
 
     const uint32_t sum_register = 0U;
@@ -212,7 +225,8 @@ inline void compute_variance_sum() {
     pack_and_push(sum_register, cb_variance_sum_idx);
 }
 #else
-inline void compute_variance_sum() {
+// Compute variance = sum((x - mean)^2) across tiles
+inline void compute_variance_reduced_to_one_tile() {
     cb_wait_front(cb_mean_bcast_idx, onetile);
 
     const uint32_t sum_register = 0U;
@@ -271,9 +285,11 @@ inline void compute_variance_sum() {
 }
 #endif
 
-// Reduce variance sum and scale by 1/N, add epsilon, take sqrt, then reciprocal
-// Result is rstd = 1 / sqrt(variance + eps)
+// Step 2b: Compute reciprocal standard deviation: rstd = 1 / sqrt(variance + eps)
+// First computes variance = (1/N) * sum((x - mean)^2), then adds epsilon and takes rsqrt
 inline void compute_rstd() {
+    compute_variance_reduced_to_one_tile();
+
     cb_wait_front(cb_variance_sum_idx, onetile);
     cb_wait_front(cb_eps_idx, onetile);
 
@@ -309,7 +325,8 @@ inline void compute_rstd() {
     pack_and_push(rstd_register, cb_rstd_bcast_idx);
 }
 
-// Compute x_hat = (input - mean) * rstd (reusing logic from backward pass)
+// Step 3: Normalize input: x_hat = (input - mean) * rstd
+// Only used in EVERYTHING_FITS_IN_L1 mode; in block mode this is fused with output computation
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_x_hat() {
     cb_wait_front(cb_mean_bcast_idx, onetile);
@@ -347,6 +364,8 @@ inline void compute_x_hat() {
 // Compute output = x_hat * gamma + beta
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_output() {
+    compute_x_hat();
+
     cb_wait_front(cb_x_hat_idx, closest_to_Wt_multiple_of_block_size);
 
     for (uint32_t col = 0; col < Wt; col += block_size) {
@@ -500,18 +519,11 @@ inline void MAIN {
 
         // Step 1: Compute mean = (1/N) * sum(x)
         compute_sum();
-        reduce_and_scale_to_mean();
 
         // Step 2: Compute rstd = 1 / sqrt((1/N) * sum((x - mean)^2) + eps)
-        compute_variance_sum();
         compute_rstd();
 
-#ifdef EVERYTHING_FITS_IN_L1
-        // Step 3: Compute x_hat = (x - mean) * rstd
-        compute_x_hat();
-#endif
-
-        // Step 4: Compute output = x_hat * gamma + beta (for non-L1, this includes x_hat computation)
+        // Step 4: Compute output = x_hat * gamma + beta (this includes x_hat computation)
         compute_output();
 
         // Step 5: Save mean and rstd for backward pass (if needed)

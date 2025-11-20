@@ -66,6 +66,7 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
             const uint32_t x_hat_reg = block_idx;
             const uint32_t temp_reg = x_hat_reg + 1;
 
+            // Subtract mean: (input - mean)
             sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, tile_idx + block_idx, 0, x_hat_reg);
 

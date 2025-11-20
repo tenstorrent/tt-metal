@@ -25,40 +25,36 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "LayerNormBackward operation requires {} to be on Device. Input storage type: {}",
+            "Tensor's '{}' storage type must be {}. Got storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tt::tt_metal::StorageType::DEVICE),
+            enchantum::to_string(tensor.storage_type()));
 
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to LayerNormBackward need to be allocated in buffers on the device. Buffer is null. Tensor name "
-            "{}",
-            name);
+        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "{} buffer must be in DRAM. Buffer of type {}",
+            "Tensor '{}' buffer must be in DRAM. Buffer of type {}",
             name,
             enchantum::to_string(tensor.buffer()->buffer_type()));
 
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
-            "LayerNormBackward operation requires tensor to be in Tile layout. {} tensor layout: {}",
+            "Tensor '{}' must be in Tile layout. Got layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "LayerNormBackward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
+            "Tensor '{}' must be of BFLOAT16 data type. Got data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "LayerNormBackward operation requires Interleaved memory layout. {} "
-            "memory layout: `{}`",
+            "Tensor '{}' must use Interleaved memory layout. Got memory layout: {}",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

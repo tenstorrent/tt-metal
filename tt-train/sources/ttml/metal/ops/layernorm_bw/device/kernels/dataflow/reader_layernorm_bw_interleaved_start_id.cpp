@@ -25,21 +25,20 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
-template <typename AddrGen>
+template <bool wait_for_read_barrier = false, typename AddrGen>
 inline void read_tiles(
     const uint32_t cb_idx,
     const AddrGen& addr_gen,
     const uint32_t start_tile,
     const uint32_t num_tiles,
-    const uint32_t tile_bytes,
-    const bool read_barrier = false) {
+    const uint32_t tile_bytes) {
     // Reads `num_tiles` tiles from DRAM starting at logical tile index `start_tile` into circular buffer `cb_idx`.
     uint32_t l1_write_addr = get_write_ptr(cb_idx);
     for (uint32_t k = 0; k < num_tiles; ++k) {
         noc_async_read_tile(start_tile + k, addr_gen, l1_write_addr);
         l1_write_addr += tile_bytes;
     }
-    if (read_barrier) {
+    if constexpr (wait_for_read_barrier) {
         noc_async_read_barrier();
     }
 }
@@ -84,7 +83,7 @@ void kernel_main() {
         cb_reserve_back(cb_mean_idx, 1);
 
         read_tiles(cb_rstd_idx, rstd_address_generator, r, 1, tile_bytes);
-        read_tiles(cb_mean_idx, mean_address_generator, r, 1, tile_bytes, /*read_barrier=*/true);
+        read_tiles</*wait_for_read_barrier=*/true>(cb_mean_idx, mean_address_generator, r, 1, tile_bytes);
 
         cb_push_back(cb_rstd_idx, 1);
         cb_push_back(cb_mean_idx, 1);
@@ -95,14 +94,14 @@ void kernel_main() {
         cb_reserve_back(cb_dL_out_idx, Wt);
 
         read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes);
-        read_tiles(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes, /*read_barrier=*/true);
+        read_tiles</*wait_for_read_barrier=*/true>(cb_dL_out_idx, dL_out_address_generator, r * Wt, Wt, tile_bytes);
 
         cb_push_back(cb_input_idx, Wt);
         cb_push_back(cb_dL_out_idx, Wt);
         if (r == start_row) {
             // Read gamma only once for all rows when everything fits in L1
             cb_reserve_back(cb_gamma_idx, Wt);
-            read_tiles(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes, /*read_barrier=*/true);
+            read_tiles</*wait_for_read_barrier=*/true>(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes);
             cb_push_back(cb_gamma_idx, Wt);
         }
 
@@ -118,7 +117,8 @@ void kernel_main() {
             cb_reserve_back(cb_gamma_idx, block_size);
 
             read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, /*read_barrier=*/true);
+            read_tiles</*wait_for_read_barrier=*/true>(
+                cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
 
             cb_push_back(cb_dL_out_idx, block_size);
             cb_push_back(cb_gamma_idx, block_size);
@@ -135,7 +135,8 @@ void kernel_main() {
 
             read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
             read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes, /*read_barrier=*/true);
+            read_tiles</*wait_for_read_barrier=*/true>(
+                cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
 
             cb_push_back(cb_input_idx, block_size);
             cb_push_back(cb_dL_out_idx, block_size);
@@ -153,13 +154,8 @@ void kernel_main() {
 
             read_tiles(cb_input_idx, input_address_generator, row_tile_idx, current_block_size, tile_bytes);
             read_tiles(cb_gamma_idx, gamma_address_generator, c, current_block_size, tile_bytes);
-            read_tiles(
-                cb_dL_out_idx,
-                dL_out_address_generator,
-                row_tile_idx,
-                current_block_size,
-                tile_bytes,
-                /*read_barrier=*/true);
+            read_tiles</*wait_for_read_barrier=*/true>(
+                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, current_block_size, tile_bytes);
 
             cb_push_back(cb_input_idx, block_size);
             cb_push_back(cb_gamma_idx, block_size);
