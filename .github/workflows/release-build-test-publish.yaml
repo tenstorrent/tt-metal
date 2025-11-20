@@ -47,6 +47,26 @@ jobs:
         fetch-depth: 0
         skip-tt-train: false
 
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      arch: wormhole_b0
+
+  t3000-demo-tests:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+
   galaxy-demos:
     needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
