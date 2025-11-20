@@ -69,9 +69,46 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-    std::string text;
 
-    auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+
+    try {
+        text = read_file_to_str(config.data_path);
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        exit(-1);
+    }
+
+    auto create_dataset =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<std::string>(text), sequence_length);
+
+                return dataset;
+            } 
+            else if (tokenizer_type == "bpe") {
+                try
+                {
+                    return ttml::datasets::InMemoryTokenDataset(std::get<std::vector<uint32_t>>(text), sequence_length);
+
+                } catch (const std::exception &e) {
+                    std::cerr << e.what() << std::endl;
+                    std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
+                    exit(-1);
+                }
+            } 
+            else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
 
     auto sequence_length = std::visit(
         [&](auto &&arg) {
@@ -84,7 +121,8 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         },
         config.transformer_config);
 
-    auto dataset = ttml::datasets::InMemoryTokenDataset(tokens_vector, sequence_length);
+    auto dataset = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type);
+    fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
