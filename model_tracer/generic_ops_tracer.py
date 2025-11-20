@@ -472,10 +472,33 @@ class OperationsTracingPlugin:
                 # If relpath fails, keep original
                 pass
 
+        # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
+        # Only capture for models/tt_transformers/demo/simple_text_demo.py
+        # This helps identify which specific HuggingFace model or Llama directory was used
+        hf_model = None
+        llama_dir = None
+        if 'models/tt_transformers/demo/simple_text_demo.py' in source_path:
+            hf_model = os.environ.get('HF_MODEL', None)
+            llama_dir = os.environ.get('LLAMA_DIR', None)
+
+            # Append whichever environment variables are available
+            env_tags = []
+            if hf_model:
+                env_tags.append(f"[HF_MODEL:{hf_model}]")
+            if llama_dir:
+                env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
+
+            if env_tags:
+                source_path = f"{source_path} {' '.join(env_tags)}"
+
         self.current_test_source = source_path
 
         print(f"\\n🔍 Starting operations trace for: {item.name}")
         print(f"📝 Source tag: {self.current_test_source}")
+        if hf_model:
+            print(f"🤗 HuggingFace Model: {hf_model}")
+        if llama_dir:
+            print(f"🦙 Llama Directory: {llama_dir}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Begin graph capture
@@ -529,6 +552,24 @@ class OperationsTracingPlugin:
                         except ValueError:
                             # If relpath fails, keep original
                             pass
+
+                    # Check for HF_MODEL and LLAMA_DIR environment variables and append if set (fallback case)
+                    # Only capture for models/tt_transformers/demo/simple_text_demo.py
+                    hf_model = None
+                    llama_dir = None
+                    if 'models/tt_transformers/demo/simple_text_demo.py' in test_source:
+                        hf_model = os.environ.get('HF_MODEL', None)
+                        llama_dir = os.environ.get('LLAMA_DIR', None)
+
+                        # Append whichever environment variables are available
+                        env_tags = []
+                        if hf_model:
+                            env_tags.append(f"[HF_MODEL:{hf_model}]")
+                        if llama_dir:
+                            env_tags.append(f"[LLAMA_DIR:{llama_dir}]")
+
+                        if env_tags:
+                            test_source = f"{test_source} {' '.join(env_tags)}"
 
                 new_configs_added = self.update_master_file(master_file, filtered_operations, test_source)
                 print(f"📝 Added {new_configs_added} new unique configurations to master file (source: {test_source})")
