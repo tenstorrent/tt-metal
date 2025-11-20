@@ -28,6 +28,7 @@ struct Untilize {
     const bool enough_space_width;
     const bool enough_space_height;
     const uint32_t pf_type;
+    const bool _internal_row_wise;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

@@ -24,4 +24,12 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_multi_core(
 tt::tt_metal::operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
+operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const CoreRangeSet& sub_core_grids,
+    uint32_t max_tiles_per_block = 1);
+
 }  // namespace ttnn::operations::data_movement::detail
