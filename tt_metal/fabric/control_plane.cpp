@@ -1991,7 +1991,8 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
     std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
 
-    return this->topology_mapper_->get_coord_range(mesh_id, local_host_rank_id);
+    // TODO: Change this to topology mapper
+    return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
 }
 
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
@@ -2202,7 +2203,12 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 
 void ControlPlane::generate_intermesh_connectivity() {
     AnnotatedIntermeshConnections intermesh_connections;
-    if (*(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
+
+    auto generate_mapping_locally_ =
+        (this->routing_table_generator_->mesh_graph->get_mesh_ids().size() == 1) &&
+        (this->routing_table_generator_->mesh_graph->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
+
+    if (!generate_mapping_locally_ && *(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
         intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
@@ -2284,6 +2290,11 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
 
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
+        // Skip if neighbor host is not in our global logical bindings
+        if (this->global_logical_bindings_.find(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}) ==
+            this->global_logical_bindings_.end()) {
+            continue;
+        }
         auto neighbor_mesh_id =
             this->global_logical_bindings_.at(tt::tt_metal::distributed::multihost::Rank{neighbor_host_rank}).first;
         bool connection_requested = check_connection_requested(
@@ -2590,6 +2601,12 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
             const auto& asic_neighbors = physical_system_descriptor->get_asic_neighbors(tt::tt_metal::AsicID{asic_id});
 
             for (const auto& asic_neighbor : asic_neighbors) {
+                // if the asic neighbor is not on the same host skip
+                if (physical_system_descriptor->get_host_name_for_asic(tt::tt_metal::AsicID{asic_id}) !=
+                    physical_system_descriptor->get_host_name_for_asic(asic_neighbor)) {
+                    continue;
+                }
+
                 auto neighbor_node = this->get_fabric_node_id_from_asic_id(*asic_neighbor);
                 if (neighbor_node.mesh_id == local_mesh_id ||
                     processed_neighbors.find({*neighbor_node.mesh_id, *local_mesh_id}) != processed_neighbors.end()) {

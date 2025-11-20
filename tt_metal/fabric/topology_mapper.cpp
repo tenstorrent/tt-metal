@@ -5,6 +5,7 @@
 #include "topology_mapper.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <unordered_set>
 #include <limits>
 #include <functional>
@@ -400,11 +401,17 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
 
-    if (world_size <= 1) {
-        for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            for (const auto& asic_id :
-                 physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
-                mapping[mesh_id][asic_id] = local_mesh_binding_.host_rank;
+    if (generate_mapping_locally_ || world_size <= 1) {
+        auto host_rank = local_mesh_binding_.host_rank;
+        auto mpi_rank = static_cast<int>(*host_rank);
+
+        // Get asics on current host
+        auto asics =
+            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+            for (const auto& asic : asics) {
+                mapping[mesh_id][asic] = host_rank;
+                mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = mpi_rank;
             }
         }
         return mapping;
@@ -536,13 +543,13 @@ std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physi
 
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
-
         auto z_channels = std::unordered_set<uint8_t>{8, 9};
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
             std::vector<tt::tt_metal::AsicID> adjacents;
+
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
                 // Skip self-connections
                 if (neighbor == asic_id) {
@@ -551,8 +558,9 @@ std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physi
                 // Make sure that the neighbor is in the mesh
                 if (mesh_asics.contains(neighbor)) {
                     if (relaxed) {
-                        // In relaxed mode, add each neighbor once
-                        adjacents.push_back(neighbor);
+                        if (std::find(adjacents.begin(), adjacents.end(), neighbor) == adjacents.end()) {
+                            adjacents.push_back(neighbor);
+                        }
                     } else {
                         // In strict mode, add each neighbor multiple times based on number of ethernet connections
                         auto eth_connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
@@ -634,10 +642,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
     std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
     for (size_t i = 0; i < n_phys; ++i) {
+        std::unordered_set<size_t> seen_indices;  // Track seen indices for deduplication
         for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
             auto it = phys_to_idx.find(neigh);
             if (it != phys_to_idx.end()) {
-                phys_adj_idx[i].push_back(it->second);
+                size_t idx = it->second;
+                // Deduplicate: only add if we haven't seen this index before
+                if (seen_indices.insert(idx).second) {
+                    phys_adj_idx[i].push_back(idx);
+                }
             }
         }
         std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
