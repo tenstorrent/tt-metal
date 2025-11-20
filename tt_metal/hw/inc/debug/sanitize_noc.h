@@ -170,7 +170,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
-    return DebugSanitizeNocOK;
+    return DebugSanitizeOK;
 }
 
 inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
@@ -185,7 +185,7 @@ inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
     if (addr + len > core_info->noc_pcie_addr_end) {
         return DebugSanitizeNocAddrOverflow;
     }
-    return DebugSanitizeNocOK;
+    return DebugSanitizeOK;
 }
 inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     if (addr + len <= addr) {
@@ -199,7 +199,7 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     if (addr + len > core_info->noc_dram_addr_end) {
         return DebugSanitizeNocAddrOverflow;
     }
-    return DebugSanitizeNocOK;
+    return DebugSanitizeOK;
 }
 
 inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
@@ -221,7 +221,7 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
-    return DebugSanitizeNocOK;
+    return DebugSanitizeOK;
 }
 
 // Note:
@@ -236,13 +236,13 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     debug_sanitize_noc_dir_t dir,
     debug_sanitize_noc_which_core_t which_core,
     uint16_t return_code) {
-    if (return_code == DebugSanitizeNocOK) {
+    if (return_code == DebugSanitizeOK) {
         return;
     }
 
-    debug_sanitize_noc_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
+    debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
 
-    if (v[noc_id].return_code == DebugSanitizeNocOK) {
+    if (v[noc_id].return_code == DebugSanitizeOK) {
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
@@ -327,7 +327,7 @@ uint32_t debug_sanitize_noc_addr(
         uint8_t y_end = (uint8_t)NOC_MCAST_ADDR_END_Y(noc_addr);
         bool is_virtual_coord_end = false;
         AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end, is_virtual_coord_end);
-        uint16_t return_code = DebugSanitizeNocOK;
+        uint16_t return_code = DebugSanitizeOK;
         if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX) {
             return_code = DebugSanitizeNocMulticastNonWorker;
         }
