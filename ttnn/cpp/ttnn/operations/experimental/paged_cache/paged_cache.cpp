@@ -52,20 +52,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
     const uint32_t batch_offset = 0,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
-    auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
-    const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
-    tt::tt_metal::operation::run(
-        PagedFusedUpdateCacheDeviceOperation{
-            update_idxs,        // .update_idxs
-            batch_offset,       // .batch_offset
-            kernel_config_val,  // .compute_kernel_config
-            share_cache_arg,    // .share_cache
-            mesh_coords,        // .mesh_coords
-        },
-        {cache_tensor1, input_tensor1, cache_tensor2, input_tensor2},
-        {update_idxs_tensor, page_table});  // Optional inputs for FUSED_UPDATE
-
-    return {cache_tensor1, cache_tensor2};  // Updated cache tensors in-place
+    return ttnn::prim::paged_fused_update_cache(
+        cache_tensor1,
+        input_tensor1,
+        cache_tensor2,
+        input_tensor2,
+        update_idxs,
+        update_idxs_tensor,
+        share_cache,
+        page_table,
+        batch_offset,
+        compute_kernel_config,
+        mesh_coords);
 }
 
 ttnn::Tensor PagedFillCacheOperation::invoke(

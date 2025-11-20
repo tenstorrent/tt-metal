@@ -5,14 +5,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_fused_update_cache_device_operation.hpp"
+#include "paged_fused_update_cache_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "paged_row_major_fused_update_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::detail {
+namespace ttnn::operations::experimental::paged_cache::program {
 
 using namespace tt::constants;
 using namespace tt;
@@ -25,18 +25,18 @@ static bool enable_fp32_dest_acc(
     return fp32_dest_acc_en;
 }
 
-operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
-    const Tensor& cache_tensor1,
-    const Tensor& input_tensor1,
-    const Tensor& cache_tensor2,
-    const Tensor& input_tensor2,
-    std::optional<const Tensor> update_idxs_tensor,
-    std::optional<const Tensor> page_table,
-    const std::vector<uint32_t>& update_idxs,
-    const uint32_t batch_offset,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    const bool share_cache) {
+PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFusedUpdateCacheProgramFactory::create(
+    const fused_update_cache::operation_attributes_t& operation_attributes,
+    const fused_update_cache::tensor_args_t& tensor_args,
+    fused_update_cache::tensor_return_value_t& tensor_return_value) {
     Program program{};
+
+    const auto& cache_tensor1 = tensor_args.cache_tensor1;
+    const auto& input_tensor1 = tensor_args.input_tensor1;
+    const auto& cache_tensor2 = tensor_args.cache_tensor2;
+    const auto& input_tensor2 = tensor_args.input_tensor2;
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
+    const auto& page_table = tensor_args.page_table;
 
     tt_metal::IDevice* device = input_tensor1.device();
 
@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    const bool fp32_dest_acc_en = enable_fp32_dest_acc(device, compute_kernel_config);
+    const bool fp32_dest_acc_en = enable_fp32_dest_acc(device, operation_attributes.compute_kernel_config);
 
     const tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
@@ -99,10 +99,11 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
                                              : cache_tensor1.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
     const uint32_t cache_total_num_tiles = cache_tensor1.physical_volume() / TILE_HW;
     const uint32_t cache_batch_num_tiles =
-        share_cache ? 0
-                    : cache_total_num_tiles /
-                          cache_tensor1.padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
-                                                            // so batch offset would be 0 in future calculations
+        operation_attributes.share_cache
+            ? 0
+            : cache_total_num_tiles /
+                  cache_tensor1.padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
+                                                    // so batch offset would be 0 in future calculations
 
     log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
@@ -300,7 +301,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         const CoreCoord& core1 = cores1.at(i);
         const CoreCoord& core2 = cores2.at(i);
 
-        const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
+        const uint32_t update_idx = use_index_tensor ? 0 : operation_attributes.update_idxs.at(i);
 
         // Cache tile info
         const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
@@ -308,8 +309,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
         // Calculate synchronization parameters
-        const bool wait_to_start = share_cache and (i != 0);
-        const bool send_signal = share_cache and (i != cores1.size() - 1);
+        const bool wait_to_start = operation_attributes.share_cache and (i != 0);
+        const bool send_signal = operation_attributes.share_cache and (i != cores1.size() - 1);
         uint32_t send_core1_x = 0, send_core1_y = 0;
         uint32_t send_core2_x = 0, send_core2_y = 0;
 
@@ -419,102 +420,107 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {!has_work});
     SetRuntimeArgs(program, compute_kernel_id, unused_cores, {!has_work});
 
-    auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id,
-         unary_writer_kernel_id,
-         cores1,
-         cores2,
-         Wbytes,
-         Wt,
-         cb_src1,
-         cb_src3,
-         cb_cur_pos_id,
-         cb_page_table_id,
-         cache_batch_num_tiles,
-         use_index_tensor,
-         is_paged_cache](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const std::vector<uint32_t> update_idxs =
-                static_cast<const PagedFusedUpdateCacheDeviceOperation*>(operation)->update_idxs;
+    // Store shared variables
+    shared_variables_t shared_vars{
+        .unary_reader_kernel_id = unary_reader_kernel_id,
+        .unary_writer_kernel_id = unary_writer_kernel_id,
+        .cores1 = cores1,
+        .cores2 = cores2,
+        .Wbytes = Wbytes,
+        .Wt = Wt,
+        .cb_src1 = cb_src1,
+        .cb_src3 = cb_src3,
+        .cb_cur_pos_id = cb_cur_pos_id,
+        .cb_page_table_id = cb_page_table_id,
+        .cache_batch_num_tiles = cache_batch_num_tiles,
+        .use_index_tensor = use_index_tensor,
+        .is_paged_cache = is_paged_cache};
 
-            const auto src1_buffer = input_tensors.at(1).buffer();
-            const auto src2_buffer = input_tensors.at(3).buffer();
-
-            const auto dst1_buffer = input_tensors.at(0).buffer();
-            const auto dst2_buffer = input_tensors.at(2).buffer();
-
-            auto index_tensor_buffer = use_index_tensor ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            auto page_table_buffer = is_paged_cache ? optional_input_tensors.at(1).value().buffer() : nullptr;
-            const auto index_tensor_addr =
-                use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-            const auto page_table_tensor_addr =
-                is_paged_cache ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-
-            if (input_tensors.at(1).is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_src1, *src1_buffer);
-            }
-            if (input_tensors.at(3).is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_src3, *src2_buffer);
-            }
-            auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-
-            for (uint32_t i = 0; i < cores1.size(); ++i) {
-                const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
-                // Cache tile info
-                const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-                const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
-                // Offset to write into untilized cache
-                const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
-
-                const CoreCoord& core1 = cores1.at(i);
-                const CoreCoord& core2 = cores2.at(i);
-
-                // Input1 args
-                {
-                    auto& runtime_args = reader_args_by_core.at(core1.x).at(core1.y);
-                    runtime_args[2] = dst1_buffer->address();
-                    runtime_args[3] = cache_start_id;
-                    runtime_args[4] = index_tensor_addr;
-                    runtime_args[6] = page_table_tensor_addr;
-                }
-
-                {
-                    auto& runtime_args = writer_args_by_core.at(core1.x).at(core1.y);
-                    runtime_args[1] = dst1_buffer->address();
-                    runtime_args[2] = cache_start_id;
-                    runtime_args[3] = tile_update_offset_B;
-                }
-
-                // Input2 args
-                {
-                    auto& runtime_args = reader_args_by_core.at(core2.x).at(core2.y);
-                    runtime_args[2] = dst2_buffer->address();
-                    runtime_args[3] = cache_start_id;
-                    runtime_args[4] = index_tensor_addr;
-                    runtime_args[6] = page_table_tensor_addr;
-                }
-
-                {
-                    auto& runtime_args = writer_args_by_core.at(core2.x).at(core2.y);
-                    runtime_args[1] = dst2_buffer->address();
-                    runtime_args[2] = cache_start_id;
-                    runtime_args[3] = tile_update_offset_B;
-                }
-            }
-            if (use_index_tensor and optional_input_tensors.at(0)->is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_cur_pos_id, *index_tensor_buffer);
-            }
-            if (is_paged_cache and optional_input_tensors.at(1)->is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_page_table_id, *page_table_buffer);
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{std::move(program), std::move(shared_vars)};
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::detail
+void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const fused_update_cache::operation_attributes_t& operation_attributes,
+    const fused_update_cache::tensor_args_t& tensor_args,
+    fused_update_cache::tensor_return_value_t& tensor_return_value) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+
+    const auto& input_tensor1 = tensor_args.input_tensor1;
+    const auto& input_tensor2 = tensor_args.input_tensor2;
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
+    const auto& page_table = tensor_args.page_table;
+
+    const auto src1_buffer = input_tensor1.buffer();
+    const auto src2_buffer = input_tensor2.buffer();
+
+    const auto dst1_buffer = tensor_args.cache_tensor1.buffer();
+    const auto dst2_buffer = tensor_args.cache_tensor2.buffer();
+
+    auto index_tensor_buffer = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr;
+    auto page_table_buffer = shared_vars.is_paged_cache ? page_table.value().buffer() : nullptr;
+    const auto index_tensor_addr = shared_vars.use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
+    const auto page_table_tensor_addr = shared_vars.is_paged_cache ? page_table.value().buffer()->address() : 0;
+
+    if (input_tensor1.is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_src1, *src1_buffer);
+    }
+    if (input_tensor2.is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_src3, *src2_buffer);
+    }
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.unary_reader_kernel_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.unary_writer_kernel_id);
+
+    for (uint32_t i = 0; i < shared_vars.cores1.size(); ++i) {
+        const uint32_t update_idx = shared_vars.use_index_tensor ? 0 : operation_attributes.update_idxs.at(i);
+        // Cache tile info
+        const uint32_t cache_batch_tile_offset = i * shared_vars.cache_batch_num_tiles;
+        const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * shared_vars.Wt);
+        // Offset to write into untilized cache
+        const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * shared_vars.Wbytes;
+
+        const CoreCoord& core1 = shared_vars.cores1.at(i);
+        const CoreCoord& core2 = shared_vars.cores2.at(i);
+
+        // Input1 args
+        {
+            auto& runtime_args = reader_args_by_core.at(core1.x).at(core1.y);
+            runtime_args[2] = dst1_buffer->address();
+            runtime_args[3] = cache_start_id;
+            runtime_args[4] = index_tensor_addr;
+            runtime_args[6] = page_table_tensor_addr;
+        }
+
+        {
+            auto& runtime_args = writer_args_by_core.at(core1.x).at(core1.y);
+            runtime_args[1] = dst1_buffer->address();
+            runtime_args[2] = cache_start_id;
+            runtime_args[3] = tile_update_offset_B;
+        }
+
+        // Input2 args
+        {
+            auto& runtime_args = reader_args_by_core.at(core2.x).at(core2.y);
+            runtime_args[2] = dst2_buffer->address();
+            runtime_args[3] = cache_start_id;
+            runtime_args[4] = index_tensor_addr;
+            runtime_args[6] = page_table_tensor_addr;
+        }
+
+        {
+            auto& runtime_args = writer_args_by_core.at(core2.x).at(core2.y);
+            runtime_args[1] = dst2_buffer->address();
+            runtime_args[2] = cache_start_id;
+            runtime_args[3] = tile_update_offset_B;
+        }
+    }
+    if (shared_vars.use_index_tensor and update_idxs_tensor.has_value() and update_idxs_tensor.value().is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_cur_pos_id, *index_tensor_buffer);
+    }
+    if (shared_vars.is_paged_cache and page_table.has_value() and page_table.value().is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_page_table_id, *page_table_buffer);
+    }
+}
+
+}  // namespace ttnn::operations::experimental::paged_cache::program
