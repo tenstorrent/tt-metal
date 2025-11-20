@@ -60,7 +60,7 @@ Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_tr
 ![NanoGPT training wandb chart](./images/nano-gpt-training-example.png)
 
 
-For more information on training with the C++ version, please see the [NanoGPT Example README](sources/examples/nano_gpt/README.md). 
+For more information on training with the C++ version, please see the [NanoGPT Example README](sources/examples/nano_gpt/README.md).
 
 For both training and evaluation, we encourage you to use the Python version of NanoGPT, which can be used via Jupyter Notebook found in the NanoGPT example directory.
 

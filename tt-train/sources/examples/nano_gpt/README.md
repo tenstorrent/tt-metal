@@ -17,4 +17,3 @@ Arguments:
 `--output_file` : output filename (defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data.csv`)
 
 Once you have a pre-tokenized dataset, ensure that the data_path in your chosen YAML config matches the path to the tokenized dataset. If using a pre-tokenized dataset, ensure that the vocab size in your chosen model's YAML config matches the vocab size of the tokenizer you used. (This will be updated in a future PR to be more automatic)
-

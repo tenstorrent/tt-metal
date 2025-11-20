@@ -97,7 +97,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
                     std::get<std::string>(text), sequence_length);
 
                 return dataset;
-            } 
+            }
             else if (tokenizer_type == "bpe") {
                 try
                 {
@@ -108,7 +108,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
                     std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
                     exit(-1);
                 }
-            } 
+            }
             else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }

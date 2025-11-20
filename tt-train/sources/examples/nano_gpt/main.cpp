@@ -404,7 +404,7 @@ int main(int argc, char **argv) {
                     std::get<std::string>(text), sequence_length);
 
                 return dataset;
-            } 
+            }
             else if (tokenizer_type == "bpe") {
                 try
                 {
@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
                     std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
                     exit(-1);
                 }
-            } 
+            }
             else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
