@@ -250,7 +250,7 @@ def run_strided_all_gather_minimal_matmul_impl(
 
     if enable_trace:
         # Compile the op
-        tt_all_gather_out_tensor = run_op(0)
+        run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
