@@ -75,7 +75,7 @@ namespace {
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
 bool is_fabric_two_erisc_enabled() {
-    auto &mc = tt::tt_metal::MetalContext::instance();
+    auto& mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
     bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
     if (force_disable_2_erisc) {
@@ -83,7 +83,7 @@ bool is_fabric_two_erisc_enabled() {
         return false;
     }
 
-    const auto &hal = mc.hal();
+    const auto& hal = mc.hal();
     // by default, enable only single erisc mode for future architectures as well to simplify bringup
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
@@ -247,7 +247,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() ||
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_bw_telemetry() ||
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
@@ -784,6 +784,9 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     uint32_t telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
     ct_args.push_back(telemetry_mode);
+
+    uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
+    ct_args.push_back(bw_telemetry_mode);
 
     // Add telemetry buffer address (16B aligned)
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));

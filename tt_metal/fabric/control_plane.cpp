@@ -32,6 +32,7 @@
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
@@ -803,7 +804,8 @@ void ControlPlane::order_ethernet_channels() {
             } else if (neighbor_asic_id.has_value()) {
                 // Find the physical chip ID for the neighbor AsicID
                 ChipId neighbor_phys_chip_id = 0;
-                const auto& chip_unique_ids = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+                const auto& chip_unique_ids =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
                 for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
                     if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
                         neighbor_phys_chip_id = physical_chip_id;
@@ -811,12 +813,16 @@ void ControlPlane::order_ethernet_channels() {
                     }
                 }
                 // Get the soc_desc for the neighbor chip
-                const auto& neighbor_soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
-                std::sort(eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
-                    auto translated_coords_a = neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
-                    auto translated_coords_b = neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
-                    return translated_coords_a.x < translated_coords_b.x;
-                });
+                const auto& neighbor_soc_desc =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
+                std::sort(
+                    eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
+                        auto translated_coords_a =
+                            neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
+                        auto translated_coords_b =
+                            neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
+                        return translated_coords_a.x < translated_coords_b.x;
+                    });
                 for (uint32_t i = 0; i < eth_connections.size(); i++) {
                     eth_chans[i] = eth_connections[i].src_chan;
                 }
@@ -1764,6 +1770,46 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
     return 0;
 }
 
+void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
+
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+    auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
+    auto telemetry_view = telemetry.view();
+    auto static_info = telemetry_view.static_info();
+
+    static_info.mesh_id() = *fabric_node_id.mesh_id;
+    static_info.device_id() = fabric_node_id.chip_id;
+    static_info.fabric_config() =
+        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    static_info.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
+
+    for (const auto& active_ethernet_core : active_ethernet_cores) {
+        auto chan_id = tt::tt_metal::MetalContext::instance()
+                           .get_cluster()
+                           .get_soc_desc(physical_chip_id)
+                           .logical_eth_core_to_chan_map.at(active_ethernet_core);
+
+        // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
+        // static_info.direction() = static_cast<std::uint8_t>(routing_direction);
+        static_info.direction() = 0;
+
+        CoreCoord virtual_eth_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                physical_chip_id, chan_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            telemetry.data(),
+            telemetry.size(),
+            tt_cxy_pair(physical_chip_id, virtual_eth_core),
+            hal.get_dev_addr(
+                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY));
+    }
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+}
+
 void ControlPlane::write_routing_tables_to_all_chips() const {
     // Configure the routing tables on the chips
     TT_ASSERT(
@@ -1780,6 +1826,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
                 "Intra mesh routing tables keys mismatch with inter mesh routing tables");
             this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+            this->write_fabric_telemetry_to_all_chips(fabric_node_id);
         }
     }
 }
@@ -2749,8 +2796,10 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
-    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
-              "Cabling descriptor file not found: {}", cabling_descriptor_path);
+    TT_ASSERT(
+        std::filesystem::exists(cabling_descriptor_path),
+        "Cabling descriptor file not found: {}",
+        cabling_descriptor_path);
 
     // Generate GSD YAML from the current physical system descriptor
     YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
@@ -2760,8 +2809,8 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         cabling_descriptor_path,
         all_hostnames,
         gsd_yaml,
-        false,                      // strict_validation
-        false                       // assert_on_connection_mismatch
+        false,  // strict_validation
+        false   // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
