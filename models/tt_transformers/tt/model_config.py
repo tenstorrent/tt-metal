@@ -1505,7 +1505,7 @@ class ModelArgs:
 
             self.embed_scale = self.dim**0.5
 
-    def _set_params_from_dict(self, config, is_hf=False):
+    def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
         self.image_token_index = config.get("image_token_index", None)
 
@@ -1533,12 +1533,7 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
-        if is_hf:
-            self.max_context_len = text_config.get("max_position_embeddings")
-        else:
-            self.max_context_len = (
-                128 * 1024
-            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+        self.max_context_len = text_config.get("max_position_embeddings")
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in text_config:
@@ -1561,16 +1556,13 @@ class ModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in config and config["_name_or_path"]:
-            if is_hf:
-                normalized_path = os.path.normpath(config["_name_or_path"])
-                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
-                if "snapshots" in normalized_path:
-                    full_model_name = normalized_path.split(os.path.sep)[-3]
-                    self.model_name = full_model_name.split("--")[-1]
-                else:
-                    self.model_name = os.path.basename(normalized_path)
+            normalized_path = os.path.normpath(config["_name_or_path"])
+            # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+            if "snapshots" in normalized_path:
+                full_model_name = normalized_path.split(os.path.sep)[-3]
+                self.model_name = full_model_name.split("--")[-1]
             else:
-                self.model_name = os.path.basename(config["_name_or_path"])
+                self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
@@ -1649,10 +1641,6 @@ class ModelArgs:
         """
         return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
 
-    def _set_model_params(self, checkpoint_dir):
-        """Set model parameters from HuggingFace checkpoint."""
-        self._set_hf_params(checkpoint_dir)
-
     def _set_vision_params(self, config):
         vision_config = config.get("vision_config", config)
 
@@ -1705,46 +1693,21 @@ class ModelArgs:
             )
 
         config = self.hf_config.to_dict()
-        self._set_params_from_dict(config, is_hf=True)
+        self._set_params_from_dict(config)
 
         # compatibility with _set_params
         if "llama" in self.model_name.lower():
-            self.orig_context_len = 8192
-            if "3.2-1B" in checkpoint_dir:
-                self.rope_scaling_factor = 32
-            elif "3.2-3B" in checkpoint_dir:
-                self.rope_scaling_factor = 32
-            elif "3.1-8B" in checkpoint_dir:
-                self.rope_scaling_factor = 8
-            elif "3.2-11B" in checkpoint_dir:
+            if "3.2-11B" in checkpoint_dir:
                 logger.warning(f"-Vision is removed from model_name {self.model_name}")
                 # TODO: do not remove "-Vision" part
                 self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-                self.rope_scaling_factor = 8  # shared with 3.1-8B
             elif "3.1-70B" in checkpoint_dir:
-                self.rope_scaling_factor = 8
                 self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             elif "3.2-90B" in checkpoint_dir:
                 logger.warning(f"-Vision is removed from model_name {self.model_name}")
                 # TODO: do not remove "-Vision" part
                 self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-                self.rope_scaling_factor = 8
                 self.is_90b = True
-            else:
-                self.rope_scaling_factor = None
-                self.orig_context_len = None
-                logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-            self.rope_scaling = (
-                rope_scaling_model_factory(
-                    {
-                        "rope_type": "llama3",
-                        "factor": self.rope_scaling_factor,
-                        "original_max_position_embeddings": self.orig_context_len,
-                    }
-                )
-                if self.rope_scaling_factor is not None
-                else None
-            )
 
     def __repr__(self):
         return f"""ModelArgs(
