@@ -537,6 +537,9 @@ std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physi
     for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
         bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
 
+        auto z_channels = std::unordered_set<uint8_t>{8, 9};
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+
         auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
                                        const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
             std::vector<tt::tt_metal::AsicID> adjacents;
@@ -553,8 +556,14 @@ std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physi
                     } else {
                         // In strict mode, add each neighbor multiple times based on number of ethernet connections
                         auto eth_connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
-                        size_t repeat_count = eth_connections.size();
-                        for (size_t i = 0; i < repeat_count; ++i) {
+                        for (const auto& eth_connection : eth_connections) {
+                            // NOTE: IGNORE Z channels for Blackhole galaxy in intra mesh connectivity since they are
+                            // not used intra mesh communication on black hole
+                            if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                                (z_channels.contains(eth_connection.src_chan) ||
+                                 z_channels.contains(eth_connection.dst_chan))) {
+                                continue;
+                            }
                             adjacents.push_back(neighbor);
                         }
                     }
