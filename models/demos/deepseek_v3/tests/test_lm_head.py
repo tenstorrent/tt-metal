@@ -73,7 +73,11 @@ def test_forward_pass(
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
     weight_cache_path = (
-        cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST") / f"{hf_config.num_hidden_layers}_layers"
+        cache_path
+        / "tests_cache"
+        / os.environ.get("PYTEST_CURRENT_TEST")
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
     )
 
     # Setup: Convert weights and get weight_config
