@@ -115,6 +115,59 @@ run_tg_llama3_70b_dp_tests() {
   fi
 }
 
+run_tg_qwen3_32b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_qwen3_32b_tests"
+
+  # Qwen3-32B
+  qwen32b=Qwen/Qwen3-32B
+  tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_qwen_decode.py -k "full" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "repeat2" --timeout 1000; fail+=$?;
+
+  echo "LOG_METAL: Qwen3-32B tests for $qwen32b completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_qwen3_32b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_tg_qwen3_32b_long_context_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_qwen3_32b_long_context_tests"
+
+  # Qwen3-32B
+  qwen32b=Qwen/Qwen3-32B
+  tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
+
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-4k-b1" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-16k-b32" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-64k-b1" --timeout 1000; fail+=$?;
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b MESH_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000; fail+=$?;
+  echo "LOG_METAL: Qwen3-32B long context tests for $qwen32b completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_qwen3_32b_long_context_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_falcon7b_tests() {
   fail=0
 
@@ -228,6 +281,10 @@ run_tg_demo_tests() {
     run_tg_gpt_oss_tests
   elif [[ "$1" == "wan22" ]]; then
     run_tg_wan22_demo_tests
+  elif [[ "$1" == "qwen3_32b" ]]; then
+    run_tg_qwen3_32b_tests
+  elif [[ "$1" == "qwen3_32b_long_context" ]]; then
+    run_tg_qwen3_32b_long_context_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1

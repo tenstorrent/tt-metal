@@ -120,6 +120,20 @@ jobs:
               "model": "mochi",
               "timeout": 30,
               "owner_id": "U09ELB03XRU"
+            },
+            {
+              "name": "Galaxy Qwen3-32B demo tests",
+              "arch": "wormhole_b0",
+              "model": "qwen3_32b",
+              "timeout": 30,
+              "owner_id": "U08JA2AK2LQ"
+            },
+            {
+              "name": "Galaxy Qwen3-32B long context demo tests",
+              "arch": "wormhole_b0",
+              "model": "qwen3_32b_long_context",
+              "timeout": 60,
+              "owner_id": "U08JA2AK2LQ"
             }
           ]' --compact-output)
 

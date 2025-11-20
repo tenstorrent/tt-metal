@@ -190,7 +190,7 @@ def create_tt_qwen_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            8192,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -209,8 +209,7 @@ def create_tt_qwen_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            # 128,  # max_generated_tokens
-            1024,  # max_generated_tokens
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
@@ -614,9 +613,9 @@ def test_qwen_demo_text(
             vocab_size = 151936  # Qwen vocab size
             # Always assume 6U Galaxy configuration
             if is_ci_env:
-                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32b-Instruct/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
             else:
-                ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/proj_sw/user_dev/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
             torch_reference = torch.load(ref_output_path)
             assert torch_reference["all_ref_logits"].shape == (
