@@ -179,8 +179,8 @@ def get_devices(
 class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
+        # Pre-compute block locations for all devices and block types
         self._device_descriptions = [DeviceDescription.create(device, metal_device_id_mapping) for device in devices]
-        # Pre-compute block locations - need to extract Device from DeviceDescription
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices

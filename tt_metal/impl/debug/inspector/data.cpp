@@ -36,8 +36,8 @@ Data::Data()
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
-            get_rpc_server().setGetChipUniqueIdsCallback(
-                [this](auto result) { this->rpc_get_chip_unique_ids(result); });
+            get_rpc_server().setGetMetalDeviceIdMappingsCallback(
+                [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -263,7 +263,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
     }
 }
 
-void Data::rpc_get_chip_unique_ids(rpc::Inspector::GetChipUniqueIdsResults::Builder results) {
+void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
     // Get cluster descriptor from MetalContext
     auto& cluster = MetalContext::instance().get_cluster();
     const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();
@@ -273,7 +273,7 @@ void Data::rpc_get_chip_unique_ids(rpc::Inspector::GetChipUniqueIdsResults::Buil
     size_t i = 0;
     for (const auto& [chip_id, unique_id] : chip_id_to_unique_id) {
         auto entry = result_mappings[i++];
-        entry.setChipId(static_cast<uint64_t>(chip_id));
+        entry.setMetalDeviceId(static_cast<uint64_t>(chip_id));
         entry.setUniqueId(unique_id);
     }
 }
