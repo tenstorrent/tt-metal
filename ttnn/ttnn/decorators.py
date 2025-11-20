@@ -205,6 +205,21 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
+def set_tensor_id(tensor, force=False):
+    import torch
+
+    if isinstance(tensor, torch.Tensor):
+        if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
+            return
+        tensor.tensor_id = ttnn._ttnn.next_tensor_id()
+    elif isinstance(tensor, (list, tuple)):
+        for element in tensor:
+            if isinstance(element, torch.Tensor):
+                element.tensor_id = ttnn._ttnn.next_tensor_id()
+    else:
+        raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
+
+
 OPERATION_CALL_STACK = []
 
 
