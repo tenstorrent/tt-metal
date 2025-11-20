@@ -295,6 +295,7 @@ void MAIN {
          * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
          * just need to bcast_mul xmm with cb_ex2pe
          */
+        cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
@@ -365,7 +366,7 @@ void MAIN {
             }
         }
         cb_pop_front(cb_ex2pe, 1);
-        // cb_pop_front(cb_xmm, Wt);
+        cb_pop_front(cb_xmm, Wt);
 
     }  // NCHt loop
     // cb_pop_front(cb_scaler, 1); // optional for correctness
