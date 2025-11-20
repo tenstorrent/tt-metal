@@ -30,8 +30,12 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_hit(
 void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = tensor_args.input;
+
+    // Validate step parameter early - padded_slice does not support strided slices
+    const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
+    TT_FATAL(!has_step, "Padded slice does not support strided slices");
+
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
@@ -67,8 +71,6 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             output_shape_required,
             out_tensor.padded_shape());
     }
-    auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
-    TT_FATAL(!has_step, "Padded slice does not support strided slices");
 }
 
 spec_return_value_t PaddedSliceDeviceOperation::compute_output_specs(
