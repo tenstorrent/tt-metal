@@ -33,11 +33,10 @@ Tests:
     patterns:
       - type: all_to_all
 
-  - name: "FlowControlMeshDynamic"
+  - name: "FlowControlMesh"
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
 
     parametrization_params:
       ftype: [unicast, mcast]

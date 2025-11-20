@@ -376,7 +376,7 @@ def test_all_gather_async_quad_host_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },

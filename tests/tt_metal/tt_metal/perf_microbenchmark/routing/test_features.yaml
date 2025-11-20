@@ -185,7 +185,6 @@ Tests:
       topology: Mesh
       # You can explicitly set the routing type. Options are "LowLatency" and "Dynamic".
       # If not specified, it defaults to "LowLatency".
-      routing_type: "LowLatency"
 
     defaults:
       ntype: unicast_write
@@ -233,7 +232,6 @@ Tests:
   - name: "DynamicRouting_CustomAtomics"
     fabric_setup:
       topology: Mesh
-      routing_type: "LowLatency"
 
     senders:
       - device: 0

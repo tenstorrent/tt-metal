@@ -211,7 +211,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -232,7 +231,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -253,7 +251,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -274,7 +271,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -295,7 +291,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -317,7 +312,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -339,7 +333,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: "XY"
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -361,7 +354,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -383,7 +375,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -500,7 +491,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -521,7 +511,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: X
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -545,7 +534,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
@@ -566,7 +554,6 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: Y
-      routing_type: Dynamic
 
     defaults:
       ftype: mcast
