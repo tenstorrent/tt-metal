@@ -120,7 +120,8 @@ void stop_perf_counter() {
                 uint32_t counter_sel = counters[i].second;
                 cntl_reg[1] = counter_sel << PERF_CNT_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
                 // wait for registers to update
-                for (int i = 0; i < 10; i++) {
+                while (cntl_reg[1] != counter_sel << PERF_CNT_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE);
+                for (int i = 0; i < 50; i++) {
                     asm("nop");
                 }
                 PerfCounter counter(read_reg[1], read_reg[0], counters[i].first);

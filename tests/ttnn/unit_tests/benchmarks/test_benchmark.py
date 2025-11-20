@@ -426,8 +426,8 @@ def test_matmul_2d_host_perf(
                 if calc_device_utilization:
                     # Read profiler log data
                     ttnn.ReadDeviceProfiler(device)
-                    profiler_data = get_profiler_data()
-                    trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
+                    #profiler_data = get_profiler_data()
+                    #trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
 
                 # Read device frequency
                 device_freq = get_device_frequency()

@@ -57,15 +57,15 @@ def test_unary_tanh_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        [1, 1, 320, 384],
+        [1, 1, 3200, 3200],
     ],
 )
-def test_add_fp32(device, shape):
-    x_torch = torch.ones(shape, dtype=torch.float32)
-    y_torch = torch.ones(shape, dtype=torch.float32)
+def test_add(device, shape):
+    x_torch = torch.ones(shape, dtype=torch.bfloat16)
+    y_torch = torch.ones(shape, dtype=torch.bfloat16)
     z_torch = x_torch + y_torch
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(
         x_tt,
         y_tt,
@@ -81,12 +81,12 @@ def test_add_fp32(device, shape):
         [1, 1, 320, 384],
     ],
 )
-def test_add_fp32_input_activ(device, shape):
-    x_torch = torch.ones(shape, dtype=torch.float32)
-    y_torch = torch.ones(shape, dtype=torch.float32)
+def test_add_input_activ(device, shape):
+    x_torch = torch.ones(shape, dtype=torch.bfloat16)
+    y_torch = torch.ones(shape, dtype=torch.bfloat16)
     z_torch = torch.square(torch.nn.functional.silu(x_torch) + y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_add = ttnn.add(
         x_tt,
         y_tt,
