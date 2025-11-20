@@ -27,9 +27,14 @@ struct ReduceToRootOp {
     };
 
     struct tensor_args_t {
-        const std::vector<Tensor> input_tensor;
-        const std::optional<std::vector<ttnn::Tensor>> optional_output_tensor;
-        const std::optional<std::vector<ttnn::Tensor>> optional_intermediate_tensor;
+        const Tensor input_tensor_l;
+        const Tensor input_tensor_s;
+        const Tensor input_tensor_m;
+        const std::optional<Tensor> optional_output_tensor_l;
+        const std::optional<Tensor> optional_output_tensor_s;
+        const std::optional<Tensor> optional_output_tensor_m;
+        const std::optional<Tensor> optional_intermediate_tensor_l;
+        const std::optional<Tensor> optional_intermediate_tensor_s_m;
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
@@ -107,17 +112,30 @@ struct ReduceToRootOp {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensor,
+        const Tensor& input_tensor_l,
+        const Tensor& input_tensor_s,
+        const Tensor& input_tensor_m,
         const tt::tt_fabric::Topology& topology,
         const MeshCoordinate& root_coord,
-        const std::optional<std::vector<ttnn::Tensor>>& optional_output_tensor = std::nullopt,
-        const std::optional<std::vector<ttnn::Tensor>>& optional_intermediate_tensor = std::nullopt) {
+        const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
+        const std::optional<Tensor>& optional_intermediate_tensor_l = std::nullopt,
+        const std::optional<Tensor>& optional_intermediate_tensor_s_m = std::nullopt) {
         return std::make_tuple(
             operation_attributes_t{
                 root_coord,
                 topology,
-                {input_tensor[0].tensor_spec(), input_tensor[1].tensor_spec(), input_tensor[2].tensor_spec()}},
-            tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
+                {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
+            tensor_args_t{
+                input_tensor_l,
+                input_tensor_s,
+                input_tensor_m,
+                optional_output_tensor_l,
+                optional_output_tensor_s,
+                optional_output_tensor_m,
+                optional_intermediate_tensor_l,
+                optional_intermediate_tensor_s_m});
     };
 
 private:
