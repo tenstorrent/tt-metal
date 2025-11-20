@@ -136,11 +136,16 @@ class TtResnet50:
         x = self.layer1_1(x)
         x = self.layer1_2(x)
 
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
+
         # Layer 2
         x = self.layer2_0(x)
         x = self.layer2_1(x)
         x = self.layer2_2(x)
         x = self.layer2_3(x)
+
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
+
         # Layer 3
         x = self.layer3_0(x)
         x = self.layer3_1(x)
@@ -148,6 +153,8 @@ class TtResnet50:
         x = self.layer3_3(x)
         x = self.layer3_4(x)
         x = self.layer3_5(x)
+
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
 
         # Layer 4
         x = self.layer4_0(x)

@@ -366,6 +366,8 @@ class TtMapDetectionTransformerDecoder:
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
             )
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer after layer
+
             output = ttnn.permute(output, (1, 0, 2))
 
             if map_reg_branches is not None:
