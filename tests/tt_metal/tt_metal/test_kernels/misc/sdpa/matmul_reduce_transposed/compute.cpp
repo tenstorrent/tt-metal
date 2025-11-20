@@ -95,12 +95,9 @@ void matmul_blocks(
 
             // Only finalize and pack after processing all row blocks for this column
             if (in0_subblock == (in0_num_subblocks - 1)) {
-                for (uint32_t i = 0; i < subblock_w; i++) {
                     sfpu_reduce_max_col_epilogue();
-                    uint32_t reduce_tile_index = out_col_offset + i;
                     // Epilogue always writes result to dst[0], so pack from dst[0]
-                    pack_tile<true>(0, reduce_out_cb, reduce_tile_index);
-                }
+                    pack_tile<true>(0, reduce_out_cb, out_col_offset);
             }
 
             tile_regs_release();
