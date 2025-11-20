@@ -736,7 +736,7 @@ inline void send_final_semaphore_to_configured_targets(
         constexpr uint32_t other_device_idx = (dispatch_index + dispatch_devices / 2) % dispatch_devices;
         if constexpr (is_1d_topology<Topology>()) {
             // previous send already sent in one direction, so we need to send in the other direction
-            // using globals was probably not great
+            // TODO: Refactor to avoid using globals here.
             fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
                 LinearizedSrcMeshCoord,
                 Topology,
