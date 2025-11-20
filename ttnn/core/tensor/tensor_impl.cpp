@@ -26,6 +26,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include <numeric>
 
 #include <tracy/Tracy.hpp>
 
@@ -1225,7 +1226,8 @@ Tensor unpad_impl(
             for (auto i = output_tensor_start[dim]; i < output_tensor_end[dim]; i++) {
                 input_indices[dim] = i;
                 if (dim == input_shape.rank() - 1) {
-                    auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
+                    auto flat_input_index = std::inner_product(
+                        input_indices.begin(), input_indices.end(), input_strides.cbegin(), std::size_t{0});
                     output_buffer[flat_output_index++] = input_buffer[flat_input_index];
                 } else {
                     unpad_from_tile(dim + 1);
