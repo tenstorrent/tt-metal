@@ -148,7 +148,7 @@ void kernel_main() {
         DPRINT << "Waiting to push sync_cb2" << ENDL();  // 32
         DPRINT << "Reader in1: num_blocks: " << num_blocks << ENDL();
 #ifdef ENABLE_GLOBAL_CB
-        experimental::remote_cb_wait_front(remote_cb_id, 16);
+        experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
         DPRINT << "Reader in1: Received in1 block in reader in1" << ENDL();
 #endif
 

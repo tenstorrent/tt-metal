@@ -1805,7 +1805,10 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
     in0_block_w = Kt_pad / num_cores;
 
-    uint32_t num_blocks = Kt_pad / in0_block_w;
+    // Take num_blocks in K dimension and divide by number of in1 subblocks
+    //
+    uint32_t num_blocks = (Kt_pad / in0_block_w);
+
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;

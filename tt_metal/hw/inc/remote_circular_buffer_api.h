@@ -213,8 +213,14 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
         len_bytes += remote_cb.fifo_start_addr + fifo_size - fifo_limit_page_aligned;
     }
+    DPRINT << "Prefetcher cb wait front: Len bytes: " << len_bytes << ENDL();
+    DPRINT << "Prefetcher cb wait front: Fifo limit page aligned: " << fifo_limit_page_aligned << ENDL();
+    DPRINT << "Prefetcher cb wait front: Fifo page size: " << remote_cb.fifo_page_size << ENDL();
+
     uint32_t num_pages_wait = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
     DPRINT << "Prefetcher cb wait front: Num pages wait: " << num_pages_wait << ENDL();
+    DPRINT << "Prefetcher cb wait front: REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE: "
+           << REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE << ENDL();
     uint32_t num_pages_recv = 0;
     uint32_t pages_acked = 0;
     uint32_t pages_sent = 0;
@@ -227,10 +233,10 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         invalidate_l1_cache();
         pages_acked = *pages_acked_ptr;
         pages_sent = *pages_sent_ptr;
-        DPRINT << "Prefetcher cb wait front: Pages acked: " << pages_acked << ENDL();
-        DPRINT << "Prefetcher cb wait front: Pages sent: " << pages_sent << ENDL();
+        // DPRINT << "Prefetcher cb wait front: Pages acked: " << pages_acked << ENDL();
+        // DPRINT << "Prefetcher cb wait front: Pages sent: " << pages_sent << ENDL();
         num_pages_recv = pages_sent - pages_acked;
-        DPRINT << "Prefetcher cb wait front: Num pages recv: " << num_pages_recv << ENDL();
+        // DPRINT << "Prefetcher cb wait front: Num pages recv: " << num_pages_recv << ENDL();
     } while (num_pages_recv < num_pages_wait);
     WAYPOINT("RCWD");
 }

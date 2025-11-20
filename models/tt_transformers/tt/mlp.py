@@ -67,7 +67,6 @@ class MLP(LightweightModule):
         )
 
         # Sharded weights
-        breakpoint()
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
@@ -85,7 +84,6 @@ class MLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
-        breakpoint()
 
         # Default activation is SILU
         self.activation_type = (
@@ -95,8 +93,8 @@ class MLP(LightweightModule):
         # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
             self.prefetcher.insert_tensor(self.w1)
-            # self.prefetcher.insert_tensor(self.w3)
-            # self.prefetcher.insert_tensor(self.w2)
+            self.prefetcher.insert_tensor(self.w3)
+            self.prefetcher.insert_tensor(self.w2)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -152,7 +150,6 @@ class MLP(LightweightModule):
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
-        breakpoint()
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -174,7 +171,9 @@ class MLP(LightweightModule):
             program_config=pc_3,
             memory_config=get_ff1_3_memory_config(),
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if mode == "decode" and self.prefetcher is not None
+            else None,
         )
         ttnn.deallocate(x)
 
@@ -247,7 +246,7 @@ class MLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        if mode == "decode" and not TG:
+        if mode == "decode" and not TG and self.prefetcher is None:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
@@ -285,8 +284,10 @@ class MLP(LightweightModule):
             program_config=pc_2,
             memory_config=get_ff2_memory_config(),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if mode == "decode" and self.prefetcher is not None
+            else None,
         )
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
@@ -310,18 +311,28 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            subdevice_id=self.prefetcher.worker_sub_device_id
+            if mode == "decode" and self.prefetcher is not None
+            else None,
         )
-
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
         if mode == "decode":
-            w2_out_reduced = ttnn.to_memory_config(
-                w2_out_reduced,
-                self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] if TG else self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            )
+            if self.prefetcher is not None:
+                w2_out_reduced = ttnn.to_memory_config(
+                    w2_out_reduced,
+                    self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                )
+            else:
+                w2_out_reduced = ttnn.to_memory_config(
+                    w2_out_reduced,
+                    self.model_config["SHARDED_ATTN_INPUT_MEMCFG"]
+                    if TG
+                    else self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                )
 
         # ttnn.deallocate(w2_out)
         return w2_out_reduced

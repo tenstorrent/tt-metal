@@ -9,6 +9,23 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
+@dataclass(frozen=True)
+class PrefetcherCoreConstants:
+    """
+    Stores all the column number constants used in PrefetcherCoreConfig.
+    """
+
+    LEFT_START_COL: int = 1
+    LEFT_END_COL_WORMHOLE_B0: int = 4
+    LEFT_END_COL_BLACKHOLE: int = 6
+    RIGHT_START_COL_WORMHOLE_B0: int = 5
+    RIGHT_START_COL_BLACKHOLE: int = 8
+    RIGHT_END_COL_WORMHOLE_B0: int = 8
+    RIGHT_END_COL_BLACKHOLE: int = 12
+    SENDER_COL_WORMHOLE_B0: int = 0
+    SENDER_COL_BLACKHOLE: int = 7
+
+
 @dataclass
 class PrefetcherCoreConfig:
     """
@@ -19,12 +36,13 @@ class PrefetcherCoreConfig:
     mesh_device: ttnn.MeshDevice
 
     def __post_init__(self):
-        left_start_col = 1  # 0th column is the sender column (WH and BH)
-        left_end_col = 4 if is_wormhole_b0() else 6
+        constants = PrefetcherCoreConstants
+        left_start_col = constants.LEFT_START_COL
+        left_end_col = constants.LEFT_END_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.LEFT_END_COL_BLACKHOLE
         right_start_col = (
-            5 if is_wormhole_b0() else 8
-        )  # 7th column is the sender column for BH, 4th column is the sender column for WH
-        right_end_col = 8 if is_wormhole_b0() else 12
+            constants.RIGHT_START_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.RIGHT_START_COL_BLACKHOLE
+        )
+        right_end_col = constants.RIGHT_END_COL_WORMHOLE_B0 if is_wormhole_b0() else constants.RIGHT_END_COL_BLACKHOLE
 
         def get_sender_range(active: Optional[bool] = None):
             left_sender_range = ([] if active == False else [0, 4, 5, 9]) + (
@@ -144,10 +162,10 @@ class Prefetcher(LightweightModule):
         self.worker_sub_device_id = None
         self.global_cb_size = 0
         self.num_receiver_cores = num_receiver_cores
-        self.max_num_receiver_cores = 6 if is_blackhole() else 3
+        self.max_num_receiver_cores = 4 if is_blackhole() else 2
         self.ring_size = num_receiver_cores * self.mesh_device.dram_grid_size().x
         assert (
-            self.num_receiver_cores < self.max_num_receiver_cores
+            self.num_receiver_cores <= self.max_num_receiver_cores
         ), f"Number of receiver cores {self.num_receiver_cores} is greater than the maximum number of receiver cores {self.max_num_receiver_cores}"
         self.width_cores = self.mesh_device.compute_with_storage_grid_size().x
         self.height_cores = self.mesh_device.compute_with_storage_grid_size().y
@@ -213,7 +231,6 @@ class Prefetcher(LightweightModule):
                 self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
             )
         )
-        breakpoint()
         match mode:
             case "decode":
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))

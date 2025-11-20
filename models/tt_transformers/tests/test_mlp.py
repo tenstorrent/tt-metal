@@ -284,7 +284,6 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-    breakpoint()
 
     num_receiver_cores = 4
 
@@ -346,9 +345,9 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     torch_input = torch.randn(
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
     )
+    breakpoint()
     reference_output = reference_model(torch_input)
 
-    breakpoint()
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
