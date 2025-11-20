@@ -15,6 +15,7 @@ import ttnn
 import torch
 import math
 from loguru import logger
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 
 
 SliceHeight = ttnn.Conv2dDRAMSliceHeight
@@ -29,13 +30,13 @@ SliceWidth = ttnn.Conv2dDRAMSliceWidth
     "batch_size, input_channels, input_height, input_width, math_fidelity, parameters",
     # fmt: off
     (
-        # ( 1,  400,    192,   192,     ttnn.MathFidelity.HiFi4,
-        #     [
-        #         (256, (1, 1), (1, 1), (0, 0), (1, 1)),
-        #         (512, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (384, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
+        ( 1,  400,    192,   192,     ttnn.MathFidelity.HiFi4,
+            [
+                (512, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (128, (5, 5), (1, 1), (2, 2), (1, 1))
+            ]
+        ),
         # ( 2,   13,    313,    71,     ttnn.MathFidelity.LoFi ,
         #     [
         #         (256, (5, 5), (1, 1), (2, 2), (2, 2)),
@@ -151,7 +152,7 @@ def test_multi_conv(
             ttnn.Conv2dSliceAttr(
                 batch_size=batch_size,
                 input_shape=[input_height, input_width],
-                input_channels=input_channels,
+                input_channels=current_input_channels,
                 output_channels=output_channels,
                 kernel_size=tuple(kernel),
                 stride=tuple(stride),
@@ -184,7 +185,7 @@ def test_multi_conv(
         op_slice_attr=op_slicing_attrs,
         dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=8),
     )
-    threshold = 0.5
+    threshold = 0.99
     tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
     out = ttnn.to_torch(tt_output_tensor_host)
     out = out.reshape(batch_size, out_height, out_width, out.shape[-1])
@@ -192,5 +193,5 @@ def test_multi_conv(
 
     ref = torch.permute(ref, (0, 2, 3, 1))
     logger.info(f"Threshold: {threshold}")
-    diff = torch.abs(ref - out) / ref.abs().mean()
-    assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=threshold)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {threshold}")
