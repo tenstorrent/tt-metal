@@ -530,6 +530,7 @@ def append_device_data(
     logFolder: Path,
     analyze_noc_traces: bool,
     device_analysis_types: Tuple[str, ...] | List[str],
+    force_legacy_device_logs: bool = False,
 ) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
     """Join host metadata with either the perf CSV or legacy device logs."""
 
@@ -537,7 +538,9 @@ def append_device_data(
     logger.info("Appending device data")
 
     device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
-    if device_perf_report.is_file():
+    use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs
+
+    if use_perf_csv:
         if device_analysis_types:
             logger.warning(
                 "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
@@ -545,10 +548,15 @@ def append_device_data(
         device_perf_by_device = load_device_perf_report(device_perf_report)
         host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
     else:
-        logger.warning(
-            f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
-            f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
-        )
+        if device_perf_report.is_file() and force_legacy_device_logs:
+            logger.info(
+                f"Forcing legacy device-log parsing even though {PROFILER_CPP_DEVICE_PERF_REPORT} exists in {logFolder}."
+            )
+        else:
+            logger.warning(
+                f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
+                f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
+            )
         host_ops_by_device = _enrich_ops_from_device_logs(host_ops_by_device, logFolder, device_analysis_types)
 
     trace_ops_by_augmented_id = _build_trace_ops_mapping(host_ops_by_device, ops)
@@ -1176,6 +1184,7 @@ def process_ops(
     device_only: bool = False,
     analyze_noc_traces: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
+    force_legacy_device_logs: bool = False,
 ) -> None:
     """Top-level entry point used by both CLI and importers."""
 
@@ -1188,7 +1197,12 @@ def process_ops(
 
     if ops and not device_only:
         deviceOps, traceOps = append_device_data(
-            ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types
+            ops,
+            traceReplays,
+            logFolder,
+            analyze_noc_traces,
+            device_analysis_types,
+            force_legacy_device_logs=force_legacy_device_logs,
         )
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
@@ -1206,10 +1220,25 @@ def process_ops(
     "--analyze-noc-traces", is_flag=True, help="Use tt-npe to analyze profiler noc event trace files (if available)"
 )
 @click.option("-a", "--device-analysis-types", multiple=True, help="Subset of analysis types to be performed on device")
-def main(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types):
+@click.option(
+    "--force-legacy-device-logs",
+    is_flag=True,
+    help="Use import_log_run_stats() device logs even if cpp_device_perf_report.csv exists.",
+)
+def main(
+    output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types, force_legacy_device_logs
+):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date, device_only, analyze_noc_traces, device_analysis_types)
+    process_ops(
+        output_folder,
+        name_append,
+        date,
+        device_only,
+        analyze_noc_traces,
+        device_analysis_types,
+        force_legacy_device_logs=force_legacy_device_logs,
+    )
 
 
 if __name__ == "__main__":
