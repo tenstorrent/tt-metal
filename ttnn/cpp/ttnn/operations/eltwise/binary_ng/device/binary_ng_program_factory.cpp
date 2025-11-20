@@ -128,15 +128,15 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
             c.memory_config().buffer_type() == BufferType::DRAM) {
             return false;
         }
-        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
-        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-            return true;
-        }
+        // if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+        //     return true;
+        // }
+        // if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+        //     return true;
+        // }
+        // if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
+        //     return true;
+        // }
     }
 
     return false;

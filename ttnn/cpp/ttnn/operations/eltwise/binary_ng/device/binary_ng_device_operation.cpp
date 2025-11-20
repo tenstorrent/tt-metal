@@ -64,23 +64,169 @@ bool is_quant_op(const BinaryOpType val) {
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a, const Tensor* input_tensor_b, const std::optional<Tensor>& output_tensor) {
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
-        const auto& grid = tensor.shard_spec()->grid;
-        auto device = tensor.device();
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
-                return sub_device_workers;
-            }
-        }
-        __builtin_unreachable();
+        // Return the actual tensor's shard grid for worker grid selection
+        return tensor.shard_spec()->grid;
     };
 
-    if (input_tensor_a.is_sharded()) {
-        return get_tensor_grid(input_tensor_a);
-    } else if (input_tensor_b && input_tensor_b->is_sharded()) {
-        return get_tensor_grid(*input_tensor_b);
-    } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        return get_tensor_grid(*output_tensor);
+    auto get_full_device_grid = [](const Tensor& tensor) -> CoreRangeSet {
+        auto device = tensor.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    };
+
+    auto get_max_grid = [&get_tensor_grid, &get_full_device_grid](const Tensor& t1, const Tensor& t2) -> CoreRangeSet {
+        if (!t1.is_sharded() && !t2.is_sharded()) {
+            // Both interleaved - use full device grid
+            return get_full_device_grid(t1);
+        }
+        if (!t1.is_sharded()) {
+            // Only t2 is sharded - use t2's grid
+            return get_tensor_grid(t2);
+        }
+        if (!t2.is_sharded()) {
+            // Only t1 is sharded - use t1's grid
+            return get_tensor_grid(t1);
+        }
+
+        // Both sharded - pick the one with more cores
+        auto grid1 = t1.shard_spec()->grid;
+        auto grid2 = t2.shard_spec()->grid;
+        return grid1.num_cores() >= grid2.num_cores() ? get_tensor_grid(t1) : get_tensor_grid(t2);
+    };
+
+    auto get_min_grid = [&get_tensor_grid, &get_full_device_grid](const Tensor& t1, const Tensor& t2) -> CoreRangeSet {
+        if (!t1.is_sharded() && !t2.is_sharded()) {
+            // Both interleaved - use full device grid
+            return get_full_device_grid(t1);
+        }
+        if (!t1.is_sharded()) {
+            // Only t2 is sharded - use t2's grid
+            return get_tensor_grid(t2);
+        }
+        if (!t2.is_sharded()) {
+            // Only t1 is sharded - use t1's grid
+            return get_tensor_grid(t1);
+        }
+
+        // Both sharded - pick the one with fewer cores
+        auto grid1 = t1.shard_spec()->grid;
+        auto grid2 = t2.shard_spec()->grid;
+        return grid1.num_cores() <= grid2.num_cores() ? get_tensor_grid(t1) : get_tensor_grid(t2);
+    };
+
+    auto get_elementwise_max_grid = [&get_tensor_grid, &get_full_device_grid](
+                                        const Tensor& t1, const Tensor& t2) -> CoreRangeSet {
+        if (!t1.is_sharded() && !t2.is_sharded()) {
+            // Both interleaved - use full device grid
+            return get_full_device_grid(t1);
+        }
+        if (!t1.is_sharded()) {
+            // Only t2 is sharded - use t2's grid
+            return get_tensor_grid(t2);
+        }
+        if (!t2.is_sharded()) {
+            // Only t1 is sharded - use t1's grid
+            return get_tensor_grid(t1);
+        }
+
+        // Both sharded - compute element-wise max grid: (max(a.x, b.x), max(a.y, b.y))
+        auto grid1 = t1.shard_spec()->grid;
+        auto grid2 = t2.shard_spec()->grid;
+        auto bbox1 = grid1.bounding_box();
+        auto bbox2 = grid2.bounding_box();
+
+        // Get grid sizes (end coordinates + 1 since coordinates are 0-based)
+        uint32_t max_x = std::max(bbox1.end_coord.x, bbox2.end_coord.x);
+        uint32_t max_y = std::max(bbox1.end_coord.y, bbox2.end_coord.y);
+
+        // Create new grid from (0,0) to (max_x, max_y)
+        return CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(max_x, max_y))});
+    };
+
+    // Check environment variable for grid selection strategy
+    static const char* grid_strategy_env = std::getenv("TT_METAL_BINARY_NG_GRID_STRATEGY");
+    std::string_view strategy = grid_strategy_env ? grid_strategy_env : "current";
+
+    if (strategy == "a_first") {
+        // Prefer A, then B, then C
+        if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+            return get_tensor_grid(*input_tensor_b);
+        } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+            return get_tensor_grid(*output_tensor);
+        }
+    } else if (strategy == "b_first") {
+        // Prefer B, then A, then C
+        if (input_tensor_b && input_tensor_b->is_sharded()) {
+            return get_tensor_grid(*input_tensor_b);
+        } else if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+            return get_tensor_grid(*output_tensor);
+        }
+    } else if (strategy == "full_grid") {
+        // Always use full device grid
+        return get_full_device_grid(input_tensor_a);
+    } else if (strategy == "half_grid") {
+        // Use half of full device grid (32 cores in 4x8 layout)
+        return CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(3, 7))});  // 4 columns × 8 rows = 32 cores
+    } else if (strategy == "max_ab") {
+        // Use max of A and B grids
+        if (input_tensor_b) {
+            return get_max_grid(input_tensor_a, *input_tensor_b);
+        } else if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        }
+        // Fallback: use full device grid
+        auto device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    } else if (strategy == "min_ab") {
+        // Use min of A and B grids
+        if (input_tensor_b) {
+            return get_min_grid(input_tensor_a, *input_tensor_b);
+        } else if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        }
+        // Fallback: use full device grid
+        auto device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    } else if (strategy == "max_abc") {
+        // Choose compute grid based on max_ab (max of A and B)
+        // Then C's shardspec core grid will be adjusted to match the compute grid
+        if (input_tensor_b) {
+            return get_max_grid(input_tensor_a, *input_tensor_b);
+        } else if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        }
+        // Fallback: use full device grid
+        auto device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    } else if (strategy == "new_grid") {
+        // Element-wise max grid: (max(a.x, b.x), max(a.y, b.y))
+        // Example: if a's grid is (4,8) and b's grid is (8,4), result is (8,8)
+        if (input_tensor_b) {
+            // if (input_tensor_a.is_sharded() && input_tensor_b->is_sharded() &&
+            //     input_tensor_a.memory_config().memory_layout() == input_tensor_b->memory_config().memory_layout()) {
+            return get_elementwise_max_grid(input_tensor_a, *input_tensor_b);
+            //} else {
+            //    return get_max_grid(input_tensor_a, *input_tensor_b);
+            //}
+        } else if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        }
+        // Fallback: use full device grid
+        auto device = input_tensor_a.device();
+        return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    } else {
+        // Default "current" strategy: prefer C, then A, then B
+        if (output_tensor.has_value() && output_tensor->is_sharded()) {
+            return get_tensor_grid(*output_tensor);
+        }
+        if (input_tensor_a.is_sharded()) {
+            return get_tensor_grid(input_tensor_a);
+        } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+            return get_tensor_grid(*input_tensor_b);
+        }
     }
 
     auto device = input_tensor_a.device();
@@ -142,7 +288,6 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
@@ -346,6 +491,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             output_shard_spec = *shard_spec;
         }
 
+        // For max_abc strategy: replace the grid with the compute grid from max_ab
+        const char* grid_strategy_env = std::getenv("TT_METAL_BINARY_NG_GRID_STRATEGY");
+        std::string_view strategy = grid_strategy_env ? grid_strategy_env : "current";
+        if (strategy == "max_abc") {
+            // Replace the output shard spec's grid with the worker grid (compute grid from max_ab)
+            output_shard_spec.grid = attributes.worker_grid;
+        }
+
         return TensorSpec(
             output_shape,
             TensorLayout(
@@ -464,7 +617,23 @@ BinaryNgDeviceOperation::invoke(
             is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
                                               // dtype depending on which LLK is meant to be used.
             output_dtype,
-            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
+            [&]() {
+                auto worker_grid = get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor);
+                // Simple logging for profiling analysis
+                const char* strategy = std::getenv("TT_METAL_BINARY_NG_GRID_STRATEGY");
+                if (strategy) {
+                    auto grid_bbox = worker_grid.bounding_box();
+                    auto grid_size = grid_bbox.grid_size();
+                    fprintf(
+                        stderr,
+                        "WORKER_GRID: strategy=%s cores=%lu grid=%lux%lu\n",
+                        strategy,
+                        static_cast<unsigned long>(worker_grid.num_cores()),
+                        static_cast<unsigned long>(grid_size.x),
+                        static_cast<unsigned long>(grid_size.y));
+                }
+                return worker_grid;
+            }(),
             std::nullopt,
             subtile_broadcast_type,
             is_sfpu_op,
@@ -501,7 +670,23 @@ BinaryNgDeviceOperation::invoke(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),
             output_dtype,
-            get_worker_grid(input_tensor_a, nullptr, output_tensor),
+            [&]() {
+                auto worker_grid = get_worker_grid(input_tensor_a, nullptr, output_tensor);
+                // Simple logging for profiling analysis
+                const char* strategy = std::getenv("TT_METAL_BINARY_NG_GRID_STRATEGY");
+                if (strategy) {
+                    auto grid_bbox = worker_grid.bounding_box();
+                    auto grid_size = grid_bbox.grid_size();
+                    fprintf(
+                        stderr,
+                        "WORKER_GRID: strategy=%s cores=%lu grid=%lux%lu\n",
+                        strategy,
+                        static_cast<unsigned long>(worker_grid.num_cores()),
+                        static_cast<unsigned long>(grid_size.x),
+                        static_cast<unsigned long>(grid_size.y));
+                }
+                return worker_grid;
+            }(),
             std::nullopt,
             SubtileBroadcastType::NONE,
             is_sfpu_op,
