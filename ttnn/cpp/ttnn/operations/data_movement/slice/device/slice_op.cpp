@@ -226,10 +226,11 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (this->use_tensor_args) {
         // Use tensor args device path
-        return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors);
+        return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors, this->sub_core_grids);
     } else {
         // Use regular path with Shape args
-        return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
+        return detail::slice_multi_core(
+            input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step, this->sub_core_grids);
     }
 }
 
