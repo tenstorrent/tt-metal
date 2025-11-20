@@ -20,7 +20,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
 
         sfpi::vFloat float_in0 = sfpi::int32_to_float(in0, 0);
         sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
-        sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<3>(float_in1), float_in1);
+        sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
 
         // If the result is expected to be integer, this function can be used.
         // vInt int_result = sfpu::_float_to_int32_(result);
