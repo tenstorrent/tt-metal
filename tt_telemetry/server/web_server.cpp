@@ -44,15 +44,9 @@ private:
     std::vector<httplib::DataSink*> sse_clients_;       // initial snapshot sent, able to receive all delta updates
     std::vector<httplib::DataSink*> new_sse_clients_;   // joined but not yet snapshotted
     std::mutex clients_mutex_;
-    std::thread telemetry_thread_;
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     std::string metal_home_;
-
-    // Accumulated telemetry data
-    TelemetrySnapshot telemetry_state_;
-    std::mutex snapshot_mutex_;
-    std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
     // Send snapshot to all new clients and move those clients to the client list. This must be run
     // from the main client thread.
@@ -63,7 +57,11 @@ private:
         }
 
         // Use current accumulated telemetry data
-        TelemetrySnapshot full_snapshot = telemetry_state_;
+        TelemetrySnapshot full_snapshot;
+        {
+            std::lock_guard<std::mutex> state_lock(state_mutex_);
+            full_snapshot = telemetry_state_;
+        }
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
 
@@ -82,21 +80,9 @@ private:
         new_sse_clients_.clear();
     }
 
-    // Get snapshot if one is ready
-    std::shared_ptr<TelemetrySnapshot> get_next_snapshot() {
-        std::lock_guard<std::mutex> lock(snapshot_mutex_);
-
-        std::shared_ptr<TelemetrySnapshot> snapshot;
-        if (!pending_snapshots_.empty()) {
-            snapshot = std::move(pending_snapshots_.front());
-            pending_snapshots_.pop();
-        }
-        return snapshot;
-    }
-
-    void send_snapshot_to_clients(std::shared_ptr<TelemetrySnapshot> snapshot) {
+    void send_snapshot_to_clients(const TelemetrySnapshot& delta) {
         // Serialize
-        json j = *snapshot;
+        json j = delta;
         std::string message = "data: " + j.dump() + "\n\n";
 
         // Send to all, removing any disconnected clients
@@ -112,19 +98,10 @@ private:
         }
     }
 
-    // Main client thread
-    void broadcast_telemetry() {
-        while (running_) {
-            handle_new_clients();
-            std::shared_ptr<TelemetrySnapshot> snapshot = get_next_snapshot();
-            if (!snapshot) {
-                // No snapshot, sleep a while
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-            telemetry_state_.merge_from(*snapshot);
-            send_snapshot_to_clients(snapshot);
-        }
+    // Called after telemetry has been merged into the state
+    void on_telemetry_updated(const TelemetrySnapshot& delta) override {
+        handle_new_clients();
+        send_snapshot_to_clients(delta);
     }
 
     std::string join_paths(const std::string& base, const std::string& path) {
@@ -359,7 +336,7 @@ public:
 
         // Prometheus metrics endpoint
         server_.Get("/api/metrics", [this](const httplib::Request&, httplib::Response& res) {
-            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            std::lock_guard<std::mutex> lock(state_mutex_);
             try {
                 auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_);
                 res.set_content(prometheus_output, "text/plain; version=0.0.4; charset=utf-8");
@@ -419,9 +396,8 @@ public:
     void start(uint16_t port) {
         setup_routes();
 
-        // Start telemetry broadcasting thread
+        // Note: The base class TelemetrySubscriber already started the processing thread in its constructor
         running_ = true;
-        telemetry_thread_ = std::thread(&WebServer::broadcast_telemetry, this);
 
         log_info(tt::LogAlways, "Starting telemetry server on port {}...", port);
         log_info(tt::LogAlways, "API endpoints:");
@@ -437,14 +413,7 @@ public:
     void stop() {
         running_ = false;
         server_.stop();
-        if (telemetry_thread_.joinable()) {
-            telemetry_thread_.join();
-        }
-    }
-
-    void on_telemetry_ready(std::shared_ptr<TelemetrySnapshot> telemetry) override {
-        std::lock_guard<std::mutex> lock(snapshot_mutex_);
-        pending_snapshots_.push(std::move(telemetry));
+        // Note: The base class destructor will handle stopping the processing thread
     }
 
     ~WebServer() { stop(); }
