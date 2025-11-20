@@ -1768,6 +1768,25 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     WAYPOINT("NSD");
 }
 
+FORCE_INLINE
+void noc_semaphore_wait_with_DPRINT(
+    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t dprint_freq = 1000000000) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
+
+    WAYPOINT("NSW");
+    uint32_t count = 0;
+    do {
+        invalidate_l1_cache();
+        if (count == 0) {
+            count = dprint_freq;
+            DPRINT << "Semaphore is " << (*sem_addr) << "\n";
+        }
+        count--;
+
+    } while ((*sem_addr) != val);
+    WAYPOINT("NSD");
+}
+
 // clang-format off
 /**
  * A blocking call that waits until the value of a local L1 memory address on

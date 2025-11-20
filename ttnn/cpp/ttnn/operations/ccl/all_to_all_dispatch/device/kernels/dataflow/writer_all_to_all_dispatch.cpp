@@ -163,6 +163,11 @@ void kernel_main() {
 
     // Send initialization semaphore to configured targets for synchronization
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+    uint32_t* init_noc_semaphore_addr_ptr = (uint32_t*)init_semaphore_address;
+    uint32_t init_noc_semaphore_val = *init_noc_semaphore_addr_ptr;
+    DPRINT << "INIT SEMAPHORE ADDRESS IS: " << init_semaphore_address << "\n";
+    DPRINT << "INIT SEMAPHORE VALUE IS: " << init_noc_semaphore_val << "\n";
+    DPRINT << "Waiting for  " << dispatch_devices - 1 << " devices from index " << dispatch_index << "\n";
     send_init_semaphore_to_configured_targets<
         linearized_mesh_coord,
         topology,
@@ -174,8 +179,10 @@ void kernel_main() {
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+    DPRINT << "Awaiting the semaphore from glx 2\n";
+    noc_semaphore_wait_with_DPRINT((uint32_t*)init_semaphore_address, dispatch_devices - 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    DPRINT << "Got the semaphore\n";
 
     // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
@@ -375,4 +382,5 @@ void kernel_main() {
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     close_direction_connections(directions, fabric_connections);
+    DPRINT << "Done a2q dispatch\n";
 }
