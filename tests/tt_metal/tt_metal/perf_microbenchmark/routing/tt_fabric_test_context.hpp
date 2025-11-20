@@ -1349,12 +1349,8 @@ private:
             return;
         }
 
-        // Determine if we have upload columns by checking first result
-        bool has_upload_data = !bandwidth_results_summary_.empty() && 
-                               bandwidth_results_summary_[0].file_name.has_value();
-
         // Write header
-        if (include_upload_columns && has_upload_data) {
+        if (include_upload_columns) {
             csv_stream << "file_name,machine_type,test_ts,";
         }
         csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
@@ -1373,14 +1369,14 @@ private:
         for (const auto& result : bandwidth_results_summary_) {
             // Write upload columns if present
             if (include_upload_columns && has_upload_data) {
-                csv_stream << result.file_name.value() << "," 
-                          << result.machine_type.value() << "," 
+                csv_stream << result.file_name.value() << ","
+                          << result.machine_type.value() << ","
                           << result.test_ts.value() << ",";
             }
 
             // Convert vector of num_devices to a string representation
             std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
-            
+
             // Write standard columns
             csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
                        << result.topology << ",\"" << num_devices_str << "\"," << result.num_links << ","
@@ -1388,7 +1384,7 @@ private:
             for (double stat : result.statistics_vector) {
                 csv_stream << "," << std::fixed << std::setprecision(6) << stat;
             }
-            
+
             // Find the corresponding golden entry for this test result
             auto golden_it = fetch_corresponding_golden_entry(result);
             if (golden_it == golden_csv_entries_.end()) {
@@ -1406,7 +1402,7 @@ private:
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         std::ostringstream summary_oss;
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
-        
+
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         csv_summary_file_path_ = output_path / summary_oss.str();
@@ -1445,7 +1441,7 @@ private:
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         std::ostringstream upload_oss;
         upload_oss << "bandwidth_summary_results_" << arch_name << "_upload.csv";
-        
+
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         csv_summary_upload_file_path_ = output_path / upload_oss.str();
