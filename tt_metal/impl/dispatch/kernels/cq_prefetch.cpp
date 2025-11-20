@@ -427,7 +427,19 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // Nothing to fetch, nothing pending, nothing available, stall on host
             WAYPOINT("HQW");
             uint32_t heartbeat = 0;
-            while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
+            // FIX: Use inline assembly to prevent LLVM LTO from breaking this volatile polling loop
+            // LLVM's LTO incorrectly optimizes volatile comparisons in loops
+            while (true) {
+                fetch_size = *prefetch_q_rd_ptr;
+                // Make the comparison opaque to LTO using inline assembly
+                bool is_zero;
+                asm volatile("seqz %0, %1\n"  // is_zero = (fetch_size == 0)
+                             : "=r"(is_zero)
+                             : "r"(fetch_size)
+                             : "memory");
+                if (!is_zero) {
+                    break;
+                }
                 invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
             }
@@ -453,7 +465,10 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
+    WAYPOINT("RIAP");  // Relay Inline Acquire Pages
+    DPRINT << "RIAP: acquiring " << npages << " pages" << ENDL();
     RelayInlineState::cb_writer.acquire_pages(npages);
+    WAYPOINT("RIAD");  // Relay Inline Acquire Done
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
@@ -1033,10 +1048,22 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
-    do {
+    // FIX: Use inline assembly to prevent LLVM LTO from breaking this volatile polling loop
+    while (true) {
+        uint32_t sem_value = *sem_addr;
+        bool not_equal;
+        asm volatile(
+            "sub %0, %1, %2\n"  // not_equal = sem_value - count
+            "snez %0, %0\n"     // not_equal = (not_equal != 0)
+            : "=r"(not_equal)
+            : "r"(sem_value), "r"(count)
+            : "memory");
+        if (!not_equal) {
+            break;  // Exit when sem_value == count
+        }
         invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    } while (*sem_addr != count);
+    }
     WAYPOINT("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1425,10 +1452,13 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
+    WAYPOINT("PCST");  // Process Cmd Start
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
+    uint32_t cmd_id = cmd->base.cmd_id;
+    DPRINT << "PCMD: cmd_id=" << cmd_id << " cmd_ptr=" << HEX() << cmd_ptr << ENDL();
     bool done = false;
 
-    switch (cmd->base.cmd_id) {
+    switch (cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT << "relay linear: " << cmd_ptr << ENDL();
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
@@ -1459,8 +1489,10 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
-            // DPRINT << "relay inline" << ENDL();
+            WAYPOINT("RILS");  // Relay Inline Start
+            DPRINT << "RILS: relay inline case entered" << ENDL();
             if constexpr (exec_buf) {
+                WAYPOINT("RIEB");
                 if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
                     stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                         cmd_ptr, downstream_data_ptr, exec_buf_state);
@@ -1469,14 +1501,21 @@ bool process_cmd(
                         cmd_ptr, downstream_data_ptr_s, exec_buf_state);
                 }
             } else {
-                if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
+                WAYPOINT("RINB");  // Relay Inline Not exec_Buf
+                DPRINT << "RINB: reading dispatcher_type" << ENDL();
+                uint8_t dispatcher_type = cmd->relay_inline.dispatcher_type;
+                DPRINT << "RINB: dispatcher_type=" << (uint32_t)dispatcher_type << ENDL();
+                if (dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
+                    WAYPOINT("RIDM");  // Relay Inline Dispatch Master
                     stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchRelayInlineState>(
                         cmd_ptr, downstream_data_ptr);
                 } else {
+                    WAYPOINT("RIDS");  // Relay Inline Dispatch Subordinate
                     stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchSRelayInlineState>(
                         cmd_ptr, downstream_data_ptr_s);
                 }
             }
+            WAYPOINT("RILD");  // Relay Inline Done
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
@@ -1948,15 +1987,20 @@ void kernel_main_hd() {
 
     while (!done) {
         DeviceZoneScopedN("CQ-PREFETCH");
+        WAYPOINT("MLPS");  // Main Loop Pre-Start
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 
+        WAYPOINT("MLFQ");  // Main Loop after Fetch Q
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
+        WAYPOINT("MLRC");  // Main Loop Read Cmd
         volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
 
+        WAYPOINT("MLPC");  // Main Loop Process Cmd
         uint32_t stride;
         done = process_cmd<false, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
+        WAYPOINT("MLPD");  // Main Loop Process Done
         cmd_ptr += stride;
     }
 }

@@ -44,7 +44,16 @@ uint32_t wrap_ge(uint32_t a, uint32_t b) {
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
     int32_t diff = a - b;
-    return diff >= 0;
+    // FIX: Use inline assembly to prevent LLVM LTO from breaking volatile polling loops
+    // that use this comparison function
+    uint32_t result;
+    asm volatile(
+        "slti %0, %1, 0\n"  // result = (diff < 0) ? 1 : 0
+        "xori %0, %0, 1\n"  // result = !result  (i.e., diff >= 0)
+        : "=r"(result)
+        : "r"(diff)
+        : "memory");
+    return result;
 }
 
 FORCE_INLINE
@@ -53,7 +62,14 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
     int32_t diff = a - b;
-    return diff > 0;
+    // FIX: Use inline assembly to prevent LLVM LTO from breaking volatile polling loops
+    // that use this comparison function
+    uint32_t result;
+    asm volatile("sgtz %0, %1\n"  // result = (diff > 0) ? 1 : 0
+                 : "=r"(result)
+                 : "r"(diff)
+                 : "memory");
+    return result;
 }
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
@@ -269,6 +285,10 @@ public:
         noc_async_atomic_barrier();
 
         WAYPOINT("DAPW");
+        DPRINT << "DAPW: sem_addr=" << HEX() << (uint32_t)sem_addr << " n=" << DEC() << n
+               << " additional_count=" << additional_count << ENDL();
+        uint32_t initial_sem_value = *sem_addr;
+        DPRINT << "DAPW: initial_sem_value=" << DEC() << initial_sem_value << ENDL();
         // Use a wrapping compare here to compare distance
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
@@ -276,6 +296,8 @@ public:
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (wrap_gt(n, additional_count + *sem_addr));
+        uint32_t final_sem_value = *sem_addr;
+        DPRINT << "DAPD: final_sem_value=" << DEC() << final_sem_value << " (exited loop)" << ENDL();
         WAYPOINT("DAPD");
         additional_count -= n;
     }
@@ -373,11 +395,15 @@ protected:
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
+            uint32_t initial_sem_value = *sem_addr;
+            DPRINT << "UAPW: sem_addr=" << HEX() << (uint32_t)sem_addr << " local_count=" << DEC() << local_count_
+                   << " upstream_count=" << upstream_count_ << " initial_sem_value=" << initial_sem_value << ENDL();
             uint32_t heartbeat = 0;
             do {
                 invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
             } while ((upstream_count_ = *sem_addr) == local_count_);
+            DPRINT << "UAPD: sem_value=" << DEC() << upstream_count_ << " (exited loop)" << ENDL();
             WAYPOINT("UAPD");
         }
 
