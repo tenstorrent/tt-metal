@@ -218,15 +218,15 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
         DPRINT << "Waiting on the barrier Semaphore \n" uint32_t* barrier_sem_ptr = (uint32_t*)barrier_sem;
-        uint32_t barrier_sem_val = *barrier_semptr;
+        uint32_t barrier_sem_val = *barrier_sem_ptr;
         DPRINT << "BAR SEMAPHORE ADDRESS IS: " << barrier_sem << "\n";
         DPRINT << "BAR SEMAPHORE VALUE IS: " << barrier_sem_val << "\n";
         DPRINT << "Waiting for  " << ring_size - 1 << " devices\n";
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-        DPRINT << "Got the barrier Semaphore \n" noc_semaphore_set(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        DPRINT << "Got the barrier Semaphore \n";
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     } else {
-        DPRINT << "Not waiting on the barrier Semaphore \n"
+        DPRINT << "Not waiting on the barrier Semaphore \n";
     }
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
