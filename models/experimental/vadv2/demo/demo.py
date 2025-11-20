@@ -20,6 +20,7 @@ from mmengine.runner import Runner
 from mmdet3d.registry import DATASETS
 from models.experimental.vadv2.reference import vad
 from models.experimental.vadv2.common import load_torch_model
+from models.experimental.vadv2.demo.nuscenes_vad_dataset import LiDARInstanceLines
 import os.path as osp
 
 try:
@@ -248,6 +249,7 @@ DEFAULT_COLOR_PALETTE = [
 ]
 
 DEFAULT_GROUND_Z = -1.6
+GT_LANE_PADDING_VALUE = -10000.0
 
 BOX_EDGES = [
     (0, 1),
@@ -357,6 +359,62 @@ def _camera_name_from_path(path):
     return parent if parent else "camera"
 
 
+def _extract_ground_truth_lanes(data_entry):
+    gt_container = data_entry.get("map_gt_bboxes_3d")
+    gt_labels = data_entry.get("map_gt_labels_3d")
+
+    if gt_container is None or gt_labels is None:
+        return None, None
+
+    if hasattr(gt_container, "data"):
+        gt_container = gt_container.data
+    if hasattr(gt_labels, "data"):
+        gt_labels = gt_labels.data
+
+    if isinstance(gt_labels, torch.Tensor):
+        gt_labels_np = gt_labels.detach().cpu().numpy()
+    else:
+        gt_labels_np = np.asarray(gt_labels)
+
+    if gt_labels_np.size == 0:
+        return None, None
+
+    gt_pts_np = None
+    if isinstance(gt_container, torch.Tensor):
+        gt_pts_np = gt_container.detach().cpu().numpy()
+    elif isinstance(gt_container, LiDARInstanceLines):
+        if len(gt_container.instance_list) == 0:
+            return None, None
+        pts_tensor = gt_container.fixed_num_sampled_points_torch
+        if isinstance(pts_tensor, torch.Tensor):
+            gt_pts_np = pts_tensor.detach().cpu().numpy()
+        else:
+            gt_pts_np = np.asarray(pts_tensor)
+    else:
+        try:
+            gt_pts_np = np.asarray(gt_container)
+        except Exception:
+            return None, None
+
+    if gt_pts_np is None or gt_pts_np.size == 0:
+        return None, None
+
+    if not isinstance(gt_pts_np, np.ndarray):
+        gt_pts_np = np.asarray(gt_pts_np)
+
+    if gt_pts_np.ndim != 3:
+        return None, None
+
+    lane_count = min(gt_pts_np.shape[0], gt_labels_np.shape[0])
+    if lane_count == 0:
+        return None, None
+
+    gt_pts_np = gt_pts_np[:lane_count]
+    gt_labels_np = gt_labels_np[:lane_count]
+
+    return gt_pts_np, gt_labels_np
+
+
 def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.2, color_palette=None):
     if "img" not in data or "img_metas" not in data:
         return
@@ -459,6 +517,8 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
     )
     sample_token = str(sample_token)
 
+    gt_lane_pts_np, gt_lane_labels_np = _extract_ground_truth_lanes(data)
+
     os.makedirs(out_dir, exist_ok=True)
 
     for cam_idx in range(recovered_imgs.shape[0]):
@@ -536,6 +596,46 @@ def visualize_sample_prediction(data, result, out_dir, class_names, score_thr=0.
                     color=lane_color,
                     linewidth=2.0,
                     alpha=0.8,
+                )
+
+        if gt_lane_pts_np is not None and gt_lane_labels_np is not None:
+            for gt_idx, gt_lane in enumerate(gt_lane_pts_np):
+                if gt_lane.ndim != 2 or gt_lane.shape[0] < 2:
+                    continue
+
+                if gt_lane.shape[1] >= 3:
+                    lane_xy = gt_lane[:, :2]
+                elif gt_lane.shape[1] == 2:
+                    lane_xy = gt_lane
+                else:
+                    continue
+
+                valid_mask = ~np.any(np.isclose(lane_xy, GT_LANE_PADDING_VALUE), axis=1)
+                lane_xy = lane_xy[valid_mask]
+                if lane_xy.shape[0] < 2:
+                    continue
+
+                finite_mask = np.all(np.isfinite(lane_xy), axis=1)
+                lane_xy = lane_xy[finite_mask]
+                if lane_xy.shape[0] < 2:
+                    continue
+
+                lane_points3d = np.column_stack([lane_xy, np.full((lane_xy.shape[0]), ground_z, dtype=lane_xy.dtype)])
+                projected_gt_lane = _project_polyline(lane_points3d, lidar2img)
+                if projected_gt_lane is None:
+                    continue
+
+                gt_palette_idx = int(gt_lane_labels_np[gt_idx]) % len(color_palette) if len(color_palette) > 0 else 0
+                gt_color_rgb = np.array(color_palette[gt_palette_idx], dtype=np.float32) / 255.0
+                gt_color = tuple(gt_color_rgb.tolist())
+
+                ax.plot(
+                    projected_gt_lane[:, 0],
+                    projected_gt_lane[:, 1],
+                    color=gt_color,
+                    linewidth=1.6,
+                    linestyle=":",
+                    alpha=0.9,
                 )
 
         if ego_traj_xy is not None and ego_traj_xy.shape[0] >= 2:
