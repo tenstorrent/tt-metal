@@ -19,12 +19,12 @@ union datatype {
 namespace ttnn::operations::full {
 FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    [[maybe_unused]] const tensor_args_t&,
     tensor_return_value_t& output) {
     auto dtype = operation_attributes.dtype;
     auto fill_value = operation_attributes.fill_value;
 
-    auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
+    auto grid = operation_attributes.mesh_device->compute_with_storage_grid_size();
     auto num_pages = (uint32_t)output.buffer()->num_pages();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_pages);
@@ -130,7 +130,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 void FullOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
+    [[maybe_unused]] const tensor_args_t&,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& writer_kernel_id = cached_program.shared_variables.writer_id;

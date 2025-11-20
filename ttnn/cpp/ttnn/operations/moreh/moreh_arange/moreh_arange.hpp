@@ -12,11 +12,11 @@ struct MorehArange {
         float start,
         float end,
         float step,
-        const Tensor& any,
+        ttnn::MeshDevice* mesh_device,
         const std::optional<Tensor>& output,
         bool untilize_out,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config);
+        const DataType& dtype,
+        const MemoryConfig& memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_arange
 
