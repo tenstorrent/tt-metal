@@ -91,13 +91,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     * - BFLOAT16, BFLOAT8_B
                       - TILE
 
-                .. list-table:: output_tensor
-                    :header-rows: 1
-
-                    * - dtype
-                      - layout
-                    * - BFLOAT16
-                      - TILE, ROW_MAJOR
+                The output will be BFLOAT16, and both the layout and the memory configuration will match the :attr:`input_tensor`.
 
             Memory Support:
               - Interleaved: DRAM and L1
