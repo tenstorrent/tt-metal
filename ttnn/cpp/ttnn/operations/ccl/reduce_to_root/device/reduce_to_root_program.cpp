@@ -19,16 +19,42 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const MeshCoordinate& device_coordinate,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor[0].device());
+    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
     const auto& topology = operation_attributes.topology;
-    const auto& input_tensor_l = tensor_args.input_tensor[0];
-    const auto& input_tensor_s = tensor_args.input_tensor[1];
-    const auto& input_tensor_m = tensor_args.input_tensor[2];
+    const auto& input_tensor_l = tensor_args.input_tensor_l;
+    const auto& input_tensor_s = tensor_args.input_tensor_s;
+    const auto& input_tensor_m = tensor_args.input_tensor_m;
     const auto& intermediate_tensor_l = output_tensors.at(1)[0];
     const auto& intermediate_tensor_sm = output_tensors.at(1)[1];
-    const auto& output_tensor_l = output_tensors.at(0)[0];
-    const auto& output_tensor_s = output_tensors.at(0)[1];
-    const auto& output_tensor_m = output_tensors.at(0)[2];
+    const auto& output_tensor_l = output_tensors.at(1)[0];
+    const auto& output_tensor_s = output_tensors.at(1)[1];
+    const auto& output_tensor_m = output_tensors.at(1)[2];
+
+    printf("output tensors len: %zu\n", output_tensors.size());
+    printf("len of output tensor [0]: %zu\n", output_tensors.at(0).size());
+    printf("len of output tensor [1]: %zu\n", output_tensors.at(1).size());
+    printf("print all shapes of output tensors:\n");
+    printf(
+        "intermediate tensor l shape: %u %u\n",
+        output_tensors.at(0)[0].logical_shape()[0],
+        output_tensors.at(0)[0].logical_shape()[1]);
+    printf(
+        "intermediate tensor sm shape: %u %u %u\n",
+        output_tensors.at(0)[1].logical_shape()[0],
+        output_tensors.at(0)[1].logical_shape()[1],
+        output_tensors.at(0)[1].logical_shape()[2]);
+    printf(
+        "output tensor l shape: %u %u\n",
+        output_tensors.at(1)[0].logical_shape()[0],
+        output_tensors.at(1)[0].logical_shape()[1]);
+    printf(
+        "output tensor s shape: %u %u\n",
+        output_tensors.at(1)[1].logical_shape()[0],
+        output_tensors.at(1)[1].logical_shape()[1]);
+    printf(
+        "output tensor m shape: %u %u\n",
+        output_tensors.at(1)[2].logical_shape()[0],
+        output_tensors.at(1)[2].logical_shape()[1]);
 
     // TODO: fix cb synchronization for receivers to get a whole chunk for tensor l
 
@@ -249,6 +275,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(cb_out_accumulate_im, aligned_input_page_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_out_accumulate_im_config);
 
+    printf("after creating circular buffers\n");
+
     auto data_core = CoreCoord(0, 0);  // depends where the data is located
     auto data_core_coord = device->worker_core_from_logical_core(data_core);
     auto core_noc_x = data_core_coord.x;
@@ -260,6 +288,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::vector<uint32_t> writer_ct_args;
     std::vector<uint32_t> compute_ct_args;
     if (is_sender_device) {
+        printf("is sender device satrt\n");
         reader_ct_args = {data_core_coord.x, data_core_coord.y};
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -286,9 +315,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/sender_writer_kernel.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        printf("is sender device end\n");
     }
 
     else if (is_root_device) {
+        printf("is root device satrt\n");
         reader_ct_args = {
             0,
             packet_header_cb_id,
@@ -324,7 +355,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root_receive_writer_kernel.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        printf("is root device end\n");
     } else if (is_root2_device) {
+        printf("is root2 device satrt\n");
         reader_ct_args = {
             0,
             packet_header_cb_id,
@@ -365,9 +398,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root2_writer_kernel.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+        printf("is root2 device end\n");
     }
 
     if (!is_sender_device) {
+        printf("compute kernel start\n");
         // scale = 1/sqrt(head_size)
         uint32_t head_size = 64;
         auto scale_fp32 = static_cast<uint32_t>(1.0f / sqrtf(static_cast<float>(head_size)));
@@ -399,8 +434,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::ComputeConfig{
                 .compile_args = compute_ct_args,
             });
+        printf("compute kernel end\n");
     }
 
+    printf("before setting runtime args\n");
     // set runtime args
     MeshCoordinate send_coord = {0, 0};
     MeshCoordinate receive_coord = {0, 0};
@@ -474,6 +511,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
 
         } else if (is_root_device) {
+            printf("is root device setting rt args\n");
             auto receive_coord = root_coord;
             auto sender_coord_1 = MeshCoordinate(root_coord.coords()[0] - 1, root_coord.coords()[1]);
             auto sender_coord_2 = MeshCoordinate(root_coord.coords()[0] + 1, root_coord.coords()[1]);
@@ -484,7 +522,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             const auto [num_hops_2, dst_is_forward_2, next_fabric_id_2] =
                 detail::fabric_routing(mesh_device, receive_coord, sender_coord_2, topology);
-
+            printf("before setting reader rt args\n");
             reader_runtime_args = {
                 0,  // fabric_2_idx,
                 input_tensor_l.buffer()->address(),
@@ -507,7 +545,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 1,  // num_hops,
                 dst_is_forward_1,
             };
-
+            printf("before adding fabric rt args\n");
             if (dst_is_forward_1) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
                     this_fabric_id, next_fabric_id_1, link_idx, program, c, reader_runtime_args);
@@ -518,6 +556,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     this_fabric_id, next_fabric_id_1, link_idx, program, c, reader_runtime_args);
             }
             reader_runtime_args[0] = reader_runtime_args.size();
+            printf("reader_rt_args size for fabric  2: %zu\n", reader_ct_args.size());
             reader_runtime_args.emplace_back(dst_is_forward_2);
             if (dst_is_forward_2) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
@@ -530,7 +569,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             }
 
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
-
+            printf("before setting writer rt args\n");
+            printf("intermediate_cb_l: %u\n", intermediate_cb_l);
+            printf("input_l_num_pages: %u\n", input_l_num_pages);
+            printf("intermediate_cb_s: %u\n", intermediate_cb_s);
+            printf("intermediate_cb_m: %u\n", intermediate_cb_m);
+            printf("output_tensor_l addr: %u\n", output_tensor_l.buffer()->address());
+            printf("output_tensor_s addr: %u\n", output_tensor_s.buffer()->address());
+            printf("output_tensor_m addr: %u\n", output_tensor_m.buffer()->address());
+            printf("input_page_size_bytes: %u\n", input_page_size_bytes);
             writer_runtime_args = {
                 intermediate_cb_l,
                 input_l_num_pages,
@@ -541,6 +588,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 output_tensor_m.buffer()->address(),
                 input_page_size_bytes,
             };
+            printf("is root device end of setting rt args\n");
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
         } else if (is_root2_device) {
             auto receive_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
             auto sender_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
@@ -607,6 +656,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         }
         // page_idx_start += increment;
         sender_cores.push_back(c);
+        printf("after setting runtime args for core (%zu, %zu)\n", c.x, c.y);
     }
 
     return {
