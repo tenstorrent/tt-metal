@@ -14,7 +14,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
-#include "ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.hpp"
+#include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

@@ -25,7 +25,9 @@ target_sources(
     PRIVATE
         padded_slice.cpp
         device/padded_slice_op.cpp
-        device/padded_slice_program_factory.cpp
+        device/padded_slice_utils.cpp
+        device/padded_slice_rm_program_factory.cpp
+        device/padded_slice_tile_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_padded_slice PRIVATE ${FixmeOpIncDirs})

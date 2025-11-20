@@ -5,7 +5,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
-#include "padded_slice_program_factory.hpp"
+#include "padded_slice_rm_program_factory.hpp"
+#include "padded_slice_tile_program_factory.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -91,8 +92,20 @@ operation::ProgramWithCallbacks PaddedSliceDeviceOperation::create_program(
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    return detail::padded_slice_multi_core(
-        input_tensor_a, output_tensor, this->padded_slice_start, this->padded_slice_end, this->step);
+    TT_FATAL(
+        output_tensor.is_sharded(),
+        "Output must be sharded for the padded_slice operation. Use slice for non-sharded outputs");
+    TT_FATAL(!input_tensor_a.is_sharded(), " Sharded input is not supported for padded_slice operation");
+
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return detail::padded_slice_rm_multi_core(
+            input_tensor_a, output_tensor, this->padded_slice_start, this->padded_slice_end);
+    } else if (input_tensor_a.layout() == Layout::TILE) {
+        return detail::padded_slice_tile_multi_core(
+            input_tensor_a, output_tensor, this->padded_slice_start, this->padded_slice_end);
+    } else {
+        TT_THROW("Unsupported layout for padded_slice operation: {}", input_tensor_a.layout());
+    }
 }
 
 }  // namespace ttnn::operations::experimental
