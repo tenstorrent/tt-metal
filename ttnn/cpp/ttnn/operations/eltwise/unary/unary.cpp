@@ -243,16 +243,6 @@ Tensor Sigmoid_accurate::invoke(
 }
 
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
-Tensor LogSigmoid::invoke(
-    const Tensor& input,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
-        memory_config,
-        optional_output_tensor);
-}
 
 Tensor Eqz::invoke(
     const Tensor& input_tensor,
@@ -343,6 +333,15 @@ Tensor Mish::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::MISH;
+
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor LogSigmoid::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::LOGSIGMOID;
 
     return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
