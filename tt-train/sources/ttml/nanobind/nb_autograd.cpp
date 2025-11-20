@@ -13,7 +13,6 @@
 #include <nanobind/stl/vector.h>
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"

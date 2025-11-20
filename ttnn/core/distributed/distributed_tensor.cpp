@@ -12,8 +12,7 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "tensor/host_buffer/functions.hpp"
-#include "tensor/storage.hpp"
-#include "tensor/tensor_impl.hpp"
+
 #include <algorithm>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -24,9 +23,10 @@
 #include <xtensor/core/xstrides.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
-#include "ttnn/tensor/xtensor/partition.hpp"
-#include "ttnn/distributed/tensor_topology.hpp"
+#include <tt-metalium/tensor/xtensor/conversion_utils.hpp>
+
+#include <tt-metalium/tensor/xtensor/partition.hpp>
+#include <tt-metalium/distributed/tensor_topology.hpp>
 #include "ttnn/distributed/host_ccl.hpp"
 #include "distribution_mode.hpp"
 

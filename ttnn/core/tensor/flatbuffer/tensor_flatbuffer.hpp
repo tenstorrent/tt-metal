@@ -9,8 +9,8 @@
 #include "tensor_generated.h"
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/tensor/tensor_spec.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 namespace ttnn {
 
@@ -18,7 +18,7 @@ namespace ttnn {
 // The data is provided in `tensor_data` and `memory_pin` to load the tensor data lazily.
 //
 // Only inline file storage (data stored in same file) is currently supported.
-Tensor from_flatbuffer(
+tt::tt_metal::Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin);
@@ -29,6 +29,8 @@ Tensor from_flatbuffer(
 //
 // Only inline file storage (data stored in the same file) is currently supported.
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers);
+    const tt::tt_metal::Tensor& tensor,
+    flatbuffers::FlatBufferBuilder& builder,
+    std::vector<tt::tt_metal::HostBuffer>& buffers);
 
 }  // namespace ttnn

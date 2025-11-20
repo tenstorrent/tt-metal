@@ -5,7 +5,7 @@
 #include "grid_sample_op.hpp"
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 

@@ -4,8 +4,8 @@
 
 #include "tensor_initializers.hpp"
 
+#include <tt-metalium/tensor/tensor_utils.hpp>
 #include <ttnn/operations/data_movement/copy/copy.hpp>
-#include <ttnn/tensor/tensor_utils.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"

@@ -4,7 +4,7 @@
 
 #include "tilize_with_val_padding_op.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 #include "tilize_with_val_padding_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

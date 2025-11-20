@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
+#include <tt-metalium/tensor/unit_mesh/unit_mesh_utils.hpp>
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"

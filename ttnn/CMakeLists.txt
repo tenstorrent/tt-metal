@@ -52,7 +52,7 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp api/ttnn/tensor/layout/layout.hpp
+        FILES cpp/ttnn/kernel/kernel_common_utils.hpp cpp/ttnn/kernel/kernel_utils.hpp
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -62,10 +62,8 @@ target_sources(
         core/device.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
-        core/distributed/distributed_configs.cpp
         core/distributed/distribution_mode.cpp
         core/distributed/host_ccl.cpp
-        core/distributed/tensor_topology.cpp
         core/distributed/bidirectional_fabric_socket.cpp
         core/distributed/create_socket.cpp
         core/distributed/fabric_socket.cpp
@@ -79,25 +77,9 @@ target_sources(
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
-        core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
-        core/tensor/host_buffer/functions.cpp
-        core/tensor/layout/alignment.cpp
-        core/tensor/layout/layout.cpp
-        core/tensor/layout/page_config.cpp
-        core/tensor/layout/tensor_layout.cpp
-        core/tensor/memory_config/memory_config.cpp
+        core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/serialization.cpp
-        core/tensor/storage.cpp
-        core/tensor/tensor.cpp
-        core/tensor/tensor_attributes.cpp
-        core/tensor/tensor_impl.cpp
-        core/tensor/tensor_ops.cpp
-        core/tensor/tensor_spec.cpp
-        core/tensor/tensor_utils.cpp
-        core/tensor/types.cpp
-        core/tensor/unit_mesh/unit_mesh_utils.cpp
-        core/tensor/xtensor/partition.cpp
         core/tensor/to_string.cpp
 )
 target_include_directories(
@@ -115,7 +97,6 @@ target_link_libraries(
     PUBLIC
         TT::Metalium
     PRIVATE
-        xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
 )
@@ -462,14 +443,12 @@ target_sources(
             api/ttnn/distributed/api.hpp
             api/ttnn/distributed/bidirectional_fabric_socket.hpp
             api/ttnn/distributed/create_socket.hpp
-            api/ttnn/distributed/distributed_configs.hpp
             api/ttnn/distributed/distributed_pybind.hpp
             api/ttnn/distributed/distributed_tensor.hpp
             api/ttnn/distributed/fabric_socket.hpp
             api/ttnn/distributed/host_ccl.hpp
             api/ttnn/distributed/isocket.hpp
             api/ttnn/distributed/mpi_socket.hpp
-            api/ttnn/distributed/tensor_topology.hpp
             api/ttnn/distributed/types.hpp
             api/ttnn/events.hpp
             api/ttnn/global_circular_buffer.hpp
@@ -489,26 +468,12 @@ target_sources(
             api/ttnn/operation_concepts.hpp
             api/ttnn/reports.hpp
             api/ttnn/run_operation.hpp
-            api/ttnn/tensor/host_buffer/functions.hpp
-            api/ttnn/tensor/layout/alignment.hpp
-            api/ttnn/tensor/layout/layout.hpp
-            api/ttnn/tensor/layout/page_config.hpp
-            api/ttnn/tensor/layout/tensor_layout.hpp
-            api/ttnn/tensor/memory_config/memory_config.hpp
-            api/ttnn/tensor/serialization.hpp
             api/ttnn/tensor/shape/shape.hpp
-            api/ttnn/tensor/storage.hpp
             api/ttnn/tensor/tensor.hpp
-            api/ttnn/tensor/tensor_attributes.hpp
-            api/ttnn/tensor/tensor_impl.hpp
-            api/ttnn/tensor/tensor_spec.hpp
-            api/ttnn/tensor/tensor_utils.hpp
-            api/ttnn/tensor/to_string.hpp
+            api/ttnn/tensor/serialization.hpp
+            api/ttnn/tensor/host_buffer/functions.hpp
             api/ttnn/tensor/types.hpp
-            api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
-            api/ttnn/tensor/xtensor/conversion_utils.hpp
-            api/ttnn/tensor/xtensor/partition.hpp
-            api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
+            api/ttnn/tensor/to_string.hpp
             api/ttnn/types.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp

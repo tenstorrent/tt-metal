@@ -12,7 +12,6 @@
 #include "ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "debug/dprint.h"
-#include "api/ttnn/tensor/layout/layout.hpp"
 #include <cstdint>
 
 using ttnn::ccl::coord_t;
@@ -23,7 +22,7 @@ using tt::tt_metal::TensorMemoryLayout;
 using ttnn::ccl::Shape4D;
 using shape_t = Shape4D<uint32_t>;
 
-void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+void dprint(const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
     DPRINT << "\ttensor_slice_shape.w: " << (uint32_t)command_tensor.tensor_slice_shape.w << "\n";
     DPRINT << "\ttensor_slice_shape.z: " << (uint32_t)command_tensor.tensor_slice_shape.z << "\n";
     DPRINT << "\ttensor_slice_shape.y: " << (uint32_t)command_tensor.tensor_slice_shape.y << "\n";
@@ -39,7 +38,7 @@ void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
     DPRINT << "\tworker_pages_per_slice: " << (uint32_t)command_tensor.worker_pages_per_slice << "\n";
 }
 
-void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+void print_tensor_command(uint32_t command_index, const ttnn::ccl::cmd::CclCommandTensor& command_tensor) {
 #ifdef DEBUG_PRINT_ENABLED
     DPRINT << "cmd[" << (uint32_t)command_index << "]:\n";
     dprint(command_tensor);
@@ -50,10 +49,10 @@ void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTens
  * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
  * into a 4D coordinate value
  */
-inline shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+inline shape_t worker_wrapped_offset_to_coord(const shape_t& slice_shape, const shape_t& worker_slice_offset) {
     static_assert(
         sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
-    auto const y = worker_slice_offset.x / slice_shape.x;
+    const auto y = worker_slice_offset.x / slice_shape.x;
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
@@ -148,7 +147,7 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor_to_address(
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
         // common with `write_chunk_v2`
 #elif defined SHARDED_MEM_LAYOUT
-        auto const& [noc_yx, page_offset, contig_pages_] =
+        const auto& [noc_yx, page_offset, contig_pages_] =
             s.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
         /*
          * num_pages - i: check if we are outside the number of pages remaining
@@ -337,9 +336,9 @@ void kernel_main() {
             shape_t valid_worker_slice_shape =
                 build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice);  // Parametrizable by ct arg
 
-            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(
+            const shape_t& worker_start_offset_global = worker_wrapped_offset_to_coord(
                 command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+            const shape_t& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
 
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 

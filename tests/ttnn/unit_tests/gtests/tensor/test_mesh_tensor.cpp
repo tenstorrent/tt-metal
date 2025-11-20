@@ -5,12 +5,12 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt_metal/tt_metal/common/multi_device_fixture.hpp>
 
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/storage.hpp"
+
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/tensor/tensor_impl.hpp>
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>

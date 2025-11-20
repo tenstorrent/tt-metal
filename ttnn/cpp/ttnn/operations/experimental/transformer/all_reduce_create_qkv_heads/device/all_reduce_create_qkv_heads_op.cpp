@@ -9,7 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "tt-metalium/tensor/tensor_utils.hpp"
 
 namespace ttnn {
 

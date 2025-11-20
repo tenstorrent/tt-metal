@@ -167,7 +167,7 @@ flatbuffers::Offset<flatbuffer::NdShardSpec> to_flatbuffer(
 
 tt::tt_metal::NdShardSpec from_flatbuffer(const flatbuffer::NdShardSpec* spec) {
     return tt::tt_metal::NdShardSpec(
-        Shape(SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
+        tt::tt_metal::Shape(SmallVector<uint32_t>(spec->shard_shape()->cbegin(), spec->shard_shape()->cend())),
         from_flatbuffer(spec->grid()),
         from_flatbuffer(spec->orientation()),
         from_flatbuffer(spec->shard_distribution_strategy()));
@@ -270,7 +270,7 @@ flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
 
 tt::tt_metal::TensorSpec from_flatbuffer(const flatbuffer::TensorSpec* spec) {
     return tt::tt_metal::TensorSpec(
-        Shape(SmallVector<uint32_t>(spec->shape()->cbegin(), spec->shape()->cend())),
+        tt::tt_metal::Shape(SmallVector<uint32_t>(spec->shape()->cbegin(), spec->shape()->cend())),
         from_flatbuffer(spec->tensor_layout()));
 }
 

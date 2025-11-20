@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include <ttnn/tensor/tensor.hpp>
+#include <tt-metalium/tensor/tensor.hpp>
 
 namespace ttnn {
 

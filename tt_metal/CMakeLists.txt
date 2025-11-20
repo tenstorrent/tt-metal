@@ -109,7 +109,28 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
+    api/tt-metalium/tensor/tensor_utils.hpp
+    api/tt-metalium/tensor/memory_config
+    api/tt-metalium/tensor/memory_config/memory_config.hpp
+    api/tt-metalium/tensor/layout/layout.hpp
+    api/tt-metalium/tensor/layout/alignment.hpp
+    api/tt-metalium/tensor/layout/page_config.hpp
+    api/tt-metalium/tensor/layout/tensor_layout.hpp
+    api/tt-metalium/tensor/tensor.hpp
+    api/tt-metalium/tensor/storage.hpp
+    api/tt-metalium/tensor/host_buffer/functions.hpp
+    api/tt-metalium/tensor/tensor_impl.hpp
+    api/tt-metalium/tensor/unit_mesh/unit_mesh_utils.hpp
+    api/tt-metalium/tensor/xtensor/xtensor_all_includes.hpp
+    api/tt-metalium/tensor/xtensor/partition.hpp
+    api/tt-metalium/tensor/xtensor/conversion_utils.hpp
+    api/tt-metalium/tensor/types.hpp
+    api/tt-metalium/tensor/tensor_spec.hpp
+    api/tt-metalium/tensor/tensor_attributes.hpp
+    api/tt-metalium/distributed/tensor_topology.hpp
+    api/tt-metalium/distributed/distributed_configs.hpp
 )
+
 target_sources(
     tt_metal
     PUBLIC
@@ -244,6 +265,7 @@ target_link_libraries(
         TT::STL
         tt-logger::tt-logger
         ${EXECINFO_LIB}
+        xtensor
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

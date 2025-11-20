@@ -10,10 +10,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <ttnn/tensor/storage.hpp>
+
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/tensor/host_buffer/functions.hpp>
-#include <ttnn/tensor/tensor_utils.hpp>
+#include <tt-metalium/tensor/host_buffer/functions.hpp>
+#include <tt-metalium/tensor/tensor_utils.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>

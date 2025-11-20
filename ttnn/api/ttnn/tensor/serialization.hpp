@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/tensor/tensor.hpp>
 
 #include <string>
 #include <unordered_map>

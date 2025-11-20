@@ -21,7 +21,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/cleanup.hpp>
 
-#include "tensor/tensor_spec.hpp"
+#include <tt-metalium/tensor/tensor_spec.hpp>
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
