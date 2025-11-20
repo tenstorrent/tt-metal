@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+include "tensor.fbs";
+
+namespace ttml.flatbuffer;
+
+// Primitive value types
+table BoolValue {
+    value: bool;
+}
+
+table CharValue {
+    value: int8;
+}
+
+table IntValue {
+    value: int32;
+}
+
+table FloatValue {
+    value: float32;
+}
+
+table DoubleValue {
+    value: float64;
+}
+
+table UInt32Value {
+    value: uint32;
+}
+
+table SizeTValue {
+    value: uint64;
+}
+
+table StringValue {
+    value: string;
+}
+
+// Vector types
+table VectorChar {
+    values: [int8];
+}
+
+table VectorInt {
+    values: [int32];
+}
+
+table VectorFloat {
+    values: [float32];
+}
+
+table VectorDouble {
+    values: [float64];
+}
+
+table VectorUInt8 {
+    values: [uint8];
+}
+
+table VectorUInt32 {
+    values: [uint32];
+}
+
+table VectorString {
+    values: [string];
+}
+
+// Union type for all serializable values
+union SerializableType {
+    BoolValue,
+    CharValue,
+    IntValue,
+    FloatValue,
+    DoubleValue,
+    UInt32Value,
+    SizeTValue,
+    StringValue,
+    VectorChar,
+    VectorInt,
+    VectorFloat,
+    VectorDouble,
+    VectorUInt8,
+    VectorUInt32,
+    VectorString,
+}
+
+// Key-value pair
+table KeyValuePair {
+    key: string;
+    value: SerializableType;
+}
+
+// Root table containing all key-value pairs
+table TTMLData {
+    pairs: [KeyValuePair];
+}
+
+root_type TTMLData;

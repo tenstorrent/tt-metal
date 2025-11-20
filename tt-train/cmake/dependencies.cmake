@@ -172,3 +172,78 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+############################################################################################################################
+# flatbuffers : https://github.com/google/flatbuffers
+############################################################################################################################
+
+CPMAddPackage(
+    NAME flatbuffers
+    GITHUB_REPOSITORY google/flatbuffers
+    GIT_TAG v24.3.25
+    OPTIONS
+        "FLATBUFFERS_BUILD_FLATC ON"
+        "FLATBUFFERS_BUILD_TESTS OFF"
+        "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+        "FLATBUFFERS_STRICT_MODE ON"
+)
+
+# Add FLATBUFFERS_LARGE_SIZE compile definition to flatbuffers targets
+if(flatbuffers_ADDED)
+    # Add compile definition to flatbuffers library target
+    if(TARGET flatbuffers)
+        target_compile_definitions(flatbuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
+    endif()
+    if(TARGET flatbuffers::flatbuffers)
+        target_compile_definitions(flatbuffers::flatbuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
+    endif()
+    if(TARGET FlatBuffers::FlatBuffers)
+        target_compile_definitions(FlatBuffers::FlatBuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
+    endif()
+    if(TARGET flatc)
+        target_compile_definitions(flatc PRIVATE FLATBUFFERS_LARGE_SIZE)
+    endif()
+endif()
+
+if(flatbuffers_ADDED)
+    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    target_compile_options(flatc PRIVATE -Wno-restrict)
+    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+endif()
+
+############################################################################################################################
+# zstd : https://github.com/facebook/zstd
+############################################################################################################################
+
+CPMAddPackage(
+    NAME zstd
+    GITHUB_REPOSITORY facebook/zstd
+    VERSION 1.5.5
+    OPTIONS
+        "ZSTD_BUILD_PROGRAMS OFF"
+        "ZSTD_BUILD_SHARED OFF"
+        "ZSTD_BUILD_STATIC ON"
+        "ZSTD_BUILD_TESTS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+# Ensure zstd static library is built with PIC for linking into shared libraries
+if(zstd_ADDED)
+    if(TARGET libzstd_static)
+        set_target_properties(
+            libzstd_static
+            PROPERTIES
+                POSITION_INDEPENDENT_CODE
+                    ON
+        )
+    endif()
+    if(TARGET zstd::libzstd_static)
+        set_target_properties(
+            zstd::libzstd_static
+            PROPERTIES
+                POSITION_INDEPENDENT_CODE
+                    ON
+        )
+    endif()
+endif()
