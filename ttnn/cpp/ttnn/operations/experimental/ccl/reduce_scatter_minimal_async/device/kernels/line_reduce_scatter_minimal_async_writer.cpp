@@ -219,9 +219,9 @@ void kernel_main() {
         }
         DPRINT << "Waiting on the barrier Semaphore \n" uint32_t* barrier_sem_ptr = (uint32_t*)barrier_sem;
         uint32_t barrier_sem_val = *barrier_semptr;
-        DPRINT << "INIT SEMAPHORE ADDRESS IS: " << barrier_sem << "\n";
-        DPRINT << "INIT SEMAPHORE VALUE IS: " << barrier_sem_val << "\n";
-        DPRINT << "Waiting for  " << dispatch_devices - 1 << " devices from index " << dispatch_index << "\n";
+        DPRINT << "BAR SEMAPHORE ADDRESS IS: " << barrier_sem << "\n";
+        DPRINT << "BAR SEMAPHORE VALUE IS: " << barrier_sem_val << "\n";
+        DPRINT << "Waiting for  " << ring_size - 1 << " devices\n";
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         DPRINT << "Got the barrier Semaphore \n" noc_semaphore_set(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
