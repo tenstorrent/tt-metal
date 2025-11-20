@@ -23,6 +23,8 @@ ttnn::Tensor FastReduceNCOperation::invoke(
         "Input tensor storage type must be DEVICE but got {}",
         input.storage_type());
 
+    TT_FATAL(!dims.empty(), "fast_reduce_nc dims should not be empty");
+
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
