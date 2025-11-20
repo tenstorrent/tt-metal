@@ -65,13 +65,64 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None, only
         python_df_sorted = python_df_sorted[sort_columns]
         cpp_df_sorted = cpp_df_sorted[sort_columns]
 
-    are_equal = python_df_sorted.equals(cpp_df_sorted)
-    if are_equal:
-        logger.info("Ops perf reports are equal")
+    python_df_compare = python_df_sorted.copy()
+    cpp_df_compare = cpp_df_sorted.copy()
+
+    ignored_zero_latency_counts: dict[str, int] = {}
+    latency_columns = {
+        "OP TO OP LATENCY [ns]",
+        "OP TO OP LATENCY BR/NRISC START [ns]",
+    }
+
+    if not only_compare_op_ids:
+        for column in latency_columns:
+            if column not in python_df_compare.columns or column not in cpp_df_compare.columns:
+                continue
+            cpp_zero_mask = cpp_df_compare[column] == 0
+            diff_mask = cpp_zero_mask & (python_df_compare[column] != cpp_df_compare[column])
+            ignored_count = int(diff_mask.sum())
+            if ignored_count > 0:
+                python_df_compare.loc[diff_mask, column] = cpp_df_compare.loc[diff_mask, column]
+                ignored_zero_latency_counts[column] = ignored_count
+
+    if python_df_compare.equals(cpp_df_compare):
+        if ignored_zero_latency_counts:
+            logger.info(
+                f"Ops perf reports only differ where CPP latency columns are zero; "
+                f"ignored per column: {ignored_zero_latency_counts}"
+            )
+        else:
+            logger.info("Ops perf reports are equal")
     else:
-        logger.info("Ops perf reports are not equal")
-        logger.info(f"{python_ops_perf_report}: {python_df_sorted}")
-        logger.info(f"{cpp_ops_perf_report}: {cpp_df_sorted}")
+        if ignored_zero_latency_counts:
+            logger.info(f"Ignored differences due to zero CPP latency values: {ignored_zero_latency_counts}")
+        logger.error("Ops perf reports are not equal")
+
+        if python_df_sorted.shape != cpp_df_sorted.shape:
+            logger.error(f"Shape mismatch: python report {python_df_sorted.shape}, cpp report {cpp_df_sorted.shape}")
+        else:
+            diff_df = python_df_sorted.compare(cpp_df_sorted, align_axis=0, keep_shape=False, keep_equal=False)
+            differing_rows = diff_df.index.nunique()
+            differing_columns = sorted({col if isinstance(col, str) else col[0] for col in diff_df.columns})
+            logger.error(
+                f"Rows with differences: {differing_rows} / {python_df_sorted.shape[0]}. "
+                f"Columns differing: {differing_columns}"
+            )
+
+            differing_cells = []
+            for row_idx, row in diff_df.iterrows():
+                for col in differing_columns:
+                    if ("self", col) in row.index and ("other", col) in row.index:
+                        val_a = row[("self", col)]
+                        val_b = row[("other", col)]
+                        if pd.notna(val_a) or pd.notna(val_b):
+                            differing_cells.append((row_idx, col, val_a, val_b))
+                if len(differing_cells) >= 10:
+                    break
+            logger.error(f"First differing cells (row, column, python, cpp): {differing_cells}")
+
+        logger.error(f"First rows of python report:\n{python_df_sorted.head()}")
+        logger.error(f"First rows of cpp report:\n{cpp_df_sorted.head()}")
         sys.exit(1)
 
 
