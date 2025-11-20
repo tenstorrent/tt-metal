@@ -55,7 +55,7 @@ void create_cluster_config(
 template <typename ProtoType>
 std::string serialize_proto_to_temp_file(const ProtoType& proto, const std::string& filename) {
     std::string temp_path = root_output_dir + filename;
-
+    std::filesystem::create_directories(std::filesystem::path(temp_path).parent_path());
     std::ofstream output_file(temp_path);
     if (!output_file.is_open()) {
         throw std::runtime_error("Failed to open output file: " + temp_path);
@@ -189,10 +189,18 @@ TEST(Cluster, TestGenerateClusterDescriptorFromFSD) {
 }
 
 TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
-    const std::string fsd_file = "tools/tests/scaleout/factory_system_descriptors/wh_galaxy_8x16_superpod.textproto";
+    const std::string cluster_file =
+        "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
+    const std::string deployment_file =
+        "tools/tests/scaleout/deployment_descriptors/8x16_wh_galaxy_xy_torus_deployment.textproto";
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_8x16_wh_galaxy_xy_torus.textproto";
+
+    CablingGenerator cabling_generator(cluster_file, deployment_file);
+
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
 
     std::string output_dir = root_output_dir + "cluster_descs/";
-    std::string base_filename = "cluster_descriptor_" + std::string(std::filesystem::path(fsd_file).stem());
+    std::string base_filename = "cluster_descriptor_8x16_wh_galaxy_xy_torus";
     std::string result_file = generate_cluster_descriptor_from_fsd(fsd_file, output_dir, base_filename);
 
     EXPECT_TRUE(std::filesystem::exists(result_file));

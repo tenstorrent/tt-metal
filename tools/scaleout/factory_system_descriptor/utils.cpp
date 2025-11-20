@@ -761,7 +761,7 @@ std::string generate_cluster_descriptor_from_fsd(
 
             uint32_t harvest_mask = tensix_harvested_units > 0 ? (1u << tensix_harvested_units) - 1 : 0;
             uint32_t dram_harvesting_mask = 0;
-            if (board_type == BoardType::P100) {
+            if (board_type_enum == BoardType::P100) {
                 dram_harvesting_mask = 8;
             } else {
                 dram_harvesting_mask = dram_harvested_units > 0 ? (1u << dram_harvested_units) - 1 : 0;
