@@ -31,6 +31,7 @@ inline Tensor unary_impl(
     bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
+                            output_dtype == DataType::UINT8 or input_dtype == DataType::UINT8 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].type() == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
@@ -242,16 +243,6 @@ Tensor Sigmoid_accurate::invoke(
 }
 
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
-Tensor LogSigmoid::invoke(
-    const Tensor& input,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
-        memory_config,
-        optional_output_tensor);
-}
 
 Tensor Eqz::invoke(
     const Tensor& input_tensor,
@@ -300,12 +291,8 @@ Tensor Tanh::invoke(
     bool approx) {
     UnaryOpType op_type = UnaryOpType::TANH;
 
-    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-
-    } else {
-        return ttnn::tanh_accurate(input_tensor, memory_config, optional_output_tensor);
-    }
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, static_cast<float>(approx)}}, memory_config, optional_output_tensor);
 }
 
 Tensor Prelu::invoke(
@@ -322,13 +309,8 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    DataType input_dtype = input_tensor.dtype();
 
-    if (input_dtype != DataType::UINT8) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    } else {
-        TT_THROW("ttnn.identity doesn't support uint8 datatype");
-    }
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Abs::invoke(
@@ -351,6 +333,15 @@ Tensor Mish::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::MISH;
+
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor LogSigmoid::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::LOGSIGMOID;
 
     return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }

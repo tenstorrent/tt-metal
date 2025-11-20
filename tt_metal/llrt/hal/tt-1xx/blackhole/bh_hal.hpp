@@ -19,9 +19,7 @@ struct AllEthMailbox {
 };
 
 HalCoreInfoType create_tensix_mem_map();
-HalCoreInfoType create_active_eth_mem_map();
+HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode);
 HalCoreInfoType create_idle_eth_mem_map();
-
-bool is_2_erisc_mode();
 
 }  // namespace tt::tt_metal::blackhole
