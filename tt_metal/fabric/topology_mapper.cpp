@@ -730,6 +730,31 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             size_t li = log_to_idx.at(fabric_node);
             restricted_phys_indices_for_logical[li] = std::move(matches);
         }
+
+        // Print info about pinnings used for this mesh
+        if (!first_pinnings.empty()) {
+            std::string pinnings_str;
+            bool first = true;
+            for (const auto& [fabric_node, pos] : first_pinnings) {
+                if (!first) {
+                    pinnings_str += ", ";
+                }
+                first = false;
+                pinnings_str += fmt::format(
+                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id,
+                    *pos.first,
+                    *pos.second);
+            }
+            log_info(
+                tt::LogFabric,
+                "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
+                first_pinnings.size(),
+                mesh_id.get(),
+                pinnings_str);
+        }
     }
 
     // Fast path: if logical graph is a single path (two endpoints with degree 1; all others degree <=2),
