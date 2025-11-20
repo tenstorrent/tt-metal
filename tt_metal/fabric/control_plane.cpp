@@ -468,34 +468,8 @@ void ControlPlane::init_control_plane(
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
-
-        // Pin start or mesh to match the Galaxy Topology so that external QSFP links align with corner of fabric mesh
-        // node ids This is for performance optimizations to make sure that MGD mapping does not bisect a device
-
-        // * * o o < Pinned corners marked with *
-        // * o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        // o o o o
-        const bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
-                           this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
-        const size_t board_size = cluster.get_unique_chip_ids().size();
-        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32) {  // Using full board size for UBB Galaxy
-            int y_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1];
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
-        }
-
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph,
-            *this->physical_system_descriptor_,
-            this->local_mesh_binding_,
-            fixed_asic_position_pinnings);
+            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
