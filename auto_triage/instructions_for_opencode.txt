@@ -13,6 +13,14 @@ Lets say the job was run 5 times, with runs A, B, C, D, and E (in chronological 
 
 As you can see, the problematic commit would be somewhere between runs A and D, since B and C wouldn't be valid runs to use. Basically, to be certain that a run was the first instance of the job breaking, you need the next run to fail with the exact same error (so run D was only known to be the first instance of the job deterministically breaking because run E also failed with the same error). The only exception is for the most recent failing job run. In that case, you can assume the failure is deterministic because we wouldn’t ask you to triage unless the job is currently broken on `main`.
 
+However, there is a caveat. Just because an error appears more than 2 times in a row doesn't necessarily mean the error is deterministic. lets say that github was experiencing issues one day, and so 10 runs all ran and all experienced server issues. All these runs might have the same error, but none are deterministic because it's not a test failure, but a github failure. You should consider a job to be the first instance of a deterministic error only if the error in the logs are from the ACTUAL TEST ITSELF, not a failure in setup steps or other steps in the job. This is in addition to the requirement that the error repeat in two successive job runs.
+
+If you determine that a job failed due to a non-deterministic failure, you are not allowed to use that job in the analysis. You must act as thought that job didn't exist. In the context of our previous example, you would have to base your reasoning on the assumption that runs B and C didn't occur and you're only working with data from run A, D, E, and any later runs. Using non-deterministic failures to justify choosing a commit is illegal.
+
+You also are not allowed to analyze any commits between jobs until you have determined that the job failure is deterministic. Your explanation must explain why a job failure is deterministic
+
+Also don't run find_boundaries.sh. That command was already run before you were given this task. Running it wastes compute time.
+
 ### Tools Available
 
 1. **Download logs (full run + job-specific subset)**
