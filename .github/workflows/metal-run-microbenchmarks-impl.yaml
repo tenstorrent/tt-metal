@@ -123,9 +123,9 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled()}}
+        # if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -133,3 +133,4 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
