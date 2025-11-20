@@ -20,6 +20,15 @@ def set_seed(seed: int = 42):
     ttml.autograd.AutoContext.get_instance().set_seed(seed)
 
 
+def get_tt_metal_home() -> str:
+    """Get the TT-Metal home directory.
+
+    Returns:
+        Path to TT-Metal home directory
+    """
+    tt_metal_home = os.environ['TT_METAL_HOME'] if 'TT_METAL_HOME' in os.environ else os.path.expanduser('~/.tt-metal')
+    return tt_metal_home
+
 def round_up_to_tile(value: int, tile: int = 32) -> int:
     """Round up value to nearest multiple of tile size.
 

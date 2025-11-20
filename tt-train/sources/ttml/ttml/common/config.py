@@ -6,7 +6,7 @@
 import os
 import yaml
 from typing import Union
-
+from ttml.common.utils import get_tt_metal_home
 
 class DeviceConfig:
     """Configuration for device mesh and distributed training."""
@@ -157,7 +157,8 @@ class MultiHostConfig:
         )
 
 
-def load_config(path: str):
+def load_config(path: str,
+    configs_root: str = None) -> dict:
     """Load configuration from YAML file.
 
     Args:
@@ -166,24 +167,27 @@ def load_config(path: str):
     Returns:
         Dictionary containing configuration
     """
+
+    if configs_root is None:
+        configs_root = f"{get_tt_metal_home()}/tt-train/configs/"
+
+    # if the path is relative, make it absolute
+    if not(os.path.isabs(path)):    
+        path = os.path.join(configs_root, path)
+        
     with open(path, "r") as f:
+
         config = yaml.safe_load(f)
     return config
 
 
 def get_training_config(
     training_config_src: str,
-    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/training_configs",
 ) -> TrainingConfig:
     """Load training configuration given its filename."""
 
-    if os.path.isabs(training_config_src):
-        training_config = load_config(training_config_src)
-    else:
-        training_config = load_config(
-            os.path.join(configs_root, "training_configs", training_config_src)
-        )
-
+    training_config = load_config(training_config_src, configs_root)
     training_config = TrainingConfig(training_config)
 
     return training_config
@@ -191,17 +195,11 @@ def get_training_config(
 
 def get_device_config(
     device_config_src: str,
-    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/training_configs/",
 ) -> DeviceConfig:
     """Load device configuration given its filename."""
 
-    if os.path.isabs(device_config_src):
-        device_config = load_config(device_config_src)
-    else:
-        device_config = load_config(
-            os.path.join(configs_root, "device_configs", device_config_src)
-        )
-
+    device_config = load_config(device_config_src, configs_root)
     device_config = DeviceConfig(device_config)
 
     return device_config
@@ -209,10 +207,11 @@ def get_device_config(
 
 def get_model_config(
     model_config_src: str,
+    configs_root: str = f"{get_tt_metal_home()}/tt-train/",
 ) -> TransformerConfig:
     """Load model configuration given its filename."""
 
-    model_config = load_config(model_config_src)
+    model_config = load_config(model_config_src, configs_root)
     model_config = TransformerConfig(model_config)
 
     return model_config
@@ -220,17 +219,11 @@ def get_model_config(
 
 def get_multihost_config(
     multihost_config_src: str,
-    configs_root: str = f"{os.environ['TT_METAL_HOME']}/tt-train/configs/",
+    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/multihost_configs/",
 ) -> MultiHostConfig:
     """Load multihost configuration given its filename."""
 
-    if os.path.isabs(multihost_config_src):
-        multihost_config = load_config(multihost_config_src)
-    else:
-        multihost_config = load_config(
-            os.path.join(configs_root, "multihost_configs", multihost_config_src)
-        )
-
+    multihost_config = load_config(multihost_config_src, configs_root)
     multihost_config = MultiHostConfig(multihost_config)
 
     return multihost_config
