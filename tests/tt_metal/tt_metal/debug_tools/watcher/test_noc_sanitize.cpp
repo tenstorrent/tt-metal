@@ -592,3 +592,11 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1Overflow) {
         },
         this->devices_[0]);
 }
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
