@@ -1240,14 +1240,25 @@ void TestDevice::create_latency_sender_kernel(
     NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
-    // Compute num hops to responder using routing calculation
-    // For simple 1D case, compute hop distance
-    uint32_t num_hops = 1;  // Default to 1 hop, will be computed by routing
+    // Get topology information
+    const bool is_2d_fabric = device_info_provider_->is_2D_routing_enabled();
 
-    // Compile-time args
+    // Compute routing information
+    uint32_t num_hops = 0;
+    if (!is_2d_fabric) {
+        // For 1D topology, compute hop distance
+        auto hops_map = route_manager_->get_hops_to_chip(fabric_node_id_, dest_node);
+        // For 1D (linear/ring), sum all hops (there should only be one non-zero direction)
+        for (const auto& [dir, hop_count] : hops_map) {
+            num_hops += hop_count;
+        }
+    }
+
+    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
-    std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
+    std::vector<uint32_t> ct_args = {
+        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
 
     // Runtime args
     // Calculate scratch buffer address after timestamp storage (256 samples * 16 bytes = 4KB)
@@ -1266,16 +1277,26 @@ void TestDevice::create_latency_sender_kernel(
     uint32_t responder_scratch_buffer_address =
         sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
 
+    // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
         semaphore_addr,                                   // semaphore for ack
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        num_hops,                                         // hops to responder
         scratch_buffer_address,                           // sender's scratch buffer for receiving echo
         responder_scratch_buffer_address                  // responder's scratch buffer for sending payload TO
     };
+
+    // Add topology-specific routing information
+    if (!is_2d_fabric) {
+        // 1D: add hop count
+        rt_args.push_back(num_hops);
+    } else {
+        // 2D: add device and mesh IDs (for Hybrid Mesh routing)
+        rt_args.push_back(dest_node.chip_id);
+        rt_args.push_back(dest_node.mesh_id.get());
+    }
 
     // Add fabric connection args
     uint32_t link_idx = 0;  // Default to link 0
@@ -1308,13 +1329,29 @@ void TestDevice::create_latency_responder_kernel(
     NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
-    // Compute num hops back to sender
-    uint32_t num_hops_back = 1;  // Default to 1 hop, will be computed by routing
+    // Get topology information
+    const bool is_2d_fabric = device_info_provider_->is_2D_routing_enabled();
+    const bool use_dynamic_routing = device_info_provider_->is_dynamic_routing_enabled();
 
-    // Compile-time args
+    // Compute routing information
+    uint32_t num_hops_back = 0;
+    if (!is_2d_fabric) {
+        // For 1D topology, compute hop distance back to sender
+        auto hops_map = route_manager_->get_hops_to_chip(fabric_node_id_, sender_node);
+        // For 1D (linear/ring), sum all hops (there should only be one non-zero direction)
+        for (const auto& [dir, hop_count] : hops_map) {
+            num_hops_back += hop_count;
+        }
+    }
+
+    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, use_dynamic_routing
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
-    std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
+    std::vector<uint32_t> ct_args = {
+        enable_fused_payload_with_sync ? 1u : 0u,
+        sem_inc_only ? 1u : 0u,
+        is_2d_fabric ? 1u : 0u,
+        use_dynamic_routing ? 1u : 0u};
 
     // Runtime args
     // Calculate sender's scratch buffer address (where responder writes echo back to)
@@ -1333,16 +1370,26 @@ void TestDevice::create_latency_responder_kernel(
     uint32_t responder_scratch_buffer_address =
         sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
 
+    // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
         semaphore_addr,                                   // semaphore for incoming packets
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        num_hops_back,                                    // hops back to sender
         sender_scratch_buffer_address,                    // sender's scratch buffer (for echo back)
         responder_scratch_buffer_address                  // responder's scratch buffer (for receiving payload)
     };
+
+    // Add topology-specific routing information (for sending back to sender)
+    if (!is_2d_fabric) {
+        // 1D: add hop count back to sender
+        rt_args.push_back(num_hops_back);
+    } else {
+        // 2D: add device and mesh IDs for sender (for Hybrid Mesh routing)
+        rt_args.push_back(sender_node.chip_id);
+        rt_args.push_back(sender_node.mesh_id.get());
+    }
 
     // Add fabric connection args (back to sender)
     uint32_t link_idx = 0;  // Default to link 0
