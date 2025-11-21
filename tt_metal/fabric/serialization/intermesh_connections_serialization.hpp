@@ -8,7 +8,7 @@
 #include <tuple>
 #include <string>
 #include <utility>
-#include "tt_metal/api/tt-metalium/experimental/mesh_graph.hpp"
+#include <tt-metalium/experimental/mesh_graph.hpp>
 
 namespace tt::tt_fabric {
 
