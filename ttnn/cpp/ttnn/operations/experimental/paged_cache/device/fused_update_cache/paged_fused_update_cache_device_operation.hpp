@@ -22,8 +22,8 @@ struct PagedFusedUpdateCacheDeviceOperation {
     using spec_return_value_t = fused_update_cache::spec_return_value_t;
     using tensor_return_value_t = fused_update_cache::tensor_return_value_t;
     using program_factory_t = std::variant<
-        program::PagedTiledFusedUpdateCacheProgramFactory,
-        program::PagedRowMajorFusedUpdateCacheProgramFactory>;
+        program::tiled::PagedTiledFusedUpdateCacheProgramFactory,
+        program::rm::PagedRowMajorFusedUpdateCacheProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

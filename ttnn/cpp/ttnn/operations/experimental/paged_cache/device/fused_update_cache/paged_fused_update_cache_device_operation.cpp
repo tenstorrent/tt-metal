@@ -16,9 +16,9 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
     const auto& input_tensor2 = tensor_args.input_tensor2;
 
     if (input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE) {
-        return program::PagedTiledFusedUpdateCacheProgramFactory{};
+        return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
     } else if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
-        return program::PagedRowMajorFusedUpdateCacheProgramFactory{};
+        return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
     } else {
         TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
     }

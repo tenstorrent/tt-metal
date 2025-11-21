@@ -12,7 +12,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::program {
+namespace ttnn::operations::experimental::paged_cache::program::tiled {
 
 using namespace tt::constants;
 using namespace tt;
@@ -521,4 +521,4 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::program
+}  // namespace ttnn::operations::experimental::paged_cache::program::tiled

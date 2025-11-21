@@ -12,7 +12,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::program {
+namespace ttnn::operations::experimental::paged_cache::program::rm {
 
 using namespace tt::constants;
 using namespace tt;
@@ -528,4 +528,4 @@ void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::program
+}  // namespace ttnn::operations::experimental::paged_cache::program::rm

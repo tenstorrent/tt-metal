@@ -9,7 +9,7 @@
 #include <vector>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::paged_cache::program {
+namespace ttnn::operations::experimental::paged_cache::program::tiled {
 
 struct PagedTiledFusedUpdateCacheSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -43,4 +43,4 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
         fused_update_cache::tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::program
+}  // namespace ttnn::operations::experimental::paged_cache::program::tiled
