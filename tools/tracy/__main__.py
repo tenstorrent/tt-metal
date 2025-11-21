@@ -7,12 +7,6 @@ from pathlib import Path
 from tracy import *
 
 
-# add cli option for program support count
-# use cpp post proc
-# run test_multi_op - run x number of ops and make sure the op count is correct (10, 100, 1000, 10000, 100000)
-# use resnet model (t3k) - resnet test asks for dram for its traces and other things, find high enough dram env var value that causes resnet to not be able to run because there's not enough dram, allocator should fatal
-# do all of this in t3k profiler
-# do one fast test in apc
 def main():
     from optparse import OptionParser
 
