@@ -41,7 +41,17 @@ if ! command -v opencode >/dev/null 2>&1; then
     exit 1
 fi
 
-PROMPT="complete the instructions defined in auto_triage/instructions_for_opencode.txt for workflow '${WORKFLOW}' and job '${SUBJOB}'. do not wait for approval as this is a test run for a CI environment where you will not have access to a user"
+INSTRUCTIONS_FILE="${ROOT}/auto_triage/instructions_for_opencode.txt"
+if [ ! -f "$INSTRUCTIONS_FILE" ]; then
+    echo "Error: ${INSTRUCTIONS_FILE} not found." >&2
+    exit 1
+fi
+
+read -r -d '' PROMPT <<EOF || true
+You are operating in a CI environment with no interactive approval. Complete the following instructions for workflow '${WORKFLOW}' and job '${SUBJOB}':
+
+$(cat "$INSTRUCTIONS_FILE")
+EOF
 
 echo "=== Launching OpenCode ==="
 opencode run -m openai/gpt-5.1-codex-mini "$PROMPT"
