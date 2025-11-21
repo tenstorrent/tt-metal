@@ -17,6 +17,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <enchantum/enchantum.hpp>
 
 namespace tt::scaleout_tools {
@@ -36,16 +37,12 @@ void log_output_rank0(const std::string& message) {
 // ============================================================================
 
 void configure_fabric_routing(
-    PhysicalSystemDescriptor& physical_system_descriptor,
     const std::optional<std::string>& fabric_config,
     const std::optional<std::string>& reliability_mode,
     const std::optional<uint8_t>& num_routing_planes,
     const std::optional<std::string>& fabric_tensix_config,
     const std::filesystem::path& output_path) {
     log_output_rank0("Configuring Fabric Routing");
-
-    auto& context = tt::tt_metal::MetalContext::instance();
-    auto& control_plane = context.get_control_plane();
 
     // Parse configuration parameters
     FabricConfig fabric_config_enum = FabricConfig::DISABLED;
@@ -67,36 +64,9 @@ void configure_fabric_routing(
             "Setting fabric tensix config to: " + fabric_tensix_config_to_string(fabric_tensix_config_enum));
     }
 
-    // Set fabric configuration
-    context.set_fabric_config(fabric_config_enum, reliability_mode_enum, num_routing_planes, fabric_tensix_config_enum);
-
-    // Configure routing tables for fabric ethernet channels
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels(fabric_config_enum, reliability_mode_enum);
-
-    // Write routing tables to all chips
-    control_plane.write_routing_tables_to_all_chips();
-
-    log_output_rank0("Fabric routing configuration complete");
-}
-
-void initialize_fabric_system(
-    PhysicalSystemDescriptor& physical_system_descriptor, const std::filesystem::path& output_path) {
-    log_output_rank0("Initializing Fabric System");
-
-    auto& context = tt::tt_metal::MetalContext::instance();
-    auto& control_plane = context.get_control_plane();
-
-    // Initialize fabric context
-    auto fabric_config = context.get_fabric_config();
-    control_plane.initialize_fabric_context(fabric_config);
-
-    // Initialize fabric tensix datamover config
-    control_plane.initialize_fabric_tensix_datamover_config();
-
-    // Initialize distributed contexts
-    control_plane.initialize_distributed_contexts();
-
-    log_output_rank0("Fabric system initialization complete");
+    tt::tt_fabric::SetFabricConfig(
+        fabric_config_enum, reliability_mode_enum, num_routing_planes, fabric_tensix_config_enum);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 }
 
 // ============================================================================

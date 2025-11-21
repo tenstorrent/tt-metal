@@ -110,51 +110,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     return input_args;
 }
 
-std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
-    std::string fsd_path;
-    if (input_args.cabling_descriptor_path.has_value()) {
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        fsd_path = input_args.output_path / "generated_factory_system_descriptor.textproto";
-        cabling_generator.emit_factory_system_descriptor(fsd_path);
-
-    } else {
-        fsd_path = input_args.fsd_path.value();
-    }
-    return fsd_path;
-}
-
-PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
-    auto log_hostnames = [&](const std::vector<std::string>& hostnames) {
-        std::stringstream ss;
-        for (const auto& hostname : hostnames) {
-            ss << hostname << ", ";
-        }
-        return ss.str();
-    };
-
-    if (input_args.gsd_path.has_value()) {
-        auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(input_args.gsd_path.value());
-        log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
-        return physical_system_descriptor;
-    } else {
-        log_output_rank0("Running Physical Discovery");
-        constexpr bool run_discovery = true;
-        auto& context = tt::tt_metal::MetalContext::instance();
-        const auto& driver = context.get_cluster().get_driver();
-        auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            driver,
-            context.get_distributed_context_ptr(),
-            &context.hal(),
-            context.rtoptions().get_mock_enabled(),
-            run_discovery);
-        log_output_rank0("Physical Discovery Complete");
-        log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
-        return physical_system_descriptor;
-    }
-}
-
 void print_usage_info() {
     std::cout << "Utility to manage Fabric Configuration and Routing for a Multi-Node TT Cluster" << std::endl;
     std::cout << "Provides fabric management capabilities including configuration, initialization, and monitoring"
@@ -206,31 +161,14 @@ int main(int argc, char* argv[]) {
 
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
-    // Create physical system descriptor and discover the system
-    auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-
-    if (*distributed_context.rank() == 0) {
-        // Set output path for the YAML file
-        std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
-        // Dump the discovered system to YAML
-        physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-        log_output_rank0("Fabric Management: System Discovery Complete");
-    }
-
     // Configure fabric if requested
     if (input_args.configure_fabric) {
         configure_fabric_routing(
-            physical_system_descriptor,
             input_args.fabric_config,
             input_args.reliability_mode,
             input_args.num_routing_planes,
             input_args.fabric_tensix_config,
             input_args.output_path);
-    }
-
-    // Initialize fabric if requested
-    if (input_args.initialize_fabric) {
-        initialize_fabric_system(physical_system_descriptor, input_args.output_path);
     }
 
     // Print fabric information if requested
