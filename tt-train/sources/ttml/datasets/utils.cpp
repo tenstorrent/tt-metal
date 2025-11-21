@@ -22,19 +22,12 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(
 }
 
 
-std::tuple<std::vector<uint32_t>, uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
+InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data, uint32_t seq_length) {
 
-    auto yaml_data = YAML::LoadFile(file_path);
 
-    std::vector<uint32_t> tokens;
-    std::stringstream token_stream(yaml_data["tokens"].as<std::string>());
-    uint32_t token;
+    std::vector<uint32_t> tokens = yaml_data["tokens"].as<std::vector<uint32_t>>();
 
-    while (token_stream >> token) {
-        tokens.push_back(token);
-    }
-
-    return std::make_tuple(tokens, yaml_data["tokenizer_vocab_size"].as<uint32_t>());
+    return InMemoryTokenDataset(tokens, seq_length);
 }
 
 }  // namespace ttml::datasets

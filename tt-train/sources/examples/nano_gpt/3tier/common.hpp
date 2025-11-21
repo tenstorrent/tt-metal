@@ -58,7 +58,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config);
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);
 
-std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(TrainingConfig &config);
+std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config);
 
 std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers);
 
