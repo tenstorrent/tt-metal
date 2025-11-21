@@ -172,4 +172,5 @@ target_link_libraries(
     PRIVATE
         scaleout_tools # For CablingGenerator and cabling descriptor parsing
         protobuf::libprotobuf # For protobuf runtime
+        cxxopts # For command line argument parsing
 )
