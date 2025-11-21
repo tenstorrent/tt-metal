@@ -8,6 +8,7 @@
 
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
+#define PROFILER_OPT_DO_SUM (1 << 3)
 
 namespace kernel_profiler {
 

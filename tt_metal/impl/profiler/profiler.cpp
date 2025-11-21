@@ -1282,8 +1282,7 @@ void DeviceProfiler::readRiscProfilerResults(
         }
     }
 
-    const uint32_t profiler_dram_bank_size_per_risc_bytes =
-        get_profiler_dram_bank_size_per_risc_bytes(rtoptions.get_profiler_program_support_count());
+    const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
     const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
 
     const uint32_t coreFlatID =

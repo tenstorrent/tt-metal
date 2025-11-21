@@ -18,6 +18,10 @@
 
 namespace tt {
 
+namespace llrt {
+class RunTimeOptions;
+}
+
 namespace tt_metal {
 
 // static function should store default op support count and return the actual op support count, outside of the class
@@ -26,16 +30,8 @@ namespace tt_metal {
 // {small, medium, large} default to 1000 if env var is not set
 constexpr inline static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
 
-uint32_t get_profiler_dram_bank_size_per_risc_bytes(std::optional<uint32_t> profiler_program_support_count);
-
-// these 2 vars should be passed to kernel_profiler with -D flag at jit build time
-// constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC =
-//     kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
-//     (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
-//      kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
-//     PROFILER_OP_SUPPORT_COUNT;
-// constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC =
-//     PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
+uint32_t get_profiler_dram_bank_size_per_risc_bytes();
 
 struct ProfilerStateManager {
 public:

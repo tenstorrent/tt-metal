@@ -177,12 +177,12 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_trace_only()) {
             profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
         }
+        if (rtoptions.get_profiler_sum()) {
+            profiler_options |= PROFILER_OPT_DO_SUM;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
-        const uint32_t profiler_dram_bank_size_per_risc_bytes =
-            get_profiler_dram_bank_size_per_risc_bytes(rtoptions.get_profiler_program_support_count());
-        this->defines_ += "-DPROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC=" +
-                          std::to_string(profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t)) + " ";
+        const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
         this->defines_ +=
             "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" + std::to_string(profiler_dram_bank_size_per_risc_bytes) + " ";
     }
