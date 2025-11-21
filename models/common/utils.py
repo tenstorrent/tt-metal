@@ -77,10 +77,16 @@ class LogProbsCalculator:
             logits_tensor (ttnn.Tensor): Logits as model output (batch_size, vocab_size)
         """
         # Calculate local max
-        local_max_tensor = ttnn.max(logits_tensor, dim=-1)
+        local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True)
         # All-gather local max to get global max
+        print(f"mesh_device: {self.mesh_device}")
         gathered_max_tensors = ttnn.all_gather(
-            local_max_tensor, dim=-1, mesh_device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            local_max_tensor,
+            dim=3,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=None,
+            topology=ttnn.Topology.Linear,
         )
         self.global_max = ttnn.max(gathered_max_tensors, dim=-1)
 
