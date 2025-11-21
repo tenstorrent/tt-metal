@@ -605,6 +605,7 @@ on:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
+    - cron: "30 4 * * *" # This cron schedule runs the workflow at 4:30 AM UTC daily (model traced runs)
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
@@ -727,16 +728,16 @@ jobs:
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: |
-          github.event_name == 'workflow_dispatch' &&
-          github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' &&
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
+           (github.event_name == 'schedule' && github.event.schedule == '30 4 * * *')) &&
           matrix.generate_mode == 'all'
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
-          (github.event_name == 'schedule' ||
+          ((github.event_name == 'schedule' && github.event.schedule != '30 4 * * *') ||
            github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' ||
            github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)') &&
-          github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' &&
+          (github.event_name == 'workflow_dispatch' ? github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' : true) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
         run: |
           # Determine which modules to skip based on generate_mode
