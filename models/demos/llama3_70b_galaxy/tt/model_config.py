@@ -1069,7 +1069,7 @@ class TtModelArgs:
                         subblock_w=8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
                     )
-                else:  # seq_len <= 1024:
+                else:
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
