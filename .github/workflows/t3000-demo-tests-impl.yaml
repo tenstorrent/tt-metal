@@ -57,7 +57,7 @@ jobs:
             },
             {
               "name": "t3k_llama3_load_checkpoints tests",
-              "model": "llama3_load_checkpoints,
+              "model": "llama3_load_checkpoints",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_llama3_load_checkpoints_tests",
               "timeout": 30,
