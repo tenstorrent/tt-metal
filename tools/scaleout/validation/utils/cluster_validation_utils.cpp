@@ -20,6 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 

@@ -19,6 +19,7 @@
 #include <thread>
 #include <atomic>
 #include <cstdlib>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 

@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include "impl/context/metal_context.hpp"
 #include <utility>
-
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
