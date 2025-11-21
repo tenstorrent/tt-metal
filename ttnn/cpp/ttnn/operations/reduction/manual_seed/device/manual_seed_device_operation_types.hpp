@@ -13,6 +13,7 @@ struct operation_attributes_t {
     tt::tt_metal::distributed::MeshDevice* device = nullptr;
     std::optional<uint32_t> seeds = std::nullopt;
     std::optional<uint32_t> user_ids = std::nullopt;
+    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct tensor_args_t {

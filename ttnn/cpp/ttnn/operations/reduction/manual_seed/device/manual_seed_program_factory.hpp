@@ -13,7 +13,7 @@
 namespace ttnn::operations::reduction::manual_seed::program {
 using namespace tt::tt_metal;
 
-struct ManualSeedProgramFactory {
+struct ManualSeedSingleSeedToAllCoresProgramFactory {
     struct shared_variables_t {};
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
