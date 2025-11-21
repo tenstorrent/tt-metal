@@ -24,12 +24,13 @@ void kernel_main() {
     DPRINT << "RESPONDER: Starting latency responder kernel\n";
 
     // Buffer for receiving payload data (if any)
-    const size_t payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_hops_back_to_sender = get_arg_val<uint32_t>(arg_idx++);
+    const size_t sender_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "RESPONDER: Config - payload_size=" << (uint32_t)payload_size_bytes
            << " burst_size=" << (uint32_t)burst_size << " num_bursts=" << (uint32_t)num_bursts
@@ -58,8 +59,8 @@ void kernel_main() {
     // Setup NOC addresses for destination (sender device)
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
-    auto dest_payload_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), payload_buffer_address, 0);
+    auto dest_payload_noc_addr = safe_get_noc_addr(
+        static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), sender_scratch_buffer_address, 0);
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -79,11 +80,11 @@ void kernel_main() {
     };
 
     auto send_payload_packet =
-        [&fabric_connection, payload_packet_header, payload_buffer_address, payload_size_bytes]() {
+        [&fabric_connection, payload_packet_header, local_payload_buffer_address, payload_size_bytes]() {
             fabric_connection.wait_for_empty_write_slot();
             if (payload_size_bytes > 0) {
                 fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    payload_buffer_address, payload_size_bytes);
+                    local_payload_buffer_address, payload_size_bytes);
             }
             fabric_connection.send_payload_flush_non_blocking_from_address(
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -111,7 +112,7 @@ void kernel_main() {
     // Main response loop
     // Wait for incoming packets and immediately send ack back
     DPRINT << "RESPONDER: Starting response loop for " << (uint32_t)num_bursts << " bursts\n";
-    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(payload_buffer_address);
+    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(local_payload_buffer_address);
     for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
         // Wait for incoming packet from sender
         // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
@@ -125,7 +126,7 @@ void kernel_main() {
             fabric_connection.wait_for_empty_write_slot();
             if (payload_size_bytes > 0) {
                 fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    payload_buffer_address, payload_size_bytes);
+                    local_payload_buffer_address, payload_size_bytes);
             }
             fabric_connection.send_payload_flush_non_blocking_from_address(
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -138,7 +139,7 @@ void kernel_main() {
                 fabric_connection.wait_for_empty_write_slot();
                 if (payload_size_bytes > 0) {
                     fabric_connection.send_payload_without_header_non_blocking_from_address(
-                        payload_buffer_address, payload_size_bytes);
+                        local_payload_buffer_address, payload_size_bytes);
                 }
                 fabric_connection.send_payload_flush_non_blocking_from_address(
                     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));

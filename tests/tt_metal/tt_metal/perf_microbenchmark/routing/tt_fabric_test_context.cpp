@@ -463,12 +463,14 @@ void TestContext::report_latency_results(const TestConfig& config) {
     const auto& data = result_data.at(latency_worker_core_);
 
     // Parse timestamp pairs and compute latencies
+    // Data is stored as uint64_t pairs but read as uint32_t array
+    // Each sample has 4 uint32_t values (2 uint64_t timestamps)
     std::vector<uint64_t> latencies_cycles;
     latencies_cycles.reserve(num_samples);
 
     for (uint32_t i = 0; i < num_samples; i++) {
-        uint64_t start_ts = static_cast<uint64_t>(data[i * 2]) | (static_cast<uint64_t>(data[i * 2 + 1]) << 32);
-        uint64_t end_ts = static_cast<uint64_t>(data[i * 2 + 2]) | (static_cast<uint64_t>(data[i * 2 + 3]) << 32);
+        uint64_t start_ts = static_cast<uint64_t>(data[i * 4]) | (static_cast<uint64_t>(data[i * 4 + 1]) << 32);
+        uint64_t end_ts = static_cast<uint64_t>(data[i * 4 + 2]) | (static_cast<uint64_t>(data[i * 4 + 3]) << 32);
 
         if (end_ts > start_ts) {
             latencies_cycles.push_back(end_ts - start_ts);
