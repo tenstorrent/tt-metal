@@ -1271,6 +1271,25 @@ void TestDevice::create_latency_sender_kernel(
         }
     }
 
+    // Register fabric connection to mark ethernet link as "used"
+    // This is required for telemetry and code profiling to know which cores to read from
+    RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, dest_node);
+    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    TT_FATAL(
+        !available_links.empty(),
+        "No forwarding links available in direction {} from node {} to node {}",
+        static_cast<int>(outgoing_direction),
+        fabric_node_id_,
+        dest_node);
+    uint32_t link_idx = available_links[0];  // Use first available link
+
+    register_fabric_connection(
+        core,
+        TestWorkerType::SENDER,
+        connection_manager_,
+        outgoing_direction,
+        link_idx);
+
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
@@ -1314,7 +1333,6 @@ void TestDevice::create_latency_sender_kernel(
     }
 
     // Add fabric connection args
-    uint32_t link_idx = 0;  // Default to link 0
     tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
 
@@ -1368,7 +1386,27 @@ void TestDevice::create_latency_responder_kernel(
         }
     }
 
-    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
+    // Register fabric connection to mark ethernet link as "used"
+    // This is required for telemetry and code profiling to know which cores to read from
+    // Note: Responder sends back to sender, so use RECEIVER worker type (similar to flow control credits)
+    RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, sender_node);
+    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    TT_FATAL(
+        !available_links.empty(),
+        "No forwarding links available in direction {} from node {} to node {}",
+        static_cast<int>(outgoing_direction),
+        fabric_node_id_,
+        sender_node);
+    uint32_t link_idx = available_links[0];  // Use first available link
+
+    register_fabric_connection(
+        core,
+        TestWorkerType::RECEIVER,
+        connection_manager_,
+        outgoing_direction,
+        link_idx);
+
+    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, use_dynamic_routing
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {
@@ -1413,7 +1451,6 @@ void TestDevice::create_latency_responder_kernel(
     }
 
     // Add fabric connection args (back to sender)
-    uint32_t link_idx = 0;  // Default to link 0
     tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
 
