@@ -61,14 +61,6 @@ tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<c
     return tt::tt_metal::Shape(std::move(new_shape));
 }
 
-int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<const uint64_t> strides) {
-    int flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
-        flat_index += indices[i] * strides[i];
-    }
-    return flat_index;
-};
-
 std::size_t compute_buffer_size(const tt::tt_metal::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
