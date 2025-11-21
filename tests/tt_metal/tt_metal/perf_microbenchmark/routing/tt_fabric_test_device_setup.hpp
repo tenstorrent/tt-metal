@@ -262,6 +262,8 @@ public:
 };
 
 struct TestDevice {
+    static constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
+
     // Friend declarations for tight coupling with worker structs
     friend struct TestSender;
     friend struct TestReceiver;
@@ -282,6 +284,29 @@ public:
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
+
+    // Latency test kernel creation (called directly by TestContext)
+    // Uses static memory map addresses for semaphores (same as bandwidth tests)
+    void create_latency_sender_kernel(
+        CoreCoord core,
+        FabricNodeId dest_node,
+        uint32_t payload_size,
+        uint32_t burst_size,
+        uint32_t num_bursts,
+        NocSendType noc_send_type,
+        CoreCoord responder_virtual_core);
+
+    void create_latency_responder_kernel(
+        CoreCoord core,
+        FabricNodeId sender_node,
+        uint32_t payload_size,
+        uint32_t burst_size,
+        uint32_t num_bursts,
+        NocSendType noc_send_type,
+        uint32_t sender_send_buffer_address,
+        uint32_t sender_receive_buffer_address,
+        CoreCoord sender_virtual_core);
+
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
@@ -346,6 +371,10 @@ public:
     FabricConnectionManager sync_connection_manager_;
 
     std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
+
+    // Latency buffer address getters (public so TestContext can query them)
+    size_t get_latency_send_buffer_address() const;
+    size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);

@@ -43,7 +43,7 @@ void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
     }
 }
 
-std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size) {
+std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size, bool read_all_active) {
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto& cluster = ctx.get_cluster();
     auto& control_plane = ctx.get_control_plane();
@@ -61,25 +61,55 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
+        if (read_all_active) {
+            // Read from all active ethernet cores (includes intermediate forwarding hops)
+            auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+            for (const auto& eth_core_xy : active_eth_cores) {
+                CoreCoord eth_core(eth_core_xy.x, eth_core_xy.y);
+                if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
+                    continue;
+                }
 
-                // Create result entry with metadata using aggregate initialization
+                // Get the channel ID for this core (need UMD CoreCoord)
+                tt::umd::CoreCoord umd_eth_core(eth_core_xy, tt::CoreType::ETH, tt::CoordSystem::LOGICAL);
+                auto eth_channel = soc_desc.get_eth_channel_for_core(umd_eth_core, tt::CoordSystem::LOGICAL);
+
+                // For all-active mode, direction and link_index are not well-defined
+                // Set to default values (will be ignored in processing)
                 flat_results.push_back(
                     {.coord = coord,
                      .fabric_node_id = fabric_node_id,
                      .eth_core = eth_core,
                      .eth_channel = eth_channel,
-                     .direction = direction,
-                     .link_index = link_index,
+                     .direction = RoutingDirection::N,  // Placeholder
+                     .link_index = 0,  // Placeholder
                      .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
 
                 // Initialize temp buffer for reading
                 temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
+            }
+        } else {
+            // Read only from registered fabric connections (original behavior)
+            for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
+                const auto& eth_cores =
+                    control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+                for (const auto& link_index : link_indices) {
+                    const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                    const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
+
+                    // Create result entry with metadata using aggregate initialization
+                    flat_results.push_back(
+                        {.coord = coord,
+                         .fabric_node_id = fabric_node_id,
+                         .eth_core = eth_core,
+                         .eth_channel = eth_channel,
+                         .direction = direction,
+                         .link_index = link_index,
+                         .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
+
+                    // Initialize temp buffer for reading
+                    temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
+                }
             }
         }
     }
@@ -91,21 +121,37 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
-
-                TT_FATAL(
-                    cluster.is_ethernet_link_up(physical_chip_id, eth_core),
-                    "Ethernet link is not up for {}",
-                    eth_core);
+        if (read_all_active) {
+            // Read from all active ethernet cores
+            auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
+            for (const auto& eth_core_xy : active_eth_cores) {
+                CoreCoord eth_core(eth_core_xy.x, eth_core_xy.y);
+                if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
+                    continue;
+                }
 
                 std::vector<CoreCoord> cores = {eth_core};
                 fixture_.read_buffer_from_ethernet_cores(
                     coord, cores, address, buffer_size, false, temp_buffer_map[fabric_node_id]);
+            }
+        } else {
+            // Read only from registered fabric connections
+            for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
+                const auto& eth_cores =
+                    control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+                for (const auto& link_index : link_indices) {
+                    const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                    const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
+
+                    TT_FATAL(
+                        cluster.is_ethernet_link_up(physical_chip_id, eth_core),
+                        "Ethernet link is not up for {}",
+                        eth_core);
+
+                    std::vector<CoreCoord> cores = {eth_core};
+                    fixture_.read_buffer_from_ethernet_cores(
+                        coord, cores, address, buffer_size, false, temp_buffer_map[fabric_node_id]);
+                }
             }
         }
     }
