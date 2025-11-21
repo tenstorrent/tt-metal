@@ -17,6 +17,89 @@ using namespace tt;
 using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::mesh::experimental;
 
+// Helper function to handle directional fanout logic
+template <OperationType operation_type, ApiVariant api_variant, typename DstAccT, typename ScatterAccT>
+inline void send_directional_fanout(
+    uint16_t hops,
+    WorkerToFabricEdmSender* sender,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    const MeshMcastRange& ranges,
+    uint32_t src_l1_addr,
+    const DstAccT& dst_acc,
+    const ScatterAccT& scatter_acc,
+    uint32_t i,
+    uint64_t sem_noc) {
+    if (hops > 0) {
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            if constexpr (api_variant == ApiVariant::Basic) {
+                fabric_multicast_noc_unicast_write(sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i);
+            } else {  // WithState or SetState
+                fabric_multicast_noc_unicast_write_with_state(
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i);
+            }
+        } else if constexpr (operation_type == OperationType::Scatter) {
+            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+            if constexpr (api_variant == ApiVariant::Basic) {
+                fabric_multicast_noc_scatter_write(
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, scatter_acc, i, i + 1);
+            } else {  // WithState or SetState
+                fabric_multicast_noc_scatter_write_with_state(
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, scatter_acc, i, i + 1);
+            }
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            if constexpr (api_variant == ApiVariant::Basic) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i, sem_noc, 1);
+            } else {  // WithState or SetState
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                    sender, packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+            }
+        }
+    }
+}
+
+// Helper function to send completion atomic increment for a direction
+inline void send_completion_atomic_inc(
+    uint16_t hops,
+    WorkerToFabricEdmSender& sender,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint16_t e_hops_for_route,
+    uint16_t w_hops_for_route,
+    uint16_t n_hops_for_route,
+    uint16_t s_hops_for_route,
+    uint64_t sem_noc_final) {
+    if (hops > 0) {
+        fabric_set_mcast_route(
+            packet_header, 0, 0, e_hops_for_route, w_hops_for_route, n_hops_for_route, s_hops_for_route);
+        packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
+        sender.wait_for_empty_write_slot();
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+}
+
+// Helper function for SetState pre-loop setup for a direction
+template <OperationType operation_type, typename DstAccT, typename ScatterAccT>
+inline void setup_set_state_for_direction(
+    uint16_t hops,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    const MeshMcastRange& ranges,
+    const DstAccT& dst_acc,
+    const ScatterAccT& scatter_acc,
+    uint64_t sem_noc) {
+    if (hops > 0) {
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            fabric_multicast_noc_unicast_write_set_state(packet_header, 0, 0, ranges, dst_acc, 0);
+        } else if constexpr (operation_type == OperationType::Scatter) {
+            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+            fabric_multicast_noc_scatter_write_set_state(packet_header, 0, 0, ranges, scatter_acc, 0, 1);
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                packet_header, 0, 0, ranges, dst_acc, 0, sem_noc, 1);
+        }
+    }
+}
+
 //
 // Unified multicast writer (fabric sender) kernel — consolidates 9 variants.
 // Sends pages from CB c_0 to multiple destination devices using compile-time parameters:
@@ -156,56 +239,23 @@ void kernel_main() {
         }
     } else if constexpr (api_variant == ApiVariant::SetState) {
         // Initialize all header fields for each direction
-        if (w_hops > 0) {
-            MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                fabric_multicast_noc_unicast_write_set_state(left_packet_header, 0, 0, ranges_w, dst_acc, 0);
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                fabric_multicast_noc_scatter_write_set_state(left_packet_header, 0, 0, ranges_w, scatter_acc, 0, 1);
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-                    left_packet_header, 0, 0, ranges_w, dst_acc, 0, sem_noc, 1);
-            }
-        }
-        if (e_hops > 0) {
-            MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                fabric_multicast_noc_unicast_write_set_state(right_packet_header, 0, 0, ranges_e, dst_acc, 0);
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                fabric_multicast_noc_scatter_write_set_state(right_packet_header, 0, 0, ranges_e, scatter_acc, 0, 1);
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-                    right_packet_header, 0, 0, ranges_e, dst_acc, 0, sem_noc, 1);
-            }
-        }
-        if (n_hops > 0) {
-            MeshMcastRange ranges_n{
-                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                fabric_multicast_noc_unicast_write_set_state(north_packet_header, 0, 0, ranges_n, dst_acc, 0);
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                fabric_multicast_noc_scatter_write_set_state(north_packet_header, 0, 0, ranges_n, scatter_acc, 0, 1);
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-                    north_packet_header, 0, 0, ranges_n, dst_acc, 0, sem_noc, 1);
-            }
-        }
-        if (s_hops > 0) {
-            MeshMcastRange ranges_s{
-                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                fabric_multicast_noc_unicast_write_set_state(south_packet_header, 0, 0, ranges_s, dst_acc, 0);
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                fabric_multicast_noc_scatter_write_set_state(south_packet_header, 0, 0, ranges_s, scatter_acc, 0, 1);
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-                    south_packet_header, 0, 0, ranges_s, dst_acc, 0, sem_noc, 1);
-            }
-        }
+        MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
+        setup_set_state_for_direction<operation_type>(
+            w_hops, left_packet_header, ranges_w, dst_acc, scatter_acc, sem_noc);
+
+        MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
+        setup_set_state_for_direction<operation_type>(
+            e_hops, right_packet_header, ranges_e, dst_acc, scatter_acc, sem_noc);
+
+        MeshMcastRange ranges_n{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
+        setup_set_state_for_direction<operation_type>(
+            n_hops, north_packet_header, ranges_n, dst_acc, scatter_acc, sem_noc);
+
+        MeshMcastRange ranges_s{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
+        setup_set_state_for_direction<operation_type>(
+            s_hops, south_packet_header, ranges_s, dst_acc, scatter_acc, sem_noc);
     }
 
     // Main loop - process pages
@@ -217,130 +267,26 @@ void kernel_main() {
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
         // --- Branch 1: direct WEST fanout (left) ---
-        if (w_hops > 0) {
-            MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_unicast_write(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_unicast_write_with_state(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i);
-                }
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_scatter_write(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, scatter_acc, i, i + 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_scatter_write_with_state(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, scatter_acc, i, i + 1);
-                }
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &senderW, left_packet_header, 0, 0, ranges_w, src_l1_addr, dst_acc, i, sem_noc, 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-                        &senderW, left_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
-                }
-            }
-        }
+        MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
+        send_directional_fanout<operation_type, api_variant>(
+            w_hops, &senderW, left_packet_header, ranges_w, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
 
         // --- Branch 2: direct EAST fanout (right) ---
-        if (e_hops > 0) {
-            MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_unicast_write(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_unicast_write_with_state(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i);
-                }
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_scatter_write(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, scatter_acc, i, i + 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_scatter_write_with_state(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, scatter_acc, i, i + 1);
-                }
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &senderE, right_packet_header, 0, 0, ranges_e, src_l1_addr, dst_acc, i, sem_noc, 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-                        &senderE, right_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
-                }
-            }
-        }
+        MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
+        send_directional_fanout<operation_type, api_variant>(
+            e_hops, &senderE, right_packet_header, ranges_e, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
 
         // --- Branch 3: NORTH trunk ---
-        if (n_hops > 0) {
-            MeshMcastRange ranges_n{
-                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_unicast_write(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_unicast_write_with_state(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i);
-                }
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_scatter_write(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, scatter_acc, i, i + 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_scatter_write_with_state(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, scatter_acc, i, i + 1);
-                }
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &senderN, north_packet_header, 0, 0, ranges_n, src_l1_addr, dst_acc, i, sem_noc, 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-                        &senderN, north_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
-                }
-            }
-        }
+        MeshMcastRange ranges_n{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
+        send_directional_fanout<operation_type, api_variant>(
+            n_hops, &senderN, north_packet_header, ranges_n, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
 
         // --- Branch 4: SOUTH trunk ---
-        if (s_hops > 0) {
-            MeshMcastRange ranges_s{
-                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
-            if constexpr (operation_type == OperationType::BasicWrite) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_unicast_write(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_unicast_write_with_state(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i);
-                }
-            } else if constexpr (operation_type == OperationType::Scatter) {
-                // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_scatter_write(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, scatter_acc, i, i + 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_scatter_write_with_state(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, scatter_acc, i, i + 1);
-                }
-            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-                if constexpr (api_variant == ApiVariant::Basic) {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &senderS, south_packet_header, 0, 0, ranges_s, src_l1_addr, dst_acc, i, sem_noc, 1);
-                } else {  // WithState or SetState
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-                        &senderS, south_packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
-                }
-            }
-        }
+        MeshMcastRange ranges_s{
+            static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
+        send_directional_fanout<operation_type, api_variant>(
+            s_hops, &senderS, south_packet_header, ranges_s, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
 
         cb_pop_front(CB_ID, cb_wait_count);
     }
@@ -354,38 +300,10 @@ void kernel_main() {
         const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
         // Send a completion per active branch so every sub-tree gets the semaphore bump.
-        if (w_hops > 0) {
-            fabric_set_mcast_route(left_packet_header, 0, 0, 0, w_hops, 0, 0);
-            left_packet_header->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
-            senderW.wait_for_empty_write_slot();
-            senderW.send_payload_flush_non_blocking_from_address(
-                (uint32_t)left_packet_header, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (e_hops > 0) {
-            fabric_set_mcast_route(right_packet_header, 0, 0, e_hops, 0, 0, 0);
-            right_packet_header->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
-            senderE.wait_for_empty_write_slot();
-            senderE.send_payload_flush_non_blocking_from_address(
-                (uint32_t)right_packet_header, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (n_hops > 0) {
-            fabric_set_mcast_route(north_packet_header, 0, 0, e_hops, w_hops, n_hops, 0);
-            north_packet_header->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
-            senderN.wait_for_empty_write_slot();
-            senderN.send_payload_flush_non_blocking_from_address(
-                (uint32_t)north_packet_header, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (s_hops > 0) {
-            fabric_set_mcast_route(south_packet_header, 0, 0, e_hops, w_hops, 0, s_hops);
-            south_packet_header->to_noc_unicast_atomic_inc(
-                NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
-            senderS.wait_for_empty_write_slot();
-            senderS.send_payload_flush_non_blocking_from_address(
-                (uint32_t)south_packet_header, sizeof(PACKET_HEADER_TYPE));
-        }
+        send_completion_atomic_inc(w_hops, senderW, left_packet_header, 0, w_hops, 0, 0, sem_noc_final);
+        send_completion_atomic_inc(e_hops, senderE, right_packet_header, e_hops, 0, 0, 0, sem_noc_final);
+        send_completion_atomic_inc(n_hops, senderN, north_packet_header, e_hops, w_hops, n_hops, 0, sem_noc_final);
+        send_completion_atomic_inc(s_hops, senderS, south_packet_header, e_hops, w_hops, 0, s_hops, sem_noc_final);
     }
 
     if (hasW) {

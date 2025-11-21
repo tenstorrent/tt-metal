@@ -3229,7 +3229,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 // clang-format on
 template <
     UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
-                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr,
+                                                 UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+                                                 UnicastFusedAtomicIncUpdateMask::PayloadSize,
     typename FabricSenderType,
     typename AddrGenType,
     typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
