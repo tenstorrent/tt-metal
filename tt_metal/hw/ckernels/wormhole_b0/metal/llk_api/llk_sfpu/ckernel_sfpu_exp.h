@@ -28,7 +28,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
     sfpi::vInt exp = exexp(val);
     sfpi::vInt man = exman8(val);  // get mantissa with implicit bit (man in [1; 2])
-    man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
     return man;
 }
 
@@ -86,9 +86,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
-    exponential_part = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(frac, exponential_part));  // restore exponent
-
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
@@ -148,14 +146,14 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
+    // Multiply by 2^-23
+    // We could have scaled factors, but the last one would have been near the subnormal range (i.e. truncation risk)
     frac = sfpi::addexp(frac, -23);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
     // This uses a 2nd degree polynomial adjustment of the fractional part
     frac = PolynomialEvaluator::eval(
         frac, sfpi::vConst1, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f);
-    // frac = PolynomialEvaluator::eval(frac, sfpi::vConst1, 8.2629562e-08, 3.413871e-15, 9.399248e-23, 1.9546244e-30,
-    // 0.001243946f, 2.9946911e-38);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);

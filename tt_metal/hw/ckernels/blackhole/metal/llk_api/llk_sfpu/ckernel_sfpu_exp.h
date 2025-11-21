@@ -28,7 +28,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
     sfpi::vInt exp = exexp(val);
     sfpi::vInt man = exman8(val);  // get mantissa with implicit bit (man in [1; 2])
-    man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
+    man = sfpi::reinterpret<sfpi::vInt>(sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(man), exp));
     return man;
 }
 
@@ -86,9 +86,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
-    exponential_part = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(frac, exponential_part));  // restore exponent
-
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
+    sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
@@ -154,8 +152,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     // This uses a 2nd degree polynomial adjustment of the fractional part
     frac = PolynomialEvaluator::eval(
         frac, sfpi::vConst1, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f);
-    // frac = PolynomialEvaluator::eval(frac, sfpi::vConst1, 8.2629562e-08, 3.413871e-15, 9.399248e-23, 1.9546244e-30,
-    // 0.001243946f, 2.9946911e-38);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -204,10 +200,10 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
 void exp_init() {
-    if constexpr (!APPROXIMATION_MODE && !FAST_APPROX) {
-        sfpi::vConstFloatPrgm0 = 1.4426950216293334961f;
-    } else {
+    if constexpr (APPROXIMATION_MODE) {
         _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, scale>();
+    } else {
+        sfpi::vConstFloatPrgm0 = 1.4426950216293334961f;
     }
 }
 
