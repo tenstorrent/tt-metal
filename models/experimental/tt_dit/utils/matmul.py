@@ -93,6 +93,13 @@ grid_13_9_configs = {
     (9472, 3456, 5120): (8, 12, 4, (1, 2)),
 }
 
+grid_12_10_configs = {
+    (9472, 5120, 1280): (16, 8, 4, (2, 2)),
+    (128, 5120, 1280): (1, 16, 8, (1, 2)),
+    (9472, 5120, 3456): (16, 8, 4, (1, 2)),
+    (9472, 3456, 5120): (16, 4, 8, (1, 2)),
+}
+
 
 def get_matmul_config(M, K, N, core_grid):
     # Default to 8x8x8 with subblock 2x2 when unknown
@@ -111,6 +118,11 @@ def get_matmul_config(M, K, N, core_grid):
         config_tuple = grid_89_configs.get((M, K, N))
     elif getattr(core_grid, "x", None) == 13 and getattr(core_grid, "y", None) == 9:
         config_tuple = grid_13_9_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
+    elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 10:
+        config_tuple = grid_12_10_configs.get((M, K, N))
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
