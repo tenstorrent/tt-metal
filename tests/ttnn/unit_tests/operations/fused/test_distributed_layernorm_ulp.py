@@ -211,7 +211,6 @@ def test_distributed_norm_comparison(
     if gamma_layout == ttnn.ROW_MAJOR_LAYOUT:
         # For row major, reshape to (N_DEV, 1, -1, 32) and shard on device dimension (dim=0)
         # Each device gets hidden_dim // N_DEV elements, arranged as rows of 32 elements
-        weight_per_device = hidden_dim // N_DEV
         ttnn_weight = ttnn.from_torch(
             torch_weight.reshape(N_DEV, 1, -1, 32),
             dtype=ttnn.bfloat16,

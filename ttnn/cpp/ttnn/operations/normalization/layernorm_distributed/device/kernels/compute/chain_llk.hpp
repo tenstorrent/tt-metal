@@ -87,16 +87,28 @@ void unroll_llk() {
     pack_reconfig_data_format(cur_llk.CB_OUT);
     cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B);
     for (uint32_t i = 0; i < cb_iterations; i++) {
+        if constexpr (cur_llk.debug_mode == 1) {
+            UNPACK(DPRINT << "=============START NODE==============" << ENDL());
+        }
         unroll_inner_loop<num_dst_regs, cur_llk_type>();
+
+        if constexpr (cur_llk.debug_mode == 1) {
+            UNPACK(DPRINT << "=============END NODE==============" << ENDL());
+        }
     }
     unroll_inner_loop<cb_leftovers, cur_llk_type>();
 }
 
+#define PRINT_STRUCT_NAME(T)                                                                      \
+    UNPACK(                                                                                       \
+        DPRINT << "-=-=-=-=-=" << ENDL() << "-=-=-=-=-= NODE: " << #T << "-=-=-=-=-=-=" << ENDL() \
+               << "-=-=-=-=-=" << ENDL());
 template <typename cur_llk_type>
 void print_input_CBs(uint32_t j) {
+    PRINT_STRUCT_NAME(cur_llk_type);
     constexpr auto cur_llk = cur_llk_type::node;
-    UNPACK(DPRINT << "=============CB_A==============" << ENDL());
-    UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
+    // UNPACK(DPRINT << "=============CB_A==============" << ENDL());
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
     UNPACK(DPRINT << "=============CB_B==============" << ENDL());
     UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j), true));
 }

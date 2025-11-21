@@ -141,19 +141,19 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    // uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    // uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        // num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        // num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
-    // log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    // log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
+    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
