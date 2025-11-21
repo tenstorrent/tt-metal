@@ -126,3 +126,4 @@ Final Reminders
 - When log downloads fail, document the attempt and reason before moving on.
 - Keep reasoning concise but explicit, and always tie conclusions back to logs or commit data.
 - Accuracy matters—engineers will act on your findings. Choose the correct case and justify it thoroughly.
+- If there are **no failing runs** after reading `boundaries_summary.json`, write `auto_triage/output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.
