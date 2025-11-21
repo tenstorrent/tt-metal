@@ -18,7 +18,6 @@ namespace ttnn::operations::reduction::manual_seed {
 
 ManualSeedDeviceOperation::program_factory_t ManualSeedDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::cout << "ManualSeedDeviceOperation::select_program_factory called" << std::endl;
     // Case 1: seed=uint32_t, user_ids=None - set all cores to the same seed
     if (operation_attributes.seeds.has_value() && !operation_attributes.user_ids.has_value() &&
         !tensor_args.seeds.has_value() && !tensor_args.user_ids.has_value()) {
@@ -66,9 +65,11 @@ void ManualSeedDeviceOperation::validate_on_program_cache_hit(
         TT_FATAL(
             !tensor_args.user_ids.has_value(),
             "Seeds were provided as a scalar, so user_ids must not be provided as a tensor.");
-        TT_FATAL(
-            operation_attributes.user_ids.value() >= 0 && operation_attributes.user_ids.value() <= 32,
-            "User IDs scalar must be in the range [0, 32].");
+        if (operation_attributes.user_ids.has_value()) {
+            TT_FATAL(
+                operation_attributes.user_ids.value() >= 0 && operation_attributes.user_ids.value() <= 32,
+                "User IDs scalar must be in the range [0, 32].");
+        }
     }
 }
 
@@ -98,22 +99,20 @@ ManualSeedDeviceOperation::invoke(
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    std::cout << "ManualSeedDeviceOperation::invoke called" << std::endl;
     // Check if device is provided when seeds is uint32_t
     if (std::holds_alternative<uint32_t>(seeds)) {
         TT_FATAL(device.has_value(), "Device must be provided when seeds is a uint32_t value.");
     }
-    std::cout << "ManualSeedDeviceOperation::invoke 2" << std::endl;
+
     // Prepare operation attributes
     operation_attributes_t operation_attributes{};
     if (device.has_value()) {
         operation_attributes.device = std::addressof(device.value().get());
-        std::cout << "ManualSeedDeviceOperation::invoke 3" << std::endl;
     } else {
         const auto& seeds_tensor = std::get<Tensor>(seeds);
         operation_attributes.device = seeds_tensor.device();
     }
-    std::cout << "ManualSeedDeviceOperation::invoke 4" << std::endl;
+
     if (std::holds_alternative<uint32_t>(seeds)) {
         operation_attributes.seeds = std::get<uint32_t>(seeds);
     }
@@ -121,7 +120,6 @@ ManualSeedDeviceOperation::invoke(
         operation_attributes.user_ids = std::get<uint32_t>(user_ids.value());
     }
     operation_attributes.sub_core_grids = sub_core_grids;
-    std::cout << "ManualSeedDeviceOperation::invoke 5" << std::endl;
     // Prepare tensor arguments
     // TODO: To be removed when API will be fixed with https://github.com/tenstorrent/tt-metal/pull/32260
     auto output_tensor = create_device_tensor(
@@ -131,7 +129,6 @@ ManualSeedDeviceOperation::invoke(
         operation_attributes.device);
 
     tensor_args_t tensor_args{output_tensor};
-    std::cout << "ManualSeedDeviceOperation::invoke 6" << std::endl;
     if (std::holds_alternative<Tensor>(seeds)) {
         tensor_args.seeds = std::get<Tensor>(seeds);
     }
