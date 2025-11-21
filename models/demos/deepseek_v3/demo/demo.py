@@ -233,6 +233,7 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    repeat_batches: int = 1,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -339,6 +340,7 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
+            repeat_batches=repeat_batches,
         )
 
         # Process all generations
