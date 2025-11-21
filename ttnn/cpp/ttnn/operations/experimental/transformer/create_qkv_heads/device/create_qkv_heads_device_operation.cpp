@@ -73,6 +73,11 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_outputs.has_value()) {
+        const auto& [q_tensor, k_tensor, v_tensor] = tensor_args.preallocated_outputs.value();
+        return {q_tensor.tensor_spec(), k_tensor.tensor_spec(), v_tensor.tensor_spec()};
+    }
+
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
@@ -81,11 +86,6 @@ spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
     const auto k_shape = args.transpose_k_heads
                              ? ttnn::Shape{input_shape[0], args.num_kv_heads, args.head_dim, input_shape[2]}
                              : v_shape;
-
-    if (tensor_args.preallocated_outputs.has_value()) {
-        const auto& [q_tensor, k_tensor, v_tensor] = tensor_args.preallocated_outputs.value();
-        return {q_tensor.tensor_spec(), k_tensor.tensor_spec(), v_tensor.tensor_spec()};
-    }
 
     CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
