@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::operations::experimental::cnn::to_chw {
 
 ConvertToCHWDeviceOperation::program_factory_t ConvertToCHWDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -112,4 +112,4 @@ ConvertToCHWDeviceOperation::invoke(
         }};
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::operations::experimental::cnn::to_chw

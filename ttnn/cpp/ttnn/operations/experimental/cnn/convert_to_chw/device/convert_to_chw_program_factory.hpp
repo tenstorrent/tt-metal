@@ -7,7 +7,7 @@
 #include "convert_to_chw_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::cnn::program {
+namespace ttnn::operations::experimental::cnn::to_chw::program {
 
 struct ConvertToCHWProgramFactory {
     struct shared_variables_t {
@@ -33,4 +33,4 @@ struct ConvertToCHWProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::cnn::program
+}  // namespace ttnn::operations::experimental::cnn::to_chw::program

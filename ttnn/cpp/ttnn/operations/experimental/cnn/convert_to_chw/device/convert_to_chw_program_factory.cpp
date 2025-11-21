@@ -6,7 +6,7 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::cnn::program {
+namespace ttnn::operations::experimental::cnn::to_chw::program {
 
 using namespace tt::constants;
 
@@ -182,4 +182,4 @@ void ConvertToCHWProgramFactory::override_runtime_arguments(
         program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
 }
 
-}  // namespace ttnn::operations::experimental::cnn::program
+}  // namespace ttnn::operations::experimental::cnn::to_chw::program

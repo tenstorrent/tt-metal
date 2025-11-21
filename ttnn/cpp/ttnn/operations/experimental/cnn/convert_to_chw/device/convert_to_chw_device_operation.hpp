@@ -15,13 +15,13 @@
 
 #include "convert_to_chw_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::cnn {
+namespace ttnn::operations::experimental::cnn::to_chw {
 
 struct ConvertToCHWDeviceOperation {
-    using operation_attributes_t = cnn::operation_attributes_t;
-    using tensor_args_t = cnn::tensor_args_t;
-    using spec_return_value_t = cnn::spec_return_value_t;
-    using tensor_return_value_t = cnn::tensor_return_value_t;
+    using operation_attributes_t = to_chw::operation_attributes_t;
+    using tensor_args_t = to_chw::tensor_args_t;
+    using spec_return_value_t = to_chw::spec_return_value_t;
+    using tensor_return_value_t = to_chw::tensor_return_value_t;
     using program_factory_t = std::variant<program::ConvertToCHWProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -36,7 +36,7 @@ struct ConvertToCHWDeviceOperation {
         const std::optional<DataType>& dtype);
 };
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::operations::experimental::cnn::to_chw
 
 namespace ttnn::prim {
 constexpr auto convert_to_chw = ttnn::register_operation<
