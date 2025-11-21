@@ -265,6 +265,8 @@ class TtBEVFormerEncoder:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             prev_bev = ttnn.stack([prev_bev, bev_query], 1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
+            # Ensure both tensors have the same layout for stack
+            shift_ref_2d = ttnn.to_layout(shift_ref_2d, ref_2d.layout)
             hybird_ref_2d = ttnn.stack([shift_ref_2d, ref_2d], 1)
             hybird_ref_2d = ttnn.reshape(hybird_ref_2d, (bs * 2, len_bev, num_bev_level, 2))
         else:
@@ -445,8 +447,8 @@ class TtBEVFormerLayer:
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
                 )
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
-                ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].weight)
+                # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
             # spaital cross attention

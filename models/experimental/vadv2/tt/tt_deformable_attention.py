@@ -95,8 +95,9 @@ class TtCustomMSDeformableAttention:
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         )
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
-        ttnn.deallocate(params.attention_weights.weight)
-        ttnn.deallocate(params.attention_weights.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.attention_weights.weight)
+        # ttnn.deallocate(params.attention_weights.bias)
         ttnn.deallocate(query)
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
@@ -143,8 +144,9 @@ class TtCustomMSDeformableAttention:
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
 
         output = output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
-        ttnn.deallocate(params.output_proj.weight)
-        ttnn.deallocate(params.output_proj.bias)
+        # Don't deallocate model weights - they need to persist across iterations
+        # ttnn.deallocate(params.output_proj.weight)
+        # ttnn.deallocate(params.output_proj.bias)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
