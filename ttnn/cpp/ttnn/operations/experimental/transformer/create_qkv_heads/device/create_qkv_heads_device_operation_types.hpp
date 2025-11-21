@@ -12,14 +12,12 @@
 
 namespace ttnn::operations::experimental::create_qkv_heads {
 
-using tt::tt_metal::MemoryConfig;
-
 struct operation_attributes_t {
     const uint32_t num_q_heads;
     const uint32_t num_kv_heads;
     const uint32_t head_dim;
     const bool transpose_k_heads;
-    const MemoryConfig output_mem_config;
+    const tt::tt_metal::MemoryConfig output_mem_config;
 };
 
 struct tensor_args_t {
