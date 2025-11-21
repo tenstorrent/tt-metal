@@ -72,6 +72,7 @@ Tensor Creation
    ttnn.full
    ttnn.full_like
    ttnn.rand
+   ttnn.from_buffer
 
 Matrix Multiplication
 =====================
@@ -425,6 +426,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+   ttnn.manual_seed
 
 Data Movement
 =============
@@ -566,6 +568,7 @@ Pooling
 
    ttnn.global_avg_pool2d
    ttnn.max_pool2d
+   ttnn.avg_pool2d
 
 Vision
 ========

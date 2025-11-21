@@ -9,4 +9,4 @@ rank_bindings:
     env_overrides:
       TT_VISIBLE_DEVICES: "3,2"
 
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto"

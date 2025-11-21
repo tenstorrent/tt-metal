@@ -494,6 +494,55 @@ TEST(MeshCoordinateRangeSetTest, MergeWithOverlaps) {
     EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(5, 7)))));
 }
 
+TEST(MeshCoordinateRangeSetTest, MergeFragmentedSingleRectangle) {
+    MeshCoordinateRangeSet set;
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(7, 7), MeshCoordinate(7, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(7, 4), MeshCoordinate(7, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(3, 4), MeshCoordinate(3, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 7), MeshCoordinate(1, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 6), MeshCoordinate(1, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(6, 6), MeshCoordinate(6, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 4), MeshCoordinate(1, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 6), MeshCoordinate(5, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(6, 5), MeshCoordinate(6, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 4), MeshCoordinate(2, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 7), MeshCoordinate(0, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 5), MeshCoordinate(1, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(4, 7), MeshCoordinate(4, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(7, 6), MeshCoordinate(7, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(7, 5), MeshCoordinate(7, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(6, 4), MeshCoordinate(6, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(0, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 6), MeshCoordinate(2, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 6), MeshCoordinate(0, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(3, 5), MeshCoordinate(3, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 5), MeshCoordinate(2, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 4), MeshCoordinate(5, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(3, 6), MeshCoordinate(3, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(3, 7), MeshCoordinate(3, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 7), MeshCoordinate(5, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(4, 4), MeshCoordinate(4, 4)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 5), MeshCoordinate(0, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(4, 5), MeshCoordinate(4, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(4, 6), MeshCoordinate(4, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(5, 5)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 7), MeshCoordinate(2, 7)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(6, 7), MeshCoordinate(6, 7)));
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(7, 7)))));
+}
+
+TEST(MeshCoordinateRangeSetTest, MergeSequenceFromAllGatherLogDebug) {
+    MeshCoordinateRangeSet set;
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 6)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 0), MeshCoordinate(3, 4)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 0), MeshCoordinate(3, 4)))));
+}
+
 TEST(MeshCoordinateRangeSetTest, SubtractInvalidDimensions) {
     EXPECT_ANY_THROW(subtract(
         MeshCoordinateRange(MeshCoordinate(0, 0, 0), MeshCoordinate(1, 1, 1)),

@@ -20,9 +20,7 @@ struct RandDeviceOperation {
         uint32_t seed;
     };
 
-    struct tensor_args_t {
-        Tensor output;
-    };
+    struct tensor_args_t {};
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

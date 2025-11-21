@@ -111,7 +111,7 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) {
+    bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
@@ -149,6 +149,20 @@ public:
             new_fabric_config = it->second;
         }
 
+        // Use the new ControlPlane validation API - always skip on mismatch
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        try {
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY &&
+                !control_plane.is_fabric_config_valid(new_fabric_config)) {
+                log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
+                return false;
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed: {} - can't open device", e.what());
+            return false;
+        }
+
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
@@ -163,6 +177,7 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+        return true;
     }
 
     void setup_workload() {
@@ -272,13 +287,6 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
-    bool is_dynamic_routing_enabled() const override {
-        return tt::tt_metal::MetalContext::instance()
-            .get_control_plane()
-            .get_fabric_context()
-            .is_dynamic_routing_enabled();
-    }
-
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -382,7 +390,6 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const {
-
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -409,7 +416,6 @@ public:
     // Process results after barrier_reads() has been called
     std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
         const ReadBufferOperation& op) const {
-
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
@@ -472,9 +478,7 @@ public:
         }
     }
 
-    void barrier_reads() const {
-        mesh_device_->mesh_command_queue().finish();
-    }
+    void barrier_reads() const { mesh_device_->mesh_command_queue().finish(); }
 
     void write_buffer_to_ethernet_cores(
         const MeshCoordinate& device_coord,

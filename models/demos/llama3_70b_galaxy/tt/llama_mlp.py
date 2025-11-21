@@ -204,40 +204,65 @@ class TtLlamaMLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         use_w1_w3_interleaved = seq_len >= 4096 or seq_len == 128
-        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
-        pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
-        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+        short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+        short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+
+        minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
+        minimal_pc_2 = self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"](seq_len)
 
         if 1024 <= seq_len < 4096:
             x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
-        w1_out = ttnn.linear(
-            x,
-            self.w1_interleaved if use_w1_w3_interleaved else self.w1,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
+            w1_out = ttnn.linear(
+                x,
+                self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                compute_kernel_config=(
+                    self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2_fp16
+                ),
+                dtype=ttnn.bfloat8_b,
+                program_config=short_lens_pc_1_3,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            w1_out = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                config=minimal_pc_1_3,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
         )
         ttnn.deallocate(w1_out)
-        w3_out = ttnn.linear(
-            x,
-            self.w3_interleaved if use_w1_w3_interleaved else self.w3,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
+            w3_out = ttnn.linear(
+                x,
+                self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+                compute_kernel_config=(
+                    self.args.compute_kernel_config_lofi
+                    if self.four_bit_mlp
+                    else self.args.compute_kernel_config_hifi2_fp16
+                ),
+                dtype=ttnn.bfloat8_b,
+                program_config=short_lens_pc_1_3,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            w3_out = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+                config=minimal_pc_1_3,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
@@ -254,19 +279,26 @@ class TtLlamaMLP(LightweightModule):
             w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
         )
         ttnn.deallocate(w2_in)
-        # ttnn.deallocate(w3_out)
-        # ttnn.deallocate(w1_out)
 
-        w2_out = ttnn.linear(
-            w2_in_gathered,
-            self.w2_interleaved,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            program_config=pc_2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
+            w2_out = ttnn.linear(
+                w2_in_gathered,
+                self.w2_interleaved,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                program_config=short_lens_pc_2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            w2_out = ttnn.experimental.minimal_matmul(
+                input_tensor=w2_in_gathered,
+                weight_tensor=self.w2_interleaved,
+                config=minimal_pc_2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
@@ -277,5 +309,4 @@ class TtLlamaMLP(LightweightModule):
                 w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
             )
 
-        # ttnn.deallocate(w2_out)
         return w2_out_reduced

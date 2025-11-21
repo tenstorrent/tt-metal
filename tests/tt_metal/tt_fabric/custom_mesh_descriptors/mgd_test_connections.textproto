@@ -4,7 +4,7 @@ mesh_descriptors {
   arch: WORMHOLE_B0
   device_topology { dims: [1, 2] }
   host_topology { dims: [1, 1] }
-  channels { count: 1 }
+  channels { count: 1 policy: RELAXED }
 }
 
 mesh_descriptors {
@@ -12,7 +12,7 @@ mesh_descriptors {
   arch: WORMHOLE_B0
   device_topology { dims: [1, 2] }
   host_topology { dims: [1, 1] }
-  channels { count: 1 }
+  channels { count: 1 policy: RELAXED }
 }
 
 graph_descriptors {

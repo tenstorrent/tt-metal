@@ -15,14 +15,13 @@ struct FullOperation {
     struct operation_attributes_t {
         const ttnn::SmallVector<uint32_t> shape;
         const std::variant<float, int> fill_value;
+        ttnn::MeshDevice* mesh_device;
         const DataType dtype;
         const Layout layout;
         const MemoryConfig memory_config;
     };
 
-    struct tensor_args_t {
-        const Tensor& any;
-    };
+    struct tensor_args_t {};
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -60,10 +59,10 @@ struct FullOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         ttnn::SmallVector<uint32_t> shape,
         std::variant<float, int> fill_value,
-        const Tensor& any,
-        const std::optional<DataType>& dtype,
-        const std::optional<Layout>& layout,
-        const std::optional<MemoryConfig>& memory_config);
+        ttnn::MeshDevice* mesh_device,
+        const DataType& dtype,
+        const Layout& layout,
+        const MemoryConfig& memory_config);
 };
 
 }  // namespace ttnn::operations::full

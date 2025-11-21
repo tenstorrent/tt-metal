@@ -128,7 +128,7 @@ def test_vit(device, batch_size, is_single_card_n300):
     if is_single_card_n300:
         expected_samples_per_sec = 1323
     else:  # n150
-        expected_samples_per_sec = 1377
+        expected_samples_per_sec = 1470
     torch.manual_seed(0)
 
     profiler.clear()

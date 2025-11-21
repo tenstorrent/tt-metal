@@ -319,7 +319,7 @@ run_yolov8s_world_perf() {
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
- pytest models/demos/wormhole/vanilla_unet/demo/demo.py
+ pytest models/demos/vanilla_unet/demo/demo.py
 }
 
 run_swin_s_demo() {
@@ -388,7 +388,7 @@ run_vovnet_demo(){
 
 run_vit_demo(){
 
- pytest models/demos/wormhole/vit/demo/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+ pytest models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 

@@ -75,7 +75,6 @@ target_link_libraries(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
-        TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
