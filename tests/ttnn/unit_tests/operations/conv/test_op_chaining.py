@@ -27,58 +27,58 @@ SliceWidth = ttnn.Conv2dDRAMSliceWidth
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],
 )
 @pytest.mark.parametrize(
-    "batch_size, input_channels, input_height, input_width, math_fidelity, parameters",
+    "batch_size, input_channels, input_height, input_width, math_fidelity, slice_type, parameters",
     # fmt: off
     (
-        ( 1,  400,    192,   192,     ttnn.MathFidelity.HiFi4,
+        ( 1,  400,    192,   192,     ttnn.MathFidelity.HiFi4, SliceWidth,
             [
                 (512, (3, 3), (1, 1), (1, 1), (1, 1)),
                 (256, (3, 3), (1, 1), (1, 1), (1, 1)),
                 (128, (5, 5), (1, 1), (2, 2), (1, 1))
             ]
         ),
-        # ( 2,   13,    313,    71,     ttnn.MathFidelity.LoFi ,
-        #     [
-        #         (256, (5, 5), (1, 1), (2, 2), (2, 2)),
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
-        # ( 2,   63,    981,    39,     ttnn.MathFidelity.LoFi ,
-        #     [
-        #         (256, (3, 3), (2, 2), (2, 2), (1, 1)),
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
-        # ( 2,  512,    128,   128,     ttnn.MathFidelity.LoFi ,
-        #     [
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
-        # ( 2,   64,    384,    64,     ttnn.MathFidelity.LoFi ,
-        #     [
-        #         (256, (4, 4), (2, 2), (1, 1), (1, 1)),
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
-        ( 1,    16,   1024,  1024,     ttnn.MathFidelity.LoFi ,
+        ( 2,   13,    313,    71,     ttnn.MathFidelity.LoFi, SliceWidth,
+            [
+                (256, (5, 5), (2, 2), (2, 2), (2, 2)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (5, 5), (1, 1), (1, 1), (1, 1))
+            ]
+        ),
+        ( 2,   63,    981,    39,     ttnn.MathFidelity.LoFi, SliceHeight,
+            [
+                (256, (3, 3), (2, 2), (2, 2), (1, 1)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (5, 5), (1, 1), (1, 1), (1, 1))
+            ]
+        ),
+        ( 2,  512,    128,   128,     ttnn.MathFidelity.LoFi, SliceWidth,
+            [
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (5, 5), (1, 1), (1, 1), (1, 1))
+            ]
+        ),
+        ( 2,   64,    384,    64,     ttnn.MathFidelity.LoFi, SliceWidth,
+            [
+                (256, (4, 4), (2, 2), (1, 1), (1, 1)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (5, 5), (1, 1), (1, 1), (1, 1))
+            ]
+        ),
+        ( 1,    16,   1024,  1024,     ttnn.MathFidelity.LoFi, SliceWidth,
             [
                 (32, (3, 3), (1, 1), (1, 1), (1, 1)),
                 (32, (3, 3), (1, 1), (1, 1), (1, 1)),
                 (32, (3, 3), (1, 1), (1, 1), (1, 1))
             ]
         ),
-        # ( 1, 2904,     48,    48,     ttnn.MathFidelity.HiFi4,
-        #     [
-        #         (256, (3, 3), (1, 1), (0, 0), (1, 1)),
-        #         (256, (3, 3), (1, 1), (1, 1), (1, 1)),
-        #         (256, (5, 5), (1, 1), (1, 1), (1, 1))
-        #     ]
-        # ),
+        ( 1, 2904,     48,    48,     ttnn.MathFidelity.HiFi4, SliceWidth,
+            [
+                (256, (3, 3), (1, 1), (0, 0), (1, 1)),
+                (256, (3, 3), (1, 1), (1, 1), (1, 1)),
+                (256, (5, 5), (1, 1), (1, 1), (1, 1))
+            ]
+        ),
     )
     # fmt: on
 )
@@ -93,6 +93,7 @@ def test_multi_conv(
     dtype,
     math_fidelity,
     parameters,
+    slice_type,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
@@ -183,7 +184,7 @@ def test_multi_conv(
         input_tensor=tt_input_tensor,
         output_tensor=tt_output_tensor,
         op_slice_attr=op_slicing_attrs,
-        dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=8),
+        dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=8),
     )
     threshold = 0.99
     tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
