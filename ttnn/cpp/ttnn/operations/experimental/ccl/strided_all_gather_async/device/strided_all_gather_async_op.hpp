@@ -16,171 +16,62 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 
-#include "ttnn/run_operation.hpp"
+#include "strided_all_gather_async_device_operation_types.hpp"
+#include "strided_all_gather_async_program.hpp"
+
+#include "ttnn/decorators.hpp"
 
 #include <optional>
 #include <utility>
 #include <vector>
 
-namespace ttnn {
+namespace ttnn::operations::experimental::ccl {
+namespace strided_all_gather_async {
 
 struct StridedAllGatherAsync {
-    std::vector<IDevice*> devices;
-    const uint32_t dim;
-    const uint32_t num_links;
-    const uint32_t ring_size;
-    const MemoryConfig output_mem_config;
-    const ccl::Topology topology;
-    const std::vector<GlobalSemaphore> semaphore;
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    std::optional<uint32_t> cluster_axis;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
-    std::optional<uint32_t> tiles_per_chunk;
-    std::optional<uint32_t> num_workers_per_link;
-    std::optional<uint32_t> num_buffers_per_channel;
-    std::optional<uint32_t> mm_cores_y;
-    std::optional<uint32_t> mm_block_ht;
-    std::optional<uint32_t> mm_block_wt;
+    using operation_attributes_t = strided_all_gather_async::operation_attributes_t;
+    using tensor_args_t = strided_all_gather_async::tensor_args_t;
+    using spec_return_value_t = strided_all_gather_async::spec_return_value_t;
+    using tensor_return_value_t = strided_all_gather_async::tensor_return_value_t;
 
-    StridedAllGatherAsync(
-        std::vector<IDevice*> devices,
-        uint32_t dim,
-        uint32_t num_links,
-        uint32_t ring_size,
-        MemoryConfig output_mem_config,
-        ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<uint32_t> cluster_axis,
+    using program_factory_t = std::variant<program::StridedAllGatherAsyncProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+    //     const operation_attributes_t&, const tensor_args_t&, const Tensor&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const uint32_t dim,
+        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const uint32_t num_links,
+        const std::optional<MemoryConfig>& memory_config,
+        const ttnn::ccl::Topology topology,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        const std::optional<uint32_t>& cluster_axis,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
-        std::optional<uint32_t> tiles_per_chunk,
-        std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel,
-        std::optional<uint32_t> mm_cores_y,
-        std::optional<uint32_t> mm_block_ht,
-        std::optional<uint32_t> mm_block_wt) :
-        devices(std::move(devices)),
-        dim(dim),
-        num_links(num_links),
-        ring_size(ring_size),
-        output_mem_config(std::move(output_mem_config)),
-        topology(topology),
-        semaphore(std::move(semaphore)),
-        sub_device_id(sub_device_id),
-        cluster_axis(cluster_axis),
-        barrier_semaphore(barrier_semaphore),
-        tiles_per_chunk(tiles_per_chunk),
-        num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel),
-        mm_cores_y(mm_cores_y),
-        mm_block_ht(mm_block_ht),
-        mm_block_wt(mm_block_wt) {}
-
-    // Add attributes method for reflection
-    auto attributes() const {
-        using tt::stl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("tiles_per_chunk", tiles_per_chunk);
-        attrs.emplace_back("num_worker_per_link", num_workers_per_link);
-        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
-        attrs.emplace_back("mm_cores_y", mm_cores_y);
-        attrs.emplace_back("mm_block_ht", mm_block_ht);
-        attrs.emplace_back("mm_block_wt", mm_block_wt);
-        return attrs;
-    }
-
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+        const std::optional<uint32_t>& tiles_per_chunk,
+        const std::optional<uint32_t>& num_workers_per_link,
+        const std::optional<uint32_t>& num_buffers_per_channel,
+        const std::optional<uint32_t>& mm_cores_y,
+        const std::optional<uint32_t>& mm_block_ht,
+        const std::optional<uint32_t>& mm_block_wt);
 };
+}  // namespace strided_all_gather_async
+}  // namespace ttnn::operations::experimental::ccl
 
-// All Gather Variants
-tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default(
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> tiles_per_chunk,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt);
-tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default_helper(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> tiles_per_chunk,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+namespace ttnn::prim {
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+constexpr auto strided_all_gather_async = ttnn::register_operation<
+    "ttnn::prim::strided_all_gather_async",
+    ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync>();
 
-Tensor strided_all_gather_async(
-    const Tensor& input_tensor,
-    uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-    std::optional<uint32_t> tiles_per_chunk = std::nullopt,
-    std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-    std::optional<uint32_t> mm_cores_y = std::nullopt,
-    std::optional<uint32_t> mm_block_ht = std::nullopt,
-    std::optional<uint32_t> mm_block_wt = std::nullopt);
-
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::prim
