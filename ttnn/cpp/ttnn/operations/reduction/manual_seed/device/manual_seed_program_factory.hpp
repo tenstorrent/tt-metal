@@ -35,4 +35,34 @@ struct ManualSeedSingleSeedSingleCoreProgramFactory {
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
+// Case 3: seed=uint32_t, user_ids=Tensor - set seeds to cores in user_ids tensor
+struct ManualSeedSingleSeedSetCoresProgramFactory {
+    struct shared_variables_t {
+        std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+        std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
+        std::vector<CoreCoord> cores;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+
+// Case 4: seed=Tensor, user_ids=Tensor - set mapping seeds to cores based on tensors
+struct ManualSeedSetSeedsSetCoresProgramFactory {
+    struct shared_variables_t {
+        std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+        std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
+        std::vector<CoreCoord> cores;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
+
 }  // namespace ttnn::operations::reduction::manual_seed::program
