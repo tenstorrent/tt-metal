@@ -486,7 +486,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            4,  # data_parallel
+            16,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
