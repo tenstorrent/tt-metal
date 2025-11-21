@@ -104,9 +104,9 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
             }
             else if (tokenizer_type == "bpe") {
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(
-                    std::get<YAML::Node>(data_source), seq_len);
+                    std::get<std::reference_wrapper<YAML::Node>>(data_source), seq_len);
 
-                auto yaml_node = std::get<YAML::Node>(data_source);
+                auto yaml_node = std::get<std::reference_wrapper<YAML::Node>>(data_source).get();
                 uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
 
                 return std::make_tuple(dataset, vocab_size);
