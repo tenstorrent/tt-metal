@@ -78,19 +78,6 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
     
     std::variant<std::string, YAML::Node> text_or_tokens;
-    uint32_t vocab_size;
-
-    uint32_t sequence_length = std::visit(
-        [&](auto &&arg) {
-            if constexpr (requires { arg.max_sequence_length; }) {
-                return arg.max_sequence_length;
-            } else {
-                throw std::runtime_error(
-                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
-            }
-        },
-        config.transformer_config);
-
 
     try {
         // check file extension:
@@ -105,17 +92,19 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     }
 
     auto create_dataset =
-        [](const auto &data_source, const auto sequence_length, const auto &tokenizer_type, auto &train_config) {
+        [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
             if (tokenizer_type == "char") {
                 auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<std::string>(data_source), sequence_length);
+                    std::get<std::string>(data_source), seq_len);
 
                 return std::make_tuple(dataset, tokenizer->get_vocab_size());
             }
             else if (tokenizer_type == "bpe") {
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(
-                    std::get<YAML::Node>(data_source), sequence_length);
-                uint32_t vocab_size = std::get<YAML::Node>(data_source)["tokenizer_vocab_size"].as<uint32_t>();
+                    std::get<YAML::Node>(data_source), seq_len);
+
+                auto yaml_node = std::get<YAML::Node>(data_source);
+                uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
 
                 return std::make_tuple(dataset, vocab_size);
             }

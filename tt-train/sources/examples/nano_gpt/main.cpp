@@ -414,11 +414,13 @@ int main(int argc, char **argv) {
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(
                     std::get<YAML::Node>(data_source), sequence_length);
 
+                auto yaml_node = std::get<YAML::Node>(data_source);
+
                 std::visit(
-                    [&](auto &&arg) { arg.vocab_size = std::get<YAML::Node>(data_source)["tokenizer_vocab_size"].as<uint32_t>(); }, model_config.transformer_config);
+                    [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); }, model_config.transformer_config);
 
                 return dataset;
-
+            }
             else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
