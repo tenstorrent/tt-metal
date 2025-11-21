@@ -10,6 +10,7 @@ from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransform
 from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
+from models.experimental.vadv2.tt.common import advanced_indexing, boolean_indexing
 
 
 class TtLearnedPositionalEncoding:
@@ -626,6 +627,16 @@ class TtVADHead:
             agent_query, agent_pos, agent_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
 
+        # Handle potential 4D shape from operations - reshape to expected 3D [1, M, C]
+        if len(agent_query.shape) == 4 and agent_query.shape[0] == 1 and agent_query.shape[1] == 1:
+            agent_query = ttnn.to_layout(agent_query, ttnn.ROW_MAJOR_LAYOUT)
+            agent_query = ttnn.reshape(agent_query, (1, agent_query.shape[2], agent_query.shape[3]))
+            agent_query = ttnn.to_layout(agent_query, ttnn.TILE_LAYOUT)
+        if len(agent_pos.shape) == 4 and agent_pos.shape[0] == 1 and agent_pos.shape[1] == 1:
+            agent_pos = ttnn.to_layout(agent_pos, ttnn.ROW_MAJOR_LAYOUT)
+            agent_pos = ttnn.reshape(agent_pos, (1, agent_pos.shape[2], agent_pos.shape[3]))
+            agent_pos = ttnn.to_layout(agent_pos, ttnn.TILE_LAYOUT)
+
         agent_pos = ttnn.to_layout(agent_pos, ttnn.TILE_LAYOUT)
         agent_pos_emb = self.ego_agent_pos_mlp(
             agent_pos, self.params.head.ego_agent_pos_mlp.weight, bias=self.params.head.ego_agent_pos_mlp.bias
@@ -667,16 +678,26 @@ class TtVADHead:
         min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
         min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
         min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
-        min_map_pos = ttnn.to_torch(min_map_pos)
-        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
-
-        min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
+        # min_map_pos = ttnn.to_torch(min_map_pos)
+        # min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
+        # min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
+        min_map_pos = advanced_indexing(min_map_pos, min_map_pos_idx)  # [B*P, 2]
+        # min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
 
         min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
         map_query, map_pos, map_mask = self.select_and_pad_query(
             map_query, min_map_pos, map_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
+
+        # Handle potential 4D shape from operations - reshape to expected 3D [1, M, C]
+        if len(map_query.shape) == 4 and map_query.shape[0] == 1 and map_query.shape[1] == 1:
+            map_query = ttnn.to_layout(map_query, ttnn.ROW_MAJOR_LAYOUT)
+            map_query = ttnn.reshape(map_query, (1, map_query.shape[2], map_query.shape[3]))
+            map_query = ttnn.to_layout(map_query, ttnn.TILE_LAYOUT)
+        if len(map_pos.shape) == 4 and map_pos.shape[0] == 1 and map_pos.shape[1] == 1:
+            map_pos = ttnn.to_layout(map_pos, ttnn.ROW_MAJOR_LAYOUT)
+            map_pos = ttnn.reshape(map_pos, (1, map_pos.shape[2], map_pos.shape[3]))
+            map_pos = ttnn.to_layout(map_pos, ttnn.TILE_LAYOUT)
 
         map_pos = ttnn.to_layout(map_pos, ttnn.TILE_LAYOUT)
         map_pos_emb = self.ego_map_pos_mlp(
@@ -984,13 +1005,15 @@ class TtVADHead:
         for i in range(query_score.shape[0]):
             dim = query.shape[-1]
             valid_qnum = ttnn.sum(query_idx[i])
-            query = ttnn.to_torch(query)
-            query_pos = ttnn.to_torch(query_pos)
-            query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
-            valid_query = query[i, query_idx[i]]
-            valid_query_pos = query_pos[i, query_idx[i]]
-            valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
-            valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
+            # query = ttnn.to_torch(query)
+            # query_pos = ttnn.to_torch(query_pos)
+            # query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
+            # valid_query = query[i, query_idx[i]]
+            # valid_query_pos = query_pos[i, query_idx[i]]
+            # valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
+            # valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
+            valid_query = boolean_indexing(query, query_idx[i])
+            valid_query_pos = boolean_indexing(query_pos, query_idx[i])
 
             pad_qnum = batch_max_qnum - valid_qnum
             padding_mask = torch.tensor([False])
