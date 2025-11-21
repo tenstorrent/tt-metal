@@ -318,8 +318,8 @@ Tensor GridSampleOperation::create_output_tensors(
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> GridSampleOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& grid,
+    const Tensor& input_tensor,
+    const Tensor& grid,
     const std::string& mode,
     const std::string& padding_mode,
     bool align_corners,
