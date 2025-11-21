@@ -696,19 +696,10 @@ void TestDevice::create_kernels() {
         this->create_sync_kernel();
     }
 
-    // Latency test mode uses specialized kernels (no validation)
-    if (latency_test_mode_) {
-        if (is_latency_sender_) {
-            this->create_latency_sender_kernel();
-        } else if (is_latency_responder_) {
-            this->create_latency_responder_kernel();
-        }
-        // Skip create_receiver_kernels() entirely in latency mode (no packet validation)
-    } else {
-        // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
-        this->create_sender_kernels();
-        this->create_receiver_kernels();
-    }
+    // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
+    // Note: Latency tests call create_latency_sender_kernel() and create_latency_responder_kernel() directly
+    this->create_sender_kernels();
+    this->create_receiver_kernels();
 }
 
 void TestDevice::create_mux_kernels() {
@@ -1239,29 +1230,33 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
-void TestDevice::create_latency_sender_kernel() {
+void TestDevice::create_latency_sender_kernel(
+    CoreCoord core,
+    FabricNodeId dest_node,
+    uint32_t payload_size,
+    uint32_t burst_size,
+    uint32_t num_bursts,
+    tt_metal::DeviceAddr semaphore_addr,
+    NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
-
-    CoreCoord core = latency_worker_core_;
-    FabricNodeId dest_node = latency_peer_node_;
 
     // Compute num hops to responder using routing calculation
     // For simple 1D case, compute hop distance
     uint32_t num_hops = 1;  // Default to 1 hop, will be computed by routing
 
     // Compile-time args
-    bool enable_fused_payload_with_sync = (latency_noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
-    bool sem_inc_only = (latency_payload_size_ == 0);
+    bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+    bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
 
     // Runtime args
     // Calculate scratch buffer address after timestamp storage (256 samples * 16 bytes = 4KB)
     constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
     TT_FATAL(
-        num_bursts_ <= MAX_LATENCY_SAMPLES,
+        num_bursts <= MAX_LATENCY_SAMPLES,
         "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
         "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
-        num_bursts_,
+        num_bursts,
         MAX_LATENCY_SAMPLES);
 
     uint32_t scratch_buffer_address =
@@ -1273,10 +1268,10 @@ void TestDevice::create_latency_sender_kernel() {
 
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
-        latency_semaphore_address_,                       // semaphore for ack
-        latency_payload_size_,                            // payload size
-        latency_burst_size_,                              // burst size (typically 1)
-        num_bursts_,                                      // num bursts
+        semaphore_addr,                                   // semaphore for ack
+        payload_size,                                     // payload size
+        burst_size,                                       // burst size (typically 1)
+        num_bursts,                                       // num bursts
         num_hops,                                         // hops to responder
         scratch_buffer_address,                           // sender's scratch buffer for receiving echo
         responder_scratch_buffer_address                  // responder's scratch buffer for sending payload TO
@@ -1303,28 +1298,32 @@ void TestDevice::create_latency_sender_kernel() {
     log_debug(tt::LogTest, "Created latency sender kernel on core {}", core);
 }
 
-void TestDevice::create_latency_responder_kernel() {
+void TestDevice::create_latency_responder_kernel(
+    CoreCoord core,
+    FabricNodeId sender_node,
+    uint32_t payload_size,
+    uint32_t burst_size,
+    uint32_t num_bursts,
+    tt_metal::DeviceAddr semaphore_addr,
+    NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
-
-    CoreCoord core = latency_worker_core_;
-    FabricNodeId sender_node = latency_peer_node_;  // In responder, peer is the sender
 
     // Compute num hops back to sender
     uint32_t num_hops_back = 1;  // Default to 1 hop, will be computed by routing
 
     // Compile-time args
-    bool enable_fused_payload_with_sync = (latency_noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
-    bool sem_inc_only = (latency_payload_size_ == 0);
+    bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+    bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
 
     // Runtime args
     // Calculate sender's scratch buffer address (where responder writes echo back to)
     constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
     TT_FATAL(
-        num_bursts_ <= MAX_LATENCY_SAMPLES,
+        num_bursts <= MAX_LATENCY_SAMPLES,
         "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
         "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
-        num_bursts_,
+        num_bursts,
         MAX_LATENCY_SAMPLES);
 
     uint32_t sender_scratch_buffer_address =
@@ -1336,10 +1335,10 @@ void TestDevice::create_latency_responder_kernel() {
 
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
-        latency_semaphore_address_,                       // semaphore for incoming packets
-        latency_payload_size_,                            // payload size
-        latency_burst_size_,                              // burst size (typically 1)
-        num_bursts_,                                      // num bursts
+        semaphore_addr,                                   // semaphore for incoming packets
+        payload_size,                                     // payload size
+        burst_size,                                       // burst size (typically 1)
+        num_bursts,                                       // num bursts
         num_hops_back,                                    // hops back to sender
         sender_scratch_buffer_address,                    // sender's scratch buffer (for echo back)
         responder_scratch_buffer_address                  // responder's scratch buffer (for receiving payload)
