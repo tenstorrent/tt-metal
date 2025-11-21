@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/eltwise_unary/rand.h"
+
 namespace NAMESPACE {
 void MAIN {
     // Get compile time args
