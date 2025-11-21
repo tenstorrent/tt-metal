@@ -1,5 +1,5 @@
 Tests:
-  - name: "FlowControlMesh"
+  - name: "FlowControlMultiMesh"
     enable_flow_control: true
     fabric_setup:
       topology: Mesh

@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include "device/fast_reduce_nc_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::experimental::reduction {

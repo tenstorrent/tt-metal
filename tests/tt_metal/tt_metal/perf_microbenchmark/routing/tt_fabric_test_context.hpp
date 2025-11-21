@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <optional>
@@ -98,12 +99,12 @@ enum class BandwidthStatistics {
 };
 // The header of each statistic in the Bandwidth Summary CSV
 const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHeader = {
-    {BandwidthStatistics::BandwidthMean, "Avg Bandwidth (GB/s)"},
-    {BandwidthStatistics::BandwidthMin, "BW Min (GB/s)"},
-    {BandwidthStatistics::BandwidthMax, "BW Max (GB/s)"},
-    {BandwidthStatistics::BandwidthStdDev, "BW Std Dev (GB/s)"},
-    {BandwidthStatistics::PacketsPerSecondMean, "Avg Packets/s"},
-    {BandwidthStatistics::CyclesMean, "Avg Cycles"},
+    {BandwidthStatistics::BandwidthMean, "avg_bandwidth_GB_per_s"},
+    {BandwidthStatistics::BandwidthMin, "bw_min_GB_per_s"},
+    {BandwidthStatistics::BandwidthMax, "bw_max_GB_per_s"},
+    {BandwidthStatistics::BandwidthStdDev, "bw_std_dev_GB_per_s"},
+    {BandwidthStatistics::PacketsPerSecondMean, "avg_packets_per_s"},
+    {BandwidthStatistics::CyclesMean, "avg_cycles"},
 };
 
 // Access to internal API: ProgramImpl::num_kernel
@@ -454,6 +455,9 @@ public:
         // Generate bandwidth summary CSV file
         generate_bandwidth_summary_csv();
 
+        // Generate bandwidth summary upload CSV file with metadata
+        generate_bandwidth_summary_upload_csv();
+
         // Compare summary results with golden CSV
         compare_summary_results_with_golden();
 
@@ -582,7 +586,11 @@ public:
 
         // Copy CSV files to CI artifacts directory
         for (const std::filesystem::path& csv_filepath :
-             {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_, comparison_statistics_csv_file_path_}) {
+             {csv_file_path_,
+              csv_summary_file_path_,
+              csv_summary_upload_file_path_,
+              diff_csv_file_path_,
+              comparison_statistics_csv_file_path_}) {
             try {
                 std::filesystem::copy_file(
                     csv_filepath,
@@ -1336,59 +1344,111 @@ private:
 
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
 
+    void write_bandwidth_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) {
+        // Create CSV file with header
+        std::ofstream csv_stream(csv_path, std::ios::out | std::ios::trunc);
+        if (!csv_stream.is_open()) {
+            log_error(tt::LogTest, "Failed to create CSV file: {}", csv_path.string());
+            return;
+        }
+
+        // Write header
+        if (include_upload_columns) {
+            csv_stream << "file_name,machine_type,test_ts,";
+        }
+        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
+        for (BandwidthStatistics stat : stat_order_) {
+            const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
+            csv_stream << "," << stat_name;
+        }
+        csv_stream << ",tolerance_percent\n";
+        log_info(tt::LogTest, "Initialized CSV file: {}", csv_path.string());
+
+        // Write data rows
+        for (const auto& result : bandwidth_results_summary_) {
+            // Write upload columns if present
+            if (include_upload_columns) {
+                csv_stream << result.file_name.value() << "," << result.machine_type.value() << ","
+                           << result.test_ts.value() << ",";
+            }
+
+            // Convert vector of num_devices to a string representation
+            std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
+
+            // Write standard columns
+            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
+                       << ",\"" << num_devices_str << "\"," << result.num_links << "," << result.packet_size << ","
+                       << result.num_iterations;
+            for (double stat : result.statistics_vector) {
+                csv_stream << "," << std::fixed << std::setprecision(6) << stat;
+            }
+
+            // Find the corresponding golden entry for this test result
+            auto golden_it = fetch_corresponding_golden_entry(result);
+            if (golden_it == golden_csv_entries_.end()) {
+                csv_stream << "," << 1.0;
+            } else {
+                csv_stream << "," << golden_it->tolerance_percent;
+            }
+            csv_stream << "\n";
+        }
+        csv_stream.close();
+        log_info(tt::LogTest, "Bandwidth summary results written to CSV file: {}", csv_path.string());
+    }
+
     void generate_bandwidth_summary_csv() {
-        // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all
-        // multirun tests to complete Generate detailed CSV filename
-        std::ostringstream summary_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
+        std::ostringstream summary_oss;
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
-        // Output directory already set in initialize_bandwidth_results_csv_file()
+
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         csv_summary_file_path_ = output_path / summary_oss.str();
 
-        // Create detailed CSV file with header
-        std::ofstream summary_csv_stream(csv_summary_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
-        if (!summary_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create summary CSV file: {}", csv_summary_file_path_.string());
-            return;
-        }
+        write_bandwidth_summary_csv_to_file(csv_summary_file_path_, false);
+    }
 
-        // Write detailed header
-        summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
-        for (BandwidthStatistics stat : stat_order_) {
-            const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
-            summary_csv_stream << "," << stat_name;
-        }
-        summary_csv_stream << ",tolerance_percent";
-        summary_csv_stream << "\n";
-        log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
+    void populate_upload_metadata_fields() {
+        // Get arch name and cluster type
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        std::string machine_type = std::string(enchantum::to_string(cluster_type));
+        std::transform(machine_type.begin(), machine_type.end(), machine_type.begin(), ::tolower);
 
-        // Write data rows
-        for (const auto& result : bandwidth_results_summary_) {
-            // Convert vector of num_devices to a string representation
-            std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
-            summary_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
-                               << result.topology << ",\"" << num_devices_str << "\"," << result.num_links << ","
-                               << result.packet_size << "," << result.num_iterations;
-            for (double stat : result.statistics_vector) {
-                summary_csv_stream << "," << std::fixed << std::setprecision(6) << stat;
-            }
-            // Find the corresponding golden entry for this test result
-            auto golden_it = fetch_corresponding_golden_entry(result);
-            if (golden_it == golden_csv_entries_.end()) {
-                log_warning(
-                    tt::LogTest,
-                    "Golden CSV entry not found for test {}, putting tolerance of 1.0 in summary CSV",
-                    result.test_name);
-                summary_csv_stream << "," << 1.0;
-            } else {
-                summary_csv_stream << "," << golden_it->tolerance_percent;
-            }
-            summary_csv_stream << "\n";
+        // Generate file_name column value
+        std::string file_name = "bw_" + arch_name + "_" + machine_type;
+
+        // Capture current timestamp
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+        std::tm timestamp_now{};
+        localtime_r(&time_t_now, &timestamp_now);
+        std::ostringstream timestamp_oss;
+        timestamp_oss << std::put_time(&timestamp_now, "%Y-%m-%d %H:%M:%S");
+        std::string test_ts = timestamp_oss.str();
+
+        // Populate optional fields in all result objects
+        for (auto& result : bandwidth_results_summary_) {
+            result.file_name = file_name;
+            result.machine_type = machine_type;
+            result.test_ts = test_ts;
         }
-        summary_csv_stream.close();
-        log_info(tt::LogTest, "Bandwidth summary results appended to CSV file: {}", csv_summary_file_path_.string());
+    }
+
+    void generate_bandwidth_summary_upload_csv() {
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
+        std::ostringstream upload_oss;
+        upload_oss << "bandwidth_summary_results_" << arch_name << "_upload.csv";
+
+        std::filesystem::path output_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+        csv_summary_upload_file_path_ = output_path / upload_oss.str();
+
+        // Populate upload metadata fields
+        populate_upload_metadata_fields();
+
+        // Write CSV with upload columns
+        write_bandwidth_summary_csv_to_file(csv_summary_upload_file_path_, true);
     }
 
     std::string get_golden_csv_filename() {
@@ -1658,6 +1718,7 @@ private:
     std::vector<BandwidthStatistics> stat_order_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
+    std::filesystem::path csv_summary_upload_file_path_;
 
     // Golden CSV comparison data
     std::vector<GoldenCsvEntry> golden_csv_entries_;
