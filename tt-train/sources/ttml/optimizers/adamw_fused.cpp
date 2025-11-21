@@ -106,6 +106,8 @@ size_t AdamWFused::get_steps() const {
 }
 
 void AdamWFused::set_steps(size_t steps) {
+    this->m_beta1_pow = std::pow(m_config.beta1, steps);
+    this->m_beta2_pow = std::pow(m_config.beta2, steps);
     this->m_steps = steps;
 }
 
