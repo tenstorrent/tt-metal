@@ -225,6 +225,7 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    is_ci_env = True
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
