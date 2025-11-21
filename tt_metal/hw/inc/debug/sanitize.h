@@ -487,9 +487,9 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #if defined(COMPILE_FOR_ERISC)
-    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE + 1;
+    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #else
-    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE + 1;
+    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
 #endif
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
