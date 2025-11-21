@@ -101,6 +101,13 @@ jobs:
               "owner_id": "U08TED0JM9D"
             },
             {
+              "name": "Galaxy Motif-Image-6B-Preview demo tests",
+              "arch": "wormhole_b0",
+              "model": "motif",
+              "timeout": 20,
+              "owner_id": "U08TED0JM9D"
+            },
+            {
               "name": "Galaxy GPT-OSS demo tests",
               "arch": "wormhole_b0",
               "model": "gpt-oss",

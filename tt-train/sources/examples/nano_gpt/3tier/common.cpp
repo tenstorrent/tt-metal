@@ -24,7 +24,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["learning_rate"].as<float>();
+    config.learning_rate = training_config["lr"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
@@ -39,12 +39,16 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    if (config.model_type == "gpt2") {
-        config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
-    } else if (config.model_type == "llama") {
-        config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+
+    auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
+    std::string model_type = model_yaml["model_type"].as<std::string>();
+
+    if (model_type == "gpt2") {
+        config.transformer_config = ttml::models::gpt2::read_config(model_yaml);
+    } else if (model_type == "llama") {
+        config.transformer_config = ttml::models::llama::read_config(model_yaml);
     } else {
-        throw std::runtime_error("Unknown model type: " + config.model_type);
+        throw std::runtime_error("Unknown model type: " + model_type);
     }
 
     auto multihost_config = yaml_config["multihost_config"];
@@ -69,9 +73,44 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-    std::string text;
 
-    auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+
+    try {
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        exit(-1);
+    }
+
+    auto create_dataset =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<std::string>(text), sequence_length);
+
+                return dataset;
+            }
+            else if (tokenizer_type == "bpe") {
+                try
+                {
+                    return ttml::datasets::InMemoryTokenDataset(std::get<std::vector<uint32_t>>(text), sequence_length);
+
+                } catch (const std::exception &e) {
+                    std::cerr << e.what() << std::endl;
+                    std::cerr << "\nExpected tokenized data file for BPE tokenizer, but received a .txt file or an invalid format. Did you tokenize the dataset? See the README for details." << std::endl;                    exit(-1);
+                }
+            }
+            else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
 
     auto sequence_length = std::visit(
         [&](auto &&arg) {
@@ -84,7 +123,8 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         },
         config.transformer_config);
 
-    auto dataset = ttml::datasets::InMemoryTokenDataset(tokens_vector, sequence_length);
+    auto dataset = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type);
+    fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);

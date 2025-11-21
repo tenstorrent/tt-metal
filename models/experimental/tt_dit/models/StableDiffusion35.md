@@ -34,12 +34,17 @@ Current performance and target performance for two systems are detailed below. P
 1. Visit [HuggingFace](https://huggingface.co/stabilityai/stable-diffusion-3.5-large) to grant access to the model weights
 2. Login with the HuggingFace token: `huggingface-cli login`
 
-Finally, run the demo
-```
-pytest models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k_cfg2_sp2_tp2 and yes_trace"
+```bash
+# [Install tt-metal](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-# On Galaxy
-TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/fun_demo.py -k "tg_cfg2_sp4_tp4 and yes_trace"
+# Set the directory to cache the weights to speed up future runs
+export TT_DIT_CACHE_DIR=/your/cache/path
+
+# Run the pipeline test on QuietBox (2x4 mesh)
+pytest models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "2x4cfg1sp0tp1 and yes_traced"
+
+# Run the pipeline test on Galaxy (4x8 mesh)
+pytest models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1 and yes_traced"
 ```
 
 
