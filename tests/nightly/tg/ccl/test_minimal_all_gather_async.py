@@ -376,7 +376,7 @@ def test_all_gather_async_quad_host_mesh(
     [
         (
             {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
                 "trace_region_size": 190112,
             },
@@ -392,7 +392,7 @@ def test_all_gather_async_quad_host_mesh(
         ),
     ],
     indirect=["device_params"],
-    ids=["fabric_2d_dynamic_linear", "fabric_linear"],
+    ids=["fabric_2d_linear", "fabric_linear"],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
 def test_all_gather_4x32_sanity(
