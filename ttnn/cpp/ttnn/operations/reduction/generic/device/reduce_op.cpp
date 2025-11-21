@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
-#include <limits>
 #include <optional>
 #include <string>
 
@@ -170,6 +169,7 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
@@ -181,23 +181,10 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
+    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    auto tilized_input =
+        ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(input_tensor, pad_value, Layout::TILE);
     if (is_multicore_hw) {
-        distributed::MeshDevice* device;
-        // Get the device
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
-            TT_FATAL(device != nullptr, "Default device must be set if no inputs to op are on device");
-        } else {
-            device = input_tensor.device();
-        }
-        auto input_tensor_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-        auto formatted_input_tensor = input_tensor;
-        if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
-                input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
-        }
         const Tensor output_tensor = operation::run(
                                          Reduce{
                                              reduce_math,
@@ -206,7 +193,7 @@ Tensor reduce(
                                              output_mem_config,
                                              output_dtype.value_or(input_tensor.dtype()),
                                              config},
-                                         {formatted_input_tensor})
+                                         {tilized_input})
                                          .at(0);
         return operation::run(
                    Reduce{
@@ -219,7 +206,7 @@ Tensor reduce(
                    {output_tensor})
             .at(0);
     } else {
-        return operation::run_with_autoformat(
+        return operation::run(
                    Reduce{
                        reduce_math,
                        reduce_dim,
@@ -227,10 +214,7 @@ Tensor reduce(
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
                        config},
-                   {input_tensor},
-                   {},
-                   {},
-                   pad_value)
+                   {tilized_input})
             .at(0);
     }
 }

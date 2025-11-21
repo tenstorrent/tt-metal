@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "clone/clone.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
@@ -61,9 +62,13 @@ ttnn::Tensor ReshapeOperation::invoke(
         // since handled within the tensor reshape method
         return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
     }
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     if (input_tensor.padded_shape() == padded_output_shape) {
-        return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-            input_tensor, output_mem_config);
+        if (input_tensor.memory_config() != output_mem_config) {
+            return ttnn::clone(input_tensor, std::nullopt, output_mem_config, std::nullopt);
+        } else {
+            return input_tensor;
+        }
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.layout() == Layout::ROW_MAJOR &&
