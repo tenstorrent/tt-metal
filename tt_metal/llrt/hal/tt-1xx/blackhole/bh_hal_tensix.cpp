@@ -17,6 +17,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
@@ -37,10 +38,9 @@ HalCoreInfoType create_tensix_mem_map() {
 
     // Validate against known physical constraints
     // There are other constraints, but that's determined at runtime
-    constexpr uint32_t total_l1_size = MEM_L1_SIZE;    // 1536 * 1024
-    constexpr uint32_t system_reserved = MEM_MAP_END;  // 32880
-    constexpr uint32_t max_kernel_buffer = total_l1_size - system_reserved;
+    constexpr uint32_t max_kernel_buffer = MEM_L1_SIZE - MEM_MAP_END;  // 1536 * 1024 - 32880 (system reserved)
 
+    // First check: validate user input before alignment
     TT_FATAL(
         default_l1_kernel_config_size <= max_kernel_buffer,
         "Kernel config buffer size {} B exceeds maximum available L1 space {} B. "
@@ -48,8 +48,26 @@ HalCoreInfoType create_tensix_mem_map() {
         "Reduce TT_METAL_KERNEL_CONFIG_BUFFER_SIZE.",
         default_l1_kernel_config_size,
         max_kernel_buffer,
-        total_l1_size,
-        system_reserved);
+        MEM_L1_SIZE,
+        MEM_MAP_END);
+
+    // Calculate the aligned end address of the kernel config buffer
+    const uint32_t aligned_end_addr = tt::align(MEM_MAP_END + default_l1_kernel_config_size, max_alignment);
+    constexpr uint32_t l1_end_addr = MEM_L1_BASE + MEM_L1_SIZE;
+
+    // Second check: validate after alignment
+    TT_FATAL(
+        aligned_end_addr <= l1_end_addr,
+        "Aligned kernel config buffer end address 0x{:x} exceeds L1 end address 0x{:x}",
+        aligned_end_addr,
+        l1_end_addr);
+
+    log_info(
+        tt::LogMetal,
+        "Kernel config buffer set to {} KB (aligned to {} KB)",
+        default_l1_kernel_config_size / 1024,
+        (aligned_end_addr - MEM_MAP_END) / 1024  // Aligned kernel config buffer size
+    );
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
@@ -73,8 +91,7 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
-        ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] = aligned_end_addr;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);

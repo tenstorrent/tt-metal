@@ -3,32 +3,40 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/tt_align.hpp>
-#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+#include "tt_metal/impl/dispatch/util/size_literals.hpp"
+#include "tt_metal/common/env_lib.hpp"
 
 namespace tt::tt_metal {
 namespace kernel_size_tests {
 
 class KernelSizeTest : public UnitMeshCQFixture {
 protected:
+    // Runtime-determined values
     uint32_t actual_kernel_config_size_{};
     uint32_t kernel_config_base_{};
     uint32_t unreserved_base_{};
     uint32_t unreserved_size_{};
+    const Hal& hal_{MetalContext::instance().hal()};
+
+    // 65536 bytes is an edge case for testing the CQDispatchWritePackedLargeSubCmd.length
+    // as its equal to scratch_db_size/2 (64KB) which overflows to 0 when cast to uint16_t in dispatch system
+    static constexpr uint32_t packed_write_large_max_chunk_size = 65536;
+    static constexpr uint32_t NUM_RISCV_PROCESSORS = 5;  // BRISC, NCRISC, TRISC0/1/2
+    static constexpr uint32_t NUM_KERNELS_AGGREGATE_TEST = 4;
+    static constexpr uint32_t OVERSIZED_KERNEL_PADDING = 32;  // Bytes beyond limit for rejection tests
+
+    // Near limit of kernel config buffer size
+    // The kernel size is greater than whats set by KERNEL_BYTES due elf headers, alignment, etc.
+    // So we need to subtract the overhead to get the near limit of the kernel config buffer size
+    static constexpr uint32_t NEAR_LIMIT_BUFFER = 324;
 
     void SetUp() override {
         UnitMeshCQFixture::SetUp();
@@ -37,10 +45,9 @@ protected:
             GTEST_SKIP() << "Kernel size config tests are only supported on Blackhole";
         }
 
-        const auto& hal = MetalContext::instance().hal();
-        kernel_config_base_ = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-        unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        kernel_config_base_ = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+        unreserved_base_ = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        unreserved_size_ = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
         // kernel config buffer size
         actual_kernel_config_size_ = unreserved_base_ - kernel_config_base_;
@@ -93,16 +100,16 @@ TEST_F(KernelSizeTest, DefaultAggregateBuffer) {
 
 // Test 2: Check if env var TT_METAL_KERNEL_CONFIG_BUFFER_SIZE is respected
 TEST_F(KernelSizeTest, EnvVarConfigBufferSize) {
+    log_info(LogTest, "Testing env var TT_METAL_KERNEL_CONFIG_BUFFER_SIZE parameter control");
+
     uint32_t user_set_kernel_config_size = tt::parse_env<uint32_t>("TT_METAL_KERNEL_CONFIG_BUFFER_SIZE", 0);
 
     if (user_set_kernel_config_size == 0) {
         GTEST_SKIP() << "Run with TT_METAL_KERNEL_CONFIG_BUFFER_SIZE set to test huge kernel config support";
     }
 
-    log_info(LogTest, "Testing env var TT_METAL_KERNEL_CONFIG_BUFFER_SIZE parameter control");
-
-    const uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    const uint32_t dram_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
+    const uint32_t l1_alignment = hal_.get_alignment(HalMemType::L1);
+    const uint32_t dram_alignment = hal_.get_alignment(HalMemType::DRAM);
     uint32_t max_alignment = std::max(dram_alignment, l1_alignment);
 
     // Calculate the expected end address by aligning (kernel_config_base_ + user_set_kernel_config_size) up
@@ -127,9 +134,8 @@ TEST_F(KernelSizeTest, EnvVarConfigBufferSize) {
 TEST_F(KernelSizeTest, WorkerL1SizeParameterControl) {
     log_info(LogTest, "Testing worker_l1_size parameter control");
 
-    const auto& hal = MetalContext::instance().hal();
-    auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    auto l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 
     uint32_t l1_end = l1_base + l1_size;
 
@@ -144,32 +150,29 @@ TEST_F(KernelSizeTest, WorkerL1SizeParameterControl) {
     EXPECT_LE(actual_kernel_config_size_, max_available);
 }
 
-// Test 4: Test kernels with different sizes and also special case of 65536 bytes (64KB).
-// 65536 bytes (64KB) is used for testing the special case of
-// encoding 0 for 64KB in cq_dispatch.cpp
+// Test 4: Test kernels with different sizes and also edge case of 65536 bytes (64KB)
+// Tests the edge case where 65536 bytes overflows to 0 in CQDispatchWritePackedLargeSubCmd.length
+// This validates the encoding/decoding of the maximum chunk size in the dispatch system
 TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
-    log_info(LogTest, "Testing different kernel sizes and special case of 65536 bytes (64KB)");
+    log_info(LogTest, "Testing different kernel sizes and edge case of {} bytes", packed_write_large_max_chunk_size);
 
-    // Test boundary conditions slightly below the default 69KB kernel config buffer size
+    // Test sizes around critical boundaries
     std::vector<uint32_t> kernel_sizes = {
-        1024,                               // 1 KB
-        16 * 1024,                          // 16 KB
-        32 * 1024,                          // 32 KB
-        65336 - 2,                          // 64KB - 2
-        65336 - 1,                          // 64KB - 1 bytes
-        65536,                              // Exactly 64KB
-        65536 + 1,                          // 64KB + 1 bytes
-        65536 + 2,                          // 64KB + 2 bytes
-        2 * 65336,                          // ~128KB
-        131072,                             // 131072 bytes
-        3 * 65336,                          // ~192KB
-        212992,                             // 212992 bytes
-        actual_kernel_config_size_ / 8,     // 1/8 of available
-        actual_kernel_config_size_ / 4,     // 1/4 of available
-        actual_kernel_config_size_ / 2,     // Half of available
-        actual_kernel_config_size_ - 2048,  // Near limit
+        1_KB,                                            // 1 KB
+        16_KB,                                           // 16 KB
+        32_KB,                                           // 32 KB
+        packed_write_large_max_chunk_size - 1,           // 64KB - 1
+        packed_write_large_max_chunk_size,               // Exactly 64KB
+        packed_write_large_max_chunk_size + 1,           // 64KB + 1
+        2 * packed_write_large_max_chunk_size,           // 128KB
+        3 * packed_write_large_max_chunk_size,           // 192KB
+        212992,                                          // 212992 bytes
+        actual_kernel_config_size_ / 8,                  // 1/8 of kernel config buffer size
+        actual_kernel_config_size_ / 4,                  // 1/4 of kernel config buffer size
+        actual_kernel_config_size_ / 2,                  // Half of kernel config buffer size
+        actual_kernel_config_size_ - NEAR_LIMIT_BUFFER,  // Near limit of kernel config buffer size
     };
 
     // Select a kernel size and if it's within kernel config buffer size,
@@ -211,8 +214,8 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 5: Multiple kernels filling up kernel config buffer
-TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
+// Test 5: Multiple kernels filling up kernel config buffer on different cores
+TEST_F(KernelSizeTest, MultipleKernelsAggregateSize) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
     log_info(LogTest, "Testing multiple kernels filling up kernel config buffer");
@@ -221,10 +224,11 @@ TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
         distributed::MeshWorkload workload;
         Program program;
 
-        const uint32_t num_kernels = 4;
-        const uint32_t kernel_size = actual_kernel_config_size_ / num_kernels;
+        // Use near limit of kernel config buffer size to test the
+        // multiple kernels filling up the buffer
+        const uint32_t kernel_size = actual_kernel_config_size_ - NEAR_LIMIT_BUFFER;
 
-        for (uint32_t i = 0; i < num_kernels; i++) {
+        for (uint32_t i = 0; i < NUM_KERNELS_AGGREGATE_TEST; i++) {
             CoreRange cr({i, 0}, {i, 0});
             CoreRangeSet cr_set({cr});
 
@@ -248,13 +252,14 @@ TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 6: Test all five RISC-V processors with large kernels
+// Test 6: Test all five RISC-V processors with large kernels on same core
 TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
     log_info(LogTest, "Testing all five RISC-V processors with large kernels");
 
-    const uint32_t kernel_size = actual_kernel_config_size_ / 5;
+    // Distribute the kernel size equally among the five RISC-V processors
+    const uint32_t kernel_size = ((actual_kernel_config_size_) / NUM_RISCV_PROCESSORS) - NEAR_LIMIT_BUFFER;
 
     log_info(LogTest, "Kernel size: {} B", kernel_size);
 
@@ -270,7 +275,7 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
         // BRISC
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
             cr_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -278,7 +283,7 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
         // NCRISC
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
             cr_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = defines});
@@ -286,7 +291,7 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
         // TRISC0, TRISC1, TRISC2
         CreateKernel(
             program,
-            "tt_metal/kernels/compute/blank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
             cr_set,
             ComputeConfig{.compile_args = {}, .defines = defines});
 
@@ -298,7 +303,7 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 7: Stress test - rapidly vary kernel sizes
+// Test 7: Stress test - rapidly vary kernel sizes on a single device
 TEST_F(KernelSizeTest, StressTestRapidlyVaryKernelSizes) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
@@ -310,7 +315,7 @@ TEST_F(KernelSizeTest, StressTestRapidlyVaryKernelSizes) {
         actual_kernel_config_size_ / 2,  // Large
         2048,                            // Small
         actual_kernel_config_size_ / 4,  // Large
-        65336,                           // Boundary
+        512,                             // Boundary
         actual_kernel_config_size_ / 2,  // Large
     };
 
@@ -358,11 +363,12 @@ TEST_F(KernelSizeTest, KernelSizeExceedsL1Limit) {
 
     log_info(LogTest, "Testing kernel size exceeding L1 limits");
 
-    const auto& hal = MetalContext::instance().hal();
-    auto l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 
     // Try to create a kernel larger than the entire L1 memory
-    uint32_t oversized_kernel = l1_size + 32;
+    // The kernel size is typically greater than whats specified by KERNEL_BYTES due elf headers, alignment, etc.
+    // So even adding a small amount of padding can reject the kernel
+    uint32_t oversized_kernel = l1_size + OVERSIZED_KERNEL_PADDING;
 
     log_info(LogTest, "L1 size: {} B", l1_size);
     log_info(LogTest, "Attempting to create kernel of size: {} B", oversized_kernel);
@@ -402,8 +408,10 @@ TEST_F(KernelSizeTest, ExceedsKernelConfigBufferSize) {
 
     log_info(LogTest, "Testing kernel size exceeding kernel config buffer size");
 
-    // kernel config buffer size plus slight overhead
-    const uint32_t kernel_size = (actual_kernel_config_size_) + 32;
+    // Kernel config buffer size plus padding for rejection test
+    // The kernel size is typically greater than whats specified by KERNEL_BYTES due elf headers, alignment, etc.
+    // So even adding a small amount of padding can reject the kernel
+    const uint32_t kernel_size = actual_kernel_config_size_ + OVERSIZED_KERNEL_PADDING;
 
     log_info(LogTest, "Kernel config buffer size: {} B", actual_kernel_config_size_);
     log_info(LogTest, "Kernel size: {} B (exceeds by {} B)", kernel_size, kernel_size - actual_kernel_config_size_);
