@@ -134,7 +134,7 @@ jobs:
               #   "cmd": "run_t3000_mixtral_tests",
               #   "timeout": 30,
               #   "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
-              # }, 
+              # },
               {
                   "name": "t3k resnet tests",
                   "model": "resnet",
