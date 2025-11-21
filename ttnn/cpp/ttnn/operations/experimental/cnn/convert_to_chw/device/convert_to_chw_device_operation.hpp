@@ -41,5 +41,5 @@ struct ConvertToCHWDeviceOperation {
 namespace ttnn::prim {
 constexpr auto convert_to_chw = ttnn::register_operation<
     "ttnn::prim::convert_to_chw",
-    ttnn::operations::experimental::cnn::ConvertToCHWDeviceOperation>();
+    ttnn::operations::experimental::cnn::to_chw::ConvertToCHWDeviceOperation>();
 }  // namespace ttnn::prim
