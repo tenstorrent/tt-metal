@@ -28,7 +28,7 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "compressed_routing_table.hpp"
+#include "compressed_direction_table.hpp"
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -773,15 +773,59 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 // order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
-        for (auto& [_, eth_chans] : eth_chans_by_dir) {
-            auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+        auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+        const auto src_asic_id = tt::tt_metal::AsicID{
+            tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(phys_chip_id)};
+        const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
+        for (auto& [direction, eth_chans] : eth_chans_by_dir) {
+            std::optional<tt::tt_metal::AsicID> neighbor_asic_id;
+            std::vector<tt::tt_metal::EthConnection> eth_connections;
+            for (const auto& asic_neighbor : asic_neighbors) {
+                eth_connections = physical_system_descriptor_->get_eth_connections(src_asic_id, asic_neighbor);
+                for (const auto& eth_connection : eth_connections) {
+                    if (std::find(eth_chans.begin(), eth_chans.end(), eth_connection.src_chan) != eth_chans.end() &&
+                        eth_connections.size() == eth_chans.size()) {
+                        neighbor_asic_id = asic_neighbor;
+                        break;
+                    }
+                }
+                if (neighbor_asic_id.has_value()) {
+                    break;
+                }
+            }
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
-
-            std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
-                auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
-                return translated_coords_a.x < translated_coords_b.x;
-            });
+            if (neighbor_asic_id.has_value() && src_asic_id > neighbor_asic_id.value()) {
+                std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
+                    auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
+                    auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
+                    return translated_coords_a.x < translated_coords_b.x;
+                });
+            } else if (neighbor_asic_id.has_value()) {
+                // Find the physical chip ID for the neighbor AsicID
+                ChipId neighbor_phys_chip_id = 0;
+                const auto& chip_unique_ids =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids();
+                for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
+                    if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
+                        neighbor_phys_chip_id = physical_chip_id;
+                        break;
+                    }
+                }
+                // Get the soc_desc for the neighbor chip
+                const auto& neighbor_soc_desc =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(neighbor_phys_chip_id);
+                std::sort(
+                    eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
+                        auto translated_coords_a =
+                            neighbor_soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
+                        auto translated_coords_b =
+                            neighbor_soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
+                        return translated_coords_a.x < translated_coords_b.x;
+                    });
+                for (uint32_t i = 0; i < eth_connections.size(); i++) {
+                    eth_chans[i] = eth_connections[i].src_chan;
+                }
+            }
         }
     }
 }
@@ -1461,8 +1505,7 @@ static void write_to_all_cores(
 }
 
 // Helper functions to compute and embed routing path tables
-void ControlPlane::compute_and_embed_1d_routing_path_table(
-    MeshId mesh_id, tensix_routing_l1_info_t& tensix_routing_info) const {
+void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routing_l1_info_t& routing_info) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& local_mesh_chip_id_container = this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
     uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
@@ -1472,12 +1515,11 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(
     intra_mesh_routing_path_t<1, false> routing_path_1d;
     routing_path_1d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), num_chips);
 
-    std::memcpy(
-        &tensix_routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
+    std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
 
 void ControlPlane::compute_and_embed_2d_routing_path_table(
-    MeshId mesh_id, ChipId chip_id, tensix_routing_l1_info_t& tensix_routing_info) const {
+    MeshId mesh_id, ChipId chip_id, routing_l1_info_t& routing_info) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
     auto local_mesh_chip_id_container = this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
 
@@ -1509,12 +1551,11 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     intra_mesh_routing_path_t<2, true> routing_path_2d;
     routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
-    std::memcpy(
-        &tensix_routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
+    std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
 
     // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
-    exit_node_table_t exit_table{};
-    std::fill_n(exit_table.nodes, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+    std::uint8_t exit_table[MAX_NUM_MESHES];
+    std::fill_n(exit_table, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
     for (const auto& dst_mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
         auto direction = inter_mesh_table[*mesh_id][chip_id][*dst_mesh_id];
@@ -1522,19 +1563,19 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
             continue;
         }
         auto exit_node = this->routing_table_generator_->get_exit_node_from_mesh_to_mesh(mesh_id, chip_id, dst_mesh_id);
-        exit_table.nodes[*dst_mesh_id] = static_cast<std::uint8_t>(exit_node.chip_id);
+        exit_table[*dst_mesh_id] = static_cast<std::uint8_t>(exit_node.chip_id);
     }
-    std::memcpy(&tensix_routing_info.exit_node_table, &exit_table, sizeof(exit_node_table_t));
+    std::memcpy(&routing_info.exit_node_table, &exit_table, sizeof(std::uint8_t[MAX_NUM_MESHES]));
 }
 
 // Write routing table to Tensix cores' L1 on a specific chip
-void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const {
+void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const {
     FabricNodeId src_fabric_node_id{mesh_id, chip_id};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
-    tensix_routing_l1_info_t tensix_routing_info = {};
-    tensix_routing_info.my_mesh_id = *mesh_id;
-    tensix_routing_info.my_device_id = chip_id;
+    routing_l1_info_t routing_info = {};
+    routing_info.my_mesh_id = *mesh_id;
+    routing_info.my_device_id = chip_id;
 
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
@@ -1544,14 +1585,14 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
     for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_MESH_SIZE; i++) {
-        tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+        routing_info.intra_mesh_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
 
     for (ChipId dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
-            tensix_routing_info.intra_mesh_routing_table.set_original_direction(
+            routing_info.intra_mesh_direction_table.set_original_direction(
                 dst_chip_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
@@ -1560,7 +1601,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
             forwarding_direction != RoutingDirection::NONE
                 ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
                 : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
-        tensix_routing_info.intra_mesh_routing_table.set_original_direction(dst_chip_id, direction_value);
+        routing_info.intra_mesh_direction_table.set_original_direction(dst_chip_id, direction_value);
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
@@ -1571,14 +1612,14 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
     for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; i++) {
-        tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+        routing_info.inter_mesh_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
 
     for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
          dst_mesh_id++) {
         if (*mesh_id == dst_mesh_id) {
-            tensix_routing_info.inter_mesh_routing_table.set_original_direction(
+            routing_info.inter_mesh_direction_table.set_original_direction(
                 dst_mesh_id, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION));
             continue;
         }
@@ -1587,34 +1628,34 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
             forwarding_direction != RoutingDirection::NONE
                 ? static_cast<std::uint8_t>(this->routing_direction_to_eth_direction(forwarding_direction))
                 : static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_DIRECTION);
-        tensix_routing_info.inter_mesh_routing_table.set_original_direction(dst_mesh_id, direction_value);
+        routing_info.inter_mesh_direction_table.set_original_direction(dst_mesh_id, direction_value);
     }
 
     if (this->get_fabric_context().is_2D_routing_enabled()) {
         // Compute and embed 2D routing path table and exit node table (per src chip id)
-        compute_and_embed_2d_routing_path_table(mesh_id, chip_id, tensix_routing_info);
+        compute_and_embed_2d_routing_path_table(mesh_id, chip_id, routing_info);
     } else {
         // Compute and embed 1D routing path table (independent of src chip id)
-        compute_and_embed_1d_routing_path_table(mesh_id, tensix_routing_info);
+        compute_and_embed_1d_routing_path_table(mesh_id, routing_info);
     }
 
     // Finally, write the full routing info to all Tensix cores and mirror to IDLE_ETH routing table
     write_to_all_cores(
-        &tensix_routing_info,
-        sizeof(tensix_routing_info),
-        tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE,
+        &routing_info,
+        sizeof(routing_info),
+        tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::TENSIX);
     write_to_all_cores(
-        &tensix_routing_info,
-        sizeof(tensix_routing_info),
-        tt::tt_metal::HalL1MemAddrType::FABRIC_ROUTING_TABLE,
+        &routing_info,
+        sizeof(routing_info),
+        tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
     write_to_all_cores(
-        &tensix_routing_info,
-        sizeof(tensix_routing_info),
-        tt::tt_metal::HalL1MemAddrType::FABRIC_ROUTING_TABLE,
+        &routing_info,
+        sizeof(routing_info),
+        tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
@@ -1739,7 +1780,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
             TT_ASSERT(
                 this->inter_mesh_routing_tables_.contains(fabric_node_id),
                 "Intra mesh routing tables keys mismatch with inter mesh routing tables");
-            this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+            this->write_routing_info_to_devices(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         }
     }
@@ -2710,8 +2751,10 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
-    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
-              "Cabling descriptor file not found: {}", cabling_descriptor_path);
+    TT_ASSERT(
+        std::filesystem::exists(cabling_descriptor_path),
+        "Cabling descriptor file not found: {}",
+        cabling_descriptor_path);
 
     // Generate GSD YAML from the current physical system descriptor
     YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
@@ -2721,8 +2764,8 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         cabling_descriptor_path,
         all_hostnames,
         gsd_yaml,
-        false,                      // strict_validation
-        false                       // assert_on_connection_mismatch
+        false,  // strict_validation
+        false   // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
