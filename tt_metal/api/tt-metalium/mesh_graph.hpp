@@ -45,6 +45,7 @@ enum class RoutingDirection {
     E = 2,
     S = 4,
     W = 8,
+    Z = 12,
     C = 16,     // Centre, means that destination is same as source
     NONE = 32,  // No direction, means that destination is not reachable
 };

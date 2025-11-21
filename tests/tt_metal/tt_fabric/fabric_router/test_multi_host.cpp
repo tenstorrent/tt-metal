@@ -739,13 +739,41 @@ TEST(MultiHost, TestDual4x8ControlPlaneInit) {
         log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
         GTEST_SKIP();
     }
-    const std::filesystem::path dual_4x8_mesh_graph_desc_path =
+    const std::filesystem::path dual_bh_galaxy_experimental_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x8_mesh_graph_descriptor.textproto";
-    auto control_plane = std::make_unique<ControlPlane>(dual_4x8_mesh_graph_desc_path.string());
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(dual_bh_galaxy_experimental_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestDual4x8Fabric2DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (4x8)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    control_plane.print_routing_tables();
+    // const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
+    // EXPECT_EQ(intermesh_connections.size(), 32);  // Bidirectional
+    // for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
+    //     const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+    //     log_info(tt::LogTest, "Direction: {}", *direction);
+    //     EXPECT_TRUE(direction.has_value());
+    //     const auto& eth_chans_by_direction =
+    //         control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+    //     EXPECT_TRUE(!eth_chans_by_direction.empty());
+    //     const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+    //     EXPECT_TRUE(!eth_chans.empty());
+    // }
 }
 
 }  // namespace multi_host_tests
