@@ -16,14 +16,15 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
     constexpr uint dst_tile_size = 64;
 
-    uint offset0 = dst_index_in0 * dst_tile_size;
-    uint offset1 = dst_index_in1 * dst_tile_size;
-    uint offset2 = dst_index_out * dst_tile_size;
+    uint offset_in0 = dst_index_in0 * dst_tile_size;
+    uint offset_in1 = dst_index_in1 * dst_tile_size;
+    uint offset_out = dst_index_out * dst_tile_size;
 
     // This uses SFPLOADMACRO to achieve a throughput of 8 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.  Variables a0,
-    // a1 are loaded from offset0; b0, b1 from offset1, and c from offset2.
+    // a1 are loaded from offset_in0; b0, b1 from offset_in1, and c from
+    // offset_out.
     //
     //
     // t  | Load | Simple                 | MAD                     | Round                 | Store    |
@@ -60,21 +61,21 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // b0
-        TT_SFPLOAD(b0, INT32, ADDR_MOD_7, offset1);
+        TT_SFPLOAD(b0, INT32, ADDR_MOD_7, offset_in1);
         // a1
-        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset0 | (a1 >> 2));
+        TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset_in0 | (a1 >> 2));
         // b1
-        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset1 | (b1 >> 2));
+        TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset_in1 | (b1 >> 2));
         // a0
-        TT_SFPLOAD(a0, INT32, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(a0, INT32, ADDR_MOD_7, offset_in0);
         // b2
-        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset1 | (b2 >> 2));
+        TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset_in1 | (b2 >> 2));
         // c = mul24_hi(a0, b2)
         TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, sfpi::SFPMUL24_MOD1_UPPER);
         // b1 = b1 + a1
         TTI_SFPIADD(0, a1, b1, sfpi::SFPIADD_MOD1_CC_NONE);
         // c
-        TT_SFPLOADMACRO((3 << 2) | (c & 3), INT32, ADDR_MOD_6, offset2 | (c >> 2));
+        TT_SFPLOADMACRO((3 << 2) | (c & 3), INT32, ADDR_MOD_6, offset_out | (c >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
