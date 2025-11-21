@@ -202,6 +202,11 @@ void kernel_main() {
 
             // multicast to both the forward and backward worker on all devices in your line that your write to
             // device going in the same direction
+            uint32_t* barrier_sem_ptr = (uint32_t*)barrier_sem;
+            uint32_t barrier_sem_val = *barrier_sem_ptr;
+            DPRINT << "BARRIER SEMAPHORE ADDRESS IS: " << barrier_sem << "\n";
+            DPRINT << "BARRIER SEMAPHORE VALUE IS: " << barrier_sem_val << "\n";
+            DPRINT << "Waiting for  " << (uint32_t)(ring_size - 1) << " devices in RS\n";
             uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -217,9 +222,10 @@ void kernel_main() {
                 pkt_hdr_seminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
-        noc_semaphore_wait_with_DPRINT(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), (uint32_t)(ring_size - 1), 0);
+        DPRINT << "Awaiting the semaphore from RS\n";
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), (uint32_t)(ring_size - 1));
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        DPRINT << "Got the semaphore in RS\n";
     }
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
