@@ -33,15 +33,15 @@ static_assert(sizeof(LiteFabricCommandFields) == 16, "CommandFields size is not 
 
 struct LiteFabricRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint64_t FIELD_MASK = 0b11;
+    static constexpr uint32_t FIELD_MASK = 0b11;
     static constexpr uint32_t NOOP = 0b00;
     static constexpr uint32_t WRITE_ONLY = 0b01;
     static constexpr uint32_t FORWARD_ONLY = 0b10;
     static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
-    static constexpr uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
-    uint64_t value;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
+    uint32_t value;
 };
 
 enum class NocSendTypeEnum : uint8_t {
@@ -96,7 +96,7 @@ struct FabricLiteHeader {
     uint8_t src_ch_id{};
     LiteFabricRoutingFields routing_fields{};
     uint32_t debug{};
-    unsigned char unused[24]{};
+    unsigned char unused[28]{};
 
     explicit FabricLiteHeader() = default;
     lite_fabric::NocSendType get_noc_send_type() volatile const {
@@ -133,10 +133,10 @@ struct FabricLiteHeader {
     // Set the number of hops along the line for this packet to the target chip
     FabricLiteHeader& to_chip_unicast(uint8_t distance_in_hops) {
         // LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value
-        const uint64_t shift_amount =
-            static_cast<uint64_t>((distance_in_hops - 1) * LiteFabricRoutingFields::FIELD_WIDTH);
-        uint64_t value = (LiteFabricRoutingFields::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
-                         (static_cast<uint64_t>(LiteFabricRoutingFields::WRITE_ONLY) << shift_amount);
+        uint32_t value =
+            (LiteFabricRoutingFields::FWD_ONLY_FIELD &
+             ((1 << (distance_in_hops - 1) * LiteFabricRoutingFields::FIELD_WIDTH) - 1)) |
+            (LiteFabricRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LiteFabricRoutingFields::FIELD_WIDTH);
         this->routing_fields.value = value;
         return *static_cast<FabricLiteHeader*>(this);
     }
