@@ -32,6 +32,8 @@
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include <tt-metalium/fabric_telemetry.hpp>
+#include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -1777,15 +1779,17 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
+    tt::tt_fabric::FabricTelemetryStaticInfo static_payload{};
+    static_payload.mesh_id = static_cast<std::uint16_t>(*fabric_node_id.mesh_id);
+    static_payload.device_id = static_cast<std::uint8_t>(fabric_node_id.chip_id);
+    static_payload.direction = 0;  // TODO: populate from routing direction when available.
+    static_payload.fabric_config =
+        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    static_payload.supported_stats = 0;
+
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
     auto telemetry_view = telemetry.view();
-    auto static_info = telemetry_view.static_info();
-
-    static_info.mesh_id() = *fabric_node_id.mesh_id;
-    static_info.device_id() = fabric_node_id.chip_id;
-    static_info.fabric_config() =
-        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    static_info.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
+    tt::tt_metal::fabric_telemetry_converter::pack_static_info_to_hal(static_payload, telemetry_view.static_info());
 
     for (const auto& active_ethernet_core : active_ethernet_cores) {
         auto chan_id = tt::tt_metal::MetalContext::instance()
@@ -1793,9 +1797,8 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
                            .get_soc_desc(physical_chip_id)
                            .logical_eth_core_to_chan_map.at(active_ethernet_core);
 
-        // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
-        // static_info.direction() = static_cast<std::uint8_t>(routing_direction);
-        static_info.direction() = 0;
+        auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
+        telemetry_view.static_info().direction() = static_cast<std::uint8_t>(routing_direction);
 
         CoreCoord virtual_eth_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
