@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <array>
