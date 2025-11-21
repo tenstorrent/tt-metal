@@ -76,7 +76,6 @@ using namespace ll_api;
 class ElfFile::Impl {
 private:
     ElfFile& owner_;
-    //    bool xipped_ = false;
 
 protected:
     // This is a view of the caller's object, which must remain live
