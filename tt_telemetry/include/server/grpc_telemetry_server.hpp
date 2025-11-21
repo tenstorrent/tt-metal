@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 #include <grpcpp/grpcpp.h>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <telemetry/telemetry_subscriber.hpp>
 
@@ -24,7 +26,7 @@ class Service;
 }
 
 // UNIX domain socket path for the gRPC server
-constexpr const char* GRPC_TELEMETRY_SOCKET_PATH = "/tmp/tt_telemetry.sock";
+constexpr const char* GRPC_TELEMETRY_SOCKET_PATH = "/tmp/tt_telemetry2.sock";
 
 class GrpcTelemetryServer : public TelemetrySubscriber {
 public:
@@ -47,4 +49,7 @@ private:
 
     // Service implementation instance (stored as base grpc::Service pointer)
     std::unique_ptr<grpc::Service> service_impl_;
+
+    // Mapping of a metric name (the last part of a path) -> all possible paths containing that name
+    std::unordered_map<std::string, std::unordered_set<std::string>> metric_paths_by_name_;
 };

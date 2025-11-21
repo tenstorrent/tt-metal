@@ -73,7 +73,7 @@ class TelemetryClient:
             print(f"RPC failed: {e.code()}: {e.details()}")
             return False, timestamp_ms, 0
 
-    def query_metric(self, metric_name: str, timeout: float = 5.0) -> tuple[bool, str, Any]:
+    def query_metric(self, metric_name: str, timeout: float = 5.0) -> tuple[bool, list[dict]]:
         """
         Query a metric by name.
 
@@ -82,35 +82,52 @@ class TelemetryClient:
             timeout: RPC timeout in seconds
 
         Returns:
-            Tuple of (success, metric_name, value)
+            Tuple of (success, results) where results is a list of dicts with keys:
+            'path', 'timestamp', 'value', 'type'
         """
         request = telemetry_service_pb2.QueryMetricRequest(metric_name=metric_name)
 
         try:
             response = self.stub.QueryMetric(request, timeout=timeout)
 
-            # Determine which field is set in the oneof
-            which = response.WhichOneof("value")
-            if which == "bool_value":
-                value = response.bool_value
-            elif which == "uint_value":
-                value = response.uint_value
-            elif which == "string_value":
-                value = response.string_value
-            elif which == "double_value":
-                value = response.double_value
-            else:
-                print(f"Warning: No value set in response")
-                return False, metric_name, None
+            results = []
 
-            return True, response.metric_name, value
+            # Process bool results
+            for result in response.bool_results:
+                results.append(
+                    {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "bool"}
+                )
+
+            # Process uint results
+            for result in response.uint_results:
+                results.append(
+                    {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "uint64"}
+                )
+
+            # Process double results
+            for result in response.double_results:
+                results.append(
+                    {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "double"}
+                )
+
+            # Process string results
+            for result in response.string_results:
+                results.append(
+                    {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "string"}
+                )
+
+            if not results:
+                print(f"Warning: No results in response")
+                return False, []
+
+            return True, results
 
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.NOT_FOUND:
-                print(f"Metric not found: {e.details()}")
+                print(f"Error: {e.details()}")
             else:
                 print(f"RPC failed: {e.code()}: {e.details()}")
-            return False, metric_name, None
+            return False, []
 
     def close(self):
         """Close the gRPC channel."""
@@ -127,10 +144,15 @@ def ping(client: TelemetryClient, params: Dict[str, Any] | None):
 
 def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
     metric_name = params["metric_name"]
-    success, name, value = client.query_metric(metric_name)
+    success, results = client.query_metric(metric_name)
     if success:
-        print(f"Metric: {name}")
-        print(f"  Value: {value} (type: {type(value).__name__})")
+        print(f"Query results for '{metric_name}':")
+        for i, result in enumerate(results, 1):
+            print(f"  Result {i}:")
+            print(f"    Path:      {result['path']}")
+            print(f"    Type:      {result['type']}")
+            print(f"    Value:     {result['value']}")
+            print(f"    Timestamp: {result['timestamp']}")
     else:
         print(f"Query failed for metric: {metric_name}")
 
