@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
@@ -31,22 +31,6 @@ constexpr bool do_mask_w = true;
 #else
 constexpr bool do_mask_w = false;
 #endif
-
-template <typename AddrGen>
-inline void read_tiles(
-    const uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    const uint32_t start_tile,
-    const uint32_t num_tiles,
-    const uint32_t tile_bytes) {
-    // Reads `num_tiles` tiles from DRAM starting at logical tile index `start_tile` into circular buffer `cb_idx`.
-    cb_reserve_back(cb_idx, num_tiles);
-    uint32_t l1_write_addr = get_write_ptr(cb_idx);
-    for (uint32_t k = 0; k < num_tiles; ++k) {
-        noc_async_read_tile(start_tile + k, addr_gen, l1_write_addr);
-        l1_write_addr += tile_bytes;
-    }
-}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -85,34 +69,33 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
-        read_tiles(cb_rms_a_idx, rms_a_address_generator, r, 1, tile_bytes);
-        noc_async_read_barrier();
-        cb_push_back(cb_rms_a_idx, 1);
+        read_tiles_by_row(cb_rms_a_idx, rms_a_address_generator, r, 1, tile_bytes, 1);
 
         // First pass: read row data for first compute phase
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
+            read_tiles_by_row</* UseBarrier = */ false>(
+                cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
+            read_tiles_by_row</* UseBarrier = */ false>(
+                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
 #ifndef EVERYTHING_FITS_IN_L1
             // If not everything fits in L1, we need to reread gamma for each row.
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+            // Barrier called by read_tiles_by_row with UseBarrier=true above
+            cb_push_back(cb_input_idx, block_size);
+            cb_push_back(cb_dL_out_idx, block_size);
 #else
             // If everything fits in L1, we can read gamma only once.
             if (r == start_row) {
-                read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
-            }
-#endif
-
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
-#ifndef EVERYTHING_FITS_IN_L1
-            cb_push_back(cb_gamma_idx, block_size);
-#else
-            if (r == start_row) {
-                cb_push_back(cb_gamma_idx, block_size);
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+                cb_push_back(cb_input_idx, block_size);
+                cb_push_back(cb_dL_out_idx, block_size);
+            } else {
+                noc_async_read_barrier();
+                cb_push_back(cb_input_idx, block_size);
+                cb_push_back(cb_dL_out_idx, block_size);
             }
 #endif
         }
@@ -122,14 +105,14 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
 
-            read_tiles(cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes);
-            read_tiles(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes);
-
-            noc_async_read_barrier();
+            read_tiles_by_row</* UseBarrier = */ false>(
+                cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
+            read_tiles_by_row</* UseBarrier = */ false>(
+                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+            // Barrier called by read_tiles_by_row with UseBarrier=true above
             cb_push_back(cb_input_idx, block_size);
             cb_push_back(cb_dL_out_idx, block_size);
-            cb_push_back(cb_gamma_idx, block_size);
         }
 #endif
     }

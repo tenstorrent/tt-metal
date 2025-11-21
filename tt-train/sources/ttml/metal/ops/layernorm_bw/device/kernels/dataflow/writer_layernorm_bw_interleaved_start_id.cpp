@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_9;              // dx (input gradient)
@@ -11,19 +12,6 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta component
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
-
-template <bool wait_for_write_barrier = false, typename AddrGen>
-inline void write_cb_block_to_dram(
-    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {
-    uint32_t l1_read_addr = get_read_ptr(cb_idx);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        noc_async_write_tile(start_idx + block_idx, addr_gen, l1_read_addr);
-        l1_read_addr += tile_bytes;
-    }
-    if constexpr (wait_for_write_barrier) {
-        noc_async_write_barrier();
-    }
-}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -57,23 +45,27 @@ void kernel_main() {
             const uint32_t current_block_size = std::min(block_size, Wt - c);
             uint32_t start_idx = (r * Wt) + c;
 
-            // Write dx block
-            cb_wait_front(cb_dx_idx, block_size);
-            write_cb_block_to_dram(cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes);
-
-            // Write dgamma_components block
-            cb_wait_front(cb_dgamma_components, block_size);
-            write_cb_block_to_dram(
-                cb_dgamma_components, dgamma_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
-
-            // Write dbeta_components block
-            cb_wait_front(cb_dbeta_components, block_size);
-            write_cb_block_to_dram</*wait_for_write_barrier=*/true>(
-                cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
-
+            // Write dx, dgamma_components, and dbeta_components blocks
+            write_tiles_by_row</* UseBarrier = */ false>(
+                cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes, block_size);
+            write_tiles_by_row</* UseBarrier = */ false>(
+                cb_dgamma_components,
+                dgamma_output_addr_generator,
+                start_idx,
+                current_block_size,
+                tile_bytes_dgamma,
+                block_size);
+            write_tiles_by_row(
+                cb_dbeta_components,
+                dbeta_output_addr_generator,
+                start_idx,
+                current_block_size,
+                tile_bytes_dgamma,
+                block_size);
+            // UseBarrier=true above calls noc_async_write_barrier() and pops cb_dbeta_components
+            // Must manually pop the first two buffers that used UseBarrier=false
             cb_pop_front(cb_dx_idx, block_size);
             cb_pop_front(cb_dgamma_components, block_size);
-            cb_pop_front(cb_dbeta_components, block_size);
         }
     }
 }
