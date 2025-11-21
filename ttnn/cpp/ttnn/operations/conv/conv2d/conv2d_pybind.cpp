@@ -29,11 +29,9 @@ void py_bind_conv2d(py::module& module) {
         module,
         ttnn::conv2d,
         R"doc(
-Performs a 2D convolution between the input tensor and weight tensor.
+"""
+Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region. For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 
-A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region.
-
-For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
 :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
 :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
@@ -60,6 +58,7 @@ For more information, refer to [CNNs on Tenstorrent Architectures](https://githu
 :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
 :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are both on device, if return_weights_and_bias = True
 :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
+"""
 
         Note:
 
