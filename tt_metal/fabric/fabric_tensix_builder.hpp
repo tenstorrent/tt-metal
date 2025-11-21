@@ -12,8 +12,8 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric.hpp>
 #include "llrt/core_descriptor.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"

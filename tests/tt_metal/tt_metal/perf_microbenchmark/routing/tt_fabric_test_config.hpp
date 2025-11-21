@@ -21,10 +21,10 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"

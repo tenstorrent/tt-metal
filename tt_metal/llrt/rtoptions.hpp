@@ -23,7 +23,7 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric_types.hpp>
 
 namespace tt {
 

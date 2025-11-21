@@ -15,7 +15,7 @@
 #include <atomic>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric_types.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -34,7 +34,7 @@ class GraphRef;
 class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
-}
+}  // namespace proto
 
 inline namespace v1_1 {
 using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
@@ -45,15 +45,15 @@ enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2, Switch = 3 };
 // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
 // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
 struct InstanceData {
-    LocalNodeId local_id;        // instance id from proto or computed device index
+    LocalNodeId local_id;  // instance id from proto or computed device index
     std::string name;
     std::string type;
     NodeKind kind;  // Type of instance (mesh, graph, device, switch)
     std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*, const proto::SwitchDescriptor*>
-        desc;                                       // Pointer to the descriptor that this instance is based on
-    std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
-    std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
-    std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
+        desc;                                        // Pointer to the descriptor that this instance is based on
+    std::unordered_set<GlobalNodeId> sub_instances;  // direct list of child GlobalNodeIds
+    std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id;  // child LocalId -> GlobalId
+    std::vector<GlobalNodeId> hierarchy;  // path from root using GlobalNodeIds
 
     GlobalNodeId global_id = generate_next_global_id();
 
@@ -65,8 +65,8 @@ private:
 };
 
 struct ConnectionData {
-    std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
-    std::uint32_t count;             // ethernet lanes per connection
+    std::vector<GlobalNodeId> nodes;  // [src_global_device_id, dst_global_device_id]
+    std::uint32_t count;              // ethernet lanes per connection
     proto::Policy policy;
     GlobalNodeId parent_instance_id;
 
@@ -106,7 +106,7 @@ public:
         TT_FATAL(it != connections_.end(), "Connection id {} not found", connection_id);
         return it->second;
     }
-    const InstanceData & top_level() const {
+    const InstanceData& top_level() const {
         auto it = instances_.find(top_level_id_);
         TT_FATAL(it != instances_.end(), "Top-level instance id {} not found", top_level_id_);
         return it->second;
@@ -128,7 +128,7 @@ public:
         TT_FATAL(it != instances_by_name_.end(), "No instances found with name: {}", name);
         return it->second;
     }
-    const std::vector<GlobalNodeId>& instances_by_type(const std::string& type) const { // includes "MESH"
+    const std::vector<GlobalNodeId>& instances_by_type(const std::string& type) const {  // includes "MESH"
         auto it = instances_by_type_.find(type);
         TT_FATAL(it != instances_by_type_.end(), "No instances found with type: {}", type);
         return it->second;
@@ -148,10 +148,12 @@ public:
     }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
-        TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id: {}", source_device_id);
+        TT_FATAL(
+            it != connections_by_source_device_id_.end(),
+            "No connections found for source device id: {}",
+            source_device_id);
         return it->second;
     }
-
 
     // TODO: This will disappear after we move to Physical discovery
     proto::Architecture get_arch() const;
@@ -161,7 +163,6 @@ public:
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
 private:
-
     // Descriptor fast lookup
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
@@ -186,7 +187,6 @@ private:
     std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
-
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
@@ -195,12 +195,14 @@ private:
     static void validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_names(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_mesh_topology(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_architecture_consistency(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_architecture_consistency(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_switch_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
-    static void validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_graph_topology_and_connections(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
 
     static void validate_legacy_requirements(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
 

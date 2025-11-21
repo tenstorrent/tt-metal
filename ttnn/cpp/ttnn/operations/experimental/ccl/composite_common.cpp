@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
