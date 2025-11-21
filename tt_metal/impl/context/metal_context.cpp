@@ -36,12 +36,8 @@
 
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <llrt/hal.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
-#include <llrt/rtoptions.hpp>
 
 namespace tt::tt_metal {
 
