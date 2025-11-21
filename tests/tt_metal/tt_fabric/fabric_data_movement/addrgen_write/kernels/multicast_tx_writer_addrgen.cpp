@@ -47,8 +47,13 @@ inline void send_directional_fanout(
                     sender, packet_header, 0, 0, ranges, src_l1_addr, scatter_acc, i, i + 1);
             }
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i, sem_noc, 1);
+            if constexpr (api_variant == ApiVariant::Basic) {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i, sem_noc, 1);
+            } else {  // WithState or SetState
+                fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                    sender, packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+            }
         }
     }
 }
@@ -80,13 +85,17 @@ inline void setup_set_state_for_direction(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     const MeshMcastRange& ranges,
     const DstAccT& dst_acc,
-    const ScatterAccT& scatter_acc) {
+    const ScatterAccT& scatter_acc,
+    uint64_t sem_noc) {
     if (hops > 0) {
         if constexpr (operation_type == OperationType::BasicWrite) {
             fabric_multicast_noc_unicast_write_set_state(packet_header, 0, 0, ranges, dst_acc, 0);
         } else if constexpr (operation_type == OperationType::Scatter) {
             // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
             fabric_multicast_noc_scatter_write_set_state(packet_header, 0, 0, ranges, scatter_acc, 0, 1);
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+                packet_header, 0, 0, ranges, dst_acc, 0, sem_noc, 1);
         }
     }
 }
@@ -231,18 +240,22 @@ void kernel_main() {
     } else if constexpr (api_variant == ApiVariant::SetState) {
         // Initialize all header fields for each direction
         MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
-        setup_set_state_for_direction<operation_type>(w_hops, left_packet_header, ranges_w, dst_acc, scatter_acc);
+        setup_set_state_for_direction<operation_type>(
+            w_hops, left_packet_header, ranges_w, dst_acc, scatter_acc, sem_noc);
 
         MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
-        setup_set_state_for_direction<operation_type>(e_hops, right_packet_header, ranges_e, dst_acc, scatter_acc);
+        setup_set_state_for_direction<operation_type>(
+            e_hops, right_packet_header, ranges_e, dst_acc, scatter_acc, sem_noc);
 
         MeshMcastRange ranges_n{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
-        setup_set_state_for_direction<operation_type>(n_hops, north_packet_header, ranges_n, dst_acc, scatter_acc);
+        setup_set_state_for_direction<operation_type>(
+            n_hops, north_packet_header, ranges_n, dst_acc, scatter_acc, sem_noc);
 
         MeshMcastRange ranges_s{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
-        setup_set_state_for_direction<operation_type>(s_hops, south_packet_header, ranges_s, dst_acc, scatter_acc);
+        setup_set_state_for_direction<operation_type>(
+            s_hops, south_packet_header, ranges_s, dst_acc, scatter_acc, sem_noc);
     }
 
     // Main loop - process pages
