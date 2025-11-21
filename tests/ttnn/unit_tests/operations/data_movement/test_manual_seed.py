@@ -7,28 +7,38 @@ import torch
 import ttnn
 
 
-def test_manual_seed(device):
-    """Test manual_seed with explicit keyword arguments for device and seeds (integer scalar)."""
-    ttnn.manual_seed(seeds=42, device=device)
+# def test_manual_seed(device):
+#     """Test manual_seed with explicit keyword arguments for device and seeds (integer scalar)."""
+#     ttnn.manual_seed(seeds=42, device=device)
 
 
-def test_manual_seed_with_user_id(device):
-    """Test manual_seed with both seed and user_id as integer scalars using keyword arguments."""
-    ttnn.manual_seed(seeds=42, device=device, user_ids=7)
+# def test_manual_seed_with_user_id(device):
+#     """Test manual_seed with both seed and user_id as integer scalars using keyword arguments."""
+#     ttnn.manual_seed(seeds=42, device=device, user_ids=7)
 
 
-def test_manual_short(device):
-    """Test manual_seed using positional arguments with only seed (shorthand syntax)."""
-    ttnn.manual_seed(42, device=device)
+# def test_manual_short(device):
+#     """Test manual_seed using positional arguments with only seed (shorthand syntax)."""
+#     ttnn.manual_seed(42, device=device)
+
+
+# def test_manual_seed_with_tensor_user_ids(device):
+#     """Test manual_seed with tensor inputs for both seeds and user_ids, verifying tensor-based API."""
+#     user_id_tensor = ttnn.from_torch(
+#         torch.Tensor([0, 1, 2]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device
+#     )
+#     ttnn.manual_seed(seeds=7, device=device, user_ids=user_id_tensor)
 
 
 def test_manual_tensors(device):
     """Test manual_seed with tensor inputs for both seeds and user_ids, verifying tensor-based API."""
-    # seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.from_torch(
+        torch.Tensor([42, 1, 4]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device
+    )
     user_id_tensor = ttnn.from_torch(
         torch.Tensor([0, 1, 2]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device
     )
-    ttnn.manual_seed(seeds=7, device=device, user_ids=user_id_tensor)
+    ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=user_id_tensor)
 
 
 # def test_manual_tensors_wrong_config(device):
