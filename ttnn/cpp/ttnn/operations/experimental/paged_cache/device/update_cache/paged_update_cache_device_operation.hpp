@@ -13,13 +13,13 @@
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
 
-namespace ttnn::operations::experimental::paged_cache {
+namespace ttnn::operations::experimental::paged_cache::update {
 
 struct PagedUpdateCacheDeviceOperation {
-    using operation_attributes_t = update_cache::operation_attributes_t;
-    using tensor_args_t = update_cache::tensor_args_t;
-    using spec_return_value_t = update_cache::spec_return_value_t;
-    using tensor_return_value_t = update_cache::tensor_return_value_t;
+    using operation_attributes_t = update::operation_attributes_t;
+    using tensor_args_t = update::tensor_args_t;
+    using spec_return_value_t = update::spec_return_value_t;
+    using tensor_return_value_t = update::tensor_return_value_t;
     using program_factory_t = std::variant<program::PagedUpdateCacheProgramFactory>;
 
     static program_factory_t select_program_factory(
@@ -52,10 +52,10 @@ struct PagedUpdateCacheDeviceOperation {
         const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache
+}  // namespace ttnn::operations::experimental::paged_cache::update
 
 namespace ttnn::prim {
 constexpr auto paged_update_cache = ttnn::register_operation<
     "ttnn::prim::paged_update_cache",
-    ttnn::operations::experimental::paged_cache::PagedUpdateCacheDeviceOperation>();
+    ttnn::operations::experimental::paged_cache::update::PagedUpdateCacheDeviceOperation>();
 }  // namespace ttnn::prim

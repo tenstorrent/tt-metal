@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache {
+namespace ttnn::operations::experimental::paged_cache::update {
 
 PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -279,4 +279,4 @@ PagedUpdateCacheDeviceOperation::invoke(
     return {attrs, tensor_args};
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache
+}  // namespace ttnn::operations::experimental::paged_cache::update

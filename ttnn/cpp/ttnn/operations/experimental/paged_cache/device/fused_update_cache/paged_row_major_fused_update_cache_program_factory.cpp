@@ -12,7 +12,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::program::rm {
+namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm {
 
 using namespace tt::constants;
 using namespace tt;
@@ -30,9 +30,9 @@ bool enable_fp32_dest_acc(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFusedUpdateCacheProgramFactory::create(
-    const fused_update_cache::operation_attributes_t& operation_attributes,
-    const fused_update_cache::tensor_args_t& tensor_args,
-    fused_update_cache::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     Program program{};
 
     const auto& cache_tensor1 = tensor_args.cache_tensor1;
@@ -446,9 +446,9 @@ PagedRowMajorFusedUpdateCacheProgramFactory::cached_program_t PagedRowMajorFused
 
 void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const fused_update_cache::operation_attributes_t& operation_attributes,
-    const fused_update_cache::tensor_args_t& tensor_args,
-    fused_update_cache::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -528,4 +528,4 @@ void PagedRowMajorFusedUpdateCacheProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::program::rm
+}  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm

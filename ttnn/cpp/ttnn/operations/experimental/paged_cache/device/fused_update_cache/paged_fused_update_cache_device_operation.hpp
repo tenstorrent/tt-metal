@@ -14,13 +14,13 @@
 #include "paged_tiled_fused_update_cache_program_factory.hpp"
 #include "paged_row_major_fused_update_cache_program_factory.hpp"
 
-namespace ttnn::operations::experimental::paged_cache {
+namespace ttnn::operations::experimental::paged_cache::fused_update {
 
 struct PagedFusedUpdateCacheDeviceOperation {
-    using operation_attributes_t = fused_update_cache::operation_attributes_t;
-    using tensor_args_t = fused_update_cache::tensor_args_t;
-    using spec_return_value_t = fused_update_cache::spec_return_value_t;
-    using tensor_return_value_t = fused_update_cache::tensor_return_value_t;
+    using operation_attributes_t = fused_update::operation_attributes_t;
+    using tensor_args_t = fused_update::tensor_args_t;
+    using spec_return_value_t = fused_update::spec_return_value_t;
+    using tensor_return_value_t = fused_update::tensor_return_value_t;
     using program_factory_t = std::variant<
         program::tiled::PagedTiledFusedUpdateCacheProgramFactory,
         program::rm::PagedRowMajorFusedUpdateCacheProgramFactory>;
@@ -57,10 +57,10 @@ struct PagedFusedUpdateCacheDeviceOperation {
         const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache
+}  // namespace ttnn::operations::experimental::paged_cache::fused_update
 
 namespace ttnn::prim {
 constexpr auto paged_fused_update_cache = ttnn::register_operation<
     "ttnn::prim::paged_fused_update_cache",
-    ttnn::operations::experimental::paged_cache::PagedFusedUpdateCacheDeviceOperation>();
+    ttnn::operations::experimental::paged_cache::fused_update::PagedFusedUpdateCacheDeviceOperation>();
 }  // namespace ttnn::prim

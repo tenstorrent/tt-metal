@@ -13,7 +13,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::fused_update_cache {
+namespace ttnn::operations::experimental::paged_cache::fused_update {
 
 struct operation_attributes_t {
     const std::vector<uint32_t> update_idxs;
@@ -35,4 +35,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
-}  // namespace ttnn::operations::experimental::paged_cache::fused_update_cache
+}  // namespace ttnn::operations::experimental::paged_cache::fused_update

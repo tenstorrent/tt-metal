@@ -8,7 +8,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
 
-namespace ttnn::operations::experimental::paged_cache {
+namespace ttnn::operations::experimental::paged_cache::fill {
 
 struct operation_attributes_t {
     const uint32_t batch_idx_fallback;
@@ -26,4 +26,4 @@ using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::experimental::paged_cache
+}  // namespace ttnn::operations::experimental::paged_cache::fill

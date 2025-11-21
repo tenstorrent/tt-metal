@@ -9,7 +9,7 @@
 #include <vector>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::paged_cache::program::rm {
+namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm {
 
 struct PagedRowMajorFusedUpdateCacheSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -32,15 +32,15 @@ struct PagedRowMajorFusedUpdateCacheProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const fused_update_cache::operation_attributes_t& operation_attributes,
-        const fused_update_cache::tensor_args_t& tensor_args,
-        fused_update_cache::tensor_return_value_t& tensor_return_value);
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const fused_update_cache::operation_attributes_t& operation_attributes,
-        const fused_update_cache::tensor_args_t& tensor_args,
-        fused_update_cache::tensor_return_value_t& tensor_return_value);
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::program::rm
+}  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::rm

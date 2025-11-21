@@ -7,7 +7,7 @@
 #include "paged_fill_cache_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::paged_cache::program {
+namespace ttnn::operations::experimental::paged_cache::fill::program {
 
 struct PagedFillCacheSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -37,4 +37,4 @@ struct PagedFillCacheProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::paged_cache::program
+}  // namespace ttnn::operations::experimental::paged_cache::fill::program
