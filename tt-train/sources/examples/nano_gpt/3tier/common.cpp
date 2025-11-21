@@ -78,7 +78,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
 
 
-    std::variant<std::string, std::reference_wrapper<YAML::Node>> text_or_tokens;
+    std::variant<std::string, YAML::Node> text_or_tokens;
     YAML::Node yaml_data;  // Separate storage
 
     try {
@@ -86,8 +86,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         if (config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(config.data_path);
         } else {
-            yaml_data = YAML::LoadFile(config.data_path);
-            text_or_tokens = std::ref(yaml_data);
+            text_or_tokens =  YAML::LoadFile(config.data_path);
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -103,8 +102,11 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
                 return std::make_tuple(dataset, tokenizer->get_vocab_size());
             }
             else if (tokenizer_type == "bpe") {
+
+                auto& yaml_node = std::get<YAML::Node>(data_source);
+
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(
-                    std::get<std::reference_wrapper<YAML::Node>>(data_source), seq_len);
+                    yaml_node, seq_len);
 
                 auto yaml_node = std::get<std::reference_wrapper<YAML::Node>>(data_source).get();
                 uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
