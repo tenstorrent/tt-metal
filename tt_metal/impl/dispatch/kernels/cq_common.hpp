@@ -306,19 +306,22 @@ public:
     }
 
     // Inform the consumer that n pages are available.
-    FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0) {
+    FORCE_INLINE void release_pages(uint32_t n, uint32_t writer_ptr = 0, bool round_to_page_size = false) {
 #if defined(WATCHER_ENABLED)
         if constexpr (buffer_page_size != 0) {
             constexpr uint32_t buffer_size = buffer_end - buffer_base;
             if constexpr (buffer_size != 0) {
                 if (n != 0) {
+                    // In the middle of writing a command, the writer pointer may not be aligned to the page size, but must always be past the number of pages released.
+                    uint32_t adjusted_writer_ptr = round_to_page_size ? (writer_ptr - (writer_ptr - buffer_base) % buffer_page_size) : writer_ptr;
                     uint64_t bytes = n * buffer_page_size;
                     uint32_t expected = watch_released_ptr_ + bytes;
                     if (expected > buffer_end) {
                         expected -= buffer_size;
                     }
-                    ASSERT(writer_ptr == expected);
-                    watch_released_ptr_ = writer_ptr;
+                    // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so it hasn't wrapped yet.
+                    ASSERT((adjusted_writer_ptr == expected) || (adjusted_writer_ptr == expected - buffer_size));
+                    watch_released_ptr_ = expected;
                 }
             }
         }
