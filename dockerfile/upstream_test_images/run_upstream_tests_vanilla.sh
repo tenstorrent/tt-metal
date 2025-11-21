@@ -32,7 +32,7 @@ test_suite_bh_umd_unit_tests() {
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
     pytest --disable-warnings --input-path="models/demos/speech_to_text/whisper/demo/dataset/conditional_generation" models/demos/speech_to_text/whisper/demo/demo.py::test_demo_for_conditional_generation
-    pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
+    pytest models/demos/cnns_vits/classification/resnet50/blackhole/tests/upstream_pipeline
 }
 
 test_suite_bh_pcie_didt_tests() {
