@@ -8,7 +8,6 @@
 #include <vector>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"

@@ -608,6 +608,7 @@ def shard_and_save(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
+    convert_meta=False,
 ) -> SavedWeight:
     """Shard a tensor and save it to a file."""
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
@@ -677,6 +678,17 @@ def shard_and_save(
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, ttnn_tensor)
+
+    if not convert_meta:
+        path_str = str(path)
+        mesh_idx = path_str.find("mesh_")
+        if mesh_idx == -1:
+            raise ValueError(f"Expected 'mesh_' in path: {path}")
+        # Skip past "mesh_<rows>x<cols>/" to get relative path
+        parts = path_str[mesh_idx:].split("/", 1)
+        if len(parts) < 2:
+            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
+        path = Path(parts[1])
 
     return SavedWeight(path, memory_config)
 
@@ -838,7 +850,11 @@ def get_weight_config(
     mesh_device: ttnn.Device,
     force_recalculate: bool,
 ):
-    weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
+    weight_cache_path = (
+        weight_cache_path
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
     for _ in range(1):
@@ -847,7 +863,7 @@ def get_weight_config(
         if not config_path.exists():
             break
         weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
-        if not _check_weights_exist(weight_path, weight_config):
+        if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
             break
         logger.info(f"Using weights cached at {weight_cache_path}")
         return weight_config
@@ -855,10 +871,11 @@ def get_weight_config(
     logger.info(f"Caching weights at {weight_cache_path}")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
+    _check_weights_exist_and_convert(weight_cache_path, weight_config)
     return weight_config
 
 
-def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
+def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfig) -> bool:
     if isinstance(weight_config, dict):
         entries = weight_config.values()
     else:
@@ -867,9 +884,21 @@ def _check_weights_exist(root_path: Path, weight_config: WeightConfig) -> bool:
         if entry is None:
             continue
         if isinstance(entry, SavedWeight):
-            if not (root_path / entry.path).exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION:
+            if (
+                not (entry.path.is_absolute())
+                and not (root_path / entry.path).exists()
+                or entry.path.suffix != TENSOR_CACHE_EXTENSION
+            ):
                 return False
-        elif not _check_weights_exist(root_path, entry):
+            elif (
+                not (entry.path.is_absolute())
+                and (root_path / entry.path).exists()
+                and entry.path.suffix == TENSOR_CACHE_EXTENSION
+            ):
+                entry.path = root_path / entry.path
+            elif entry.path.is_absolute() and (not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION):
+                return False
+        elif not _check_weights_exist_and_convert(root_path, entry):
             return False
     return True
 
