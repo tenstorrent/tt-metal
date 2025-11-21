@@ -36,7 +36,7 @@ struct StridedAllGatherAsyncProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static cached_program_t strided_all_gather_async_minimal_default_helper(
+    static shared_variables_t strided_all_gather_async_minimal_default_helper(
         tt::tt_metal::Program& program,
         const Tensor& input_tensor,
         const MeshCoordinate& sender_device_coord,
@@ -59,6 +59,13 @@ struct StridedAllGatherAsyncProgramFactory {
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
         CoreCoord core_grid_offset = CoreCoord(0, 0));
+
+    static void override_runtime_arguments_per_program(
+        const shared_variables_t& shared_variables,
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor);
 
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
