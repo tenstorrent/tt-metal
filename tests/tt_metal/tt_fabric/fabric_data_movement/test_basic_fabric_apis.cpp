@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <algorithm>
 #include <map>
