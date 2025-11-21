@@ -5,7 +5,7 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
 run_falcon7b_func() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -272,7 +272,7 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/llms/falcon7b/wormhole/demo_wormhole.py
 
 }
 

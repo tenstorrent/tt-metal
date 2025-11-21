@@ -5,7 +5,7 @@ This folder contains Falcon7b code which is shared by the Grayskull, Wormhole, a
 
 [Falcon7B Grayskull Demo](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/grayskull/falcon7b)
 
-[Falcon7B Wormhole Demo](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/falcon7b)
+[Falcon7B Wormhole Demo](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/falcon7b/wormhole)
 
 [Falcon7B T3000 Demo](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/falcon7b/t3000)
 
