@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.distilbert.tt import ttnn_optimized_distilbert
 
@@ -40,8 +40,6 @@ def run_distilbert_question_and_answering_inference(
     model_location_generator,
     input_path,
 ):
-    disable_persistent_kernel_cache()
-
     hugging_face_reference_model = DistilBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
 
@@ -167,8 +165,6 @@ def run_distilbert_question_and_answering_inference_squad_v2(
     model_location_generator,
     n_iterations,
 ):
-    disable_persistent_kernel_cache()
-
     hugging_face_reference_model = DistilBertForQuestionAnswering.from_pretrained(model_name)
     hugging_face_reference_model.eval()
 
@@ -277,8 +273,6 @@ def test_demo(
     model_location_generator,
     device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_distilbert_question_and_answering_inference(
         device=device,
         model_name=model_name,
@@ -303,8 +297,6 @@ def test_demo_squadv2(
     model_location_generator,
     device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_distilbert_question_and_answering_inference_squad_v2(
         device=device,
         model_name=model_name,
