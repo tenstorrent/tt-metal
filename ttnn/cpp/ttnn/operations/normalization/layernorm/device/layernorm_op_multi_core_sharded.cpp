@@ -133,15 +133,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    const auto& shape = a.logical_shape();
+    const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
     uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
-    uint32_t Wt = tt::div_up(W, TILE_WIDTH);
-    uint32_t Ht = tt::div_up(H, TILE_HEIGHT);
+    uint32_t Wt = W / TILE_WIDTH;
+    uint32_t Ht = H / TILE_HEIGHT;
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
