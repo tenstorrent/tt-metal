@@ -1154,6 +1154,8 @@ jobs:
           RUN_TYPE="nightly"
           if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
+          elif [[ "${{ github.event.schedule }}" == "30 4 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
