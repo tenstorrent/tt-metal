@@ -169,6 +169,7 @@ struct UDMWriteControlHeader {
     uint8_t risc_id;
     uint8_t transaction_id;
     uint8_t posted;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -180,17 +181,18 @@ struct UDMReadControlHeader {
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 9, "UDMWriteControlHeader size is not 9 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 16, "UDMReadControlHeader size is not 16 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
+static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -691,14 +693,13 @@ static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHead
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
 
     // Override to return correct size for UDMHybridMeshPacketHeader
     size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
     }
 } __attribute__((packed));
-static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 96B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
