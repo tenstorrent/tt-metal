@@ -482,11 +482,15 @@ class Generator:
             chunked_fields = {
                 field: self._chunk_sampling_param(getattr(sampling_params, field)) for field in SAMPLING_PARAM_FIELDS
             }
+            prompt_chunks = (
+                torch.chunk(prompt_tokens, self.data_parallel, 0)
+                if prompt_tokens is not None
+                else [None] * self.data_parallel
+            )
             sampling_params_list = [
                 SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
                 for i in range(self.data_parallel)
             ]
-
             for i in range(self.data_parallel):
                 formatted_params = format_sampling_params(
                     sampling_params_list[i], 32
@@ -495,18 +499,9 @@ class Generator:
                 if sampling_module is None:
                     continue
                 sampling_module.reset_sampling_params(formatted_params)
-        prompt_chunks = (
-            torch.chunk(prompt_tokens, self.data_parallel, 0)
-            if prompt_tokens is not None
-            else [None] * self.data_parallel
-        )
-        for i in range(self.data_parallel):
-            sampling_module = getattr(self.model[i], "sampling", None)
-            if sampling_module is None:
-                continue
-            if reset_inputs:
-                sampling_module.reset_prompt_tokens(prompt_chunks[i])
-                sampling_module.reset_output_state()
+                if reset_inputs:
+                    sampling_module.reset_prompt_tokens(prompt_chunks[i])
+                    sampling_module.reset_output_state()
 
         decode_kwargs = {
             "current_pos": start_pos,
