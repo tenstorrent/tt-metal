@@ -1,26 +1,12 @@
-# SPDX-FileCopyrightText: Copyright (c) Meta Platforms, Inc. and affiliates.
-# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
-# All rights reserved.
-#
-# This source code is licensed under the terms described in the LICENSE file in
-# this folder
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
-# Small modifications by Tenstorrent for CPU compatibility
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 import math
 from typing import Optional, Tuple
 
-# import fairscale.nn.model_parallel.initialize as fs_init
 import torch
 import torch.nn.functional as F
 
-# from fairscale.nn.model_parallel.layers import (
-#     ColumnParallelLinear,
-#     RowParallelLinear,
-#     VocabParallelEmbedding,
-# )
 from torch import nn
 from .args import ModelArgs
 
@@ -195,10 +181,6 @@ class Attention(nn.Module):
         d = xq.size(-1)
         xq = self.q_norm(xq)
         xk = self.k_norm(xk)
-
-        # scale = 1.0 / math.sqrt(d)
-        # xq = xq * scale
-        # xk = xk * scale
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
