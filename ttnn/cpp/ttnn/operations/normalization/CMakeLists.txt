@@ -19,6 +19,7 @@ file(
     layernorm_distributed/device/kernels/*
     rmsnorm_distributed/device/kernels/*
     softmax/device/kernels/*
+    softmax_backward/device/kernels/*
     kernel_util/compute/*
 )
 target_sources(
@@ -36,6 +37,10 @@ target_sources(
             softmax/device/softmax_device_operation.hpp
             softmax/device/softmax_program_factory.hpp
             softmax/softmax.hpp
+            softmax_backward/device/softmax_backward_operation_types.hpp
+            softmax_backward/device/softmax_backward_device_operation.hpp
+            softmax_backward/device/softmax_backward_program_factory.hpp
+            softmax_backward/softmax_backward.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -63,6 +68,9 @@ target_sources(
         softmax/softmax.cpp
         softmax/device/softmax_device_operation.cpp
         softmax/device/softmax_program_factory.cpp
+        softmax_backward/softmax_backward.cpp
+        softmax_backward/device/softmax_backward_device_operation.cpp
+        softmax_backward/device/softmax_backward_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})
