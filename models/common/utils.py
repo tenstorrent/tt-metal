@@ -88,16 +88,21 @@ class LogProbsCalculator:
             cluster_axis=None,
             topology=ttnn.Topology.Linear,
         )
-        self.global_max = ttnn.max(gathered_max_tensors, dim=-1)
+        self.global_max = ttnn.max(gathered_max_tensors, dim=-1, keepdim=True)
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
         subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max)
-        sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1)
+        sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1, keepdim=True)
         # All-gather stable local sum-exp to get global sum-exp
         gathered_sum_exp_tensors = ttnn.all_gather(
-            sum_exp_tensor, dim=-1, mesh_device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            sum_exp_tensor,
+            dim=3,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=None,
+            topology=ttnn.Topology.Linear,
         )
-        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1)
+        self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1, keepdim=True)
 
     def calculate_log_probs(self, logits_tensor: ttnn.Tensor):
         """
@@ -108,7 +113,6 @@ class LogProbsCalculator:
 
         # Calculate log-probs with formula:
         # logits_tensor - self.global_max - ttnn.log(self.global_exp_sum)
-
         out = ttnn.subtract(logits_tensor, self.global_max)
         out = ttnn.subtract(out, ttnn.log(self.global_exp_sum))
 
