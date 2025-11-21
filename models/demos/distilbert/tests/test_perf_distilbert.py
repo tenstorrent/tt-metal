@@ -11,13 +11,7 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_grayskull,
-    is_wormhole_b0,
-    profiler,
-)
+from models.common.utility_functions import is_grayskull, is_wormhole_b0, profiler
 from models.demos.distilbert.tt import ttnn_optimized_distilbert
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
@@ -43,8 +37,6 @@ def test_performance_distilbert_for_qa(
     # set up tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = hugging_face_reference_model.config
-
-    disable_persistent_kernel_cache()
 
     cpu_key = "ref_key"
 
@@ -115,7 +107,6 @@ def test_performance_distilbert_for_qa(
             end = time.time()
 
             durations.append(end - start)
-            enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

@@ -15,8 +15,6 @@ from models.common.utility_functions import (
     torch_random,
     is_wormhole_b0,
     is_blackhole,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -46,8 +44,6 @@ def get_expected_times(model_name, functional_t5):
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("functional_t5", [ttnn_functional_t5, ttnn_optimized_functional_t5])
 def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_size, functional_t5):
-    disable_persistent_kernel_cache()
-
     config = transformers.T5Config.from_pretrained(model_name)
 
     torch_input_ids = torch_random((batch_size, sequence_size), 0, config.vocab_size, dtype=torch.int64)
@@ -83,7 +79,6 @@ def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_
         output = ttnn.from_device(output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

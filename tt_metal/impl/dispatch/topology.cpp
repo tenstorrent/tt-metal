@@ -25,7 +25,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
-#include "persistent_kernel_cache.hpp"
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
@@ -726,18 +725,10 @@ void create_cq_program(IDevice* device) {
 }
 
 void compile_cq_programs() {
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
-        detail::EnablePersistentKernelCache();
-    }
-
     command_queue_compile_group.compile_all(/*force_slow_dispatch=*/true);
 
     // Write runtime args to device
     command_queue_compile_group.write_runtime_args(/*force_slow_dispatch=*/true);
-
-    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
-        detail::DisablePersistentKernelCache();
-    }
 }
 
 std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device) {
