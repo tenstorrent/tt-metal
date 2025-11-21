@@ -19,8 +19,16 @@ struct ExecuteConv3d {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        const std::optional<ttnn::Tensor>& bias_tensor,
-        const Conv3dConfig& config,
+        uint32_t output_channels,
+        std::array<uint32_t, 3> kernel_size,
+        std::array<uint32_t, 3> stride = std::array<uint32_t, 3>{1, 1, 1},
+        std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding = std::array<uint32_t, 3>{0, 0, 0},
+        std::array<uint32_t, 3> dilation = std::array<uint32_t, 3>{1, 1, 1},
+        std::string padding_mode = "zeros",
+        uint32_t groups = 1,
+        const std::optional<ttnn::Tensor>& bias_tensor = std::nullopt,
+        const std::optional<Conv3dConfig>& config = std::nullopt,
+        const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

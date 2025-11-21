@@ -19,8 +19,16 @@ namespace ttnn::operations::experimental::conv3d {
 ttnn::Tensor ExecuteConv3d::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    uint32_t output_channels,
+    std::array<uint32_t, 3> kernel_size,
+    std::array<uint32_t, 3> stride,
+    std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+    std::array<uint32_t, 3> dilation,
+    std::string padding_mode,
+    uint32_t groups,
     const std::optional<ttnn::Tensor>& bias_tensor,
-    const Conv3dConfig& config,
+    const std::optional<Conv3dConfig>& config,
+    const std::optional<ttnn::DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -28,7 +36,15 @@ ttnn::Tensor ExecuteConv3d::invoke(
 
     return operation::run(
                Conv3dOp{
-                   .config = config,
+                   .output_channels = output_channels,
+                   .kernel_size = kernel_size,
+                   .stride = stride,
+                   .padding = padding,
+                   .dilation = dilation,
+                   .padding_mode = padding_mode,
+                   .groups = groups,
+                   .config = config.value_or(Conv3dConfig{}),
+                   .dtype = dtype.value_or(ttnn::DataType::BFLOAT16),
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},

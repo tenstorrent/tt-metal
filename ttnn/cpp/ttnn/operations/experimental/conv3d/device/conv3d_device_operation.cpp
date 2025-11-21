@@ -30,6 +30,19 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_out = ((W_in + 2 * padding[2] - kernel_size[2]) / stride[2]) + 1;
     return {T_out, H_out, W_out};
 }
+
+std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    const std::array<uint32_t, 6>& padding,
+    const std::array<uint32_t, 3>& stride,
+    const std::array<uint32_t, 3>& kernel_size) {
+    uint32_t T_out = ((T_in + padding[4] + padding[5] - kernel_size[0]) / stride[0]) + 1;
+    uint32_t H_out = ((H_in + padding[2] + padding[3] - kernel_size[1]) / stride[1]) + 1;
+    uint32_t W_out = ((W_in + padding[0] + padding[1] - kernel_size[2]) / stride[2]) + 1;
+    return {T_out, H_out, W_out};
+}
 }  // namespace detail
 
 void Conv3dOp::validate(
@@ -69,54 +82,67 @@ void Conv3dOp::validate(
             bias_tensor.logical_shape().size());
     }
 
-    TT_FATAL(config.groups == 1, "Groups must be 1. got {}", config.groups);
+    TT_FATAL(this->groups == 1, "Groups must be 1. got {}", this->groups);
     // assert padding on T is zero
+    std::visit(
+        [](const auto& padding) {
+            using PaddingType = std::decay_t<decltype(padding)>;
+            if constexpr (std::is_same_v<PaddingType, std::array<uint32_t, 3>>) {
+                TT_FATAL(
+                    padding[0] == 0, "Padding must be (0,x,x). got ({}, {}, {})", padding[0], padding[1], padding[2]);
+            } else if constexpr (std::is_same_v<PaddingType, std::array<uint32_t, 6>>) {
+                TT_FATAL(
+                    padding[4] == 0 && padding[5] == 0,
+                    "Padding must be (x,x,y,y,0,0). got ({}, {}, {}, {}, {}, {})",
+                    padding[0],
+                    padding[1],
+                    padding[2],
+                    padding[3],
+                    padding[4],
+                    padding[5]);
+            }
+        },
+        this->padding);
     TT_FATAL(
-        config.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        config.padding[0],
-        config.padding[1],
-        config.padding[2]);
-    TT_FATAL(
-        config.padding_mode == "zeros" || config.padding_mode == "replicate",
+        this->padding_mode == "zeros" || this->padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
-        config.padding_mode);
+        this->padding_mode);
 
     if (config.C_out_block > 0) {
         TT_FATAL(
-            config.output_channels % config.C_out_block == 0 && config.C_out_block % tt::constants::TILE_WIDTH == 0,
+            this->output_channels % config.C_out_block == 0 && config.C_out_block % tt::constants::TILE_WIDTH == 0,
             "C_out_block must be a multiple of {} and divide evenly into output channels. Got C_out_block={} and "
             "output_channels={}.",
             tt::constants::TILE_WIDTH,
             config.C_out_block,
-            config.output_channels);
+            this->output_channels);
     }
 
     TT_FATAL(
-        config.output_channels % tt::constants::TILE_WIDTH == 0,
+        this->output_channels % tt::constants::TILE_WIDTH == 0,
         "Output channels must be a multiple of {}.",
         tt::constants::TILE_WIDTH);
 
     // Validate weight shape and config arguments
     const auto patch_size =
-        config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * input_tensor_a.logical_shape()[4];
+        this->kernel_size[0] * this->kernel_size[1] * this->kernel_size[2] * input_tensor_a.logical_shape()[4];
     TT_FATAL(
         weight_tensor.logical_shape()[0] == patch_size,
         "Weight patch size must match input patch size. got {} vs {}",
         weight_tensor.logical_shape()[0],
         patch_size);
     TT_FATAL(
-        weight_tensor.logical_shape()[1] == config.output_channels,
+        weight_tensor.logical_shape()[1] == this->output_channels,
         "Weight output channels must match input output channels. got {} vs {}",
         weight_tensor.logical_shape()[1],
-        config.output_channels);
+        this->output_channels);
     if (optional_input_tensors.at(0).has_value()) {
         const auto& bias_tensor = optional_input_tensors.at(0).value();
         TT_FATAL(
-            bias_tensor.logical_shape()[1] == config.output_channels,
+            bias_tensor.logical_shape()[1] == this->output_channels,
             "Bias must match output channels. got {} vs {}",
             bias_tensor.logical_shape()[1],
-            config.output_channels);
+            this->output_channels);
     }
 
     // Add grid size validation
@@ -163,15 +189,18 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     uint32_t T_in = input_tensor_a_shape[1];
     uint32_t H_in = input_tensor_a_shape[2];
     uint32_t W_in = input_tensor_a_shape[3];
-    uint32_t C_out = config.output_channels;
+    uint32_t C_out = this->output_channels;
 
-    auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
+    auto [T_out, H_out, W_out] = std::visit(
+        [&](const auto& padding) {
+            return detail::compute_output_dims(T_in, H_in, W_in, padding, this->stride, this->kernel_size);
+        },
+        this->padding);
 
     ttnn::Shape output_shape({N, T_out, H_out, W_out, C_out});
 
     const auto& memory_config = input_tensor_a.memory_config();
-    auto dtype = input_tensor_a.dtype();
+    auto dtype = this->dtype.value_or(input_tensor_a.dtype());
 
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
 }
@@ -184,7 +213,21 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv3dOp::create_program(
     const auto& weight_tensor = input_tensors.at(1);
     const auto& bias_tensor = optional_input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    return detail::conv3d_factory(act_tensor, weight_tensor, bias_tensor, config, output_tensor, compute_kernel_config);
+    return detail::conv3d_factory(
+        act_tensor,
+        weight_tensor,
+        bias_tensor,
+        this->output_channels,
+        this->kernel_size,
+        this->stride,
+        this->padding,
+        this->padding_mode,
+        this->dilation,
+        this->groups,
+        this->dtype,
+        config,
+        output_tensor,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::conv3d
