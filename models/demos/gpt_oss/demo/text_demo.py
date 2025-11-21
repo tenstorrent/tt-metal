@@ -494,13 +494,13 @@ def test_gpt_oss_demo(
             # N150 targets (milliseconds) - lower is better
             "T3K_gpt-oss-20b": 1600,
             "T3K_gpt-oss-120b": 1600,
-            "TG_gpt-oss-20b": 1600,
+            "TG_gpt-oss-20b": 450,
             "TG_gpt-oss-120b": 1600,
         }
         ci_target_decode_tok_s_u = {
             "T3K_gpt-oss-20b": 8,
             "T3K_gpt-oss-120b": 8,
-            "TG_gpt-oss-20b": 8,
+            "TG_gpt-oss-20b": 13,
             "TG_gpt-oss-120b": 8,
         }
 
