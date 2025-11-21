@@ -382,14 +382,16 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
-    std::variant<std::string, YAML::Node> text_or_tokens;
+    std::variant<std::string, std::reference_wrapper<YAML::Node>> text_or_tokens;
+    YAML::Node yaml_data;  // Separate storage
 
     try {
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(training_config.data_path);
         } else {
-            text_or_tokens = YAML::LoadFile(training_config.data_path);
+            yaml_data = YAML::LoadFile(training_config.data_path);  // Store in variable
+            text_or_tokens = std::ref(yaml_data);  // Now reference the stored object
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -412,9 +414,9 @@ int main(int argc, char **argv) {
             else if (tokenizer_type == "bpe") {
 
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(
-                    std::get<YAML::Node>(data_source), sequence_length);
+                    std::get<std::reference_wrapper<YAML::Node>>(data_source), sequence_length);
 
-                auto yaml_node = std::get<YAML::Node>(data_source);
+                auto yaml_node = std::get<std::reference_wrapper<YAML::Node>>(data_source).get();
 
                 std::visit(
                     [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); }, model_config.transformer_config);
@@ -435,6 +437,8 @@ int main(int argc, char **argv) {
     if (multihost_config.socket_type == SocketType::FABRIC || device_config.enable_tp || device_config.enable_ddp) {
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
+
+    exit(0);
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();

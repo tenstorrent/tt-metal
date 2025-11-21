@@ -77,14 +77,17 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
 
-    std::variant<std::string, YAML::Node> text_or_tokens;
+
+    std::variant<std::string, std::reference_wrapper<YAML::Node>> text_or_tokens;
+    YAML::Node yaml_data;  // Separate storage
 
     try {
         // check file extension:
         if (config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(config.data_path);
         } else {
-            text_or_tokens = YAML::LoadFile(config.data_path);
+            yaml_data = YAML::LoadFile(config.data_path);
+            text_or_tokens = std::ref(yaml_data);
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
