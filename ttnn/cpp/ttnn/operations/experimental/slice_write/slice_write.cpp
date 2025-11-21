@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
-#include "device/slice_write_op.hpp"
+#include "device/slice_write_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -119,11 +118,8 @@ ttnn::Tensor SliceWriteOperation::invoke(
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
-        (void)tt::tt_metal::operation::run(
-            SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
-            {input},
-            {},
-            {output_tensor})[0];
+        (void)ttnn::prim::slice_write(
+            input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
         }
