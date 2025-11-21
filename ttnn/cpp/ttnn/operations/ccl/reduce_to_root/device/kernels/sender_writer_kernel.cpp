@@ -12,6 +12,7 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
+    DPRINT << "sender writer kernel started\n";
     constexpr uint32_t accessor_2_idx = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_l = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_s = get_compile_time_arg_val(2);
@@ -35,7 +36,7 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = 8;  // get_arg_val<uint32_t>(6);
+    const uint32_t max_pages_per_packet_l = 2;  // 8;  // get_arg_val<uint32_t>(6); //HERE
     const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(6);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
@@ -152,4 +153,5 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
+    DPRINT << "sender writer kernel completed\n";
 }

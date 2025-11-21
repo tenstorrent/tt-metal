@@ -22,18 +22,21 @@ inline void read_from_local(
     uint32_t cb_id_in_l,  // compute cb for l
     uint32_t cb_id_in_s,  // compute cb for s
     uint32_t cb_id_in_m,  // compute cb for m
-    uint32_t onetile) {
+    uint32_t onetile,
+    uint32_t input_num_tiles) {
     // read l, s, m data from own device and push it to compute cbs
+    DPRINT << "start reading from local\n";
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    for (uint32_t i = 0; i < num_tiles_l / 8; ++i) {
-        cb_reserve_back(cb_id_in_l, 8);
+    for (uint32_t i = 0; i < num_tiles_l / input_num_tiles; ++i) {
+        cb_reserve_back(cb_id_in_l, input_num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
-        noc_async_read(read_addr, l1_write_addr, 8 * page_bytes);
-        read_addr += 8 * page_bytes;
+        noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
+        read_addr += input_num_tiles * page_bytes;
         noc_async_read_barrier();
-        cb_push_back(cb_id_in_l, 8);
+        cb_push_back(cb_id_in_l, input_num_tiles);
     }
 
+    DPRINT << "finished reading l tensor\n";
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in_s);
@@ -42,6 +45,7 @@ inline void read_from_local(
     noc_async_read_barrier();
     cb_push_back(cb_id_in_s, onetile);
 
+    DPRINT << "finished reading s tensor\n";
     // for tensor m
     cb_reserve_back(cb_id_in_m, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_m);
@@ -49,9 +53,11 @@ inline void read_from_local(
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
+    DPRINT << "finished reading m tensor\n";
 }
 
 void kernel_main() {
+    DPRINT << "root reader kernel started\n";
     constexpr uint32_t accessor_2_idx = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -93,7 +99,7 @@ void kernel_main() {
     size_t conn_arg_idx = 18;
     uint32_t num_tiles_l = page_idx_end;
 
-    uint32_t chunk_size = 8;
+    uint32_t chunk_size = 2;  // to be modified with tiny tiles HERE
 
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
     const auto packet_buffer_2 = TensorAccessor(packet_buffer_args_2, intermediate_base_addr_2, packet_size_bytes);
@@ -137,9 +143,11 @@ void kernel_main() {
         compute_cb_l,
         compute_cb_s,
         compute_cb_m,
-        1);
+        1,
+        chunk_size);
     // device 0 is sending data to device 1
 
+    DPRINT << "after reading from local\n";
     // receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
@@ -183,6 +191,7 @@ void kernel_main() {
         }
     }
     cb_push_back(packet_cb_id, 1);
+    DPRINT << "after receiving packet l\n";
 
     // now receiving s and m
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -202,6 +211,8 @@ void kernel_main() {
         dest_page_base_addr_m2, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
 
     noc_semaphore_set(local_semaphore_ptr, 0);
+
+    DPRINT << "after receiving packet s and m\n";
 
     // now the similar behaviour when device 2 is sending data to device 1
     // will be waiting on another semaphore, and fabric is for the other direction
@@ -225,6 +236,8 @@ void kernel_main() {
         (uint32_t)sem_header_ptr_2, packet_header_size_bytes);
     fabric_connection_2.close();
 
+    DPRINT << "after sending semaphore increment to device 2\n";
+
     // read local data from own device from intermediate buffer and push to compute cbs
     read_from_local(
         get_read_ptr(int_src_l),
@@ -237,12 +250,17 @@ void kernel_main() {
         compute_cb_l,
         compute_cb_s,
         compute_cb_m,
-        1);
+        1,
+        chunk_size);
+
+    DPRINT << "after reading from local second time\n";
 
     // read again l, s and m from device 2
 
     local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr2);
     noc_semaphore_wait(local_semaphore_ptr, 1);
+
+    DPRINT << "after waiting on semaphore from device 2\n";
 
     page_idx_start = 0;
     curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -302,4 +320,5 @@ void kernel_main() {
         dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
 
     noc_semaphore_set(local_semaphore_ptr, 0);
+    DPRINT << "root reader kernel completed\n";
 }

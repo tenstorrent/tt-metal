@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    DPRINT << "sender reader kernel started\n";
     const uint32_t src_addr_l = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles_l = get_arg_val<uint32_t>(1);
     const uint32_t src_addr_s = get_arg_val<uint32_t>(2);
@@ -51,4 +52,5 @@ void kernel_main() {
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
+    DPRINT << "sender reader kernel completed\n";
 }
