@@ -10,6 +10,17 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 using tt::data_movement::common::tt_memmove;
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 8; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right =
+            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
 inline void read_from_local(
     uint32_t src_addr_l,  // source address for l tensor
@@ -26,9 +37,16 @@ inline void read_from_local(
     uint32_t input_num_tiles) {
     // read l, s, m data from own device and push it to compute cbs
     DPRINT << "start reading from local\n";
+    DPRINT << "input num tiles: " << (uint32_t)input_num_tiles << "\n";
+    DPRINT << "I SHOULD BE less than : " << (uint32_t)(num_tiles_l / input_num_tiles) << "\n";
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
+    DPRINT << "src adr l: " << (uint32_t)src_addr_l << "\n";
+    DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
+    DPRINT << "reserving cb id: " << (uint32_t)cb_id_in_l << "\n";
     for (uint32_t i = 0; i < num_tiles_l / input_num_tiles; ++i) {
+        DPRINT << "reserving cb for l tensor with " << (uint32_t)input_num_tiles << "\n";
         cb_reserve_back(cb_id_in_l, input_num_tiles);
+        DPRINT << "reserved cb for l tensor\n";
         uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
         noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
         read_addr += input_num_tiles * page_bytes;
@@ -99,7 +117,7 @@ void kernel_main() {
     size_t conn_arg_idx = 18;
     uint32_t num_tiles_l = page_idx_end;
 
-    uint32_t chunk_size = 2;  // to be modified with tiny tiles HERE
+    uint32_t chunk_size = 8;  // to be modified with tiny tiles HERE
 
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
     const auto packet_buffer_2 = TensorAccessor(packet_buffer_args_2, intermediate_base_addr_2, packet_size_bytes);
@@ -147,6 +165,8 @@ void kernel_main() {
         chunk_size);
     // device 0 is sending data to device 1
 
+    print_full_tile(compute_cb_m, 0, false);
+
     DPRINT << "after reading from local\n";
     // receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
@@ -190,6 +210,8 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "print data from cb receiver l\n";
+    print_full_tile(receiver_cb_id_l, 0, false);
     cb_push_back(packet_cb_id, 1);
     DPRINT << "after receiving packet l\n";
 
@@ -199,16 +221,25 @@ void kernel_main() {
     const uint32_t dest_page_base_addr_s2 = get_write_ptr(receiver_cb_id_s);
     const uint32_t dest_page_base_addr_m2 = get_write_ptr(receiver_cb_id_m);
 
+    DPRINT << "after reserving back s and m cb\n";
+
     auto packet_idx_sm = 0;
     const uint64_t pkt_noc_addr2 = packet_buffer_2.get_noc_addr(packet_idx_sm, 0, 0);
     // read the single packet that contains both s and m to a temporary buffer
     // then copy first tile to s and second tile to m
     noc_async_read(pkt_noc_addr2, packet_l1_addr, page_size_bytes * 2);
+    DPRINT << "after reading s and m packet\n";
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr_s2, packet_l1_addr, page_size_bytes);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m2, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
+
+    DPRINT << "print data from cb receiver m\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
+
+    cb_push_back(receiver_cb_id_s, 1);
+    cb_push_back(receiver_cb_id_m, 1);
 
     noc_semaphore_set(local_semaphore_ptr, 0);
 

@@ -60,59 +60,64 @@ constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(16);
 constexpr uint32_t vDHt = get_compile_time_arg_val(17);
 constexpr uint32_t loop_size = get_compile_time_arg_val(18);
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 8; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right =
+            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void MAIN {
     DPRINT << "compute kernel started\n";
     DPRINT << "loop size: " << (uint32_t)loop_size << "\n";
-    const bool use_half_tile = false;
+    const bool use_half_tile = true;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
-    constexpr uint32_t out_chunk_tiles = 2;  // vDHt; //Sq_chunk_t * vDHt; HERE
+    constexpr uint32_t out_chunk_tiles = 8;  // Sq_chunk_t * vDHt;
+
+    DPRINT << "read data of cb_m_in\n";
+    // print_full_tile(cb_m_in, 0, 1);
+
+    DPRINT << "read data of cb_prev_max\n";
+    // print_full_tile(cb_prev_max, 0, 1);
 
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
-        DPRINT << "start of loop " << (uint32_t)loop_idx << "\n";
-
         // move m2 input
-        move_block<true>(cb_prev_max, cb_m2_temp, 1);
-        DPRINT << "after move m2\n";
+        move_block<true>(cb_prev_max, cb_m2_temp, Sq_chunk_t);
 
         // move m1 input
-        move_block<true>(cb_m_in, cb_m1_temp, 1);
+        move_block<true>(cb_m_in, cb_m1_temp, Sq_chunk_t);
 
-        DPRINT << "after move m1\n";
-        DPRINT << "CB idx of m1 temp: " << (uint32_t)cb_m1_temp << "\n";
-        DPRINT << "CB idx of m2 temp: " << (uint32_t)cb_m2_temp << "\n";
-        DPRINT << "CB idx of m temp: " << (uint32_t)cb_m_temp << "\n";
-        // CUR_MAX = max(PREV_MAX, WORKER_MAX)
+        max_block<vector_mode>(cb_m1_temp, cb_m2_temp, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
 
-        max_block<vector_mode>(cb_m1_temp, cb_m2_temp, cb_m_temp, 1);  // pushed, pushed, popped
-
-        DPRINT << "AFTER MAX BLOCK\n";
-        DPRINT << "before exp\n";
-
-        cb_reserve_back(cb_exp_max_diff_2, 1);
+        cb_reserve_back(cb_exp_max_diff_2, Sq_chunk_t);
         // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
         // PREV_SUM_2 *= EXP_MAX_DIFF_2
-        sub_exp_block<scale_fp32, vector_mode>(cb_m1_temp, cb_m_temp, cb_exp_max_diff_2, 1);
-        DPRINT << "after sub exp block 2\n";
+        sub_exp_block<scale_fp32, vector_mode>(cb_m1_temp, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
 
-        cb_wait_front(cb_prev_sum_2, 1);
+        cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
 
-        DPRINT << "AFTER WAIT FRONT PREV SUM 2\n";
-        mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, 1);
+        mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
         DPRINT << "after prev sum2\n";
 
-        sub_exp_block<scale_fp32, vector_mode>(cb_m2_temp, cb_m_temp, cb_exp_max_diff, 1);
-        mul_block_inplace(cb_prev_sum, cb_exp_max_diff, 1);
+        sub_exp_block<scale_fp32, vector_mode>(cb_m2_temp, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
+        mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
         DPRINT << "after prev sum\n";
 
         /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-        add_block(cb_prev_sum_2, cb_prev_sum, cb_s_temp, 1);
+        add_block(cb_prev_sum_2, cb_prev_sum, cb_s_temp, Sq_chunk_t);
 
+        DPRINT << "after cur sum\n";
         // OUT_ACC_2 *= EXP_MAX_DIFF
         // OUT_ACC *= EXP_MAX_DIFF_2
-        mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, 1, vDHt);
-        mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, 1, vDHt);
+        mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
+        mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
         // OUT_ACC = OUT_ACC + OUT_ACC_2
         add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
@@ -120,22 +125,25 @@ void MAIN {
         // if do_final_division at the end, update OUT_ACC to be OUT_ACC / CUR_SUM
         if (loop_idx == 1) {
             // RECIP_CUR_SUM = 1 / CUR_SUM
-            recip_block_inplace<vector_mode>(cb_s_temp, 1);
+            recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);
             // OUT_ACC = OUT_ACC * RECIP_CUR_SUM
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_s_temp, 1, vDHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_s_temp, Sq_chunk_t, vDHt);
         }
+        DPRINT << "after final division IF APPLICABLE\n";
 
         // OUT <- OUT_ACC
         move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
 
         // OUT_MAX <- TEMP_MAX
-        move_block<true>(cb_m_temp, cb_cur_max, 1);
+        move_block<true>(cb_m_temp, cb_cur_max, Sq_chunk_t);
 
         // OUT_SUM <- TEMP_SUM
-        move_block<true>(cb_s_temp, cb_cur_sum, 1);
+        move_block<true>(cb_s_temp, cb_cur_sum, Sq_chunk_t);
 
-        cb_pop_front(cb_m_in, 1);
-        cb_pop_front(cb_prev_max, 1);
+        DPRINT << "after moving out sum\n";
+        cb_pop_front(cb_m_in, Sq_chunk_t);
+        cb_pop_front(cb_prev_max, Sq_chunk_t);
+        DPRINT << "end of loop " << (uint32_t)loop_idx << "\n";
     }
 }
 }  // namespace NAMESPACE

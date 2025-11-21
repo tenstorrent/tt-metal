@@ -14,12 +14,14 @@ def test_reduce_to_root_basic(mesh_device):
     root_coord = (1, 0)
     num_devices = 4
     # currently change shape to fit tile, change later to tiny tile, make same shape in terms of number of packets
-    l_shape = [32, 64]  # should be tiny tile (8,256)
-    s_shape = [32, 32]  # should be tiny tile (8,1)
-    m_shape = [32, 32]  # should be tiny tile (8,1)
-    intermediate_shapes = [[32, 64], [2, 32, 32]]  # should be (8,256) and (2,8,1)
+    l_shape = [8, 256]  # should be tiny tile (8,256)
+    s_shape = [8, 32]  # should be tiny tile (8,1)
+    m_shape = [8, 32]  # should be tiny tile (8,1)
+    intermediate_shapes = [[8, 256], [2, 8, 32]]  # should be (8,256) and (2,8,1)
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
+    tile = ttnn.Tile((8, 32))
+    shard_spec_sm_shape = (16, 32)
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
 
@@ -37,7 +39,7 @@ def test_reduce_to_root_basic(mesh_device):
     )
     shard_spec_sm = ttnn.ShardSpec(
         shard_grid,
-        (64, 32),
+        shard_spec_sm_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     mem_config_l = ttnn.MemoryConfig(
@@ -61,6 +63,7 @@ def test_reduce_to_root_basic(mesh_device):
             torch.ones(l_shape, dtype=torch.bfloat16) * (i + 1),
             device=submesh_device,
             layout=layout,
+            tile=tile,
             dtype=dtype,
             memory_config=mem_config_l,
             mesh_mapper=mesh_mapper,
@@ -69,6 +72,7 @@ def test_reduce_to_root_basic(mesh_device):
             torch.ones(s_shape, dtype=torch.bfloat16) * (i + 1),
             device=submesh_device,
             layout=layout,
+            tile=tile,
             dtype=dtype,
             memory_config=mem_config_s,
             mesh_mapper=mesh_mapper,
@@ -77,6 +81,7 @@ def test_reduce_to_root_basic(mesh_device):
             torch.ones(m_shape, dtype=torch.bfloat16) * (i + 1),
             device=submesh_device,
             layout=layout,
+            tile=tile,
             dtype=dtype,
             memory_config=mem_config_s,
             mesh_mapper=mesh_mapper,
@@ -87,6 +92,7 @@ def test_reduce_to_root_basic(mesh_device):
         torch.zeros(intermediate_shapes[0], dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
+        tile=tile,
         dtype=dtype,
         memory_config=mem_config_l,
         mesh_mapper=mesh_mapper,
@@ -95,6 +101,7 @@ def test_reduce_to_root_basic(mesh_device):
         torch.zeros(intermediate_shapes[1], dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
+        tile=tile,
         dtype=dtype,
         memory_config=mem_config_sm,
         mesh_mapper=mesh_mapper,
