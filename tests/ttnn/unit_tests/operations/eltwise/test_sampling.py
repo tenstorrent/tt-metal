@@ -263,7 +263,7 @@ def test_log_probs_calculation(shape, mesh_device):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    log_probs_calculator = LogProbsCalculator(mesh_device, input_values.numel())
+    log_probs_calculator = LogProbsCalculator(input_values.shape[-1], mesh_device)
     # calculate global stats
     log_probs_calculator.compute_global_stats(tt_input_values_tensor)
 
