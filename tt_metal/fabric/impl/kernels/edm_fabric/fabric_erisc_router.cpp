@@ -308,11 +308,11 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
     sender_channel_4_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 11);
-static_assert(sender_channel_free_slots_stream_ids[1] == 12);
-static_assert(sender_channel_free_slots_stream_ids[2] == 13);
-static_assert(sender_channel_free_slots_stream_ids[3] == 14);
-static_assert(sender_channel_free_slots_stream_ids[4] == 15);
+static_assert(sender_channel_free_slots_stream_ids[0] == 18);
+static_assert(sender_channel_free_slots_stream_ids[1] == 19);
+static_assert(sender_channel_free_slots_stream_ids[2] == 20);
+static_assert(sender_channel_free_slots_stream_ids[3] == 21);
+static_assert(sender_channel_free_slots_stream_ids[4] == 22);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
@@ -2156,7 +2156,8 @@ void kernel_main() {
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
     init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-    // to_sender_packets_acked_streams initialization removed - ack streams no longer used
+    // init_ptr_val<to_receiver_packets_sent_streams[2]>(0);
+    //  to_sender_packets_acked_streams initialization removed - ack streams no longer used
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);
@@ -2169,6 +2170,9 @@ void kernel_main() {
     init_ptr_val<vc_0_free_slots_from_downstream_edge_2_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<vc_0_free_slots_from_downstream_edge_3_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<vc_1_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
+    // init_ptr_val<vc_2_free_slots_from_downstream_edge_1_stream_id>(0);  // Initialize VC2 streams
+    // init_ptr_val<vc_2_free_slots_from_downstream_edge_2_stream_id>(0);
+    // init_ptr_val<vc_2_free_slots_from_downstream_edge_3_stream_id>(0);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
@@ -2177,9 +2181,15 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
         init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
-        // to_sender_packets_acked_streams initialization removed - ack streams no longer used
+        // init_ptr_val<sender_channel_free_slots_stream_ids[5]>(SENDER_NUM_BUFFERS_ARRAY[5]);
+        // init_ptr_val<sender_channel_free_slots_stream_ids[6]>(SENDER_NUM_BUFFERS_ARRAY[6]);
+        // init_ptr_val<sender_channel_free_slots_stream_ids[7]>(SENDER_NUM_BUFFERS_ARRAY[7]);
+        //  to_sender_packets_acked_streams initialization removed - ack streams no longer used
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
+        // init_ptr_val<to_sender_packets_completed_streams[5]>(0);
+        // init_ptr_val<to_sender_packets_completed_streams[6]>(0);
+        // init_ptr_val<to_sender_packets_completed_streams[7]>(0);
     }
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
