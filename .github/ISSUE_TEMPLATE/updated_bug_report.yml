@@ -1,7 +1,8 @@
 name: Bug Report
 description: Report a functional bug or unexpected behavior with a minimal repro.
 title: "[area]: brief summary"
-labels: ["bug"]
+labels: ["bug", "needs-triage"]
+assignees: []
 
 body:
   - type: input
@@ -23,14 +24,26 @@ body:
         - label: Wrong results
         - label: Other unexpected behavior
 
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Select priority and **add the same P0/P1/P2/P3 label manually** after submission.
+      options:
+        - P0 (Blocking)
+        - P1 (High)
+        - P2 (Medium)
+        - P3 (Low)
+    validations:
+      required: true
+
   - type: textarea
     id: impact
     attributes:
-      label: Impact & Priority
+      label: Impact
       description: Who/what is blocked and by when?
       value: |
-        Priority: [Blocking|High|Medium|Low]
-        Affected users/workflows:
+        Affected workflows or users:
         Release/date risk:
     validations:
       required: true
