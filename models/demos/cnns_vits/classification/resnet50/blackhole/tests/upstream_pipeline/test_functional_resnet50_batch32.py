@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.demos.wormhole.resnet50.tests.test_resnet50_functional import run_resnet_50
+from models.demos.cnns_vits.classification.resnet50.wormhole.tests.test_resnet50_functional import run_resnet_50
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

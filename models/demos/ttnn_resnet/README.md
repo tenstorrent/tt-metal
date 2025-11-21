@@ -68,4 +68,4 @@ For single device and other platform-specific versions, please refer to:
 ### Single Device
 [Grayskull](/models/demos/grayskull/resnet50/)
 
-[Wormhole_B0](/models/demos/wormhole/resnet50/)
+[Wormhole_B0](/models/demos/cnns_vits/classification/resnet50/wormhole/)
