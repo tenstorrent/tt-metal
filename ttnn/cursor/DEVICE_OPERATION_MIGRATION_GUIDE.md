@@ -380,7 +380,7 @@ Hash is based on operation attributes and input arguments and helps reuse alread
 Know, the default legacy implementation hashes both operation attributes and input tensors.
 Tensor hash includes:
  - Storage variant index (0 or 1)
-- Logical shape dimensions (vector of uint32_t)
+ - Logical shape dimensions (vector of uint32_t)
 - Data type (DataType enum)
 - Page config variant index (0 or 1)
 - Tile configuration (from page config)
