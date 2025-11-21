@@ -205,22 +205,22 @@ class LMHead(LightweightModule):
                 outputs.append(output)
         else:
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
-                # x = ttnn.typecast(x, ttnn.bfloat8_b)
-                output = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    config=self.prefill_pc,
-                    dtype=ttnn.bfloat8_b,
+                output = ttnn.linear(
+                    x,
+                    weight,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=self.prefill_pc,
+                    dtype=ttnn.bfloat8_b,
                 )
-                # output = ttnn.linear(
-                #     x,
-                #     weight,
+                # Minimal matmul is not giving any performance improvement over linear
+                # output = ttnn.experimental.minimal_matmul(
+                #     input_tensor=x,
+                #     weight_tensor=weight,
+                #     config=self.prefill_pc,
+                #     dtype=ttnn.bfloat8_b,
                 #     compute_kernel_config=self.compute_kernel_config,
                 #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                #     program_config=self.prefill_pc,
-                #     dtype=ttnn.bfloat8_b,
                 # )
                 x.deallocate(True)
                 outputs.append(output)

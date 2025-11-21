@@ -439,20 +439,21 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        xqkv = ttnn.experimental.minimal_matmul(
-            input_tensor=x_11SH,
-            weight_tensor=self.wqkv_interleaved,
-            config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+        xqkv = ttnn.linear(
+            x_11SH,
+            self.wqkv_interleaved,
+            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
-        # xqkv = ttnn.linear(
-        #     x_11SH,
-        #     self.wqkv_interleaved,
-        #     dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Minimal matmul is giving bad outputs for seqlen > 128
+        # xqkv = ttnn.experimental.minimal_matmul(
+        #     input_tensor=x_11SH,
+        #     weight_tensor=self.wqkv_interleaved,
+        #     config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
         #     compute_kernel_config=self.compute_kernel_config_hifi2,
-        #     program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
 
         ttnn.deallocate(x_11SH)
