@@ -33,15 +33,16 @@ void kernel_main() {
     constexpr uint32_t subtile_size_bytes{subtile_elements * SUBTILE_LINE_BYTES}; 
     constexpr uint32_t tile_size_bytes{tile_elements * tile_elements * 2U}; // * 2U since FP16 is 2 bytes
 
-    const uint32_t ALIGNMENT{get_arg_val<uint32_t>(8U)};
-    const bool MISALIGNED {ALIGNMENT > SUBTILE_LINE_BYTES};
+    constexpr uint32_t ALIGNMENT{get_compile_time_arg_val(0U)};
+    constexpr uint32_t ALIGNMENT_MASK{ALIGNMENT - 1U};
+    constexpr bool MISALIGNED {ALIGNMENT > SUBTILE_LINE_BYTES};
 
     const uint32_t intermed_l1_scratch{MISALIGNED ? get_write_ptr(1U) : 0U};
     uint8_t* intermed_l1_scratch_ptr{reinterpret_cast<uint8_t* const>(intermed_l1_scratch)};
 
     constexpr uint32_t onetile{1U};
     constexpr uint32_t operand0{0U};
-    constexpr auto src_args{TensorAccessorArgs<0U>()};
+    constexpr auto src_args{TensorAccessorArgs<1U>()};
     const auto s0{TensorAccessor(src_args, src0_addr, 2048U)};
 
     // The original tensor shape is [N, C, H, W]
@@ -107,8 +108,8 @@ void kernel_main() {
                             if (MISALIGNED) {
                                 // if banked addr and dest addr don't share alignment then we need to read to the intermediate
                                 // buffer and then copy it to the correct location
-                                const uint32_t banked_alignment{static_cast<uint32_t>(banked_addr % ALIGNMENT)};
-                                if ((dest_tr0_l1 % ALIGNMENT) != banked_alignment) {
+                                const uint32_t banked_alignment{static_cast<uint32_t>(banked_addr & ALIGNMENT_MASK)};
+                                if ((dest_tr0_l1 & ALIGNMENT_MASK) != banked_alignment) {
                                     // we write to the top of the intermediate buffer as that's aligned, and we write from the
                                     // closest align source address if source is not aligned to ALIGNMENT then we go to the nearest
                                     // address that is aligned and copy from there

@@ -112,8 +112,8 @@ int main(int argc, char** argv) {
         const uint32_t W{shape[3U]}, H{shape[2U]}, C{shape[1U]}, N{shape[0U]};
         const uint32_t HW{H * W};
         const uint32_t CHW{C * H * W};
-
         std::vector<uint32_t> reader_compile_time_args;
+        reader_compile_time_args.emplace_back(alignment);
         tt::tt_metal::TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
         auto reader_kernel{tt_metal::CreateKernel(
             program,
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
         tt_metal::SetRuntimeArgs(
-            program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW, alignment});
+            program, reader_kernel, core, {dram_buffer_src0_addr, 0U, W, H, C, HW, N, CHW});
 
         tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0U, num_tensor_tiles});
