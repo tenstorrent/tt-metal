@@ -122,29 +122,27 @@ void kernel_main() {
         }
 
         if constexpr (enable_fused_payload_with_sync) {
-            send_payload_packet();
+            fabric_connection.wait_for_empty_write_slot();
+            if (payload_size_bytes > 0) {
+                fabric_connection.send_payload_without_header_non_blocking_from_address(
+                    payload_buffer_address, payload_size_bytes);
+            }
+            fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         } else {
             if constexpr (sem_inc_only) {
-                send_seminc_packet();
+                fabric_connection.wait_for_empty_write_slot();
+                fabric_connection.send_payload_flush_non_blocking_from_address(
+                    (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
-                send_payload_packet();
+                fabric_connection.wait_for_empty_write_slot();
+                if (payload_size_bytes > 0) {
+                    fabric_connection.send_payload_without_header_non_blocking_from_address(
+                        payload_buffer_address, payload_size_bytes);
+                }
+                fabric_connection.send_payload_flush_non_blocking_from_address(
+                    (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
             }
-        }
-
-        // // Immediately send response packet back to sender
-        // if constexpr (sem_inc_only) {
-        //     send_seminc_packet();
-        // } else {
-        //     if constexpr (enable_fused_payload_with_sync) {
-        //         send_payload_packet();
-        //     } else {
-        //         send_payload_packet();
-        //         send_seminc_packet();
-        //     }
-        // }
-
-        if (burst_idx % 10 == 0 || burst_idx == num_bursts - 1) {
-            DPRINT << "RESPONDER: Completed burst " << (uint32_t)burst_idx << "/" << (uint32_t)num_bursts << "\n";
         }
     }
 

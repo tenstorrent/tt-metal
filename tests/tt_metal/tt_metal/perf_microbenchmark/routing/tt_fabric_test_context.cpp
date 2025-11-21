@@ -424,27 +424,15 @@ void TestContext::collect_latency_results() {
 
     TT_FATAL(sender_device != nullptr, "Could not find latency sender device");
 
-    // Get the sender cores (should be exactly one)
-    const auto& senders = sender_device->get_senders();
-    for (const auto& [core, worker] : senders) {
-        log_info(tt::LogTest, "Sender core: {}, worker: {}", core, worker.get_core());
-    }
-    TT_FATAL(senders.size() == 1, "Latency sender should have exactly one core. Got {} cores.", senders.size());
-    const auto& [sender_core, sender_worker] = *senders.begin();
-
-    // Calculate result buffer size needed for latency samples
-    // Each sample is a pair of uint64_t (start_timestamp, end_timestamp)
-    uint32_t num_samples = 0;
-    for (const auto& [config, _] : sender_worker.configs_) {
-        num_samples += config.parameters.num_packets;  // num_packets represents num_bursts in latency mode
-    }
+    // Use stored latency parameters (latency tests use specialized kernels, not normal sender workers)
+    uint32_t num_samples = latency_num_bursts_;
     uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);  // 2 timestamps per sample
 
-    // Read latency samples from sender device
+    // Read latency samples from sender device using the latency worker core
     auto result_data = fixture_->read_buffer_from_cores(
-        sender_coord, {sender_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+        sender_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
 
-    log_info(tt::LogTest, "Collected {} latency samples", num_samples);
+    log_info(tt::LogTest, "Collected {} latency samples from core {}", num_samples, latency_worker_core_);
 }
 
 void TestContext::report_latency_results(const TestConfig& config) {
