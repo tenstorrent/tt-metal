@@ -191,7 +191,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp

@@ -8,7 +8,7 @@
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -112,8 +112,13 @@ void kernel_main() {
 
             uint32_t target_value = target_indexes_l1_ptr[target_value_idx];
 
-            noc_async_read_tile(idx + (target_value / TILE_WIDTH), input_address_generator, l1_input_tile_write_addr);
-            noc_async_read_barrier();
+            read_tiles_by_row(
+                cb_input_tile,
+                input_address_generator,
+                idx + (target_value / TILE_WIDTH),
+                onetile,
+                tile_bytes,
+                onetile);
 
             auto read_input_tile_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_input_tile));
 
@@ -128,42 +133,15 @@ void kernel_main() {
         cb_push_back(cb_target_logits, onetile);
 
 #ifdef EVERYTHING_FITS_IN_L1
-        // read input buffer
-        cb_reserve_back(cb_input_idx, Wt);  // reserve Wt tiles in input buffer ==  wait until cb will has Wt tiles
-        uint32_t l1_write_addr = get_write_ptr(cb_input_idx);  // get the address of the first tile in the input buffer
-
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc_async_read_tile(
-                idx + j, input_address_generator, l1_write_addr);  // read the tile from the input buffer
-            l1_write_addr += tile_bytes;                           // move to the next tile
-        }
-        noc_async_read_barrier();        // wait until all tiles are read
-        cb_push_back(cb_input_idx, Wt);  // push the tile to the back of the input buffer
+        // read entire input row at once
+        read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
 
 #else
         // read input buffer by blocks to calculate max value in row
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
         // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-        }
+        read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
 #endif
     }
