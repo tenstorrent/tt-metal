@@ -994,11 +994,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
+        CoreCoord left_core_plus_one = {std::min((std::size_t)start_core_x + 1, right_core.x), (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
+        CoreCoord top_core_plus_one = {(std::size_t)core.x, std::min((std::size_t)start_core_y + 1, bottom_core.y)};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
         auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
