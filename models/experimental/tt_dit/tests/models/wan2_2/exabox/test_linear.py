@@ -20,13 +20,13 @@ from .....parallel.manager import CCLManager
 @pytest.mark.parametrize("tp_mesh_axis", [0])
 @pytest.mark.parametrize("is_fsdp", [True], ids=["yes_fsdp"])
 @pytest.mark.parametrize(
-    ("B, M, K, N, bias, sp_mesh_axis"),
+    ("B, M, K, N, bias, sp_mesh_axis, activation_fn"),
     [
-        (1, 81920, 5120, 5120, False, 1),  # sequence padding for chunk size 256
-        (1, 77824, 5120, 5120, False, 1),  # sequence padding for chunk size 128
-        (1, 81920, 5120, 13824, True, 1),  # sequence padding for chunk size 256
-        (1, 77824, 5120, 13824, True, 1),  # sequence padding for chunk size 128
-        (1, 128, 5120, 5120, False, None),  # sequence padding for chunk size 256
+        (1, 81920, 5120, 5120, False, 1, None),  # sequence padding for chunk size 256
+        (1, 77824, 5120, 5120, False, 1, None),  # sequence padding for chunk size 128
+        (1, 81920, 5120, 13824, True, 1, None),  # sequence padding for chunk size 256
+        (1, 77824, 5120, 13824, True, 1, "gelu"),  # sequence padding for chunk size 128
+        (1, 128, 5120, 5120, False, None, None),  # sequence padding for chunk size 256
     ],
     ids=[
         "wan_spatial_qkv_pad256",
@@ -53,6 +53,7 @@ def test_wan_col_parallel_linear(
     tp_mesh_axis: int,
     is_fsdp: bool,
     num_links: int,
+    activation_fn: str,
     reset_seeds,
 ) -> None:
     torch_dtype = torch.bfloat16
@@ -70,9 +71,12 @@ def test_wan_col_parallel_linear(
             mesh_axis=tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            activation_fn=activation_fn,
         )
     else:
-        tt_model = ColParallelLinear(K, N, bias=bias, mesh_device=mesh_device, mesh_axis=tp_mesh_axis)
+        tt_model = ColParallelLinear(
+            K, N, bias=bias, mesh_device=mesh_device, mesh_axis=tp_mesh_axis, activation_fn=activation_fn
+        )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, M, K), dtype=torch_dtype)
@@ -84,6 +88,8 @@ def test_wan_col_parallel_linear(
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
+        if activation_fn == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
 
     tt_output = tt_model(tt_input_tensor)
 
