@@ -20,6 +20,8 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 
+#include "compute_kernel_api/bcast.h"
+
 #include "common.hpp"
 
 namespace {
@@ -191,8 +193,27 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        add_tiles_init(cb_cumsum_stage_X, cb_output);
-        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        // UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read)));
+        // UNPACK(
+        //     (llk_unpack_AB<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE,
+        //     31)));
+
+        // MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>()));
+        // MATH((llk_math_eltwise_binary<
+        //       EltwiseBinaryType::ELWADD,
+        //       BroadcastType::ROW,
+        //       false,  // if anything, investigate later
+        //       0,
+        //       EltwiseBinaryReuseDestType::NONE>(WORKING_REG, false)));
+
+        // add_tiles_init(cb_cumsum_stage_X, cb_output);
+        // add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+
+        constexpr uint32_t LAST_ROW_INDEX = 31;
+
+        add_tiles_bcast_rows(
+            cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG, LAST_ROW_INDEX);
 
         tile_regs_wait();
         tile_regs_commit();
@@ -232,7 +253,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
             } else {
                 cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
             }
@@ -241,7 +262,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // axis 3/4's propagation
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
             } else {
                 cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.output_cb, block_depth);
             }
