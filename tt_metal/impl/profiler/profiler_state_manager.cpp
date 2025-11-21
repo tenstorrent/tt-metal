@@ -15,8 +15,8 @@ namespace tt {
 
 namespace tt_metal {
 
-// PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT is controlled by rtoptions. when env var is set, pass that bit through jit
-// build and in kernel_profiler.hpp, use that bit to determine the value of PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT.
+constexpr static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
+constexpr static uint32_t DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT = 2;
 
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions) {
     std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
@@ -26,12 +26,12 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
         profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
     }
 
-    const uint32_t profiler_l1_op_min_optional_marker_count =
-        do_profiler_sum ? kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT : 0;
+    const uint32_t profiler_l1_program_min_optional_marker_count =
+        do_profiler_sum ? DEFAULT_PROFILER_L1_PROGRAM_MIN_OPTIONAL_MARKER_COUNT : 0;
     const uint32_t dram_bank_size_per_risc_bytes_single_program =
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
         (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
-         profiler_l1_op_min_optional_marker_count) *
+         profiler_l1_program_min_optional_marker_count) *
         sizeof(uint32_t);
 
     if (profiler_program_support_count <=
