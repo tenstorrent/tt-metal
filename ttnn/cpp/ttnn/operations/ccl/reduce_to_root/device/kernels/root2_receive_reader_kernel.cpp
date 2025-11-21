@@ -87,7 +87,7 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 13;
-    uint32_t input_num_tiles = 2;  // to be modified with tiny tiles HERE
+    uint32_t input_num_tiles = 8;  // to be modified with tiny tiles HERE
 
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
     const auto packet_buffer_2 = TensorAccessor(packet_buffer_args_2, intermediate_base_addr_2, packet_size_bytes);
@@ -210,6 +210,9 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(dest_page_base_addr_s, packet_l1_addr, page_size_bytes);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
+
+    cb_push_back(receiver_cb_id_s, 1);
+    cb_push_back(receiver_cb_id_m, 1);
 
     DPRINT << "after memmove of s and m\n";
     noc_semaphore_set(local_semaphore_ptr, 0);
