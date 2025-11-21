@@ -77,6 +77,7 @@
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
 #include "tt_stl/reflection.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -96,7 +97,7 @@ using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator()->get_config().l1_unreserved_base -
+        return device->allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     } else {
