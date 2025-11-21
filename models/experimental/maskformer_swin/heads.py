@@ -35,6 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     MaskformerMLPPredictionHead = None
 
 from .backbone_swin import DEFAULT_TT_DTYPE
+from .tt_configs import build_heads_program_configs
 from .ttnn_compat import ttnn, require_ttnn
 from .weights import extract_heads_state
 
@@ -115,6 +116,11 @@ class MaskFormerHeads:
 
         # TTNN execution path
         if self.device is not None and ttnn is not None and self._tt_class_weight is not None:
+            heads_cfg = build_heads_program_configs(
+                num_queries=int(decoder_outputs.shape[1]), hidden_dim=self.config.hidden_dim
+            )
+            act_mem = heads_cfg.activation_memory or ttnn.DRAM_MEMORY_CONFIG
+
             # decoder_outputs: [B, Q, D]
             # pixel_embeddings: [B, Cmask, H, W]
             # Convert inputs to TT tensors if needed
@@ -124,61 +130,75 @@ class MaskFormerHeads:
                     dtype=self.dtype or DEFAULT_TT_DTYPE,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=act_mem,
                 )
             else:
                 dec_tt = decoder_outputs
                 if dec_tt.get_layout() != ttnn.TILE_LAYOUT:
                     dec_tt = ttnn.to_layout(dec_tt, ttnn.TILE_LAYOUT)
             if isinstance(pixel_embeddings, torch.Tensor):
+                pix_nhwc = pixel_embeddings.detach().contiguous().permute(0, 2, 3, 1)
                 pix_tt = ttnn.from_torch(
-                    pixel_embeddings.detach().contiguous(),
+                    pix_nhwc,
                     dtype=self.dtype or DEFAULT_TT_DTYPE,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=act_mem,
                 )
-                pix_tt = ttnn.to_layout(pix_tt, ttnn.TILE_LAYOUT)
             else:
                 pix_tt = pixel_embeddings
-                if pix_tt.get_layout() != ttnn.TILE_LAYOUT:
-                    pix_tt = ttnn.to_layout(pix_tt, ttnn.TILE_LAYOUT)
+                if pix_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                    pix_tt = ttnn.to_layout(pix_tt, ttnn.ROW_MAJOR_LAYOUT)
 
             matmul_cfg = self._make_compute_kernel_config()
+            linear_kwargs = {}
+            matmul_kwargs = {}
+            if heads_cfg.core_grid is not None:
+                linear_kwargs["core_grid"] = heads_cfg.core_grid
+                matmul_kwargs["core_grid"] = heads_cfg.core_grid
+            if heads_cfg.matmul is not None:
+                linear_kwargs["program_config"] = heads_cfg.matmul
+                matmul_kwargs["program_config"] = heads_cfg.matmul
+
+            def _linear(x, w, b=None, activation=None):
+                if hasattr(ttnn, "linear"):
+                    try:
+                        return ttnn.linear(
+                            x,
+                            w,
+                            b,
+                            activation=activation,
+                            compute_kernel_config=matmul_cfg,
+                            dtype=self.dtype or DEFAULT_TT_DTYPE,
+                            **linear_kwargs,
+                        )
+                    except Exception:
+                        pass
+                y = ttnn.matmul(x, w, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs)
+                if b is not None:
+                    y = ttnn.add(y, b)
+                if activation is not None:
+                    y = ttnn.relu(y)
+                return y
 
             # Class logits: [B, Q, D] x [NumCls+1, D]^T -> [B, Q, NumCls+1]
-            class_logits_tt = ttnn.matmul(
-                dec_tt, self._tt_class_weight, transpose_b=True, compute_kernel_config=matmul_cfg
-            )
-            if self._tt_class_bias is not None:
-                class_logits_tt = ttnn.add(class_logits_tt, self._tt_class_bias)
+            class_logits_tt = _linear(dec_tt, self._tt_class_weight, self._tt_class_bias)
 
             # Mask embedder MLP: three linears with ReLU
-            x = ttnn.matmul(dec_tt, self._tt_mlp_w1, transpose_b=True, compute_kernel_config=matmul_cfg)
-            if self._tt_mlp_b1 is not None:
-                x = ttnn.add(x, self._tt_mlp_b1)
-            x = ttnn.relu(x)
-            x = ttnn.matmul(x, self._tt_mlp_w2, transpose_b=True, compute_kernel_config=matmul_cfg)
-            if self._tt_mlp_b2 is not None:
-                x = ttnn.add(x, self._tt_mlp_b2)
-            x = ttnn.relu(x)
-            mask_embeddings_tt = ttnn.matmul(x, self._tt_mlp_w3, transpose_b=True, compute_kernel_config=matmul_cfg)
-            if self._tt_mlp_b3 is not None:
-                mask_embeddings_tt = ttnn.add(mask_embeddings_tt, self._tt_mlp_b3)
+            x = _linear(dec_tt, self._tt_mlp_w1, self._tt_mlp_b1, activation="relu")
+            x = _linear(x, self._tt_mlp_w2, self._tt_mlp_b2, activation="relu")
+            mask_embeddings_tt = _linear(x, self._tt_mlp_w3, self._tt_mlp_b3, activation=None)
 
             # Compute mask logits via batched matmul: [B,Q,Cm] x [B,Cm,H*W] -> [B,Q,H*W] -> [B,Q,H,W]
-            # Reshape pixel embeddings to [B, H*W, Cm] in ROW_MAJOR for clarity, then tile
-            pix_rm = ttnn.to_layout(pix_tt, ttnn.ROW_MAJOR_LAYOUT)
-            B = int(pix_rm.shape[0])
-            C = int(pix_rm.shape[1])
-            H = int(pix_rm.shape[2])
-            W = int(pix_rm.shape[3])
-            # Current layout likely [B, C, H, W]; bring to [B, H*W, C]
-            pix_seq = ttnn.permute(pix_rm, (0, 2, 3, 1))
-            pix_seq = ttnn.reshape(pix_seq, (B, H * W, C))
+            B = int(pix_tt.shape[0])
+            H = int(pix_tt.shape[1])
+            W = int(pix_tt.shape[2])
+            C = int(pix_tt.shape[3])
+            pix_seq = ttnn.reshape(pix_tt, (B, H * W, C))
             pix_seq_t = ttnn.to_layout(pix_seq, ttnn.TILE_LAYOUT)
-            # mask_embeddings already [B, Q, Cm]
-            logits_seq = ttnn.matmul(mask_embeddings_tt, pix_seq_t, transpose_b=True, compute_kernel_config=matmul_cfg)
+            logits_seq = ttnn.matmul(
+                mask_embeddings_tt, pix_seq_t, transpose_b=True, compute_kernel_config=matmul_cfg, **matmul_kwargs
+            )
             logits_rm = ttnn.to_layout(logits_seq, ttnn.ROW_MAJOR_LAYOUT)
             logits_hw = ttnn.reshape(logits_rm, (B, int(logits_rm.shape[1]), H, W))
 

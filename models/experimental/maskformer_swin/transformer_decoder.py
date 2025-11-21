@@ -38,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional when running outside 
 
 
 from .backbone_swin import DEFAULT_TT_DTYPE
+from .tt_configs import build_decoder_program_configs
 from .ttnn_compat import ttnn, require_ttnn
 from .weights import extract_transformer_state
 
@@ -150,7 +151,11 @@ class MaskFormerTransformerDecoder:
         # 2) Build position embeddings for encoder tokens and query embeddings
         with torch.no_grad():
             bsz, ch, h, w = feats.shape
-            pos = self._hf_decoder.position_embedder(feats.shape, feats.device, feats.dtype)  # [B,C,H,W]
+            try:
+                pos = self._hf_decoder.position_embedder(feats)  # HF >=4.34 signature: (x, mask=None)
+            except TypeError:
+                # Backward-compat: older HF versions expect shape/device/dtype triplet
+                pos = self._hf_decoder.position_embedder(feats.shape, feats.device, feats.dtype)
             # Flatten to sequences [B, HW, C]
             mem = feats.view(bsz, ch, h * w).permute(0, 2, 1).contiguous()
             pos_mem = pos.view(bsz, ch, h * w).permute(0, 2, 1).contiguous()
@@ -160,15 +165,36 @@ class MaskFormerTransformerDecoder:
             # Initial hidden states are zeros (inputs_embeds in HF path)
             hidden = torch.zeros_like(q_embed, dtype=feats.dtype, device=feats.device)
 
-        # Convert sequences to TTNN tiles in DRAM for safer capacity
+        # Program/memory configs for attention + MLP
+        num_heads = int(self.config.num_attention_heads)
+        head_dim = int(self.config.hidden_dim // self.config.num_attention_heads)
+        prog_cfg = build_decoder_program_configs(
+            seq_q=int(hidden.shape[1]),
+            seq_k=int(mem.shape[1]),
+            hidden_dim=self.config.hidden_dim,
+            num_heads=num_heads,
+            batch_size=int(hidden.shape[0]),
+        )
+        seq_memory_cfg = prog_cfg.sequence_memory or ttnn.DRAM_MEMORY_CONFIG
+
+        # Convert sequences to TTNN tiles (prefer L1 when configured)
         def to_tt_sequence(x):
-            return ttnn.from_torch(
-                x,
-                dtype=self.dtype or DEFAULT_TT_DTYPE,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            try:
+                return ttnn.from_torch(
+                    x,
+                    dtype=self.dtype or DEFAULT_TT_DTYPE,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=seq_memory_cfg,
+                )
+            except Exception:
+                return ttnn.from_torch(
+                    x,
+                    dtype=self.dtype or DEFAULT_TT_DTYPE,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         tt_hidden = to_tt_sequence(hidden)
         tt_qpos = to_tt_sequence(q_embed)
@@ -190,10 +216,17 @@ class MaskFormerTransformerDecoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        matmul_qkv_kwargs = {}
+        matmul_ctx_kwargs = {}
+        if prog_cfg.core_grid is not None:
+            matmul_qkv_kwargs["core_grid"] = prog_cfg.core_grid
+            matmul_ctx_kwargs["core_grid"] = prog_cfg.core_grid
+        if prog_cfg.matmul_qkv is not None:
+            matmul_qkv_kwargs["program_config"] = prog_cfg.matmul_qkv
+        if prog_cfg.matmul_out is not None:
+            matmul_ctx_kwargs["program_config"] = prog_cfg.matmul_out
 
         # Decoder stack
-        num_heads = int(self.config.num_attention_heads)
-        head_dim = int(self.config.hidden_dim // self.config.num_attention_heads)
         hidden_list: list = []
         attn_list: list = []  # not populated in this minimal TT path
 
@@ -201,7 +234,17 @@ class MaskFormerTransformerDecoder:
         fuse_linear_act = int(os.environ.get("MASKFORMER_TT_FUSE_LINEAR_ACT", "1")) == 1 and hasattr(ttnn, "linear")
         prefer_linear = int(os.environ.get("MASKFORMER_TT_USE_LINEAR", "1")) == 1 and hasattr(ttnn, "linear")
 
-        def _project(tt_x, w, b, *, activation: Optional[str] = None):
+        def _project(tt_x, w, b, *, activation: Optional[str] = None, program: Optional[Any] = None):
+            linear_kwargs = {}
+            matmul_kwargs = {}
+            if prog_cfg.core_grid is not None:
+                linear_kwargs["core_grid"] = prog_cfg.core_grid
+                matmul_kwargs["core_grid"] = prog_cfg.core_grid
+            if program is None:
+                program = prog_cfg.matmul_mlp
+            if program is not None:
+                linear_kwargs["program_config"] = program
+                matmul_kwargs["program_config"] = program
             if (activation is not None and fuse_linear_act) or (activation is None and prefer_linear):
                 try:
                     return ttnn.linear(
@@ -211,11 +254,12 @@ class MaskFormerTransformerDecoder:
                         activation=activation,
                         compute_kernel_config=compute_cfg,
                         dtype=self.dtype or DEFAULT_TT_DTYPE,
+                        **linear_kwargs,
                     )
                 except Exception:
                     # Fallback to matmul path if fused is unsupported at runtime
                     pass
-            y = ttnn.matmul(tt_x, w, transpose_b=True, compute_kernel_config=compute_cfg)
+            y = ttnn.matmul(tt_x, w, transpose_b=True, compute_kernel_config=compute_cfg, **matmul_kwargs)
             if b is not None:
                 y = ttnn.add(y, b)
             if activation is not None:
@@ -231,6 +275,29 @@ class MaskFormerTransformerDecoder:
                     y = ttnn.relu(y)
             return y
 
+        def _project_qkv(tt_x, w, b):
+            linear_kwargs = {}
+            if prog_cfg.core_grid is not None:
+                linear_kwargs["core_grid"] = prog_cfg.core_grid
+            if prog_cfg.matmul_qkv is not None:
+                linear_kwargs["program_config"] = prog_cfg.matmul_qkv
+            try:
+                qkv = ttnn.linear(
+                    tt_x,
+                    w,
+                    b,
+                    compute_kernel_config=compute_cfg,
+                    dtype=self.dtype or DEFAULT_TT_DTYPE,
+                    **linear_kwargs,
+                )
+                if hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "split_query_key_value_and_split_heads"):
+                    return ttnn.transformer.split_query_key_value_and_split_heads(
+                        qkv, num_heads=num_heads, transpose_key=False
+                    )
+            except Exception:
+                pass
+            return None
+
         def _split_heads(tt_x):
             # [B, L, C] -> [B, H, L, Hd] as a 4D view
             B = int(tt_x.shape[0])
@@ -245,28 +312,40 @@ class MaskFormerTransformerDecoder:
             L = int(tt_x.shape[1])
             return ttnn.reshape(tt_x, (B, L, num_heads * head_dim))
 
-        def _qk_scores(tt_q, tt_k):
-            # Inputs [B, Lq, H, Hd], [B, Lk, H, Hd] -> scores [B, H, Lq, Lk]
-            # Reshape to batch heads and use matmul with transpose_b=True
-            B = int(tt_q.shape[0])
-            Lq = int(tt_q.shape[1])
-            Lk = int(tt_k.shape[1])
-            q_bh = ttnn.reshape(tt_q, (B * num_heads, Lq, head_dim))
-            k_bh = ttnn.reshape(tt_k, (B * num_heads, Lk, head_dim))
-            scores = ttnn.matmul(q_bh, k_bh, transpose_b=True, compute_kernel_config=compute_cfg)
-            return scores
+        def _split_heads_sdpa(tt_x):
+            # [B, L, C] -> [B, H, L, Hd] but head dim first for SDPA
+            B = int(tt_x.shape[0])
+            L = int(tt_x.shape[1])
+            return ttnn.reshape(tt_x, (B, num_heads, L, head_dim))
 
-        def _attn_softmax(scores):
-            # scores: [B*H, Lq, Lk]
-            return ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+        def _concat_heads(tt_x):
+            if hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "concatenate_heads"):
+                try:
+                    return ttnn.transformer.concatenate_heads(tt_x)
+                except Exception:
+                    pass
+            B = int(tt_x.shape[0])
+            L = int(tt_x.shape[2])
+            return ttnn.reshape(tt_x, (B, L, num_heads * head_dim))
 
-        def _attn_weighted_sum(attn, tt_v, Lq, Lv):
-            # attn: [B*H, Lq, Lv], V: [B, Lv, H, Hd] -> context [B, Lq, H, Hd]
-            B = int(tt_v.shape[0])
-            v_bh = ttnn.reshape(tt_v, (B * num_heads, Lv, head_dim))
-            ctx = ttnn.matmul(attn, v_bh, compute_kernel_config=compute_cfg)
+        def _manual_attention(attn_layer, q_in, k_in, v_in):
+            q = _project(q_in, attn_layer["self_q_w"], attn_layer["self_q_b"], program=prog_cfg.matmul_qkv)
+            k = _project(k_in, attn_layer["self_k_w"], attn_layer["self_k_b"], program=prog_cfg.matmul_qkv)
+            v = _project(v_in, attn_layer["self_v_w"], attn_layer["self_v_b"], program=prog_cfg.matmul_qkv)
+            q = _split_heads(q)
+            k = _split_heads(k)
+            v = _split_heads(v)
+            B = int(q.shape[0])
+            Lq = int(q.shape[1])
+            Lk = int(k.shape[1])
+            q_bh = ttnn.reshape(q, (B * num_heads, Lq, head_dim))
+            k_bh = ttnn.reshape(k, (B * num_heads, Lk, head_dim))
+            scores = ttnn.matmul(q_bh, k_bh, transpose_b=True, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs)
+            attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+            v_bh = ttnn.reshape(v, (B * num_heads, Lk, head_dim))
+            ctx = ttnn.matmul(attn, v_bh, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
             ctx = ttnn.reshape(ctx, (B, Lq, num_heads, head_dim))
-            return ctx
+            return _merge_heads(ctx)
 
         for layer_idx in range(self.config.num_layers):
             layer = self._tt_params["layers"][layer_idx]
@@ -282,55 +361,88 @@ class MaskFormerTransformerDecoder:
                 except Exception:
                     pass
             # Self-attention: add query position embeddings to queries/keys inputs
-            # Keep original hidden for value projection
-            q_in = ttnn.add(tt_hidden, tt_qpos)
-            k_in = q_in
-            v_in = tt_hidden
-            q = _project(q_in, layer["self_q_w"], layer["self_q_b"])
-            k = _project(k_in, layer["self_k_w"], layer["self_k_b"])
-            v = _project(v_in, layer["self_v_w"], layer["self_v_b"])
-            q = _split_heads(q)
-            k = _split_heads(k)
-            v = _split_heads(v)
-            scores = _qk_scores(q, k)
-            attn = _attn_softmax(scores)
-            Lq = int(q.shape[1])
-            Lv = int(v.shape[1])
-            ctx = _attn_weighted_sum(attn, v, Lq, Lv)
-            ctx = _merge_heads(ctx)
-            sa_out = _project(ctx, layer["self_out_w"], layer.get("self_out_b"))
+            qkv_in = ttnn.add(tt_hidden, tt_qpos)
+            use_sdpa = hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "scaled_dot_product_attention")
+            ctx = None
+            if use_sdpa and layer.get("self_qkv_w") is not None:
+                try:
+                    q, k, v = _project_qkv(qkv_in, layer["self_qkv_w"], layer.get("self_qkv_b"))
+                    if q is not None and k is not None and v is not None:
+                        attn_ctx = ttnn.transformer.scaled_dot_product_attention(
+                            q,
+                            k,
+                            v,
+                            is_causal=False,
+                            program_config=prog_cfg.sdpa,
+                            compute_kernel_config=compute_cfg,
+                        )
+                        ctx = _concat_heads(attn_ctx)
+                except Exception:
+                    ctx = None
+            if ctx is None:
+                ctx = _manual_attention(layer, qkv_in, qkv_in, tt_hidden)
+            sa_out = _project(ctx, layer["self_out_w"], layer.get("self_out_b"), program=prog_cfg.matmul_out)
             # Residual + LayerNorm (post-norm)
             sa_res = ttnn.add(tt_hidden, sa_out)
             tt_hidden = ttnn.layer_norm(
                 sa_res,
                 weight=layer["ln1_w"],
                 bias=layer["ln1_b"],
-                eps=1e-5,
+                epsilon=1e-5,
             )
 
             # Cross-attention: Q from tt_hidden+qpos, K from mem+pos, V from mem
             q_in = ttnn.add(tt_hidden, tt_qpos)
             k_in = ttnn.add(tt_mem, tt_mem_pos)
             v_in = tt_mem
-            q = _project(q_in, layer["cross_q_w"], layer["cross_q_b"])
-            k = _project(k_in, layer["cross_k_w"], layer["cross_k_b"])
-            v = _project(v_in, layer["cross_v_w"], layer["cross_v_b"])
-            q = _split_heads(q)
-            k = _split_heads(k)
-            v = _split_heads(v)
-            scores = _qk_scores(q, k)
-            attn = _attn_softmax(scores)
-            Lq = int(q.shape[1])
-            Lv = int(v.shape[1])
-            ctx = _attn_weighted_sum(attn, v, Lq, Lv)
-            ctx = _merge_heads(ctx)
-            ca_out = _project(ctx, layer["cross_out_w"], layer.get("cross_out_b"))
+            use_sdpa = hasattr(ttnn, "transformer") and hasattr(ttnn.transformer, "scaled_dot_product_attention")
+            ctx = None
+            if use_sdpa:
+                try:
+                    q = _project(q_in, layer["cross_q_w"], layer["cross_q_b"], program=prog_cfg.matmul_qkv)
+                    k = _project(k_in, layer["cross_k_w"], layer["cross_k_b"], program=prog_cfg.matmul_qkv)
+                    v = _project(v_in, layer["cross_v_w"], layer["cross_v_b"], program=prog_cfg.matmul_qkv)
+                    qh = _split_heads_sdpa(q)
+                    kh = _split_heads_sdpa(k)
+                    vh = _split_heads_sdpa(v)
+                    attn_ctx = ttnn.transformer.scaled_dot_product_attention(
+                        qh,
+                        kh,
+                        vh,
+                        is_causal=False,
+                        program_config=prog_cfg.sdpa,
+                        compute_kernel_config=compute_cfg,
+                    )
+                    ctx = _concat_heads(attn_ctx)
+                except Exception:
+                    ctx = None
+            if ctx is None:
+                q = _project(q_in, layer["cross_q_w"], layer["cross_q_b"], program=prog_cfg.matmul_qkv)
+                k = _project(k_in, layer["cross_k_w"], layer["cross_k_b"], program=prog_cfg.matmul_qkv)
+                v = _project(v_in, layer["cross_v_w"], layer["cross_v_b"], program=prog_cfg.matmul_qkv)
+                q = _split_heads(q)
+                k = _split_heads(k)
+                v = _split_heads(v)
+                B = int(q.shape[0])
+                Lq = int(q.shape[1])
+                Lv = int(v.shape[1])
+                q_bh = ttnn.reshape(q, (B * num_heads, Lq, head_dim))
+                k_bh = ttnn.reshape(k, (B * num_heads, Lv, head_dim))
+                scores = ttnn.matmul(
+                    q_bh, k_bh, transpose_b=True, compute_kernel_config=compute_cfg, **matmul_qkv_kwargs
+                )
+                attn = ttnn.softmax(scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_cfg)
+                v_bh = ttnn.reshape(v, (B * num_heads, Lv, head_dim))
+                ctx = ttnn.matmul(attn, v_bh, compute_kernel_config=compute_cfg, **matmul_ctx_kwargs)
+                ctx = ttnn.reshape(ctx, (B, Lq, num_heads, head_dim))
+                ctx = _merge_heads(ctx)
+            ca_out = _project(ctx, layer["cross_out_w"], layer.get("cross_out_b"), program=prog_cfg.matmul_out)
             ca_res = ttnn.add(tt_hidden, ca_out)
             tt_hidden = ttnn.layer_norm(
                 ca_res,
                 weight=layer["ln2_w"],
                 bias=layer["ln2_b"],
-                eps=1e-5,
+                epsilon=1e-5,
             )
 
             # MLP block: Linear1 -> activation -> Linear2
@@ -343,7 +455,7 @@ class MaskFormerTransformerDecoder:
                 mlp_res,
                 weight=layer["ln3_w"],
                 bias=layer["ln3_b"],
-                eps=1e-5,
+                epsilon=1e-5,
             )
 
             if output_hidden_states:
@@ -487,6 +599,17 @@ class MaskFormerTransformerDecoder:
             tt_k_w, tt_k_b = self._to_tt_linear(k_w, k_b)
             tt_v_w, tt_v_b = self._to_tt_linear(v_w, v_b)
             tt_o_w, tt_o_b = self._to_tt_linear(o_w, o_b)
+            # Fused QKV for SDPA
+            try:
+                qkv_w = torch.cat([q_w_s, k_w.detach().contiguous(), v_w.detach().contiguous()], dim=0)
+                qkv_b = None
+                if q_b is not None and k_b is not None and v_b is not None:
+                    qkv_b = torch.cat(
+                        [q_b.detach().contiguous(), k_b.detach().contiguous(), v_b.detach().contiguous()], dim=0
+                    )
+                tt_qkv_w, tt_qkv_b = self._to_tt_linear(qkv_w, qkv_b)
+            except Exception:
+                tt_qkv_w, tt_qkv_b = (None, None)
 
             # Cross-attention projections
             ca = layer.encoder_attn
@@ -525,6 +648,8 @@ class MaskFormerTransformerDecoder:
                     "self_v_b": tt_v_b,
                     "self_out_w": tt_o_w,
                     "self_out_b": tt_o_b,
+                    "self_qkv_w": tt_qkv_w,
+                    "self_qkv_b": tt_qkv_b,
                     "cross_q_w": tt_cq_w,
                     "cross_q_b": tt_cq_b,
                     "cross_k_w": tt_ck_w,

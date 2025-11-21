@@ -74,10 +74,12 @@ python -m models.experimental.maskformer_swin.runner \
 - Perf JSON: `generated/tt_perf.json`
 - Perf header JSON: `generated/tt_perf_header.json`
 - Optional COCO report: `generated/coco_eval_tt.json`
+- Optional predictions JSON: `generated/predictions_tt.json` (via `--dump-predictions`)
 
 ## Tests
 - End‑to‑end fallback demo: `pytest models/experimental/maskformer_swin/tests/test_e2e_demo.py::test_maskformer_fallback_end_to_end -q`
 - Optional integration tests (download HF weights): set `MASKFORMER_RUN_WEIGHT_TESTS=1` and run `pytest models/experimental/maskformer_swin/tests -q`
+- TT smoke test (skips without hardware): set `MASKFORMER_RUN_TT_TESTS=1` and run `pytest models/experimental/maskformer_swin/tests/test_tt_minimal.py -q`
 
 ## Parity helpers (optional)
 - Patch embedding parity:
@@ -92,13 +94,24 @@ python -m models.experimental.maskformer_swin.runner \
 
 - Stage / decoder parity: replace `--patch-embed-parity` with `--stage1-parity`, `--stage2-parity`, or `--decoder-parity` to compare additional taps.
 
+## TT optimizations
+- Coverage: decoder + heads on TT; optional 3×3 mask projection in the pixel decoder. Swin backbone and most pixel-decoder blocks remain on CPU.
+- Attention/MLP configs: centralised in `tt_configs.py` (Matmul + SDPA program configs, 8×7 core-grid hints, L1 preference for small sequences). Decoder uses fused QKV + SDPA where supported and falls back to manual attention otherwise.
+- Head/block parallelism: matmuls/attention respect the shared grid config so heads and batch shards spread across cores; stage activations stay in L1 when size permits.
+- Fused dense ops: decoder MLPs and head projections route through `ttnn.linear` with bias/activation fusion when available. Program configs shard work across the Wormhole grid.
+- CNN flow: mask projection conv uses TT-CNN builder with height slicing, TILE output, and L1-preferred inputs.
+- Layout hygiene: tensors stay in TILE layout through decoder/heads; pixel embeddings are permuted once to NHWC before the projection matmul to reduce layout churn.
+- Tunable knobs: `--height/--width` for 320×320 or 640×640, env vars (`MASKFORMER_TT_DECODER`, `MASKFORMER_TT_MASK_PROJ`, `MASKFORMER_TT_FUSE_LINEAR_ACT`, `MASKFORMER_TT_USE_LINEAR`), and program configs in `tt_configs.py`.
+- Perf artifacts: placeholders for Wormhole N300 at 320×320 and 640×640 live in `perf_wormhole_n300_{320,640}.json` plus headers `perf_header_wormhole_n300_{320,640}.json`. Regenerate with `--dump-perf` on hardware to populate numbers.
+- Programmatic eval: `eval_utils.run_coco_eval` mirrors the CLI for mIoU/PQ; `dump_predictions_json` serializes per-query class confidences for quick inspection.
+- Known limitation: TT mask projection will fall back to the HF conv if TT-CNN configs are unsupported on a given firmware/runtime; the fallback is logged and the rest of the TT path continues.
+
 ## Details
 - Entry points: `runner.py` (CLI demo), `fallback.py` (CPU pipeline)
 - Modules: `backbone_swin.py`, `pixel_decoder.py`, `transformer_decoder.py`, `heads.py`, `weights.py`
 
 ## Status & limitations
-- TT coverage for bounty #30876 focuses on the transformer decoder and heads plus an optional TT mask‑projection conv. The Swin backbone and the rest of the pixel decoder currently run via the Hugging Face fallback path.
-- The TT implementation is tuned and validated on Wormhole N300 (`--device wormhole_n300`) using `ttnn.WormholeComputeKernelConfig`. Blackhole/N150 support is not wired yet and would require dedicated profiling and kernel configuration.
-- Decoder and heads keep weights and LayerNorm parameters in L1, while large activations (queries, memory, pixel features) stay in DRAM to avoid L1 OOM. This trades some on‑chip reuse for predictable correctness in Stage 1/2 bring‑up.
-- Multi‑head attention in the decoder uses an explicit QK^T → softmax → AV path with per‑head reshaping instead of fused SDPA. Q scaling is folded into the Q projection, and additional fused/parallel variants can be added as Stage‑3 follow‑ups.
-- TT behaviour is controlled via environment flags and the CLI: `--tt-run` enables `MASKFORMER_TT_DECODER=1` and `MASKFORMER_TT_MASK_PROJ=1`; advanced toggles like `MASKFORMER_TT_FUSE_LINEAR_ACT`, `MASKFORMER_TT_USE_LINEAR`, and `MASKFORMER_COMPARE_QUANTIZE` exist for experimentation but are not required for the bounty path.
+- Swin backbone + most pixel decoder layers are still CPU; TT coverage is decoder + heads + optional mask projection.
+- Tuned for Wormhole N300; Blackhole/N150 not profiled.
+- Perf headers for 320/640 are placeholders until populated on-device.
+- Panoptic PQ requires `panopticapi` and GT paths; otherwise only mIoU is reported.

@@ -106,30 +106,37 @@ class MaskFormerPixelDecoder:
         ):
             last_fpn = fpn_hidden[-1]  # [B, C=fpn_dim, H, W]
             nhwc = last_fpn.detach().contiguous().permute(0, 2, 3, 1)
+            mem_cfg = getattr(ttnn, "DRAM_MEMORY_CONFIG", None) or ttnn.DRAM_MEMORY_CONFIG
             tt_in = ttnn.from_torch(
                 nhwc,
                 dtype=self.dtype or get_default_dtype(),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_cfg,
             )
-            conv_kwargs, compute_cfg = self._build_mask_conv_params(tt_in)
-            out_tt, (oh, ow) = ttnn.conv2d(
+            # Minimal DRAM-based conv2d; error if unsupported to avoid CPU fallback.
+            out_tt = ttnn.conv2d(
                 input_tensor=tt_in,
                 weight_tensor=self._mask_proj_kernel["weight"],
                 bias_tensor=self._mask_proj_kernel.get("bias"),
-                return_output_dim=True,
-                return_weights_and_bias=False,
-                compute_config=compute_cfg,
-                dtype=self.dtype or get_default_dtype(),
-                **conv_kwargs,
+                in_channels=int(tt_in.shape[-1]),
+                out_channels=self.config.mask_dim,
+                batch_size=int(tt_in.shape[0]),
+                input_height=int(tt_in.shape[1]),
+                input_width=int(tt_in.shape[2]),
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                memory_config=mem_cfg,
             )
             out_rm = (
                 out_tt
                 if out_tt.get_layout() == ttnn.ROW_MAJOR_LAYOUT
                 else ttnn.to_layout(out_tt, ttnn.ROW_MAJOR_LAYOUT)
             )
-            # TT conv returns NHWC (row-major). Convert back to NCHW for downstream heads.
             mask_features = self._to_torch(out_rm).permute(0, 3, 1, 2).contiguous()
             return mask_features, fpn_hidden
 
@@ -205,8 +212,6 @@ class MaskFormerPixelDecoder:
         try:
             from models.tt_cnn.tt.builder import (
                 Conv2dConfiguration,
-                HeightShardedStrategyConfiguration,
-                HeightSliceStrategyConfiguration,
                 L1FullSliceStrategyConfiguration,
                 to_conv2d_config,
                 to_compute_config,
@@ -219,20 +224,15 @@ class MaskFormerPixelDecoder:
         if dtype is None:
             raise RuntimeError("Unable to determine default TT dtype for mask projection.")
 
-        # Prefer height slicing to keep L1 bounded
-        if HeightSliceStrategyConfiguration is not None:
-            slice_strategy = HeightSliceStrategyConfiguration(num_slices=2)
-        elif L1FullSliceStrategyConfiguration is not None:
-            slice_strategy = L1FullSliceStrategyConfiguration()
-        else:
-            slice_strategy = None
+        # For stability across small spatial sizes, avoid aggressive slicing.
+        slice_strategy = None
 
         in_ch = int(tt_input.shape[-1]) if len(tt_input.shape) == 4 else self.config.fpn_dim
         out_ch = self.config.mask_dim
         sharding = None
-        if "HeightShardedStrategyConfiguration" in locals() and HeightShardedStrategyConfiguration is not None:
+        if "L1FullSliceStrategyConfiguration" in locals() and L1FullSliceStrategyConfiguration is not None:
             try:
-                sharding = HeightShardedStrategyConfiguration(reshard_if_not_optimal=True, act_block_h_override=16)
+                sharding = L1FullSliceStrategyConfiguration()
             except Exception:
                 sharding = None
 
@@ -264,7 +264,7 @@ class MaskFormerPixelDecoder:
 
         conv_config = to_conv2d_config(configuration)
         compute_config = to_compute_config(configuration, self.device)
-        slice_config = ttnn.Conv2dL1FullSliceConfig
+        slice_config = None
         if to_slice_config is not None and slice_strategy is not None:
             derived_slice = to_slice_config(slice_strategy)
             if derived_slice is not None:
@@ -282,6 +282,7 @@ class MaskFormerPixelDecoder:
             "groups": configuration.groups,
             "device": self.device,
             "conv_config": conv_config,
-            "slice_config": slice_config,
         }
+        if slice_config is not None:
+            conv_kwargs["slice_config"] = slice_config
         return conv_kwargs, compute_config

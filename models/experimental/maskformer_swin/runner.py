@@ -43,6 +43,7 @@ from .weights import (
     download_reference_weights,
 )
 from .ttnn_compat import ttnn, require_ttnn
+from .eval_utils import default_prediction_path, dump_predictions_json, run_coco_eval
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -59,6 +60,14 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="wormhole_n300", help="Target Tenstorrent device type.")
     parser.add_argument("--save", type=Path, default=None, help="Optional path to save overlay visualisation.")
     parser.add_argument("--dump-perf", type=Path, default=None, help="Optional path to write perf JSON.")
+    parser.add_argument(
+        "--dump-predictions",
+        nargs="?",
+        const=Path("generated/predictions_tt.json"),
+        type=Path,
+        default=None,
+        help="Write per-query predictions JSON (optional path overrides default near --dump-perf).",
+    )
     parser.add_argument("--coco-eval", action="store_true", help="Run COCO evaluation hooks (if available).")
     parser.add_argument(
         "--height",
@@ -232,7 +241,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     try:
         if args.patch_embed_parity or args.stage1_parity or args.stage2_parity or args.decoder_parity:
             require_ttnn("run patch embedding parity")
-            device = ttnn.open_device(device_id=0)
+            device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
 
         backbone = MaskFormerSwinBackbone.from_huggingface(
             tt_state_dict,
@@ -264,14 +273,16 @@ def main(argv: Optional[list[str]] = None) -> None:
             _run_backbone_preview(args, backbone, tt_state_dict, ref_weights)
             return
 
+        # COCO evaluation can run on CPU or TT depending on --tt-run.
+        if args.coco_eval:
+            _run_coco_eval(args, ref_weights, tt_state_dict)
+            return
+
         if args.fallback_run:
             _run_fallback_inference(args, ref_weights, tt_state_dict)
             return
         if args.tt_run:
             _run_tt_inference(args, ref_weights, tt_state_dict)
-            return
-        if args.coco_eval:
-            _run_coco_eval(args, ref_weights, tt_state_dict)
             return
 
         # No explicit mode selected. The demo supports:
@@ -284,9 +295,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     finally:
         if device is not None:
             ttnn.close_device(device)
-
-    if device is not None:
-        ttnn.close_device(device)
 
 
 def _describe_backbone(backbone: MaskFormerSwinBackbone) -> None:
@@ -660,7 +668,7 @@ def _run_fallback_inference(
             and isinstance(args.device, str)
             and args.device.lower().startswith(("wormhole", "blackhole"))
         ):
-            tt_device = ttnn.open_device(device_id=0)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
     except Exception:
         tt_device = None
     pipeline = MaskFormerFallbackPipeline.from_reference(ref_weights, state_dict, device=tt_device)
@@ -676,6 +684,18 @@ def _run_fallback_inference(
 
     _print_class_summary(outputs, ref_weights)
 
+    if args.dump_predictions is not None:
+        pred_path = args.dump_predictions
+        if args.dump_perf is not None and pred_path == Path("generated/predictions_tt.json"):
+            pred_path = default_prediction_path(args.dump_perf, mode="fallback")
+        dump_predictions_json(
+            class_logits=outputs.class_logits,
+            id2label=ref_weights.config.get("id2label", {}),
+            output_path=pred_path,
+            task_type="instance",
+        )
+        print(f"[maskformer] Wrote predictions to {pred_path}")
+
     overlay_path = args.save or args.fallback_overlay
     if overlay_path:
         _save_overlay(overlay_path, processor, image, pipeline, pixel_values)
@@ -686,6 +706,8 @@ def _run_fallback_inference(
         except Exception:
             pass
 
+    target_hw = [int(args.height), int(args.width)] if args.height and args.width else list(image.size[::-1])
+
     if args.dump_perf:
         perf_payload = {
             "mode": "fallback",
@@ -693,7 +715,7 @@ def _run_fallback_inference(
             "dtype": "fp32",
             "latency_ms": latency_ms,
             "fps": fps,
-            "image_size_hw": list(image.size[::-1]),
+            "image_size_hw": target_hw,
             "num_queries": int(outputs.class_logits.shape[1]),
             "tt_submodules": [],
         }
@@ -719,7 +741,7 @@ def _run_tt_inference(
     tt_device = None
     try:
         if ttnn is not None:
-            tt_device = ttnn.open_device(device_id=0)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
             os.environ["MASKFORMER_TT_MASK_PROJ"] = "1"
             os.environ["MASKFORMER_TT_DECODER"] = "1"
     except Exception:
@@ -746,11 +768,25 @@ def _run_tt_inference(
     )
     _print_class_summary(outputs, ref_weights)
 
+    if args.dump_predictions is not None:
+        pred_path = args.dump_predictions
+        if args.dump_perf is not None and pred_path == Path("generated/predictions_tt.json"):
+            pred_path = default_prediction_path(args.dump_perf, mode="tt")
+        dump_predictions_json(
+            class_logits=outputs.class_logits,
+            id2label=ref_weights.config.get("id2label", {}),
+            output_path=pred_path,
+            task_type="instance",
+        )
+        print(f"[maskformer] Wrote predictions to {pred_path}")
+
     overlay_path = args.save or args.fallback_overlay
     if overlay_path:
         _save_overlay(overlay_path, processor, image, pipeline, pixel_values)
 
     # Emit perf JSON + header for review
+    target_hw = [int(args.height), int(args.width)] if args.height and args.width else list(image.size[::-1])
+
     if args.dump_perf:
         dtype_str = _dtype_to_str(_resolve_dtype(args.dtype)) if args.dtype else "auto"
         perf_payload = {
@@ -761,7 +797,7 @@ def _run_tt_inference(
             "latency_ms_repeats": latencies,
             "latency_ms_std": float(np.std(latencies)) if latencies else None,
             "fps": fps,
-            "image_size_hw": list(image.size[::-1]),
+            "image_size_hw": target_hw,
             "num_queries": int(outputs.class_logits.shape[1]),
             "tt_submodules": ["decoder", "heads", "mask_projection"],
         }
@@ -829,7 +865,10 @@ def _prepare_inputs(args: argparse.Namespace):
 
     processor = AutoImageProcessor.from_pretrained(args.weights)
     image = Image.open(args.image).convert("RGB")
-    pixel_values = processor(images=image, return_tensors="pt")["pixel_values"]
+    proc_kwargs = {}
+    if args.height is not None and args.width is not None:
+        proc_kwargs.update({"size": {"height": int(args.height), "width": int(args.width)}, "do_resize": True})
+    pixel_values = processor(images=image, return_tensors="pt", **proc_kwargs)["pixel_values"]
     return processor, image, pixel_values
 
 
@@ -844,6 +883,7 @@ def _emit_perf_header(path: Path, perf: Dict[str, object]) -> None:
         "batch_size": 1,
         "num_queries": perf.get("num_queries", None),
         "latency_ms": perf.get("latency_ms", None),
+        "latency_ms_std": perf.get("latency_ms_std", None),
         "fps": perf.get("fps", None),
         "tt_submodules": perf.get("tt_submodules", []),
     }
@@ -858,20 +898,25 @@ def _run_coco_eval(args: argparse.Namespace, ref_weights: ReferenceWeights, stat
     except Exception:
         print("[maskformer] COCO eval requires 'pycocotools'. Install via `pip install pycocotools`.")
         return
+
     try:
-        from panopticapi.utils import rgb2id, id2rgb  # type: ignore
-        from panopticapi.evaluation import pq_compute  # type: ignore
+        from transformers import AutoImageProcessor  # type: ignore
+    except Exception as exc:
+        print(f"[maskformer] transformers not available for COCO eval: {exc}")
+        return
+
+    have_panoptic = False
+    try:
+        import panopticapi  # type: ignore  # noqa: F401
 
         have_panoptic = True
     except Exception:
         have_panoptic = False
 
-    # Resolve dataset paths
     images_dir = None
     pan_json = args.coco_panoptic_json
     pan_root = args.coco_panoptic_root
     if args.coco_dir and args.coco_dir.exists():
-        # Prefer explicit files if provided; otherwise infer from structure
         candidate_images = args.coco_dir / "val2017"
         if candidate_images.exists():
             images_dir = candidate_images
@@ -888,8 +933,8 @@ def _run_coco_eval(args: argparse.Namespace, ref_weights: ReferenceWeights, stat
 
     if have_panoptic and (pan_json is None or pan_root is None):
         print(
-            "[maskformer] panopticapi available but ground-truth not resolved. "
-            "Pass --coco-panoptic-json and --coco-panoptic-root for PQ. Proceeding with mIoU only."
+            "[maskformer] panopticapi available but GT missing; continuing with mIoU only. "
+            "Provide --coco-panoptic-json and --coco-panoptic-root for PQ."
         )
         have_panoptic = False
 
@@ -897,30 +942,15 @@ def _run_coco_eval(args: argparse.Namespace, ref_weights: ReferenceWeights, stat
     tt_device = None
     try:
         if args.tt_run and ttnn is not None:
-            tt_device = ttnn.open_device(device_id=0)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
             os.environ["MASKFORMER_TT_DECODER"] = "1"
             os.environ.setdefault("MASKFORMER_TT_MASK_PROJ", "1")
     except Exception:
         tt_device = None
 
     pipeline = MaskFormerFallbackPipeline.from_reference(ref_weights, state_dict, device=tt_device)
+    processor = AutoImageProcessor.from_pretrained(args.weights)
 
-    # Index panoptic GT if available
-    pan_gt_by_file = {}
-    if have_panoptic:
-        import json as _json
-
-        with pan_json.open("r", encoding="utf-8") as fh:
-            gt_payload = _json.load(fh)
-        ann_by_image_id = {ann["image_id"]: ann for ann in gt_payload.get("annotations", [])}
-        file_to_image_id = {img["file_name"]: img["id"] for img in gt_payload.get("images", [])}
-        pan_gt_by_file = {
-            fn: ann_by_image_id[file_to_image_id[fn]]
-            for fn in file_to_image_id
-            if file_to_image_id[fn] in ann_by_image_id
-        }
-
-    # Iterate images
     image_list = sorted([p for p in images_dir.glob("*.jpg")])
     if args.coco_max_images:
         image_list = image_list[: int(args.coco_max_images)]
@@ -928,134 +958,23 @@ def _run_coco_eval(args: argparse.Namespace, ref_weights: ReferenceWeights, stat
         print(f"[maskformer] No images found in {images_dir}")
         return
 
-    from transformers import AutoImageProcessor  # safe to import here
-
-    processor = AutoImageProcessor.from_pretrained(args.weights)
-
-    # Accumulators for mIoU
-    intersections: Dict[int, int] = {}
-    unions: Dict[int, int] = {}
-
-    # Optional panoptic prediction dump for PQ
-    pred_dir = None
-    pred_json = None
-    pred_annotations = []
-    if have_panoptic:
-        pred_dir = (args.coco_report or Path("generated/coco_eval.json")).with_suffix("").with_name("panoptic_pred")
-        pred_dir.mkdir(parents=True, exist_ok=True)
-        pred_json = pred_dir / "pred.json"
-
-    for img_path in image_list:
-        image = Image.open(img_path).convert("RGB")
-        pixel_values = processor(images=image, return_tensors="pt")["pixel_values"]
-        with torch.no_grad():
-            outputs = pipeline.forward(pixel_values, output_hidden_states=False, output_attentions=False)
-        # Semantic prediction
-        pred_sem = pipeline.post_process_semantic(outputs, image_processor=processor, target_sizes=[image.size[::-1]])[
-            0
-        ]
-        pred_sem = pred_sem.cpu().numpy().astype(np.int32)
-
-        if have_panoptic and img_path.name in pan_gt_by_file:
-            import numpy as _np
-
-            gt_entry = pan_gt_by_file[img_path.name]
-            gt_png = pan_root / gt_entry["file_name"]
-            gt_seg = np.array(Image.open(gt_png), dtype=np.uint8)
-            gt_seg = rgb2id(gt_seg)
-            id_to_cat = {s["id"]: s["category_id"] for s in gt_entry.get("segments_info", [])}
-            gt_sem = _np.vectorize(lambda sid: id_to_cat.get(int(sid), 0), otypes=[_np.int32])(gt_seg)
-        elif have_panoptic:
-            # Missing GT entry, skip this image for mIoU/PQ
-            continue
-        else:
-            # No panoptic, cannot compute mIoU reliably
-            gt_sem = None
-
-        if gt_sem is not None:
-            # Accumulate per-class intersections/unions
-            classes = np.union1d(np.unique(gt_sem), np.unique(pred_sem)).astype(np.int64).tolist()
-            for cid in classes:
-                gt_mask = gt_sem == cid
-                pr_mask = pred_sem == cid
-                inter = int(np.logical_and(gt_mask, pr_mask).sum())
-                uni = int(np.logical_or(gt_mask, pr_mask).sum())
-                if uni == 0:
-                    continue
-                intersections[cid] = intersections.get(cid, 0) + inter
-                unions[cid] = unions.get(cid, 0) + uni
-
-        if have_panoptic:
-            # Build naive panoptic prediction: use HF post-process for panoptic to get segments_info
-            pan_pred = pipeline.post_process_panoptic(
-                outputs, image_processor=processor, target_sizes=[image.size[::-1]]
-            )[0]
-            seg = pan_pred["segmentation"].cpu().numpy().astype(np.int32)
-            seg_ids = np.unique(seg)
-            # Write PNG with RGB-encoded segment ids
-            rgb = id2rgb(seg)
-            out_name = img_path.with_suffix(".png").name
-            Image.fromarray(rgb).save(pred_dir / out_name)
-            # Minimal segments_info with areas
-            segments_info = []
-            for sid in seg_ids:
-                area = int((seg == sid).sum())
-                # Find category id from segments_info returned by post-process
-                cat = 0
-                for s in pan_pred.get("segments_info", []):
-                    if int(s.get("id", -1)) == int(sid):
-                        cat = int(s.get("category_id", 0))
-                        break
-                segments_info.append({"id": int(sid), "category_id": int(cat), "area": area, "iscrowd": 0})
-            pred_annotations.append(
-                {
-                    "image_id": int(pan_gt_by_file[img_path.name]["image_id"]),
-                    "file_name": out_name,
-                    "segments_info": segments_info,
-                }
-            )
-
-    # Compute metrics
-    miou = None
-    if unions:
-        ious = [intersections[c] / unions[c] for c in intersections if unions[c] > 0]
-        miou = float(np.mean(ious)) if ious else None
-
-    pq = None
-    if have_panoptic and pred_dir is not None and pred_json is not None and pred_annotations:
-        import json as _json
-
-        with pred_json.open("w", encoding="utf-8") as fh:
-            _json.dump({"annotations": pred_annotations}, fh)
-        try:
-            pq_res = pq_compute(
-                gt_json_file=str(pan_json),
-                gt_folder=str(pan_root),
-                pred_json_file=str(pred_json),
-                pred_folder=str(pred_dir),
-            )
-            pq = float(pq_res["All"]["pq"])  # type: ignore[index]
-        except Exception as e:
-            print(f"[maskformer] PQ computation failed: {e}")
-            pq = None
-
-    report = {
-        "dataset": str(images_dir),
-        "num_images": len(image_list),
-        "miou": miou,
-        "pq": pq,
-        "device": str(args.device if args.tt_run else "cpu"),
-    }
-    # Determine report path
+    device_label = str(args.device if args.tt_run else "cpu")
     report_path = args.coco_report
     if report_path is None and args.dump_perf:
-        # Align naming with docs: use *_coco_tt.json next to perf file when unspecified
         report_path = args.dump_perf.with_name(args.dump_perf.stem + "_coco_tt.json")
-    # Default location/name when no perf path provided
     report_path = report_path or Path("generated/coco_eval_tt.json")
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2))
-    print(f"[maskformer] COCO eval → mIoU={miou} PQ={pq}; wrote {report_path}")
+
+    result = run_coco_eval(
+        images=image_list,
+        pipeline=pipeline,
+        processor=processor,
+        panoptic_json=pan_json if have_panoptic else None,
+        panoptic_root=pan_root if have_panoptic else None,
+        max_images=args.coco_max_images,
+        device_label=device_label,
+        report_path=report_path,
+    )
+    print(f"[maskformer] COCO eval → mIoU={result.miou} PQ={result.pq}; wrote {report_path}")
 
     if tt_device is not None:
         try:
