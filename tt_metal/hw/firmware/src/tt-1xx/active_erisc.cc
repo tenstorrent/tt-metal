@@ -223,6 +223,11 @@ int __attribute__((noinline)) main(void) {
         noc_local_state_init(n);
     }
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+
+if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    ncrisc_noc_counters_init<1>();
+#endif
+
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
