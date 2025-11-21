@@ -10,7 +10,6 @@
 #include <vector>
 #include <map>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>

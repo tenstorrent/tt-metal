@@ -10,7 +10,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <vector>
 #include "tt_metal/fabric/fabric_context.hpp"

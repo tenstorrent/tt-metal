@@ -62,7 +62,15 @@ bool is_quant_op(const BinaryOpType val) {
 }  // namespace utils
 
 CoreRangeSet get_worker_grid(
-    const Tensor& input_tensor_a, const Tensor* input_tensor_b, const std::optional<Tensor>& output_tensor) {
+    const Tensor& input_tensor_a,
+    const Tensor* input_tensor_b,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // If sub_core_grids is provided, use it directly
+    if (sub_core_grids.has_value()) {
+        return sub_core_grids.value();
+    }
+
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
         const auto& grid = tensor.shard_spec()->grid;
         auto device = tensor.device();
@@ -126,10 +134,11 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash()
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        is_quant_op ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+        (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
+        sub_core_grids,
         subtile_broadcast_type,
         is_sfpu,
         is_quant_op,
@@ -426,7 +435,8 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    std::optional<unary::ScalarVariant> scalar_value) {
+    std::optional<unary::ScalarVariant> scalar_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
@@ -464,8 +474,9 @@ BinaryNgDeviceOperation::invoke(
             is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
                                               // dtype depending on which LLK is meant to be used.
             output_dtype,
-            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
+            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor, sub_core_grids),
             std::nullopt,
+            sub_core_grids,
             subtile_broadcast_type,
             is_sfpu_op,
             is_quant_op,
@@ -485,7 +496,8 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    std::optional<unary::ScalarVariant> scalar_value) {
+    std::optional<unary::ScalarVariant> scalar_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op =
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
@@ -501,8 +513,9 @@ BinaryNgDeviceOperation::invoke(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),
             output_dtype,
-            get_worker_grid(input_tensor_a, nullptr, output_tensor),
+            get_worker_grid(input_tensor_a, nullptr, output_tensor, sub_core_grids),
             std::nullopt,
+            sub_core_grids,
             SubtileBroadcastType::NONE,
             is_sfpu_op,
             is_quant_op,

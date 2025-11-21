@@ -108,6 +108,10 @@ def get_supported_trace_region_size(request, mesh_device):
             "T3K": 70000000,
             "TG": 70000000,
         },
+        "gemma-3-27b": {
+            "T3K": 70000000,
+            "TG": 70000000,
+        },
     }
 
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
