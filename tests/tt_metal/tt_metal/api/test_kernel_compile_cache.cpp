@@ -63,7 +63,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
+        const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
 
         const std::string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
