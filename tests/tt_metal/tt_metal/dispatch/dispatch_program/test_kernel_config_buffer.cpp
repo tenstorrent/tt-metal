@@ -184,7 +184,7 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
 
             CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
                 cr_set,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -219,7 +219,7 @@ TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
 
             CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
                 cr_set,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -323,7 +323,7 @@ TEST_F(KernelSizeTest, StressTestRapidlyVaryKernelSizes) {
 
             CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
                 cr_set,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
