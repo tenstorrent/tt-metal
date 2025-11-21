@@ -11,7 +11,6 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "upsample_device_operation_types.hpp"
-// #include "dram_prefetcher_program_factory.hpp"
 #include "upsample_bilinear_program_factory_multicore.hpp"
 #include "upsample_program_factory_multicore_interleaved.hpp"
 #include "upsample_program_factory_multicore_sharded.hpp"
@@ -38,9 +37,9 @@ struct UpsampleOperation {
         const Tensor& input_tensor,
         const int scale_factor_h,
         const int scale_factor_w,
-        const std::string& mode = std::string("nearest"),
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+        const std::string& mode,
+        const MemoryConfig& output_mem_config,
+        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::pool::upsample

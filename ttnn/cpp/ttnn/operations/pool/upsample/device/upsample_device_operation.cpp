@@ -133,15 +133,15 @@ std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_
     const int scale_factor_h,
     const int scale_factor_w,
     const std::string& mode,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const MemoryConfig& output_mem_config,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     return {
         operation_attributes_t{
             .scale_factor_h_ = scale_factor_h,
             .scale_factor_w_ = scale_factor_w,
             .mode_ = mode,
-            .output_mem_config_ = output_mem_config.value(),
-            .compute_kernel_config_ = compute_kernel_config.value()},
+            .output_mem_config_ = output_mem_config,
+            .compute_kernel_config_ = compute_kernel_config},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 }  // namespace ttnn::operations::pool::upsample
