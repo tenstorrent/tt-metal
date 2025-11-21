@@ -10,105 +10,72 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn {
+namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 
-void StridedAllGatherAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {}
+StridedAllGatherAsync::program_factory_t StridedAllGatherAsync::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return program::StridedAllGatherAsyncProgramFactory{};
+}
 
-std::vector<ttnn::TensorSpec> StridedAllGatherAsync::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.logical_shape();  // TODO: Replace with logical_shape()
-    shape[this->dim] *= this->ring_size;
+void StridedAllGatherAsync::validate_on_program_cache_hit(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(attributes, tensor_args);
+}
+
+void StridedAllGatherAsync::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {}
+
+StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output_specs(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto shape = input_tensor.logical_shape();
+    shape[attributes.dim] *= attributes.ring_size;
     return {TensorSpec(
-        shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
+        shape,
+        TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), attributes.output_mem_config))};
 }
 
-std::vector<Tensor> StridedAllGatherAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
-}
-
-tt::tt_metal::operation::MeshWorkloadWithCallbacks StridedAllGatherAsync::create_mesh_workload(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    return ccl::create_mesh_workload_from_programs(
-        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, output_tensors);
-        });
-}
-
-tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_program_at(
-    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
-
-    std::optional<MeshCoordinate> forward_coord =
-        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
-
-    std::optional<MeshCoordinate> backward_coord =
-        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
-    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
-
-    return strided_all_gather_async_minimal_default(
-        input_tensors[0],
-        coord,
-        forward_coord,
-        backward_coord,
-        output_tensors[0],
-        this->dim,
-        this->num_links,
-        this->ring_size,
-        device_index,
-        this->topology,
-        this->semaphore,
-        this->barrier_semaphore,
-        this->sub_device_id,
-        this->tiles_per_chunk,
-        this->num_workers_per_link,
-        this->num_buffers_per_channel,
-        this->mm_cores_y,
-        this->mm_block_ht,
-        this->mm_block_wt);
+StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_output_tensors(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].padded_shape();
-    auto input_memory_layout = input_tensors[0].layout();
-    auto input_dtype = input_tensors[0].dtype();
-    auto input_memory_config = input_tensors[0].memory_config();
-    return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
-        this->dim,
-        this->num_links,
-        this->ring_size,
-        this->output_mem_config,
-        this->topology,
-        this->cluster_axis,
-        this->sub_device_id.has_value(),
-        this->sub_device_id.has_value()
-            ? input_tensors[0].device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        this->barrier_semaphore.has_value(),
-        this->tiles_per_chunk,
-        this->num_workers_per_link,
-        this->num_buffers_per_channel,
-        this->mm_cores_y,
-        this->mm_block_ht,
-        this->mm_block_wt,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<StridedAllGatherAsync>(
+        select_program_factory(attributes, tensor_args).index(),
+        attributes.dim,
+        attributes.num_links,
+        attributes.ring_size,
+        attributes.output_mem_config,
+        attributes.topology,
+        attributes.cluster_axis,
+        attributes.sub_device_id.has_value(),
+        attributes.barrier_semaphore.has_value(),
+        attributes.tiles_per_chunk,
+        attributes.num_workers_per_link,
+        attributes.num_buffers_per_channel,
+        attributes.mm_cores_y,
+        attributes.mm_block_ht,
+        attributes.mm_block_wt,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.input_tensor.layout(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.input_tensor.memory_config());
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+// tt::tt_metal::operation::OpPerformanceModelGeneral<StridedAllGatherAsync::tensor_return_value_t>
+// StridedAllGatherAsync::create_op_performance_model(
+//     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
+//     const auto& input_tensor = tensor_args.input_tensor;
+//     int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output_tensor);
+//     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+//         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+//     return result;
+// }
 
-namespace {
-Tensor strided_all_gather_async_impl(
+std::tuple<StridedAllGatherAsync::operation_attributes_t, StridedAllGatherAsync::tensor_args_t>
+StridedAllGatherAsync::invoke(
     const Tensor& input_tensor,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -116,7 +83,6 @@ Tensor strided_all_gather_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<uint32_t>& tiles_per_chunk,
@@ -137,71 +103,26 @@ Tensor strided_all_gather_async_impl(
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    return tt::tt_metal::operation::run(
-               ttnn::StridedAllGatherAsync(
-                   devices,
-                   dim,
-                   num_links,
-                   num_devices,
-                   memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
-                   multi_device_global_semaphore,
-                   sub_device_id,
-                   cluster_axis,
-                   barrier_semaphore,
-                   tiles_per_chunk,
-                   num_workers_per_link,
-                   num_buffers_per_channel,
-                   mm_cores_y,
-                   mm_block_ht,
-                   mm_block_wt),
-               {input_tensor},
-               {},
-               {})
-        .at(0);
+    return {
+        operation_attributes_t{
+            ttnn::ccl::get_active_physical_devices(input_tensor),
+            dim,
+            num_links,
+            num_devices,
+            memory_config.value_or(input_tensor.memory_config()),
+            ccl_topology,
+            multi_device_global_semaphore,
+            sub_device_id,
+            cluster_axis,
+            barrier_semaphore,
+            tiles_per_chunk,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            mm_cores_y,
+            mm_block_ht,
+            mm_block_wt},
+        tensor_args_t{input_tensor}};
 }
-}  // namespace
-
-Tensor strided_all_gather_async(
-    const Tensor& input_tensor,
-    const uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> cluster_axis,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    std::optional<uint32_t> tiles_per_chunk,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt) {
-    return strided_all_gather_async_impl(
-        input_tensor,
-        dim,
-        multi_device_global_semaphore,
-        num_links,
-        memory_config,
-        topology,
-        sub_device_id,
-        ttnn::ccl::get_active_physical_devices(input_tensor),
-        cluster_axis,
-        barrier_semaphore,
-        tiles_per_chunk,
-        num_workers_per_link,
-        num_buffers_per_channel,
-        mm_cores_y,
-        mm_block_ht,
-        mm_block_wt);
-}
-
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
