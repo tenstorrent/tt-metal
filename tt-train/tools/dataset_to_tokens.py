@@ -63,7 +63,7 @@ def save_to_yaml(data, vocab_size, output_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Preprocess a text dataset using a tokenizer and save tokenized data with metadata (vocab size, data length) in YAML format."  
+        description="Preprocess a text dataset using a tokenizer and save tokenized data with metadata (vocab size, data length) in YAML format."
     )
     parser.add_argument(
         "--text_file",

@@ -39,9 +39,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    if (!yaml_config["model_config"]) {  
-        throw std::runtime_error("Missing required field: model_config\n Please specify the path to the model configuration YAML file.");  
-    }  
+    if (!yaml_config["model_config"]) {
+        throw std::runtime_error("Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
+    }
 
     auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
     std::string model_type = model_yaml["model_type"].as<std::string>();
@@ -76,7 +76,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-    
+
     std::variant<std::string, YAML::Node> text_or_tokens;
 
     try {
