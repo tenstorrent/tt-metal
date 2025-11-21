@@ -48,14 +48,15 @@ def save_to_yaml(data, vocab_size, output_file):
     writer.writerow(data)
 
     csv_str = output.getvalue()
+
     yaml_data = {
         "tokenizer_vocab_size": vocab_size,
         "data_length": len(data),
-        "tokens": csv_str.strip(),
+        "tokens": list(map(int, csv_str.strip().split())),
     }
 
     with open(output_file, "w", encoding="utf-8") as file:
-        yaml.dump(yaml_data, file)
+        yaml.dump(yaml_data, file, default_flow_style=True)
 
     print(f"Saved tokenized data as YAML to {output_file}")
 
