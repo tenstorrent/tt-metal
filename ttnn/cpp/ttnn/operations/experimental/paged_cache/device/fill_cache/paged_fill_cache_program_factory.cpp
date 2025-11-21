@@ -5,25 +5,28 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
+#include "paged_fill_cache_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
+#include "paged_fill_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::paged_cache::detail {
+namespace ttnn::operations::experimental::paged_cache::fill::program {
 
 using namespace tt::constants;
 using namespace tt;
 
-operation::ProgramWithCallbacks paged_fill_cache_multi_core(
-    const Tensor& cache_tensor,
-    const Tensor& input_tensor,
-    const Tensor& page_table_tensor,
-    std::optional<const Tensor> batch_idx_tensor,
-    const uint32_t batch_idx_fallback) {
+PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     Program program{};
+
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& page_table_tensor = tensor_args.page_table;
+    const auto& batch_idx_tensor = tensor_args.batch_idx_tensor_opt;
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -157,7 +160,8 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
                 num_blocks_per_core,      // num_rows
             });
 
-        uint32_t writer_batch_arg = use_batch_idx_tensor ? batch_idx_buffer_addr : batch_idx_fallback;
+        uint32_t writer_batch_arg =
+            use_batch_idx_tensor ? batch_idx_buffer_addr : operation_attributes.batch_idx_fallback;
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -173,72 +177,71 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         num_blocks_written += num_blocks_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [unary_reader_kernel_id,
-         unary_writer_kernel_id,
-         cores,
-         g1_numcores,
-         g2_numcores,
-         num_blocks_per_core_group_1,
-         num_blocks_per_core_group_2,
-         Wt,
-         use_batch_idx_tensor  // Capture this
-    ](const void* operation,   // Should be PagedUpdateCacheDeviceOperation
-        Program& program,
-        const std::vector<Tensor>& input_tensors,                                // cache, input, page_table
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,  // batch_idx_tensor if used
-        const std::vector<Tensor>& output_tensors) {                             // output_tensors not used by fill op
-            auto dst_addr = input_tensors.at(0).buffer()->address();         // cache_tensor
-            auto src_addr = input_tensors.at(1).buffer()->address();         // input_tensor
-            auto page_table_addr = input_tensors.at(2).buffer()->address();  // page_table_tensor
+    // Store shared variables
+    shared_variables_t shared_variables{
+        .unary_reader_kernel_id = unary_reader_kernel_id,
+        .unary_writer_kernel_id = unary_writer_kernel_id,
+        .cores = cores,
+        .g1_numcores = g1_numcores,
+        .g2_numcores = g2_numcores,
+        .num_blocks_per_core_group_1 = num_blocks_per_core_group_1,
+        .num_blocks_per_core_group_2 = num_blocks_per_core_group_2,
+        .Wt = Wt,
+        .use_batch_idx_tensor = use_batch_idx_tensor};
 
-            uint32_t current_kernel_batch_arg;
-            const auto op_specific = static_cast<const PagedUpdateCacheDeviceOperation*>(operation);
-
-            if (use_batch_idx_tensor) {
-
-                TT_FATAL(
-                    op_specific->batch_idx_tensor_opt.has_value(),
-                    "batch_idx_tensor_opt is expected in PagedUpdateCacheDeviceOperation but not provided for callback "
-                    "when use_batch_idx_tensor is true.");
-                current_kernel_batch_arg = op_specific->batch_idx_tensor_opt.value().buffer()->address();
-            } else {
-                // Fallback to scalar batch_idx from the operation struct
-                current_kernel_batch_arg =
-                    op_specific->batch_idx_fallback;  // Assumes PagedUpdateCacheDeviceOperation has batch_idx_fallback
-            }
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-
-            for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); i++) {
-                const CoreCoord& core = cores.at(i);
-                uint32_t num_blocks_per_core = 0;
-                if (i < g1_numcores) {
-                    num_blocks_per_core = num_blocks_per_core_group_1;
-                } else if (i < g1_numcores + g2_numcores) {
-                    num_blocks_per_core = num_blocks_per_core_group_2;
-                } else {
-                    num_blocks_per_core = 0;
-                }
-
-                auto& reader_args = reader_args_by_core.at(core.x).at(core.y);
-                reader_args[0] = src_addr;
-                reader_args[1] = num_blocks_written * Wt;  // start_tile_id
-                reader_args[2] = num_blocks_per_core;      // num_rows
-
-                auto& writer_args = writer_args_by_core.at(core.x).at(core.y);
-                writer_args[0] = dst_addr;
-                writer_args[1] = page_table_addr;
-                writer_args[2] = num_blocks_written;        // start_row_num
-                writer_args[3] = num_blocks_per_core;       // num_rows
-                writer_args[4] = current_kernel_batch_arg;  // batch_idx_tensor_addr or batch_idx_fallback
-
-                num_blocks_written += num_blocks_per_core;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-}  // namespace ttnn::operations::experimental::paged_cache::detail
+void PagedFillCacheProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    const auto& shared_vars = cached_program.shared_variables;
+
+    auto dst_addr = tensor_args.cache_tensor.buffer()->address();
+    auto src_addr = tensor_args.input_tensor.buffer()->address();
+    auto page_table_addr = tensor_args.page_table.buffer()->address();
+
+    uint32_t current_kernel_batch_arg;
+    if (shared_vars.use_batch_idx_tensor) {
+        TT_FATAL(
+            tensor_args.batch_idx_tensor_opt.has_value(),
+            "batch_idx_tensor_opt is expected but not provided when use_batch_idx_tensor is true.");
+        current_kernel_batch_arg = tensor_args.batch_idx_tensor_opt.value().buffer()->address();
+    } else {
+        current_kernel_batch_arg = operation_attributes.batch_idx_fallback;
+    }
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.unary_reader_kernel_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.unary_writer_kernel_id);
+
+    for (uint32_t i = 0, num_blocks_written = 0; i < shared_vars.cores.size(); i++) {
+        const CoreCoord& core = shared_vars.cores.at(i);
+        uint32_t num_blocks_per_core = 0;
+        if (i < shared_vars.g1_numcores) {
+            num_blocks_per_core = shared_vars.num_blocks_per_core_group_1;
+        } else if (i < shared_vars.g1_numcores + shared_vars.g2_numcores) {
+            num_blocks_per_core = shared_vars.num_blocks_per_core_group_2;
+        } else {
+            num_blocks_per_core = 0;
+        }
+
+        auto& reader_args = reader_args_by_core.at(core.x).at(core.y);
+        reader_args[0] = src_addr;
+        reader_args[1] = num_blocks_written * shared_vars.Wt;  // start_tile_id
+        reader_args[2] = num_blocks_per_core;                  // num_rows
+
+        auto& writer_args = writer_args_by_core.at(core.x).at(core.y);
+        writer_args[0] = dst_addr;
+        writer_args[1] = page_table_addr;
+        writer_args[2] = num_blocks_written;        // start_row_num
+        writer_args[3] = num_blocks_per_core;       // num_rows
+        writer_args[4] = current_kernel_batch_arg;  // batch_idx_tensor_addr or batch_idx_fallback
+
+        num_blocks_written += num_blocks_per_core;
+    }
+}
+
+}  // namespace ttnn::operations::experimental::paged_cache::fill::program
