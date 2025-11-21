@@ -5,7 +5,6 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
 #include <sub_device.hpp>

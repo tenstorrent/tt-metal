@@ -52,7 +52,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links_, topology_, memory_config_, subdevice_id, cluster_axis);
     }
     return ttnn::prim::reduce_scatter(
                input_tensor,
