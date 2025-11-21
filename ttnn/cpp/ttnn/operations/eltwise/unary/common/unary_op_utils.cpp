@@ -62,6 +62,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
+        case UnaryOpType::BITCAST: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";  // Uses identity kernel, no SFPU needed
         case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_XOR_INCLUDE";
         case UnaryOpType::BITWISE_NOT: return "SFPU_OP_BITWISE_NOT_INCLUDE";
         case UnaryOpType::BITWISE_AND: return "SFPU_OP_BITWISE_AND_INCLUDE";
@@ -447,6 +448,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[1]))};
             break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -810,6 +816,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
         case UnaryOpType::CBRT: op_init_and_name = {}; break;
