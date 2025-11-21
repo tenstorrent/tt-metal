@@ -110,6 +110,3 @@ jobs:
         with:
           path: /work/build/tt-train/generated/test_reports/
           prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
