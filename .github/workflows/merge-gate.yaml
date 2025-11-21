@@ -294,7 +294,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       gtest_filter: "*-*NIGHTLY_*"
       merge-gate-call: true
-  
+
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.any-code-changed == 'true'
