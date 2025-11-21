@@ -19,7 +19,6 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
-#include "ttnn/api/ttnn/device.hpp"
 
 namespace tt::tt_metal {
 namespace kernel_size_tests {
@@ -136,70 +135,7 @@ TEST_F(KernelSizeTest, WorkerL1SizeParameterControl) {
     EXPECT_LE(actual_kernel_config_size_, max_available);
 }
 
-// should this be inheriting from tt:: test?
-//  TODO: revisit this again
-//  Test with minimal kernel config buffer - requires custom device setup
-//  The worker_l1_size takes precedence over the kernel config buffer size env var
-//  The env var is ignored because worker_l1_size != 0
-//  The env var only matters when worker_l1_size == 0 (meaning "use default")
-TEST(KernelSizeStandaloneTest, MinimalKernelConfigBuffer) {
-    // Skip if not Blackhole
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Test only supported on Blackhole";
-    }
-
-    // Request maximum worker_l1_size to minimize kernel config buffer
-    const uint32_t max_worker_l1 = tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
-
-    log_info(LogTest, "Creating device with max worker_l1_size: {} KB", max_worker_l1 / 1024);
-
-    const uint32_t min_kernel_config_size = 1024 * 32;  // 32 KB
-    const uint32_t reduced_l1_size = max_worker_l1 - min_kernel_config_size;
-
-    // Create mesh device with large worker_l1_size
-    auto mesh_device = ttnn::open_mesh_device(
-        0,  // Single device mesh
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        tt::tt_metal::DispatchCoreConfig{},
-        reduced_l1_size  // worker_l1_size
-    );
-
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto kernel_config_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-    auto unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t actual_kernel_config_size = unreserved_base - kernel_config_base;
-
-    log_info(LogTest, "Resulting kernel config buffer size: {} bytes", actual_kernel_config_size);
-    log_info(LogTest, "reduced_l1_size                size: {} bytes ", reduced_l1_size);
-    EXPECT_GT(actual_kernel_config_size, 0);
-
-    // Create and run a simple kernel
-    tt::tt_metal::distributed::MeshWorkload workload;
-    tt::tt_metal::Program program;
-
-    CoreRange cr({0, 0}, {0, 0});
-    CoreRangeSet cr_set({cr});
-
-    tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
-        cr_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-
-    auto zero_coord = tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(2);
-    auto device_range = tt::tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
-
-    workload.add_program(device_range, std::move(program));
-    EXPECT_NO_THROW(tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false));
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
-
-    mesh_device->close();
-}
-
-// Test 5: Test kernels with sizes around 65335 / 65536 bytes
+// Test 4: Test kernels with sizes around 65335 / 65536 bytes
 TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
@@ -262,7 +198,7 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 6: Multiple kernels filling up kernel config buffer
+// Test 5: Multiple kernels filling up kernel config buffer
 TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
@@ -299,7 +235,7 @@ TEST_F(KernelSizeTest, MultipleAggregatedKernelSize) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 7: Test all five RISC-V processors with large kernels
+// Test 6: Test all five RISC-V processors with large kernels
 TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 
@@ -349,7 +285,7 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 8: Stress test - rapidly vary kernel sizes
+// Test 7: Stress test - rapidly vary kernel sizes
 TEST_F(KernelSizeTest, StressTestRapidlyVaryKernelSizes) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
 

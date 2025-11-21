@@ -36,7 +36,7 @@ HalCoreInfoType create_tensix_mem_map() {
         tt::parse_env<uint32_t>("TT_METAL_KERNEL_CONFIG_BUFFER_SIZE", 69 * 1024);
 
     // Validate against known physical constraints
-    // There are other constraints, but that's dependent on runtime
+    // There are other constraints, but that's determined at runtime
     constexpr uint32_t total_l1_size = MEM_L1_SIZE;    // 1536 * 1024
     constexpr uint32_t system_reserved = MEM_MAP_END;  // 32880
     constexpr uint32_t max_kernel_buffer = total_l1_size - system_reserved;
