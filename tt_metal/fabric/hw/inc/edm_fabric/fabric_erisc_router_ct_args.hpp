@@ -119,9 +119,9 @@ static_assert(
     !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
     "Deadlock avoidance requires at least 2 receiver channels");
 // TODO: Pipe from host
-constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
+constexpr size_t NUM_USED_RECEIVER_CHANNELS = (NUM_FORWARDING_PATHS > 0) ? NUM_FORWARDING_PATHS : 1;
 constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
-    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
+    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : (NUM_FORWARDING_PATHS > 0 ? NUM_FORWARDING_PATHS : 1);
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
