@@ -7,7 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/line_reduce_scatter_minimal_async_program.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
 
     // Reduce Scatter
     tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_program_with_callbacks =
-        ttnn::reduce_scatter_minimal_async_helper(
+        ttnn::create_line_reduce_scatter_minimal_async_program(
             program,
             matmul_output_tensor,
             persistent_intermediate_tensor,

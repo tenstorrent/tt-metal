@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async_op.hpp"
+#include "ring_reduce_scatter_minimal_async_program.hpp"
+#include "line_reduce_scatter_minimal_async_program.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
@@ -283,25 +285,55 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
     log_debug(tt::LogOp, "Device index for {} is {}", coord, device_index);
 
-    return reduce_scatter_minimal_async(
-        input_tensors[0],
-        output_tensors[0],
-        coord,
-        forward_coord,
-        backward_coord,
-        output_tensors[1],
-        this->dim,
-        this->num_links,
-        target_ring_size,
-        device_index,
-        this->topology,
-        this->semaphore,
-        this->barrier_semaphore,
-        this->using_persistent_buffers,
-        this->sub_device_id,
-        this->chunks_per_sync,
-        this->num_workers_per_link,
-        this->num_buffers_per_channel);
+    tt::tt_metal::Program program{};
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler> empty_fused_op_signaler;
+
+    if (this->topology == ccl::Topology::Ring) {
+        return create_ring_reduce_scatter_minimal_async_program(
+            program,
+            input_tensors[0],
+            output_tensors[0],
+            coord,
+            forward_coord,
+            backward_coord,
+            output_tensors[1],
+            this->dim,
+            this->num_links,
+            target_ring_size,
+            device_index,
+            this->topology,
+            this->semaphore,
+            this->barrier_semaphore,
+            this->using_persistent_buffers,
+            this->sub_device_id,
+            empty_fused_op_signaler,
+            this->chunks_per_sync,
+            this->num_workers_per_link,
+            this->num_buffers_per_channel);
+    } else {
+        TT_FATAL(this->topology == ccl::Topology::Linear, "Must be line or ring");
+        return create_line_reduce_scatter_minimal_async_program(
+            program,
+            input_tensors[0],
+            output_tensors[0],
+            coord,
+            forward_coord,
+            backward_coord,
+            output_tensors[1],
+            this->dim,
+            this->num_links,
+            target_ring_size,
+            device_index,
+            this->topology,
+            this->semaphore,
+            this->barrier_semaphore,
+            this->using_persistent_buffers,
+            this->sub_device_id,
+            empty_fused_op_signaler,
+            this->chunks_per_sync,
+            this->num_workers_per_link,
+            this->num_buffers_per_channel);
+    }
 }
 
 tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(

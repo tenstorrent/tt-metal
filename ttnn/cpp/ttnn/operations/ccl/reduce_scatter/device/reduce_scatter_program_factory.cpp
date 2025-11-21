@@ -13,6 +13,8 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/ring_reduce_scatter_minimal_async_program.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/line_reduce_scatter_minimal_async_program.hpp"
 
 namespace ttnn::operations::ccl {
 

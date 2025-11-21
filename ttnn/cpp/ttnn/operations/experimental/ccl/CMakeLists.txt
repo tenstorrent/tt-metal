@@ -88,7 +88,9 @@ target_sources(
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
-        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program_common.cpp
+        reduce_scatter_minimal_async/device/ring_reduce_scatter_minimal_async_program.cpp
+        reduce_scatter_minimal_async/device/line_reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op.cpp
         send_recv_async/send_async/device/send_async_program.cpp
