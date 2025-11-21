@@ -486,11 +486,16 @@ void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
 }
 
 void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
-    constexpr uint64_t l1_size = MEM_L1_SIZE;
-    if (addr + len > l1_size) {
+#if defined(COMPILE_FOR_ERISC)
+    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE + 1;
+#else
+    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE + 1;
+#endif
+    if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
+            0,  // unused (not a noc transaction)
+            0,  // unused (not a noc transaction)
             addr,
-            0,
             len,
             DEBUG_SANITIZE_NOC_UNICAST,
             DEBUG_SANITIZE_NOC_WRITE,
