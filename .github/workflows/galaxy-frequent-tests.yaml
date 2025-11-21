@@ -17,6 +17,7 @@ on:
           - wan22
           - mochi
           - flux1
+          - motif
   schedule:
     - cron: "0 3 * * *"  # Every day at 3:00 UTC
 
