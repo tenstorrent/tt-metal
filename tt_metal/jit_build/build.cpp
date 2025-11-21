@@ -509,7 +509,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // 2. Weakened firmware elf (for kernels)
     std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        std::string weakened = weakened_firmware_elf_name();
+        std::string weakened = weakened_firmware_name();
         link_deps.push_back(weakened);
         if (!this->firmware_is_kernel_object_) {
             cmd += "-Wl,--just-symbols=";
@@ -548,7 +548,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = weakened_firmware_elf_name();
+    std::string pathname_out = weakened_firmware_name();
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
@@ -560,7 +560,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     elf.WriteImage(pathname_out);
 }
 
-std::string JitBuildState::weakened_firmware_elf_name() const {
+std::string JitBuildState::weakened_firmware_name() const {
     std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
     return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
 }
