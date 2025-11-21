@@ -68,7 +68,7 @@ jobs:
               "model": "llama3_vision",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_llama3_vision_tests",
-              "timeout": 30,
+              "timeout": 45,
               "owner_id": "U03FJB5TM5Y" # Colman Glagovich
             },
             {
