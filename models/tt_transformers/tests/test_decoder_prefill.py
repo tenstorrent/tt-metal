@@ -66,6 +66,8 @@ def test_decoder_inference(
             "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
         )
 
+    mesh_device = create_submeshes(mesh_device, 1)
+
     # Create submesh for Galaxy (T3K with dp4)
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     if num_devices == 32:  # Galaxy

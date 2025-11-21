@@ -1657,9 +1657,7 @@ def create_submeshes(mesh_device, data_parallel):
     if not isinstance(mesh_device, ttnn.MeshDevice) or data_parallel == 1:
         submeshes = mesh_device.create_submeshes(ttnn.MeshShape(8, 1))
 
-        submeshes[0].reshape(ttnn.MeshShape(1, 8))
-
-        return [submeshes[0]]
+        return submeshes[0].reshape(ttnn.MeshShape(1, 8))
 
     # num_rows, num_cols = mesh_device.shape
     # num_devices = num_rows * num_cols
