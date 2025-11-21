@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/reg_api.h"
 
@@ -35,6 +36,12 @@ inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
     tile_regs_release();
     cb_push_back(cb_output, block_size);
 };
+
+inline void zero_dst_reg(const uint32_t i) {
+    constexpr float zero = 0.0f;
+    fill_tile_init();
+    fill_tile(i, zero);
+}
 
 inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     // NOTE:
