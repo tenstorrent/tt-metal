@@ -133,7 +133,15 @@ on:
         type: boolean
         default: false
 
-run-name: ${{ inputs.trigger_type }}
+run-name: >
+  T3000 ${{ inputs.trigger_type }} pipeline: 
+  Unit: ${{ inputs.t3000-unit != 'disabled' && inputs.t3000-unit || '❌' }}, 
+  Demo: ${{ inputs.t3000-demo != 'disabled' && inputs.t3000-demo || '❌' }}, 
+  Frequent: ${{ inputs.t3000-frequent != 'disabled' && inputs.t3000-frequent || '❌' }}, 
+  Model-perf: ${{ inputs.t3000-model-perf != 'disabled' && inputs.t3000-model-perf || '❌' }}, 
+  Nightly: ${{ inputs.t3000-nightly && '✅' || '❌'}}, 
+  Profiler: ${{ inputs.t3000-profiler && '✅' || '❌'}}, 
+  Perplexity: ${{ inputs.t3000-perplexity && '✅' || '❌'}}
 jobs:
   # Centralized logic to determine what should run
   determine-tests:
