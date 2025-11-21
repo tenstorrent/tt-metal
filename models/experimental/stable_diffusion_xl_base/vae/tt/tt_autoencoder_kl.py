@@ -93,7 +93,7 @@ class TtAutoencoderKL(LightweightModule):
         h = torch.permute(h, (0, 3, 1, 2))
 
         h = h.chunk(B, dim=0)
-        posterior = [DiagonalGaussianDistribution(h_i) for h_i in h]
+        posterior = [DiagonalGaussianDistribution(h_i, True) for h_i in h]
         return AutoencoderKLOutput(latent_dist=posterior)
 
     def decode(self, hidden_states, input_shape):

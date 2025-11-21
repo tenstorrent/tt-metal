@@ -503,6 +503,8 @@ def prepare_image_latents(
     is_strength_max=True,
     add_noise=True,
     latents=None,  # passed in latents
+    start_latent_seed=None,
+    fixed_seed_for_batch=False,
 ):
     # 4, 5, 8
     assert image is not None, "Image is not provided"
@@ -522,20 +524,30 @@ def prepare_image_latents(
     if image.shape[1] == 4:
         image_latents = image
     else:
+        image_latents = []
         if tt_pipeline.pipeline_config.vae_on_device:
-            image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
-            image_latents = torch.cat(image_latents, dim=0)
+            if start_latent_seed is not None:
+                torch.manual_seed(start_latent_seed)
+            for index, latent in enumerate(tt_pipeline.tt_vae.encode(image).latent_dist):
+                if start_latent_seed is not None:
+                    torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                item = latent.sample()
+                image_latents.append(item)
         else:
-            image_latents = [
-                torch_pipeline.vae.encode(img).latent_dist.sample()
-                for img in torch.chunk(image, chunks=batch_size, dim=0)
-            ]
-            image_latents = torch.cat(image_latents, dim=0)
+            for index, img in enumerate(torch.chunk(image, chunks=batch_size, dim=0)):
+                if start_latent_seed is not None:
+                    torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                item = torch_pipeline.vae.encode(img).latent_dist.sample()
+                image_latents.append(item)
+
+        image_latents = torch.cat(image_latents, dim=0)
         image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     if add_noise:
-        torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
+        if start_latent_seed is not None:
+            torch.manual_seed(start_latent_seed)
+        torch_noise = torch.randn(shape, device=cpu_device, dtype=dtype)
         torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
         if is_strength_max:
             return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
