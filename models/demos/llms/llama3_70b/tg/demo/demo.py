@@ -20,8 +20,8 @@ from models.demos.llms.llama2_70b.tt.llama_common import (
     load_llama_state_dict,
     string_similarity_score,
 )
-from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
-from models.demos.tg.llama3_70b.tt.llama_generation_galaxy import TtLlamaModelForGeneration
+from models.demos.llms.llama3_70b.tg.tt.llama_common import setup_llama_env
+from models.demos.llms.llama3_70b.tg.tt.llama_generation_galaxy import TtLlamaModelForGeneration
 
 
 @dataclass
@@ -161,7 +161,7 @@ def run_demo(args):
 
         if data_args.output_at_end:
             with open(
-                f"models/demos/tg/llama3_70b/demo/{model_args.llama_version}_demo_user_output.json", "w"
+                f"models/demos/llms/llama3_70b/tg/demo/{model_args.llama_version}_demo_user_output.json", "w"
             ) as f:  # Open a file for writing
                 output_json = json.dumps(all_text, indent=4)
                 f.write(output_json)
