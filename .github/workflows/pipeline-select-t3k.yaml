@@ -200,7 +200,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit-tests || 'all' }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit || 'all' }}
   t3000-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
