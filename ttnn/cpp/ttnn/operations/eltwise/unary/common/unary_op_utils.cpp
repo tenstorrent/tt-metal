@@ -58,6 +58,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
+        case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
@@ -188,6 +189,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::TANH:
+            op_init_and_name = {
+                fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
@@ -810,6 +816,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDMISH:
             op_init_and_name = {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
             break;
+        case UnaryOpType::LOGSIGMOID: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -867,7 +874,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
     } else if (name == "tanh") {
-        return UnaryWithParam(UnaryOpType::TANH);
+        return UnaryWithParam(UnaryOpType::TANH, static_cast<float>(false));
     } else if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
     } else if (name == "log10") {
@@ -1008,6 +1015,7 @@ std::string get_compute_kernel_path(
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
         case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
+        case UnaryOpType::LOGSIGMOID: return fmt::format("{}/{}", compute_root, "logsigmoid_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
