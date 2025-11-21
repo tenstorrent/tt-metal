@@ -184,9 +184,10 @@ class PerfReport:
         self._frames = frames or [pd.DataFrame()]
         self._masks = masks or [pd.Series()]
 
-    def append(self, frame: pd.DataFrame) -> None:
+    def append(self, frame: pd.DataFrame) -> "PerfReport":
         self._frames.append(frame)
         self._masks.append(pd.Series(True, index=frame.index))
+        return self
 
     def frame(self) -> pd.DataFrame:
         # merge
@@ -215,6 +216,9 @@ class PerfReport:
         return self.filter("marker", marker)
 
 
+# Generating the report
+
+
 @pytest.fixture(scope="module")
 def perf_report(request):
     report = PerfReport()
@@ -227,7 +231,11 @@ def perf_report(request):
     except Exception as e:
         print("Perf: Unexpected error, Saving report anyway", e)
 
-    dump_report(test_module, report)
+    dump_csv(test_module, f"{test_module}.csv", report)
+
+    post = _postprocess_report(report)
+    dump_csv(test_module, f"{test_module}.post.csv", post)
+    # dump_scatter(test_module, post)
 
 
 def _dataclass_names(parent, obj):
@@ -298,29 +306,65 @@ def delete_benchmark_dir(testname: str):
         shutil.rmtree(path)
 
 
-def create_benchmark_dir(testname: str):
+def get_benchmark_dir(testname: str) -> Path:
     root = os.environ.get("LLK_HOME")
     if not root:
         raise AssertionError("Environment variable LLK_HOME is not set")
 
-    output_path = Path(root) / "perf_data" / testname
-    output_path.mkdir(parents=True, exist_ok=True)
+    path = Path(root) / "perf_data" / testname
 
-    return output_path
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+    return path
 
 
-def dump_report(testname: str, report: PerfReport):
-    root = os.environ.get("LLK_HOME")
-    if not root:
-        raise AssertionError("Environment variable LLK_HOME is not set")
+# Common postprocessing
 
-    benchmark_dir = create_benchmark_dir(testname)
-    output_path = benchmark_dir / f"{testname}.csv"
 
-    report.frame().to_csv(output_path, index=False)
+def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+    mask = frame["marker"] == "TILE_LOOP"
+
+    if not mask.any():
+        return frame
+
+    # Ensure columns exist and default missing values only for masked rows
+    for col in ["loop_factor", "tile_cnt"]:
+        if col not in frame.columns:
+            frame[col] = 1
+        frame[col] = frame[col].fillna(1)
+
+    # Compute divisor as Series aligned with masked rows
+    divisor = frame.loc[mask, "loop_factor"] * frame.loc[mask, "tile_cnt"]
+
+    # Select only mean/std columns
+    mean_columns = [c for c in frame.columns if c.startswith("mean(")]
+    std_columns = [c for c in frame.columns if c.startswith("std(")]
+
+    # Apply division
+    for cols in (mean_columns, std_columns):
+        if cols:
+            frame.loc[mask, cols] = frame.loc[mask, cols].div(divisor, axis=0)
+
+    return frame
+
+
+def _postprocess_report(report: PerfReport) -> PerfReport:
+    frame = report.frame().copy()
+    frame = _postprocess_tile_loop(frame)
+
+    return PerfReport().append(frame)
+
+
+def dump_csv(testname: str, filename: str, post_report: PerfReport):
+    benchmark_dir = get_benchmark_dir(testname)
+    output_path = benchmark_dir / filename
+    post_report.frame().to_csv(output_path, index=False)
 
 
 def dump_scatter(testname: str, report: PerfReport):
+    # FIXME: was broken by the new pandas implementation (https://github.com/tenstorrent/tt-llk/issues/857)
+
     # generate a scatter plot using plotly.graph_objects (no pandas required)
 
     if not report.sweep_names or not report.stat_names:
