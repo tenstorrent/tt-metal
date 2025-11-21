@@ -88,7 +88,7 @@ struct LatencyResult {
     double raw_max_ns{};
     double raw_avg_ns{};
     double raw_p99_ns{};
-    
+
     double tolerance_percent{};  // Tolerance for golden comparison
 };
 
@@ -102,25 +102,25 @@ struct GoldenLatencyEntry {
     uint32_t num_links{};
     uint32_t num_samples{};
     uint32_t payload_size{};
-    
+
     // Golden values for net latency (most important metric)
     double net_min_ns{};
     double net_max_ns{};
     double net_avg_ns{};
     double net_p99_ns{};
-    
+
     // Golden values for responder time
     double responder_min_ns{};
     double responder_max_ns{};
     double responder_avg_ns{};
     double responder_p99_ns{};
-    
+
     // Golden values for raw latency
     double raw_min_ns{};
     double raw_max_ns{};
     double raw_avg_ns{};
     double raw_p99_ns{};
-    
+
     double tolerance_percent{};  // Per-test tolerance percentage
 };
 
@@ -129,7 +129,7 @@ struct LatencyComparisonResult {
     double difference_percent() const {
         return ((current_net_avg_ns - golden_net_avg_ns) / golden_net_avg_ns) * 100.0;
     }
-    
+
     std::string test_name;
     std::string ftype;
     std::string ntype;
@@ -138,11 +138,11 @@ struct LatencyComparisonResult {
     uint32_t num_links{};
     uint32_t num_samples{};
     uint32_t payload_size{};
-    
+
     // Current vs golden for net latency average (primary comparison metric)
     double current_net_avg_ns{};
     double golden_net_avg_ns{};
-    
+
     bool within_tolerance{};
     std::string status;
 };
