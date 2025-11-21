@@ -21,7 +21,7 @@ Read more about it at:
 ```python
 pytest --disable-warnings models/demos/cnns_vits/classification/resnet50/wormhole/demo/demo.py::test_demo_sample
 ```
-Where 16 is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
+Where 16 is the batch size per device, and `models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run this with
 ```python

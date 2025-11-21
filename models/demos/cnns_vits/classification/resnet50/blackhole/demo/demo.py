@@ -7,10 +7,13 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.demo.demo import (
+    run_resnet_imagenet_inference,
+    run_resnet_inference,
+)
 from models.demos.cnns_vits.classification.resnet50.wormhole.tests.test_resnet50_performant_imagenet import (
     test_run_resnet50_trace_2cqs_inference,
 )
-from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
 
 test_run_resnet50_trace_2cqs_inference.__test__ = False
 
@@ -31,8 +34,8 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
 @pytest.mark.parametrize(
     "batch_size, input_loc",
     (
-        (16, "models/demos/ttnn_resnet/demo/images/"),
-        (32, "models/demos/ttnn_resnet/demo/images/"),
+        (16, "models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/"),
+        (32, "models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/"),
     ),
 )
 def test_demo_sample(mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator):

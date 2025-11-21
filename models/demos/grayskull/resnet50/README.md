@@ -21,7 +21,7 @@ Read more about it at:
 ```python
 pytest --disable-warnings models/demos/grayskull/resnet50/demo/demo.py::test_demo_sample
 ```
-where 20 is the batch size, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
+where 20 is the batch size, and `models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run it with:
 ```python
