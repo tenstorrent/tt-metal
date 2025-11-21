@@ -30,11 +30,6 @@ jobs:
       OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_OPENAI_KEY }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Install opencode CLI
         run: |
           curl -fsSL https://opencode.ai/install | bash
