@@ -21,7 +21,9 @@ struct ManualSeedDeviceOperation {
     using tensor_return_value_t = manual_seed::tensor_return_value_t;
     using program_factory_t = std::variant<
         program::ManualSeedSingleSeedToAllCoresProgramFactory,
-        program::ManualSeedSingleSeedSingleCoreProgramFactory>;
+        program::ManualSeedSingleSeedSingleCoreProgramFactory,
+        program::ManualSeedSingleSeedSetCoresProgramFactory,
+        program::ManualSeedSetSeedsSetCoresProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
