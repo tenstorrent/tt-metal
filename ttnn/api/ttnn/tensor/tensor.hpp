@@ -149,8 +149,7 @@ public:
     //                                  Low Level APIs
     // ======================================================================================
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
-    [[nodiscard]] Tensor reshape(
-        const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+    [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
 
     Tensor with_tensor_topology(tt::tt_metal::TensorTopology tensor_topology) const;
     // ======================================================================================
@@ -197,16 +196,9 @@ public:
     uint32_t element_size() const;
 
     void print() const;
-    
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("tensor_spec", "buffer_spec", "storage_type", "device");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            lazy_tensor_->tensor_spec(),
-            lazy_tensor_->buffer_spec(),
-            lazy_tensor_->storage_type(),
-            lazy_tensor_->device());
-    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("tensor_spec", "storage_type");
+    auto attribute_values() const { return std::forward_as_tuple(this->tensor_spec(), this->storage_type()); }
 
     static std::uint64_t get_tensor_id_counter();
 
