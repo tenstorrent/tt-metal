@@ -331,6 +331,7 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
+        compute_config.compile_args = compute_group_2_args;
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(program, kComputeKernelPath, core_group_2, compute_config);
     }
 
