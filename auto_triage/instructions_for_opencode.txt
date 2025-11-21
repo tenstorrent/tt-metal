@@ -3,55 +3,40 @@ Auto Triage Playbook (LLM-Friendly)
 
 Mission
 -------
-You are diagnosing a single failing subjob in a GitHub Actions workflow that is currently red on `main`. Your job is to identify the exact commit that introduced the deterministic failure.
+Diagnose the current failing GitHub Actions subjob on `main`. Depending on the evidence, you must choose **exactly one** of the three cases below and produce the required outputs.
 
-High-Level Workflow
--------------------
-1. Read `auto_triage/data/boundaries_summary.json` (or `subjob_runs.json`) to understand the ordered run history.
-2. Download logs for candidate runs, starting from the oldest failing run whose logs still exist.
-3. Confirm the first deterministic failure by comparing consecutive runs.
-4. Once determinism is proven, analyze commits between the last good run and the first deterministic bad run.
-5. Select the most likely culprit commit, note credible alternatives, and document everything in `auto_triage/output/`.
+-Case Matrix
+------------
+- **Case 1 – Failure attributable to a specific commit**
+  - You have enough evidence to tie the observed failure to a particular commit (or tiny set) within a ≤100 commit window, and `download_data_between_commits.sh` succeeds. Matching failures across runs strengthens the case but is **not** required; a single failing run plus a compelling diff/copilot summary is sufficient.
+- **Case 2 – Deterministic failure, culprit commit unknown**
+  - The failure is deterministic but you cannot identify the exact commit (expired logs, >100 commits so the download script aborts, or other data gaps). Focus on root-cause instructions rather than naming a commit.
+- **Case 3 – Failure unrelated to tt-metal changes**
+  - Evidence shows the issue is probably external (infrastructure, flaky machines, mismatched dependencies, or commits that clearly cannot affect the failing test). Use this only when you have exhausted reasonable tt-metal hypotheses.
 
-Key Data Files (under `auto_triage/data/`)
------------------------------------------
-- `boundaries_summary.json`: includes the last successful run (`run_number` 0) plus every subsequent failing run. Each entry has job URL, job ID, commit SHA, and run_number. Use `runs` for the full timeline or `failed_runs` for failures only.
-- `subjob_runs.json`: the same `runs` array in isolation, handy for quick chronological reference.
+You must justify the selected case explicitly in `auto_triage/output/explanation.md`.
 
-Deterministic Failure Rules
+Shared Workflow (All Cases)
 ---------------------------
-- A run is deterministic only if the **same test failure** is observed in two consecutive runs (unless it is the most recent failing run, which you may assume is deterministic).
-- Ignore failures caused by infrastructure issues (runner disconnects, OOM before tests, GitHub outages, setup steps). The failing logs must show the actual test failure.
-- Do **not** analyze any commits until you have identified the first deterministic failure with concrete evidence from logs.
-- Document why the chosen run is deterministic in your final explanation.
+1. Inspect `auto_triage/data/boundaries_summary.json` (or `subjob_runs.json`) to understand the ordered history and identify the last successful run and subsequent failures.
+2. **Log downloads:**
+   - Start by downloading:
+     - The **oldest failing run** (first failure after the last success) and
+     - The **two most recent failing runs**.
+   - If there are fewer than three failures total, download all of them.
+- If the oldest failing run cannot be downloaded (logs expired or `get_logs.sh` errors), treat this as a strong signal toward Case 2. Continue the investigation using the most recent logs you can obtain, but remain open to switching to Case 3 if those logs indicate the job never ran the test or otherwise point to external causes.
+   - If the downloaded errors match, rely on that signature. If they differ, continue with the most recent error unless you need an extra run to resolve ambiguity. Avoid additional downloads unless absolutely necessary (they are expensive).
+- If you truly need additional evidence, you may download more runs, but justify the cost and stop as soon as you have enough data.
+3. Determine whether the failure is likely caused by tt-metal changes. Matching errors across runs help establish determinism, but a single run can still justify Case 1 if the commit evidence is strong. **Never** assume determinism just because a run is the latest; always explain your rationale.
+4. If you can map the failure to code changes (even from a single run), proceed toward Case 1. If you believe the failure is deterministic but cannot identify a culprit commit, you are heading toward Case 2. If tt-metal seems unrelated, that’s Case 3.
+5. Contact planning: while you work, note commit authors, file owners (`git log`, `git blame`, `.github/CODEOWNERS`), and capture GitHub profile URLs for everyone you may need to ping.
 
-Understanding the Example Scenario
-----------------------------------
-Runs A–E happen in order. A passes. B and C fail due to flaky infrastructure. D and E both fail with the same test assertion. The first deterministic failure is therefore run D, and the culprit commit lies between runs A and D. Only after confirming this pattern can you analyze commits in that interval.
-
-Log Download Policy
--------------------
-- Use `auto_triage/get_logs.sh <job_url> [output_dir]`.
-  ```
-  auto_triage/get_logs.sh https://github.com/tenstorrent/tt-metal/actions/runs/<run_id>/job/<job_id>
-  ```
-  Output defaults to `auto_triage/logs/job_<job_id>/` with `full/` archives and, when possible, `job_specific/` subsets.
-- Always attempt to download the **oldest available failing run**. If logs are missing or `get_logs.sh` errors out, stop chasing older runs and switch to the newest run that still has logs (Edge Case A guidance below).
-- If the newest run fails before tests execute, try the next-newest run, repeating until you find a run where the test actually ran.
-- If you cannot find the test log within the archive, assume that run was non-deterministic (test never executed).
-- Never run `find_boundaries.sh`; it has already been executed.
-
-Edge Case A (Expired Logs)
---------------------------
-- Trigger: `get_logs.sh` fails for the oldest failing run because logs expired.
-- Response: stop searching for older logs. Use the most recent run that has logs to understand the current deterministic failure.
-- Deliverables: only `auto_triage/output/explanation.md`, explicitly noting that logs expired and providing the best root-cause hypothesis plus remediation guidance. Do **not** analyze commits in this case.
-
-Efficiency + Log Parsing
-------------------------
-- Logs are large. Prefer `grep`, small helper scripts, or search terms like `FAILED`, `AssertionError`, `summary`.
-- Once you find an error signature, reuse it (via `grep`) when checking other logs so you never manually re-scan for the same string twice.
-- Always explain your thought process before running commands.
+Failure Evidence Rules
+----------------------
+- Repeated identical **test** errors across runs strongly indicate determinism but are not strictly required for Case 1. Use your judgment: if code diffs clearly explain the failure, you may proceed with a single run.
+- Treat infrastructure/setup issues (runner disconnects, missing deps, timeouts before tests) as non-deterministic unless commits point directly to them.
+- If log archives lack the actual test output, assume that specific run is non-deterministic.
+- Always document the failure signature and why you believe it is (or is not) attributable to tt-metal code.
 
 Toolbox Reference
 -----------------
@@ -59,55 +44,85 @@ Toolbox Reference
    ```
    auto_triage/get_logs.sh <job_url> [output_dir]
    ```
-2. **List commits between a known good commit and the first deterministic bad commit**
+2. **List commits between the last success and first deterministic failure**
    ```
    auto_triage/download_data_between_commits.sh <good_commit> <bad_commit> [output_json]
    ```
-   Default output: `auto_triage/data/commit_info.json` (includes Copilot summaries, author, etc.).
-3. **Changed files for a specific commit**
+   Outputs `auto_triage/data/commit_info.json`. The script now errors if >100 commits are requested.
+3. **Changed files for a commit**
    ```
    auto_triage/get_changed_files.sh <commit> [output_json]
    ```
-   Default output: `auto_triage/data/commit_<commit>_files.json`.
 4. **Full diff for a commit**
    ```
    auto_triage/get_commit_diff.sh <commit> [output_patch]
    ```
-   Default output: `auto_triage/data/commit_<commit>_diff.patch`.
 
-Commit Analysis Requirements
+Case 1 – Deterministic Failure With Identified Commit
+-----------------------------------------------------
+Trigger this case when:
+- You have two matching test failures that prove determinism.
+- The commit window between last success and first deterministic failure has ≤100 commits (script succeeds).
+- A specific commit (or very small set) clearly explains the failure via Copilot overview, file diffs, etc.
+
+Actions:
+1. Run `download_data_between_commits.sh <good> <bad>` to gather metadata.
+2. Use Copilot summaries, changed files, and diffs to pick the most likely culprit. Record alternatives if the evidence is close.
+3. Prepare outputs under `auto_triage/output/`:
+   - `chosen_commit.json`
+   - `alternatives.json`
+   - `explanation.md` covering:
+     - Why the failure is deterministic.
+     - The commit window, Copilot summaries referenced, and supporting diffs.
+     - Detailed fix-forward suggestions (not just “revert”).
+     - A “Who to contact” section listing names + GitHub handles + profile URLs, prioritizing the culprit commit author and relevant file owners (per `git log`, `git blame`, `.github/CODEOWNERS`).
+
+Case 2 – Deterministic Failure But Commit Unknown
+-------------------------------------------------
+Use this case when a deterministic failure exists but you cannot determine the commit because:
+- The oldest failing run’s logs cannot be retrieved (expired or `get_logs.sh` error) and the remaining evidence still points to a tt-metal regression rather than an external issue.
+- The commit window exceeds 100 commits (script exits with “too many commits. cannot download”).
+- Metadata is insufficient to map the failure to a specific change.
+
+Actions:
+1. Explain clearly why the commit cannot be identified (expired logs, excessive commit span, missing data, etc.).
+2. Describe the failure signature, affected files/tests, and best-effort hypotheses on where the bug likely lives in the codebase.
+3. Produce **only** `auto_triage/output/explanation.md` (no JSON outputs). Include:
+   - Determinism evidence.
+   - Guidance for engineers on how to debug/fix the issue (files to inspect, test commands, configs to tweak).
+   - A contact list (names + handles + GitHub URLs) derived from `git log`, `git blame`, `.github/CODEOWNERS`, prioritizing likely owners of the failing areas.
+
+Case 3 – Failure Likely Outside tt-metal
+----------------------------------------
+Choose this case when tt-metal commits cannot reasonably explain the failure. Indicators include:
+- Every failure since the last success appears non-deterministic or infrastructure-related (runner crashes, networking, flaky hardware).
+- The failing runs all show identical errors, but the intervening commits only touch unrelated code paths (e.g., Python docs while the job is a C++ kernel test).
+- The mismatch between failure signature and available commits leads you to conclude that the issue likely sits outside tt-metal (e.g., flaky machine, external dependency regression).
+- You could not download the oldest failing run, and the remaining logs show the test never executed or failed for reasons clearly unrelated to tt-metal.
+
+Actions:
+1. Document why tt-metal is likely not at fault:
+   - Summaries of the failures you inspected.
+   - Commit analysis showing no plausible offending changes.
+   - Any external/environmental clues from the logs.
+2. Produce `auto_triage/output/explanation.md` with:
+   - A clear statement that this is Case 3.
+   - Suggestions for next steps (check runners, dependencies, hardware, upstream repos, etc.).
+   - A contact list (names + handles + GitHub URLs) for people who can help investigate the suspected area (e.g., infra owners, CODEOWNERS of the test, commit authors touching tooling).
+
+Contact Guidance (All Cases)
 ----------------------------
-- Only begin commit analysis after identifying the first deterministic failing run.
-- Use `download_data_between_commits.sh` to gather commit metadata (especially Copilot summaries) for the range between the last passing run and the first deterministic failing run.
-- The final explanation must cite the Copilot overview (or other metadata) that justifies why a commit is suspect.
-
-Outputs (when **not** in Edge Case A)
--------------------------------------
-Write the following files under `auto_triage/output/`:
-- `chosen_commit.json`: commit SHA and justification for the most likely culprit.
-- `alternatives.json`: other plausible commits with short rationales.
-- `explanation.md`: a detailed report covering:
-  - Which job/run was the first deterministic failure and why.
-  - The commit window examined and how it was derived.
-  - The repeated error signature.
-  - Which Copilot summaries and file/diff details you relied on.
-  - Fix-forward guidance beyond “revert the commit”.
-- Contact guidance:
-  - Identify the most relevant engineer(s) to loop in. If a culprit commit is named, list the author first.
-  - Otherwise, use `git log`, `git blame`, and `.github/CODEOWNERS` to find owners of the failing files/tests.
-  - For each suggested contact, include a GitHub profile URL (e.g., `https://github.com/<handle>`). If you know the real name, show both name and handle.
-  - Mention these contacts, with hyperlinks, explicitly in `explanation.md`.
-
-Outputs (Edge Case A)
----------------------
-- Only produce `auto_triage/output/explanation.md`.
-- State that logs expired and provide best-effort debugging guidance referencing the most recent logs that still exist.
-- Still include a “Who to contact” section using `git log`, `git blame`, and `.github/CODEOWNERS` to identify likely owners for the failing area, and provide a GitHub URL for each handle.
+- Always recommend specific engineers to loop in. Order of preference:
+  1. Identified culprit commit author(s) (Case 1).
+  2. Owners of files or tests implicated in the failure (from `git log`, `git blame`, `.github/CODEOWNERS`).
+  3. Infra/test maintainers if Case 3 points outside tt-metal.
+- Provide both the best-known real name (if visible) and the GitHub handle, plus a hyperlink `https://github.com/<handle>`.
+- Include this section in `explanation.md` for every case.
 
 Final Reminders
 ---------------
-- Stay deterministic: every conclusion must be backed by logs or data.
-- Be concise but explicit about reasoning.
-- Efficiency matters—avoid redundant work.
-- Accuracy is critical; developers act on this analysis.
-- Always recommend specific people to contact, prioritizing commit authors and file owners identified via `git log`, `git blame`, and `.github/CODEOWNERS`, and share their GitHub URLs for easy follow-up.
+- Do not assume a failure is deterministic without evidence.
+- Avoid downloading more logs than necessary; each download costs money.
+- When log downloads fail, document the attempt and reason before moving on.
+- Keep reasoning concise but explicit, and always tie conclusions back to logs or commit data.
+- Accuracy matters—engineers will act on your findings. Choose the correct case and justify it thoroughly.
