@@ -424,7 +424,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-    this->num_used_receiver_channels = builder_config::num_receiver_channels;
+    this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel
@@ -710,9 +710,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
 
-    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+    const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
         receiver_channels_downstream_flow_control_semaphore_id,
-    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+    const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
         receiver_channels_downstream_teardown_semaphore_id,
     const std::array<size_t, builder_config::num_sender_channels>& sender_channels_flow_control_semaphore_id,
     const std::array<size_t, builder_config::num_sender_channels>& sender_channels_connection_semaphore_id,
@@ -1225,9 +1225,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::array<size_t, builder_config::num_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id{};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id;
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
 
     auto remote_pool_allocators =

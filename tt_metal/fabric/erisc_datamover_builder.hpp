@@ -237,12 +237,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
-    static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-    static constexpr std::size_t num_downstream_edms_vc1 = 1;
-    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
-    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
-    static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
     static constexpr std::size_t field_size = 16;
@@ -310,8 +304,10 @@ struct FabricEriscDatamoverConfig {
 
     // ----------- Receiver Channels
     // persistent mode field
-    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_teardown_semaphore_address = {};
+    std::array<std::size_t, builder_config::max_downstream_edms>
+        receiver_channels_downstream_flow_control_semaphore_address = {};
+    std::array<std::size_t, builder_config::max_downstream_edms>
+        receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
@@ -469,9 +465,9 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
 
-        const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+        const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
             receiver_channels_downstream_flow_control_semaphore_id,
-        const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+        const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
             receiver_channels_downstream_teardown_semaphore_id,
         const std::array<size_t, builder_config::num_sender_channels>& sender_channels_flow_control_semaphore_id,
         const std::array<size_t, builder_config::num_sender_channels>& sender_channels_connection_semaphore_id,
@@ -548,7 +544,8 @@ public:
     size_t channel_buffer_size = 0;
 
     std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, builder_config::max_downstream_edms>
+        downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -565,9 +562,9 @@ public:
 
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id = {};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_flow_control_semaphore_id = {};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id = {};

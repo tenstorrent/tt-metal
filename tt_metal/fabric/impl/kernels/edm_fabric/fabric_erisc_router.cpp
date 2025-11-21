@@ -2156,8 +2156,6 @@ void kernel_main() {
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
     init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-    // init_ptr_val<to_receiver_packets_sent_streams[2]>(0);
-    //  to_sender_packets_acked_streams initialization removed - ack streams no longer used
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[2]>(0);

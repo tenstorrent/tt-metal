@@ -80,15 +80,26 @@ static constexpr std::size_t num_sender_channels_2d = 5;
 static constexpr std::size_t num_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
 static constexpr std::size_t num_downstream_sender_channels = num_sender_channels - 1;
 
-static constexpr std::size_t num_receiver_channels = 2;
+static constexpr std::size_t num_receiver_channels_1d = 2;
+static constexpr std::size_t num_receiver_channels_2d = 2;
+static constexpr std::size_t num_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
-static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
 static constexpr std::size_t num_downstream_edms_vc1 = 1;
-static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
-static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
+static constexpr std::size_t num_downstream_edms_vc2 = 0;  // VC2 not used in 1D
+static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
+static constexpr std::size_t num_downstream_edms_2d_vc1 = 1;
+static constexpr std::size_t num_downstream_edms_2d_vc2 = 0;  // VC2 has 3 downstream EDMs in 2D
+static constexpr std::size_t num_downstream_edms =
+    num_downstream_edms_vc0 + num_downstream_edms_vc1 + num_downstream_edms_vc2;
+static constexpr std::size_t num_downstream_edms_2d =
+    num_downstream_edms_2d_vc0 + num_downstream_edms_2d_vc1 + num_downstream_edms_2d_vc2;
+
 static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
 
+inline uint32_t get_receiver_channel_count(const bool is_2D_routing) {
+    return is_2D_routing ? builder_config::num_receiver_channels_2d : builder_config::num_receiver_channels_1d;
+}
 
 inline uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
@@ -104,6 +115,9 @@ inline uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
                          : builder_config::num_downstream_edms_vc0;
 }
 
+inline uint32_t get_vc2_downstream_edm_count(const bool is_2D_routing) {
+    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc2 : builder_config::num_downstream_edms_vc2;
+}
 
 }  // namespace builder_config
 
