@@ -15,7 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
@@ -2417,7 +2417,7 @@ class ModelArgs:
         """Create and return a Tokenizer instance based on the checkpoint type."""
         if self.checkpoint_type == CheckpointType.Meta:
             # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
             return Tokenizer(self.tokenizer_path)
         else:
@@ -2550,7 +2550,7 @@ class ModelArgs:
 
     def reference_lm_head(self):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
 
             return ColumnParallelLinear(self.dim, self.vocab_size, bias=False, init_method=lambda x: x)
         else:
@@ -2562,7 +2562,7 @@ class ModelArgs:
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
 
             model = Transformer(self)
             if load_checkpoint:
@@ -2635,7 +2635,7 @@ class ModelArgs:
 
     def reference_rms_norm(self):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
 
             return RMSNorm(self.dim, self.norm_eps)
         else:
@@ -2686,7 +2686,7 @@ class ModelArgs:
 
     def reference_mlp(self):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 
             return FeedForward(self.dim, 4 * self.dim, self.multiple_of, self.ffn_dim_multiplier)
         else:
@@ -2716,7 +2716,7 @@ class ModelArgs:
 
     def reference_decoder(self):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 
             return TransformerBlock(layer_id=0, args=self)
         else:
@@ -2737,7 +2737,7 @@ class ModelArgs:
 
     def reference_attention(self):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
+            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Attention
 
             return Attention(self)
         else:
