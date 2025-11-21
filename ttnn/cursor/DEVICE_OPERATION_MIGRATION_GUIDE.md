@@ -402,7 +402,7 @@ Anything that affects the compiled kernel binary:
 - Operation attributes that affect program structure
 
 **What to exclude from hash:**
-Anything that has no affect on compiled binaries (runtime arguments)
+Anything that has no effect on compiled binaries (runtime arguments)
 - Buffer addresses
 - Offsets
 - Number of tiles to process (runtime arguments)
