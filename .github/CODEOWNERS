@@ -280,7 +280,7 @@ models/demos/llms/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypa
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 models/demos/blackhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt @tenstorrent/codeowner-bypass
+models/demos/llms/falcon40b @uaydonat @djordje-tt @johanna-rock-tt @tenstorrent/codeowner-bypass
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/llms/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
