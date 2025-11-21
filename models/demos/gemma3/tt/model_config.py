@@ -2223,7 +2223,6 @@ class ModelArgs:
                 from transformers import Gemma3ForConditionalGeneration
 
                 model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                model = model
             else:
                 if self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)

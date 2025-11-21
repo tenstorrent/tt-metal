@@ -2485,7 +2485,6 @@ class ModelArgs:
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0]
         use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
-        model_name_env = os.getenv("HF_MODEL")
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:
