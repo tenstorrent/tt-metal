@@ -792,6 +792,271 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
     }
 }
 
+// Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
+// These tests intentionally send packets with a non-optimal initial direction to verify mux forwarding works
+// Test cases cover scenarios where the worker sends a packet to a mux in a different direction,
+// and the mux must forward it to the correct downstream mux based on the packet's initial_direction field
+
+// Node 0 has neighbors in E and S directions
+// Forwarding to East destinations (1, 2, 3) via non-East initial direction (S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode0ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 0: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 0->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 0->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial direction (E)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode0ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E}) {
+        log_info(tt::LogTest, "Node 0: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 0->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 0->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 1 has neighbors in E, W, and S directions - test all 9 combinations
+// Forwarding to East destinations (2, 3) via non-East initial directions (W, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {2u, 3u}) {
+            log_info(tt::LogTest, "  Node 1->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 1->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to West destinations (0) via non-West initial directions (E, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to West via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 1->Node 0: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, 0u), initial_dir);
+        log_info(tt::LogTest, "  Node 1->Node 0: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, 0u), initial_dir);
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode1ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 1: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 1->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(1u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 1->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(1u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 2 has neighbors in E, W, and S directions - test all 9 combinations
+// Forwarding to East destinations (3) via non-East initial directions (W, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to East via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 2->Node 3: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, 3u), initial_dir);
+        log_info(tt::LogTest, "  Node 2->Node 3: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, 3u), initial_dir);
+    }
+}
+
+// Forwarding to West destinations (0, 1) via non-West initial directions (E, S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u}) {
+            log_info(tt::LogTest, "  Node 2->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 2->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (6, 7) via non-South initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode2ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 2: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {6u, 7u}) {
+            log_info(tt::LogTest, "  Node 2->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(2u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 2->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(2u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 3 has neighbors in W and S directions
+// Forwarding to West destinations (0, 1, 2) via non-West initial direction (S)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode3ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::S}) {
+        log_info(tt::LogTest, "Node 3: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u}) {
+            log_info(tt::LogTest, "  Node 3->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 3->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to South destinations (4, 5, 6, 7) via non-South initial direction (W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode3ForwardSouth) {
+    for (auto initial_dir : {RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 3: Testing forward to South via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 3->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(3u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 3->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(3u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 4 has neighbors in E and N directions
+// Forwarding to East destinations (5, 6, 7) via non-East initial direction (N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode4ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 4: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {5u, 6u, 7u}) {
+            log_info(tt::LogTest, "  Node 4->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 4->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial direction (E)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode4ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E}) {
+        log_info(tt::LogTest, "Node 4: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 4->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(4u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 4->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(4u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 5 has neighbors in E, W, and N directions - test all 9 combinations
+// Forwarding to East destinations (6, 7) via non-East initial directions (W, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to East via initial_dir={}", initial_dir);
+        for (uint32_t dst : {6u, 7u}) {
+            log_info(tt::LogTest, "  Node 5->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 5->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to West destinations (4) via non-West initial directions (E, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to West via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 5->Node 4: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, 4u), initial_dir);
+        log_info(tt::LogTest, "  Node 5->Node 4: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, 4u), initial_dir);
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode5ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 5: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 5->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(5u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 5->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(5u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 6 has neighbors in E, W, and N directions - test all 9 combinations
+// Forwarding to East destinations (7) via non-East initial directions (W, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardEast) {
+    for (auto initial_dir : {RoutingDirection::W, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to East via initial_dir={}", initial_dir);
+        log_info(tt::LogTest, "  Node 6->Node 7: Write");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, 7u), initial_dir);
+        log_info(tt::LogTest, "  Node 6->Node 7: Read");
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, 7u), initial_dir);
+    }
+}
+
+// Forwarding to West destinations (4, 5) via non-West initial directions (E, N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u}) {
+            log_info(tt::LogTest, "  Node 6->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 6->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial directions (E, W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode6ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::E, RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 6: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 6->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(6u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 6->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(6u, dst), initial_dir);
+        }
+    }
+}
+
+// Node 7 has neighbors in W and N directions
+// Forwarding to West destinations (4, 5, 6) via non-West initial direction (N)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode7ForwardWest) {
+    for (auto initial_dir : {RoutingDirection::N}) {
+        log_info(tt::LogTest, "Node 7: Testing forward to West via initial_dir={}", initial_dir);
+        for (uint32_t dst : {4u, 5u, 6u}) {
+            log_info(tt::LogTest, "  Node 7->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 7->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst), initial_dir);
+        }
+    }
+}
+
+// Forwarding to North destinations (0, 1, 2, 3) via non-North initial direction (W)
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricMuxToMuxNode7ForwardNorth) {
+    for (auto initial_dir : {RoutingDirection::W}) {
+        log_info(tt::LogTest, "Node 7: Testing forward to North via initial_dir={}", initial_dir);
+        for (uint32_t dst : {0u, 1u, 2u, 3u}) {
+            log_info(tt::LogTest, "  Node 7->Node {}: Write", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(7u, dst), initial_dir);
+            log_info(tt::LogTest, "  Node 7->Node {}: Read", dst);
+            UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(7u, dst), initial_dir);
+        }
+    }
+}
+
 // Unicast Scatter Write
 TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocScatterWrite) {
     for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {

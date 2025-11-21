@@ -437,6 +437,8 @@ FORCE_INLINE void forward_to_downstream_mux_or_local_router(
         mux_dir = packet_header->udm_control.write.initial_direction;
     }
 
+    // DPRINT << "Mux Direction " << Direction << " mux_dir " << mux_dir <<ENDL();
+
     if (Direction != mux_dir) {
         // Forward to the correct downstream mux
         uint32_t mux_index = direction_to_mux_index_map[Direction][mux_dir];
