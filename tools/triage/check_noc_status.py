@@ -19,7 +19,7 @@ from ttexalens.tt_exalens_lib import read_tensix_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, log_check, run_script
+from triage import ScriptConfig, log_check_location, run_script
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -64,7 +64,7 @@ def check_noc_status(
             message += f"    {reg} {var} {reg_val} {var_val}\n"
             passed = False
 
-    log_check(passed, message)
+    log_check_location(location, passed, message)
 
 
 def run(args, context: Context):
