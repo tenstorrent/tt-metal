@@ -382,5 +382,5 @@ void kernel_main() {
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     close_direction_connections(directions, fabric_connections);
-    DPRINT << "Done a2q dispatch\n";
+    DPRINT << "Done a2a dispatch\n";
 }

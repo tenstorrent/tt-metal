@@ -1770,7 +1770,7 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 
 FORCE_INLINE
 void noc_semaphore_wait_with_DPRINT(
-    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t dprint_freq = 1000000000) {
+    volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t flag, uint32_t dprint_freq = 1000000000) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT);
 
     WAYPOINT("NSW");
@@ -1779,7 +1779,7 @@ void noc_semaphore_wait_with_DPRINT(
         invalidate_l1_cache();
         if (count == 0) {
             count = dprint_freq;
-            DPRINT << "Semaphore is " << (*sem_addr) << "\n";
+            DPRINT << "Semaphore is " << (*sem_addr) << " flag is " << flag << "\n";
         }
         count--;
 
