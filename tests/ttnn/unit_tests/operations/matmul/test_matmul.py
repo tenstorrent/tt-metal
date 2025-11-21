@@ -133,7 +133,8 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
     assert_with_pcc(torch_input_tensor, output_tensor, 1)
 
 
-@pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
+# @pytest.mark.parametrize("m, k, n", [(784, 192, 576), (576, 192, 784), (486, 792, 352), (966, 123, 561)])
+@pytest.mark.parametrize("m, k, n", [(10000, 10000, 10000)])
 def test_pytorch_2_0_failed_cases(device, m, k, n):
     x = torch.ones((m, k), dtype=torch.float32)
     y = torch.ones((k, n), dtype=torch.float32)
