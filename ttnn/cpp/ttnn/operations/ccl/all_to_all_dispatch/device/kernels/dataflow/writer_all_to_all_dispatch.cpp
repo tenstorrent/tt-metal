@@ -180,7 +180,7 @@ void kernel_main() {
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
     DPRINT << "Awaiting the semaphore from glx 2\n";
-    noc_semaphore_wait_with_DPRINT((uint32_t*)init_semaphore_address, dispatch_devices - 1);
+    noc_semaphore_wait_with_DPRINT((uint32_t*)init_semaphore_address, dispatch_devices - 1, 1);
     noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     DPRINT << "Got the semaphore\n";
 

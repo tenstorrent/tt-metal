@@ -1779,7 +1779,7 @@ void noc_semaphore_wait_with_DPRINT(
         invalidate_l1_cache();
         if (count == 0) {
             count = dprint_freq;
-            DPRINT << "Semaphore is " << (*sem_addr) << " flag is " << flag << "\n";
+            DPRINT << "Semaphore is " << (*sem_addr) << " flag is " << flag << " out of " << val << "\n";
         }
         count--;
 
