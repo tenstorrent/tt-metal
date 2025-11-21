@@ -252,7 +252,7 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
         .src0_cb_index = src0_cb_index,
         .num_cores_y = num_cores_y};
 
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{std::move(program), shared_variables};
 }
 
 void AttnMatmulProgramFactory::override_runtime_arguments(
