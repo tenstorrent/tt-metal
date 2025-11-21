@@ -203,7 +203,7 @@ string get_noc_target_str(
 string get_l1_target_str(
     HalProgrammableCoreType programmable_core_type, dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     string out = fmt::format(
-        "{} core overflowed L1 with access to {:#x}",
+        "{} core overflowed L1 with access to {:#x} of length {}",
         get_riscv_name(programmable_core_type, san.which_risc()),
         san.l1_addr(),
         san.len());
