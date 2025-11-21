@@ -37,7 +37,7 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = 2;  // 8;  // get_arg_val<uint32_t>(6); HERE
+    const uint32_t max_pages_per_packet_l = 8;  // 8;  // get_arg_val<uint32_t>(6); HERE
     const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(6);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
@@ -47,7 +47,7 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 8;
-    uint32_t chunk_size = 2;  // 8; HERE
+    uint32_t chunk_size = 8;  // 8; HERE
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);

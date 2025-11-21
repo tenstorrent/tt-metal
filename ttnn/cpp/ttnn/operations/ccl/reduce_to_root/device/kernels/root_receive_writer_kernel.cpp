@@ -73,7 +73,7 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    uint32_t input_num_tiles = 2;  // to be modified with tiny tiles HERE
+    uint32_t input_num_tiles = 8;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
 

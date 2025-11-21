@@ -11,6 +11,18 @@
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 8; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right =
+            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     DPRINT << "sender writer kernel started\n";
     constexpr uint32_t accessor_2_idx = get_compile_time_arg_val(0);
@@ -36,7 +48,7 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = 2;  // 8;  // get_arg_val<uint32_t>(6); //HERE
+    const uint32_t max_pages_per_packet_l = 8;  // 2;  // get_arg_val<uint32_t>(6); //HERE
     const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(6);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(7);
@@ -53,7 +65,7 @@ void kernel_main() {
     // set up packet header buffer
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    // cb_push_back(packet_header_cb_id, 1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
@@ -62,8 +74,8 @@ void kernel_main() {
 
     // working memory to hold coalesced packet
     cb_reserve_back(packet_cb_id, 1);
-    const uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
-    cb_push_back(packet_cb_id, 1);
+    uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
+    // cb_push_back(packet_cb_id, 1);
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
@@ -85,6 +97,7 @@ void kernel_main() {
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(cb_id_l, 1);
         uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
+        print_full_tile(cb_id_l, 0, false);
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             const uint32_t page_offset = page_segment_idx * payload_size_bytes;
             const uint32_t src_addr = src_page_base_addr + page_offset;
@@ -105,6 +118,7 @@ void kernel_main() {
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
+                DPRINT << "performing packet send for packet idx: " << (uint32_t)packet_idx << ENDL();
                 // reset counters
                 packet_page_idx = 0;
                 curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx - 1);
@@ -115,10 +129,9 @@ void kernel_main() {
         cb_pop_front(cb_id_l, 1);
     }
 
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
+    DPRINT << "after loop\n";
 
+    DPRINT << "after reserving again packet cb\n";
     // now send m and s in a single packet
     // read from both cb to a temporary buffer and send
     cb_wait_front(cb_id_m, 1);
@@ -130,8 +143,10 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         packet_base_addr + aligned_page_size_bytes, src_page_base_addr_s, page_size_bytes);
     cb_pop_front(cb_id_s, 1);
-    const uint32_t total_payload_size_ms = 2 * payload_size_bytes;
-    const uint32_t packet_size_bytes_ms = align(total_payload_size_ms, alignment);
+    const uint32_t total_payload_size_ms = 2 * page_size_bytes;
+
+    DPRINT << "after memmove of m and s to packet buffer\n";
+
     // packet_header_ptr->to_noc_unicast_write(NocUnicastCommandHeader{dst_noc_addr}, packet_size_bytes_ms);
     // perform_payload_send(connection_direction, packet_base_addr, total_payload_size_ms, packet_header_ptr);
 
@@ -140,8 +155,20 @@ void kernel_main() {
     uint32_t packet_idx_sm = 0;  // separate index for m and s packet
     const uint64_t dst_noc_addr = dst_buffer_2.get_noc_addr(packet_idx_sm, 0, 0);
     tt::tt_fabric::linear::to_noc_unicast_write(
-        align(payload_size_bytes, alignment), packet_header_ptr, packet_idx_sm, dst_buffer_2);
-    perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
+        align(total_payload_size_ms, alignment), packet_header_ptr, packet_idx_sm, dst_buffer_2);
+    perform_payload_send(connection_direction, packet_base_addr, total_payload_size_ms, packet_header_ptr);
+
+    DPRINT << "read data at packet base addr for m and s send\n";
+    volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(packet_base_addr);
+    for (uint16_t value = 0; value < 1024; value++) {
+        DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
+    }
+    cb_push_back(packet_header_cb_id, 1);
+    cb_push_back(packet_cb_id, 1);
+
+    cb_reserve_back(packet_header_cb_id, 1);
+    uint32_t sem_header_addr = get_read_ptr(packet_header_cb_id);
+    cb_push_back(packet_header_cb_id, 1);
 
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
 
