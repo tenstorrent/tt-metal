@@ -24,7 +24,7 @@ struct WhereOperation {
         const TensorScalarVariant& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     template <typename T>
         requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
@@ -34,7 +34,7 @@ struct WhereOperation {
         const T& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 // Addcmul Operation
