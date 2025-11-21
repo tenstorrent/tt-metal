@@ -17,6 +17,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric {
 namespace multi_host_tests {
@@ -732,7 +733,7 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
     }
 }
 
-TEST(MultiHost, TestDual4x8ControlPlaneInit) {
+TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
     // This test is intended for 2 meshes, each 4x8 Blackhole mesh connected with 2 connections
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
@@ -748,7 +749,7 @@ TEST(MultiHost, TestDual4x8ControlPlaneInit) {
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
-TEST(MultiHost, TestDual4x8Fabric2DSanity) {
+TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         log_info(tt::LogTest, "This test is only for Blackhole Galaxy (4x8)");
@@ -762,18 +763,46 @@ TEST(MultiHost, TestDual4x8Fabric2DSanity) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     control_plane.print_routing_tables();
-    // const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    // EXPECT_EQ(intermesh_connections.size(), 32);  // Bidirectional
-    // for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
-    //     const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-    //     log_info(tt::LogTest, "Direction: {}", *direction);
-    //     EXPECT_TRUE(direction.has_value());
-    //     const auto& eth_chans_by_direction =
-    //         control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
-    //     EXPECT_TRUE(!eth_chans_by_direction.empty());
-    //     const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
-    //     EXPECT_TRUE(!eth_chans.empty());
-    // }
+
+    // Test Z direction functionality
+    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
+    EXPECT_EQ(
+        control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
+        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+
+    // Verify get_forwarding_eth_chans_to_chip can handle Z direction
+    // (This will return empty if no Z connections exist, but should not crash)
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& z_chans =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::Z);
+        // Z direction channels may be empty if no Z connections exist, which is expected
+        // The important thing is that the API doesn't crash
+    }
+
+    // Verify channels 8 and 9 are associated with Z direction when appropriate
+    // Check if any fabric node has channels 8 or 9 assigned to Z direction
+    const auto& mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
+    size_t z_channel_count = 0;
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& chip_ids = control_plane.get_mesh_graph().get_chip_ids(mesh_id);
+        for (const auto& [_, chip_id] : chip_ids) {
+            auto fabric_node_id = FabricNodeId(mesh_id, static_cast<std::uint32_t>(chip_id));
+            const auto& z_direction_chans =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, RoutingDirection::Z);
+            for (const auto& chan : z_direction_chans) {
+                if (chan == 8 || chan == 9) {
+                    z_channel_count++;
+                    // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
+                    EXPECT_EQ(
+                        control_plane.get_eth_chan_direction(fabric_node_id, chan),
+                        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+                }
+            }
+        }
+    }
+    // Verify that we found exactly 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)
+    EXPECT_EQ(z_channel_count, 8) << "Expected 4 Z channels (channels 8 and 9, bidirectional)";
 }
 
 }  // namespace multi_host_tests

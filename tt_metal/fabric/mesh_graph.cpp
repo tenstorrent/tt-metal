@@ -430,6 +430,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
+            }
+        }
     }
 
     // Populate switches as meshes (switches are treated as meshes internally)
@@ -552,6 +561,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            }
+        }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
             }
         }
     }
