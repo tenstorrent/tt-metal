@@ -223,7 +223,8 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
         DPRINT << "Awaiting the semaphore from RS\n";
-        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), (uint32_t)(ring_size - 1));
+        noc_semaphore_wait_with_DPRINT(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), (uint32_t)(ring_size - 1), 0);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         DPRINT << "Got the semaphore in RS\n";
     }
