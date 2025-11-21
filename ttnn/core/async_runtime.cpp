@@ -5,7 +5,6 @@
 #include "ttnn/async_runtime.hpp"
 
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;

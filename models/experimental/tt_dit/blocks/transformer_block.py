@@ -40,6 +40,8 @@ class TransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        attention_k_chunk_size: int = 512,
+        attention_q_chunk_size: int = 128,
     ) -> None:
         super().__init__()
 
@@ -105,6 +107,8 @@ class TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            k_chunk_size=attention_k_chunk_size,
+            q_chunk_size=attention_q_chunk_size,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -290,14 +294,6 @@ class TransformerBlock(Module):
         prompt = prompt + prompt_ff
 
         return spatial, prompt
-
-    @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
-        return Attention.spatial_sequence_padding_length(length=length, sp_factor=sp_factor)
-
-    @staticmethod
-    def pad_spatial_sequence(x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
-        return Attention.pad_spatial_sequence(x, sp_factor=sp_factor)
 
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
