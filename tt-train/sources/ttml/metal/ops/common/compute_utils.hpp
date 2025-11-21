@@ -35,3 +35,23 @@ inline void pack_and_push_block(uint32_t cb_output, uint32_t block_size) {
     tile_regs_release();
     cb_push_back(cb_output, block_size);
 };
+
+inline void pack_and_push_two_blocks(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
+    // NOTE:
+    // Packs two blocks from consecutive registers to two output circular buffers.
+    // Should be called after tile_regs_commit() for proper synchronization.
+    cb_reserve_back(cb_output_1, block_size);
+    cb_reserve_back(cb_output_2, block_size);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_output_1);
+    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        pack_tile(block_idx, cb_output_1);
+    }
+    pack_reconfig_data_format(cb_output_2);
+    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        pack_tile(block_idx, cb_output_2);
+    }
+    tile_regs_release();
+    cb_push_back(cb_output_1, block_size);
+    cb_push_back(cb_output_2, block_size);
+}

@@ -186,6 +186,30 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
 
+bool is_llk_bcast(
+    const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
+    const ttnn::DataType a_dtype,
+    const ttnn::DataType b_dtype,
+    const ttnn::DataType c_dtype) {
+    if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
+        if (a_dtype == ttnn::DataType::BFLOAT16 && b_dtype == ttnn::DataType::BFLOAT16 &&
+            c_dtype == ttnn::DataType::BFLOAT16) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void overwrite_compute_kernel_name_and_defines(
+    ttnn::operations::ternary::KernelName& kernel_name,
+    const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
+    const ttnn::operations::ternary::TernaryOpType op_type) {
+    if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
+        kernel_name =
+            op_type == TernaryOpType::ADDCMUL ? KernelName::ComputeRowBcastAddcmul : KernelName::ComputeRowBcastTTT;
+    }
+}
+
 // Get operation-specific compute kernel defines
 std::map<std::string, std::string> get_ternary_compute_defines(
     const TernaryDeviceOperation::operation_attributes_t& operation_attributes, ttnn::DataType dtype) {
@@ -514,6 +538,9 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     // Use TernaryKernelConfig to get the appropriate kernel names
     TernaryKernelConfig kernel_config(operation_attributes.ternary_op_type, variant, broadcast_type);
+    auto reader_kernel = kernel_config.reader_kernel;
+    auto compute_kernel = kernel_config.compute_kernel;
+    auto writer_kernel = kernel_config.writer_kernel;
 
     auto program = CreateProgram();
 
@@ -611,15 +638,38 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
             tt::CBIndex::c_2,
             program,
             all_device_cores,
-            value_false_single_tile_size,  // Using actual false tensor size
+            value_false_single_tile_size,
             num_tiles_per_cb,
-            value_false_data_format);  // Using actual false tensor format
+            value_false_data_format);
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
         TT_FATAL(false, "Unsupported Where variant in TernaryDeviceOperation. Supported: TTS, TST, TTT");
     }
 
+    if (variant == TernaryVariant::TTT && broadcast_type == TernaryBroadcastType::ROW_BCAST) {
+        create_cb(
+            tt::CBIndex::c_4,
+            program,
+            all_device_cores,
+            predicate_single_tile_size,
+            num_tiles_per_cb,
+            predicate_data_format);
+        create_cb(
+            tt::CBIndex::c_5,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        create_cb(
+            tt::CBIndex::c_6,
+            program,
+            all_device_cores,
+            value_false_single_tile_size,
+            num_tiles_per_cb,
+            value_false_data_format);
+    }
     // Output buffer - use c_3 for all cases now
     auto output_cb_index = tt::CBIndex::c_3;
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
@@ -655,6 +705,20 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         true_is_bcast,
         false_is_bcast);
 
+    std::map<std::string, std::string> kernel_defines;
+    if (variant == TernaryVariant::TTT) {
+        if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                broadcast_type,
+                predicate_tensor.dtype(),
+                value_true_tensor.value().dtype(),
+                value_false_tensor.value().dtype())) {
+            CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
+                compute_kernel, broadcast_type, operation_attributes.ternary_op_type);
+            reader_defines["BCAST_LLK"] = "1";
+        } else {
+            reader_defines["BCAST_LLK"] = "0";
+        }
+    }
     tt_metal::ReaderDataMovementConfig reader_config;
 
     if (variant == TernaryVariant::TTS) {
@@ -693,16 +757,17 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
                  (predicate_tensor.dtype() != DataType::FLOAT32 && predicate_tensor.dtype() != DataType::INT32 &&
                   predicate_tensor.dtype() != DataType::UINT32);
     }
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program, get_kernel_file_path(kernel_config.reader_kernel, is_fpu), all_device_cores, reader_config);
+
+    auto reader_kernel_id =
+        tt_metal::CreateKernel(program, get_kernel_file_path(reader_kernel, is_fpu), all_device_cores, reader_config);
 
     // Use unary writer config for all cases (consistent with other writer variants)
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
     tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     tt_metal::WriterDataMovementConfig writer_config = tt_metal::WriterDataMovementConfig(writer_compile_time_args);
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program, get_kernel_file_path(kernel_config.writer_kernel, is_fpu), all_device_cores, writer_config);
+    auto writer_kernel_id =
+        tt_metal::CreateKernel(program, get_kernel_file_path(writer_kernel, is_fpu), all_device_cores, writer_config);
 
     // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
@@ -747,11 +812,9 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     uint32_t scalar_is_true_value = (variant == TernaryVariant::TST) ? 1 : 0;
     std::vector<uint32_t> compute_kernel_args = {
         num_tiles_per_cycle, scalar_is_true_value};  // {num_tiles_per_cycle, scalar_is_true_value}
-    std::map<std::string, std::string> kernel_defines;
 
     // Add binary_ng style defines for TTT column broadcast case
-    if (variant == TernaryVariant::TTT &&
-        (broadcast_type == TernaryBroadcastType::COL_BCAST || broadcast_type == TernaryBroadcastType::SCALAR_BCAST)) {
+    if (variant == TernaryVariant::TTT) {
         // 3-tensor broadcast configuration - set defines for each tensor independently
         kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";
         kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";
@@ -804,8 +867,8 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         .compile_args = compute_kernel_args,
         .defines = kernel_defines};
 
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program, get_kernel_file_path(kernel_config.compute_kernel, is_fpu), all_device_cores, compute_config);
+    auto compute_kernel_id =
+        tt_metal::CreateKernel(program, get_kernel_file_path(compute_kernel, is_fpu), all_device_cores, compute_config);
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

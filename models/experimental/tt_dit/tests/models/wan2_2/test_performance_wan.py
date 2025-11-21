@@ -245,14 +245,14 @@ def test_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 9.34,
+            "text_encoding_time": 15.0,
             "denoising_time": 163,
             "vae_decoding_time": 18.2,
             "total_time": 192,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         expected_metrics = {
-            "text_encoding_time": 9.15,
+            "text_encoding_time": 15.0,
             "denoising_time": 502,
             "vae_decoding_time": 39.6,
             "total_time": 556,

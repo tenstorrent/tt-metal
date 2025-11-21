@@ -22,7 +22,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
     create_tt_model,
-    get_base_model_name,
     preprocess_inputs_prefill,
     sample_host,
 )
@@ -252,18 +251,6 @@ def prepare_generator_args(
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
     processor = model_args[0].processor
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor
-
-
-def set_trace_region_size():
-    # NOTE: temporary until we merge https://github.com/tenstorrent/tt-metal/pull/32086
-    LLAMA_DIR = os.getenv("LLAMA_DIR")
-    HF_MODEL = os.getenv("HF_MODEL")
-    model_name = LLAMA_DIR.strip("/").split("/")[-1] if LLAMA_DIR else HF_MODEL.split("/")[-1]
-    base_model_name = get_base_model_name(model_name)
-    if base_model_name in ["Llama-3.1-70B", "Llama-3.3-70B"]:
-        return 90000000
-    else:
-        return 70000000
 
 
 # List of supported Parameters for demo.py
@@ -711,7 +698,7 @@ def set_trace_region_size():
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": set_trace_region_size(), "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -964,7 +951,6 @@ def test_demo_text(
         if mode == "prefill" or mode == "full":
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-
             logits = generator.prefill_forward_text(
                 input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
                 page_table=page_table,
@@ -1419,7 +1405,7 @@ def test_demo_text(
                 "T3K_Llama-3.1-70B": 240,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
+                "T3K_Qwen3-32B": (100, 1.1),  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better

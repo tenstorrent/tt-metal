@@ -4,7 +4,7 @@
     Galaxy (WH)
 
 ## Introduction
-This codebase was designed for the model: [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528) but should also work with other DeepseekV3 models such as:
+This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528) model and is compatible with other DeepSeek-V3 checkpoints. The TT-NN pipeline supports full-model execution, teacher-forced accuracy verification, random-weight smoke tests, and multiple prompt ingestion patterns for throughput benchmarking.
 
 - [deepseek-ai/DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1)
 - [deepseek-ai/DeepSeek-V3](https://huggingface.co/deepseek-ai/DeepSeek-V3)
@@ -15,7 +15,7 @@ This codebase was designed for the model: [deepseek-ai/DeepSeek-R1-0528](https:/
 
 ## Demo CLI
 
-Example (replace the placeholder paths with your environment):
+Quick start (replace the placeholder paths with your environment):
 
 ```bash
 python models/demos/deepseek_v3/demo/demo.py \
@@ -25,21 +25,55 @@ python models/demos/deepseek_v3/demo/demo.py \
   "Write a haiku about autumnal days by the sea"
 ```
 
-Supported arguments:
+### Supported arguments
 
+- `prompts`: Positional prompt text. Required unless `--random-weights` is set.
+- `--prompts-file FILE`: Load prompts from a JSON file (see below). CLI prompts are ignored when this flag is present.
+- `--num-prompts N`: Limit the number of prompts loaded from `--prompts-file`.
+- `--output-path FILE`: Save generations/statistics to JSON when using `--prompts-file`. Defaults to `<prompts-file-stem>_output.json`.
 - `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/deepseek_v3/reference`.
-- `--cache-dir PATH`: Where to store converted TTNN weights and caches. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
-- `--early_print_first_user`: Stream generated tokens for the first prompt as they are produced instead of printing only at the end.
+- `--cache-dir PATH`: Directory for converted TTNN weights/cache. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
+- `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
+- `--generator {bp,pp}`: Choose between batch-parallel (`bp`, default) and pipeline-parallel (`pp`) generator implementations.
+- `--enable-trace`: Enable tracing for the batch-parallel generator decode path (unsupported with `--generator pp`).
 - `--random-weights`: Use randomly initialized weights (single dense layer only). Does not require tokenizer or safetensors.
-- `--single-layer {mlp,moe}`: With `--random-weights`, request a single layer (mlp supported).
-- `--token-accuracy`: Enable teacher‑forcing decode and report accuracy (requires full‑model mode + tokenizer).
+- `--single-layer {mlp,moe}`: When combined with `--random-weights`, request a single-layer run (`mlp` only).
+- `--token-accuracy`: Enable teacher-forcing decode and report accuracy (requires full-model mode plus tokenizer and reference file).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
-- `--tf-prompt-len N`: Override the teacher‑forcing prompt length in tokens (taken from the reference file). Defaults to half+1 if omitted.
+- `--tf-prompt-len N`: Override the teacher-forcing prompt length pulled from the reference file.
 
 You should also provide one or more prompts (each in quotes as in the above example) as positional arguments, unless using `--random-weights`. In `--random-weights` mode, prompts are optional.
 
-Programmatic usage:
+### Prompt files and batch generation
+
+The CLI accepts JSON files in either of the following layouts:
+
+```json
+[
+  {"prompt": "First prompt"},
+  {"prompt": "Second prompt"}
+]
+```
+
+```json
+{
+  "prompts": [
+    {"prompt": "First prompt"},
+    {"prompt": "Second prompt"}
+  ]
+}
+```
+
+Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
+
+### Sample usage with JSON file:
+
+```bash
+python models/demos/deepseek_v3/demo/demo.py --prompts-file models/demos/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
+```
+
+### Programmatic usage
 
 ```python
 from models.demos.deepseek_v3.demo.demo import run_demo
@@ -51,21 +85,25 @@ run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3"
 run_demo(None, random_weights=True)
 ```
 
+### Performance metrics
+
+The demo logs wall-clock statistics (prefill/decode times, tokens per second, and total runtime) when available. When writing JSON output, the statistics block is included so that automated benchmarks can consume it downstream.
+
 ### Teacher Forcing Accuracy Verification
 
-You can verify accuracy under teacher forcing using a reference file with tokenized ground‑truth. The expected format matches the tt_transformers demos/tests:
+You can verify accuracy under teacher forcing using a reference file with tokenized ground-truth. The expected format matches the tt_transformers demos/tests:
 
 - Keys: `reference_tokens` (LongTensor [1, T]) and optional `top5_tokens` (LongTensor [T, 5]).
-- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground‑truth continuation.
+- The demo splits `reference_tokens` at `T//2 + 1` into input prompt and ground-truth continuation.
 
 Generate a compatible reference file with the tt_transformers helper (use the same tokenizer/model family as your DeepSeek model to ensure token IDs match):
 
 - Hugging Face path:
   - `python models/tt_transformers/tests/generate_reference_outputs.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
-- Or use the HF‑only variant:
+- Or use the HF-only variant:
   - `python models/tt_transformers/tests/generate_reference_hf.py --total_length 2048 --output_file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --model deepseek-ai/DeepSeek-V3`
 
-Run the DeepSeek‑V3 demo with teacher forcing:
+Run the DeepSeek-V3 demo with teacher forcing:
 
 - `python models/demos/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
   - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
@@ -74,8 +112,8 @@ Run the DeepSeek‑V3 demo with teacher forcing:
 Notes:
 
 - `--token-accuracy` is not compatible with `--random-weights` and requires tokenizer files in `--model-path`.
-- The demo decodes a single sequence in teacher‑forcing mode. `--max-new-tokens` is capped to the number of available GT tokens in the reference file.
-- If `top5_tokens` is present in the reference, the demo reports both top‑1 and top‑5 accuracies; otherwise, only top‑1.
+- The demo decodes a single sequence in teacher-forcing mode. `--max-new-tokens` is capped to the number of available ground-truth tokens in the reference file.
+- If `top5_tokens` is present in the reference, the demo reports both top-1 and top-5 accuracies; otherwise, only top-1.
 
 ## How to develop
 
@@ -83,7 +121,6 @@ If you are not running on Tenstorrent internal infrastructure, you need to set t
 
 - `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/deepseek_v3/reference`. Download the model from Hugging Face set this to the model directory.
 - `DEEPSEEK_V3_CACHE`: Path to a directory where cached data such as converted weights and test inputs/outputs will be stored.
-
 
 These variables are used in scripts for generating test data and running tests.
 
@@ -150,3 +187,46 @@ output = MLP.forward_prefill(input_tensor, run_config) # or forward_decode(input
 - [reference](./reference): Reference model code from HuggingFace, cleaned up and extracted submodule code etc.
 - [tests](./tests): pytests for submodules
 - [tt](./tt): ttnn submodule code
+
+## VLLM Server (TT backend)
+
+To run the DeepSeek-V3 model via vLLM with the TT device backend, configure the environment and launch the server as shown below. Adjust the paths for your workspace.
+
+```bash
+export TT_METAL_HOME=<path to tt metal home>
+export VLLM_DIR=<path to vllm dir>
+export PYTHON_ENV_DIR=$TT_METAL_HOME/build/python_env_vllm
+
+source $VLLM_DIR/tt_metal/setup-metal.sh
+source $PYTHON_ENV_DIR/bin/activate
+
+export VLLM_TARGET_DEVICE="tt"
+export ARCH_NAME=wormhole_b0
+export HF_HOME=<hugging face home directory>
+export HF_MODEL="deepseek-ai/DeepSeek-R1-0528"
+export DEEPSEEK_V3_CACHE=<deepseek v3 cache dir>
+export DEEPSEEK_V3_HF_MODEL=<deepseek v3 model dir>
+export HF_TOKEN=<HF token>
+```
+
+Launch the server with long-lived RPC settings and TT mesh sizing:
+
+```bash
+VLLM_RPC_TIMEOUT=1000000 \
+MESH_DEVICE="(4,8)" \
+VLLM_USE_V1=1 \
+python examples/server_example_tt.py \
+  --model "deepseek-ai/DeepSeek-R1-0528" \
+  --max_model_len 1024 \
+  --num_scheduler_steps 1 \
+  --block_size 32 \
+  --override_tt_config '{"trace_mode": false}'
+```
+
+In another terminal, send a client request:
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{ "model": "deepseek-ai/DeepSeek-R1-0528", "prompt": "San Francisco is a", "max_tokens": 32, "temperature": 0, "top_p": 0.9, "top_k": 10 }'
+```

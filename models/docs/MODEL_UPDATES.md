@@ -4,6 +4,11 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## November 3, 2025
+
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
+- Integrated Gemma 3 with vLLM V1 in the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
 ## October 15, 2025
 
 ### [DeepSeek R1 Distill Qwen 14B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
@@ -11,7 +16,7 @@
 
 ## September 29, 2025
 
-### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
 - Added support for multi-image prompts.
 - Added support for sliding window attention in local attention layers.
 
@@ -32,7 +37,7 @@
 
 ## September 8, 2025
 
-### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/gemma3)
 - Added support for Gemma 3-4B on N150/N300 and Gemma 3-27B on Wormhole QuietBox to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
 
 ### [Phi-3-Mini-128k](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)

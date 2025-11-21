@@ -37,9 +37,7 @@ void ScaledDotProductAttention::validate(
                 input_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
             input_tensor.dtype());
-        TT_FATAL(
-            input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Operands to SDPA need to be in DRAM");
+        TT_FATAL(!input_tensor.is_sharded(), "Operands to SDPA need to be DRAM/L1 interleaved");
     }
 
     auto validate_padding = [&](const Tensor& tensor) {

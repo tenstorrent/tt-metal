@@ -369,16 +369,14 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     uint32_t noc_y,
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
     eth_chan_directions direction) :
+    FabricDatamoverBuilderBase(noc_x, noc_y, direction),
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
     ethernet_channel_id_(ethernet_channel_id),
     link_idx_(link_idx),
     risc_id_(risc_id),
-    noc_x_(noc_x),
-    noc_y_(noc_y),
-    fabric_mux_config_(std::move(fabric_mux_config)),
-    direction_(direction) {
+    fabric_mux_config_(std::move(fabric_mux_config)) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }
@@ -501,9 +499,8 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
 
     // Get topology-specific fabric router stream IDs based on topology
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
-    const auto worker_channel = is_2d_fabric ? direction_ : 0;
+    const auto worker_channel = 0;
     const auto& tensix_config = fabric_context.get_tensix_config();
     const auto worker_stream_id =
         tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel);
@@ -514,23 +511,20 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
         case tt::tt_fabric::Topology::Linear:
         case tt::tt_fabric::Topology::Ring:
             fabric_stream_ids_check_by_local = {
-                worker_stream_id,                                                             // default 17
+                worker_stream_id,                                                             // default 0
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
             break;
         case tt::tt_fabric::Topology::Mesh:
         case tt::tt_fabric::Topology::Torus:
             fabric_stream_ids_check_by_local = {
+                worker_stream_id,                                                            // default 0
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
                 tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
                 tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
-                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
             };
             break;
         default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
     }
-
-    // override the worker channel stream id
-    fabric_stream_ids_check_by_local[worker_channel] = worker_stream_id;
 
     uint8_t num_full_size_channels =
         fabric_mux_config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);

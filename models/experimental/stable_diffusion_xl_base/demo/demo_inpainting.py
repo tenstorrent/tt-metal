@@ -49,6 +49,8 @@ def run_demo_inference(
     guidance_rescale=0.0,
     timesteps=None,
     sigmas=None,
+    input_images=None,
+    input_masks=None,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
@@ -111,12 +113,22 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
-    img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
-    mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
-
     height = width = 1024
-    image = [load_image(img_url).resize((height, width))] * batch_size
-    mask_image = [load_image(mask_url).resize((height, width))] * batch_size
+    if input_images is None:  # when running the demo directly
+        img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
+        mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
+
+        image = [load_image(img_url).resize((height, width))] * batch_size
+        mask_image = [load_image(mask_url).resize((height, width))] * batch_size
+    else:  # when running the accuracy test, providing dataset images and masks
+        assert isinstance(input_images, list) and len(input_images) == len(
+            input_masks
+        ), "Input images and masks lists must be the same length"
+        image, mask_image = (
+            input_images + [input_images[-1]] * needed_padding,
+            input_masks + [input_masks[-1]] * needed_padding,
+        )
+        assert len(prompts) == len(image), "After padding, prompts and images lists must be the same length"
 
     init_image = [
         tt_sdxl.torch_pipeline.image_processor.preprocess(
@@ -364,6 +376,8 @@ def test_demo(
     guidance_rescale,
     timesteps,
     sigmas,
+    input_images=None,
+    input_masks=None,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -386,4 +400,6 @@ def test_demo(
         guidance_rescale,
         timesteps,
         sigmas,
+        input_images,
+        input_masks,
     )

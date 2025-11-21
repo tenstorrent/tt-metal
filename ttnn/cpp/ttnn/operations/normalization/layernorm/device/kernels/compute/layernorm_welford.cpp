@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cinttypes>
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -10,19 +9,12 @@
 
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/welford.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 
@@ -65,9 +57,13 @@ void MAIN {
         }
     }();
 
-    constexpr int dst0 = 0;  // Input tile to Welford's algorithm
-    constexpr int dst1 = 1;  // Partial E[x] result for Welford's
-    constexpr int dst2 = 2;  // Partial Var[x] result for Welford's
+    constexpr uint32_t dst0 = 0;
+    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
+    constexpr uint32_t mean_dst = 1;
+    constexpr uint32_t var_dst = 2;
+
+    // The number of valid rows in the last tile in width dimension
+    constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
 
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
@@ -90,50 +86,59 @@ void MAIN {
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                ACQ();
                 cb_wait_front(cb_in, blk);
                 cb_wait_front(cb_inb, blk);
-                cb_reserve_back(cb_x, blk);
+                tile_regs_acquire();
                 for (uint32_t j = 0; j < blk; j++) {
                     add_tiles(cb_in, cb_inb, j, j, j);
-                    pack_tile(j, cb_x);
                 }
-                REL();
-                cb_push_back(cb_x, blk);  // push the sum into the same buffer
+                tile_regs_commit();
                 cb_pop_front(cb_in, blk);
                 cb_pop_front(cb_inb, blk);
+
+                cb_reserve_back(cb_x, blk);
+                tile_regs_wait();
+                for (uint32_t j = 0; j < blk; j++) {
+                    pack_tile(j, cb_x);
+                }
+                tile_regs_release();
+                cb_push_back(cb_x, blk);  // push the sum into the same buffer
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-        ACQ();
-
         uint32_t start_N = 0;
         transpose_wh_init_short(cb_x);
+        tile_regs_acquire();
         welford_init();
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_x, wt + blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                // Welford's needs transposed input tile
-                transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, W>(start_N, W, 0, *p_reciprocals);
-                start_N += tile_width;
-            }
+        // Process all but the last tile
+        for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
+            cb_wait_front(cb_x, wt + 1);
+            // Welford's needs transposed input tile
+            transpose_wh_tile(cb_x, wt, input_dst);
+            welford_update<W>(input_dst, start_N, *p_reciprocals);
+            start_N += tile_width;
         }
 
-        // Transpose dst1 and dst2 back to columns
+        // Process the last tile
+        cb_wait_front(cb_x, Wt);
+        transpose_wh_tile(cb_x, Wt - 1, input_dst);
+        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+
+        // Store the mean and variance to the destination registers
+        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+        tile_regs_commit();
+
+        // Transpose mean and var back to columns
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
-
+        tile_regs_wait();
         pack_reconfig_data_format(cb_ex);
-        pack_tile(dst1, cb_ex);
+        pack_tile(mean_dst, cb_ex);
         pack_reconfig_data_format(cb_ex2);
-        pack_tile(dst2, cb_ex2);
-
-        tile_regs_commit();
+        pack_tile(var_dst, cb_ex2);
         tile_regs_release();
-
         cb_push_back(cb_ex, onetile);
         cb_push_back(cb_ex2, onetile);
 
@@ -141,10 +146,9 @@ void MAIN {
         cb_wait_front(cb_ex2, onetile);
         reconfig_data_format_srca(cb_ex);
         transpose_wh_init_short(cb_ex);
-
         tile_regs_acquire();
-        transpose_wh_tile(cb_ex, 0, dst1);
-        transpose_wh_tile(cb_ex2, 0, dst2);
+        transpose_wh_tile(cb_ex, 0, mean_dst);
+        transpose_wh_tile(cb_ex2, 0, var_dst);
         tile_regs_commit();
 
         cb_pop_front(cb_ex, onetile);
@@ -152,17 +156,16 @@ void MAIN {
 
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
-        pack_reconfig_data_format(cb_ex);
 
+        pack_reconfig_data_format(cb_ex);
         tile_regs_wait();
-        pack_tile(dst1, cb_ex);
+        pack_tile(mean_dst, cb_ex);
         pack_reconfig_data_format(cb_ex2);
-        pack_tile(dst2, cb_ex2);
+        pack_tile(var_dst, cb_ex2);
         tile_regs_release();
 
         cb_push_back(cb_ex, onetile);
         cb_push_back(cb_ex2, onetile);
-        REL();
 
         // x - E[x]
         // Reuse cb_x since we didn't pop anything from it
@@ -173,13 +176,17 @@ void MAIN {
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            ACQ();
+            tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_xmm);
             }
+            tile_regs_release();
             cb_push_back(cb_xmm, blk);
-            REL();
         }
         cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_x, Wt);
@@ -194,17 +201,19 @@ void MAIN {
             reconfig_data_format(cb_ex2, cb_eps);
         }
         cb_wait_front(cb_ex2, onetile);  // should have 1 tile
-        ACQ();
+        tile_regs_acquire();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        cb_reserve_back(cb_ex2pe, onetile);
         rsqrt_tile_init();
         rsqrt_tile(dst0);
-        pack_tile(dst0, cb_ex2pe);
-        cb_push_back(cb_ex2pe, onetile);
-        REL();
+        tile_regs_commit();
         cb_pop_front(cb_ex2, onetile);
+
+        cb_reserve_back(cb_ex2pe, onetile);
+        tile_regs_wait();
+        pack_tile(dst0, cb_ex2pe);
+        tile_regs_release();
+        cb_push_back(cb_ex2pe, onetile);
 
         // Remainder of the layernorm operation
         // norm(x) * gamma + beta,
@@ -218,38 +227,47 @@ void MAIN {
             } else {
                 pack_reconfig_data_format(cb_fusion);
             }
-            cb_reserve_back(cb_im_or_out, blk);
 
-            ACQ();
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
+            tile_regs_acquire();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(cb_im_or_out, blk);
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
+            tile_regs_release();
             cb_push_back(cb_im_or_out, blk);  // if no gamma/beta are provided, this will be passed on to the writer
-            REL();
 
             if constexpr (do_gamma) {
                 if constexpr (do_beta == 0) {
                     pack_reconfig_data_format(cb_out);
                 }
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
-                ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, blk);
+                tile_regs_acquire();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
+                }
+                tile_regs_commit();
+                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
+                cb_pop_front(cb_fusion, blk);
+
+                cb_reserve_back(cb_outg, blk);
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     pack_tile(wtr, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
-                cb_pop_front(cb_fusion, blk);
-                // we don't pop gamma
+                tile_regs_release();
                 cb_push_back(cb_outg, blk);
-                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                REL();
             }
             if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
@@ -258,19 +276,25 @@ void MAIN {
                 } else {
                     reconfig_data_format_srcb(cb_ex2pe, cb_beta);
                 }
-                ACQ();
+
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_reserve_back(cb_out, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);
+                tile_regs_acquire();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
-                    pack_tile(wtr, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
+                tile_regs_commit();
                 cb_pop_front(cb_fusion, blk);
                 // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
+
+                cb_reserve_back(cb_out, blk);
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    pack_tile(wtr, cb_out);  // pack either to intermediate (cb_fusion or out0)
+                }
+                tile_regs_release();
                 cb_push_back(cb_out, blk);
-                REL();
             }
         }
         cb_pop_front(cb_ex2pe, onetile);

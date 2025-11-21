@@ -50,42 +50,6 @@ void bind_max_pool2d_operation(py::module& module) {
 
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
-
-        Example:
-            >>> import ttnn
-            >>> import torch
-            >>> device = ttnn.CreateDevice(0, l1_small_size=8192)
-            >>> kernel_h, kernel_w = 2, 2
-            >>> stride_h, stride_w = 1, 1
-            >>> pad_h, pad_w = 0, 0
-            >>> dilation_h, dilation_w = 1, 1
-            >>> nchw_shape = (4, 256, 40, 40)
-            >>> in_N, in_C, in_H, in_W = nchw_shape
-            >>> input_shape = (1, 1, in_N * in_H * in_W, in_C)
-            >>> input = torch.randn(nchw_shape, dtype=torch.bfloat16)
-            >>> input_perm = torch.permute(input, (0, 2, 3, 1)) # this op expects a [N, H, W, C] format
-            >>> input_reshape = input_perm.reshape(input_shape)
-            >>> tt_input= ttnn.from_torch(input_reshape, ttnn.bfloat16)
-            >>> tt_input_dev = ttnn.to_device(tt_input, device)
-            >>> tt_output = ttnn.max_pool2d(
-                                input_tensor=tt_input_dev,
-                                batch_size=in_N,
-                                input_h=in_H,
-                                input_w=in_W,
-                                channels=in_C,
-                                kernel_size=[kernel_h, kernel_w],
-                                stride=[stride_h, stride_w],
-                                padding=[pad_h, pad_w],
-                                dilation=[dilation_h, dilation_w],
-                                ceil_mode=False,
-                                memory_config=None,
-                                applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                                deallocate_input=False,
-                                reallocate_halo_output=True,
-                                dtype=ttnn.bfloat16,
-                                output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                            )
-
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::max_pool2d)& self,
@@ -185,41 +149,6 @@ void bind_avg_pool2d_operation(py::module& module) {
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
-
-        Example:
-            >>> import ttnn
-            >>> import torch
-            >>> device = ttnn.open_device(device_id=0, l1_small_size=8192)
-            >>> kernel_h, kernel_w = 2, 2
-            >>> stride_h, stride_w = 1, 1
-            >>> pad_h, pad_w = 0, 0
-            >>> nchw_shape = (4, 256, 40, 40)
-            >>> in_N, in_C, in_H, in_W = nchw_shape
-            >>> input_shape = (1, 1, in_N * in_H * in_W, in_C)
-            >>> input = torch.randn(nchw_shape, dtype=torch.bfloat16)
-            >>> input_perm = torch.permute(input, (0, 2, 3, 1)) # this op expects a [N, H, W, C] format
-            >>> input_reshape = input_perm.reshape(input_shape) # this op expects [1, 1, NHW, C]
-            >>> tt_input = ttnn.from_torch(input_reshape, device=device)
-            >>> tt_output = ttnn.avg_pool2d(
-                            input_tensor=tt_input,
-                            batch_size=in_N,
-                            input_h=in_H,
-                            input_w=in_W,
-                            channels=in_C,
-                            kernel_size=[kernel_h, kernel_w],
-                            stride=[stride_h, stride_w],
-                            padding=[pad_h, pad_w],
-                            dilation=[dilation_h, dilation_w],
-                            ceil_mode=False,
-                            count_include_pad=True,
-                            divisor_override=None,
-                            memory_config=None,
-                            applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                            deallocate_input=False,
-                            reallocate_halo_output=True,
-                            dtype=ttnn.bfloat16,
-                            output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                        )
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::avg_pool2d)& self,

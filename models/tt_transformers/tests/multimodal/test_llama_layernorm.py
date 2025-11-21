@@ -4,7 +4,6 @@
 
 import os
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from loguru import logger
@@ -31,7 +30,7 @@ def test_layernorm_inference(mesh_device, reset_seeds, ensure_gc):
     width = model_args.vision_dim
     num_chunks = 4
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.ln_1."
@@ -40,10 +39,8 @@ def test_layernorm_inference(mesh_device, reset_seeds, ensure_gc):
     }
 
     model_args.WEIGHTS_DTYPE = dtype
-    reference_model = llama_reference_mod.LayerNorm(
-        normalized_shape=width,
-        eps=model_args.norm_eps,
-    )
+    # In HF Llama post_attention and input attention norms are implemented by plain pytorch layernorm
+    reference_model = torch.nn.LayerNorm(width, eps=model_args.norm_eps)
     reference_model.load_state_dict(partial_state_dict)
 
     # Initialize the custom LayerNorm model

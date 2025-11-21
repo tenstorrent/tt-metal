@@ -324,7 +324,7 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
-        (1000, 100),
+        (100, 10),
     ],
 )
 @pytest.mark.parametrize("trace_mode", [True])

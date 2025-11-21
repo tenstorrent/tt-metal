@@ -86,6 +86,8 @@ jobs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
@@ -216,6 +218,17 @@ jobs:
 
           cd /work/tt-train/.build
           cmake --build .
+
+  build-docs:
+    if: ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
+            needs.find-changed-files.outputs.docs-changed == 'true'
+        }}
+    needs: [find-changed-files, build]
+    uses: ./.github/workflows/docs-latest-public.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
     needs: [ build, find-changed-files ]
@@ -398,13 +411,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

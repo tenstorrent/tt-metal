@@ -465,29 +465,31 @@ void MAIN {
                 // This indicates that there are computes done by other workers.
                 // We need to wait for them and send to reducer's compute
                 // Iterate through each worker
-
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    // OUT_ACC_2 <- WORKER_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
-                    // PREV_SUM_2 <- WORKER_SUM
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
 
-                    // CUR_MAX = max(PREV_MAX, WORKER_MAX)
-                    max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+                    // Fused Softmax Correction
+                    // * Fused Correction is a fused operation that performs the following steps:
+                    // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
+                    // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // * 3. PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
+                    // * 5. PREV_SUM *= EXP_MAX_DIFF
+                    // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
+                    // */
+                    correction_block<scale_fp32, (int)VectorMode::C>(
+                        cb_m_in,        // cb worker max
+                        cb_prev_sum_2,  // cb worker sum
+                        cb_cur_max,
+                        cb_prev_max,
+                        cb_cur_sum,
+                        cb_prev_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
+                        Sq_chunk_t);
 
-                    // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
-                    // PREV_SUM_2 *= EXP_MAX_DIFF_2
-                    sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
-
-                    /// EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
-                    // PREV_SUM *= EXP_MAX_DIFF
-                    sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
-                    /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-                    add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
+                    // OUT_ACC_2 <- WORKER_OUT
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC_2 *= EXP_MAX_DIFF
                     // OUT_ACC *= EXP_MAX_DIFF_2

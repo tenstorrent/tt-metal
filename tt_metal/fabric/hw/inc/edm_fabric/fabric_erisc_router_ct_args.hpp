@@ -42,25 +42,23 @@ constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STRE
 constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
 constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
 constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
-constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id =
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_1_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
-constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id =
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_2_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
-constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id =
+constexpr uint32_t vc_0_free_slots_from_downstream_edge_3_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
-constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id =
+constexpr uint32_t vc_1_free_slots_from_downstream_edge_1_stream_id =
     get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
-constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id =
-    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
-constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
-constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
-constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
-constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
-constexpr uint32_t vc1_sender_channel_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
+constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
+// vc1_sender_channel_free_slots_stream_id is the same as sender_channel_4_free_slots_stream_id (stream ID 21)
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
 
 // Special marker after stream IDs
-constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 23;
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 21;
 constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
@@ -77,8 +75,10 @@ constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_N
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
 constexpr size_t NUM_FORWARDING_PATHS_CT_ARG_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
-constexpr size_t NUM_FORWARDING_PATHS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
-constexpr size_t wait_for_host_signal_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_CHANNELS = get_compile_time_arg_val(NUM_FORWARDING_PATHS_CT_ARG_IDX);
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX = NUM_FORWARDING_PATHS_CT_ARG_IDX + 1;
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = get_compile_time_arg_val(NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX);
+constexpr size_t wait_for_host_signal_IDX = NUM_DOWNSTREAM_SENDERS_VC0_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
 
@@ -92,14 +92,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 28,
-    "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
+    wait_for_host_signal_IDX == 27,
+    "wait_for_host_signal_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 29,
-    "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 28,
+    "MAIN_CT_ARGS_START_IDX must be 30 (23 stream IDs + 1 marker + 1 tensix connections + 5 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -118,10 +118,6 @@ static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_
 static_assert(
     !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
     "Deadlock avoidance requires at least 2 receiver channels");
-// TODO: Pipe from host
-constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
-constexpr size_t NUM_USED_RECEIVER_CHANNELS_VC0 =
-    enable_deadlock_avoidance ? NUM_FORWARDING_PATHS - 1 : NUM_FORWARDING_PATHS;
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
@@ -228,7 +224,6 @@ static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
 // Downstream sender num buffers comes after channel mappings
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
@@ -353,7 +348,10 @@ constexpr bool UPDATE_PKT_HDR_ON_RX_CH = get_compile_time_arg_val(MAIN_CT_ARGS_I
 
 constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 18) != 0;
 
-constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 19;
+constexpr bool is_intermesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 19) != 0;
+constexpr bool is_intramesh_router_on_edge = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 20) != 0;
+
+constexpr size_t SPECIAL_MARKER_0_IDX = MAIN_CT_ARGS_IDX_5 + 21;
 constexpr size_t SPECIAL_MARKER_0 = 0x00c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_0_IDX) == SPECIAL_MARKER_0,

@@ -1,0 +1,54 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: STRICT
+  }
+}
+
+# --- Switches ---------------------------------------------------------------
+
+switch_descriptors {
+  name: "SW0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] }
+  channels {
+    count: 2
+    policy: STRICT
+  }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+# POD template: 3 meshes with a switch
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { switch { switch_descriptor: "SW0" switch_id: 3 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0} }
+    nodes { switch { switch_descriptor: "SW0" switch_id: 3 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { switch { switch_descriptor: "SW0" switch_id: 3 } }
+    channels { count: 2 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { switch { switch_descriptor: "SW0" switch_id: 3 } }
+    channels { count: 2 }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

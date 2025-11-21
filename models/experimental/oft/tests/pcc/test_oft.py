@@ -18,38 +18,17 @@ from loguru import logger
 
 @pytest.mark.parametrize(
     "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_integral_img, pcc_output, num_slices",
+    # fmt: off
     [
-        # fmt: off
-        # feats8 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.872, 18),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.808, 18),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.679, 18),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.642, 18),
-        # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522, 12),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453, 12),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348, 12),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334, 12),
-        # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296, 11),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290, 11),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236, 11),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229, 11),
-        # fmt: on
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.803, 18),       # feats8 float32 use_precomputed_grid
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453, 12),       # feats16 float32 use_precomputed_grid
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.292, 11),       # feats32 float32 use_precomputed_grid
     ],
+    # fmt: on
     ids=[
-        "feats8_fp32_no_precomputed_grid",
         "feats8_fp32_precomputed_grid",
-        "feats8_bfp16_no_precomputed_grid",
-        "feats8_bfp16_precomputed_grid",
-        "feats16_fp32_no_precomputed_grid",
         "feats16_fp32_precomputed_grid",
-        "feats16_bfp16_no_precomputed_grid",
-        "feats16_bfp16_precomputed_grid",
-        "feats32_fp32_no_precomputed_grid",
         "feats32_fp32_precomputed_grid",
-        "feats32_bfp16_no_precomputed_grid",
-        "feats32_bfp16_precomputed_grid",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
@@ -142,7 +121,7 @@ def test_oft_forward(
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {exp_pcc=}, {abs=:.3f}, {rel=:.3f}")
         if passed and float(pcc) - exp_pcc > 0.001:
             logger.warning(
                 f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."

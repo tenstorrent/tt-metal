@@ -843,6 +843,99 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
+            #  Only used when seq_len >= 4096
+            def prefill_ff1_ff3_minimal_matmul_config(seq_len):
+                """
+                Returns the best minimal matmul config for prefill FF1/FF3 based on sequence length.
+                Configurations are optimized based on sweep results.
+                """
+                # Best configurations from sweep results for each M value
+                if seq_len <= 4096:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+                elif seq_len <= 8192:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+                else:  # For seq_len >= 16384, use the best config from sweep results
+                    # This covers 16384, 32768, 65536, 131072
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
+
+            #  Only used when seq_len >= 4096
+            def prefill_ff2_minimal_matmul_config(seq_len):
+                """
+                Returns the best minimal matmul config for prefill FF2 based on sequence length.
+                Configurations are optimized based on sweep results.
+                """
+                # Best configurations from sweep results for each M value
+                if seq_len <= 4096:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+                elif seq_len <= 16384:  # Both 8K and 16K share the same config
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                elif seq_len <= 32768:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                elif seq_len <= 65536:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # For seq_len >= 131072
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=4,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                    )
+
+            self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+
             def w2_prg_config(seq_len):
                 if seq_len == 128:
                     return self.matmul_1d_config(

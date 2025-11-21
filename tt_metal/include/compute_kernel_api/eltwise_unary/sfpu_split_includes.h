@@ -120,6 +120,10 @@
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_LOGSIGMOID_INCLUDE
+#include "compute_kernel_api/logsigmoid.h"
+#endif
+
 #if SFPU_OP_SELU_INCLUDE
 #include "compute_kernel_api/eltwise_unary/selu.h"
 #endif

@@ -43,7 +43,7 @@ run_tg_llama3_long_context_tests() {
   for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000; fail+=$?;
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b32" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000; fail+=$?;
@@ -157,8 +157,8 @@ run_tg_gpt_oss_tests() {
   pip install -r models/demos/gpt_oss/requirements.txt
 
   # GPT-OSS weights for 20B and 120B
-  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/
-  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
+  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/
+  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
 
   for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
     HF_MODEL=$gpt_oss_dir pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1000; fail+=$?

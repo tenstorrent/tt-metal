@@ -218,6 +218,17 @@ struct BinaryOperationHypot {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+template <BinaryOpType binary_op_type>
+struct WhereOperationWithScalar {
+    // For TTS / TST variant
+    static Tensor invoke(
+        const Tensor& condition,
+        const Tensor& true_false_tensor,  // For TTS variant, true_tensor; For TST variant, false_tensor
+        unary::ScalarVariant scalar_value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::binary
 
 constexpr auto add =
