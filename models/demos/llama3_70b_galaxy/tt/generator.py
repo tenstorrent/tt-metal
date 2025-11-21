@@ -439,16 +439,8 @@ class Generator:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
             sampling_module = self.model.sampling
-            sampling_module.reset_sampling_params(
-                k=sampling_params.top_k,
-                p=sampling_params.top_p,
-                temp=sampling_params.temperature,
-            )
-            sampling_module.reset_penalty_params(
-                presence=sampling_params.presence_penalty,
-                frequency=sampling_params.frequency_penalty,
-                repetition=sampling_params.repetition_penalty,
-            )
+            sampling_module.reset_sampling_params(sampling_params)
+
             sampling_module.reset_prompt_tokens(prompt_tokens)
             sampling_module.reset_output_state()
 

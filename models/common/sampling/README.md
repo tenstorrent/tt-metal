@@ -18,12 +18,7 @@ from models.common.sampling import SamplingGenerator, format_sampling_params
 sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
 
 params = format_sampling_params(user_params, max_batch_size=32)
-sampling.reset_sampling_params(k=params.top_k, p=params.top_p, temp=params.temperature)
-sampling.reset_penalty_params(
-    presence=params.presence_penalty,
-    frequency=params.frequency_penalty,
-    repetition=params.repetition_penalty,
-)
+sampling.reset_sampling_params(params)
 
 sampling.reset_prompt_tokens(prompt_tokens)   # torch tensor shaped [B, S]
 sampling.reset_output_state()

@@ -2,8 +2,6 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-import torch
-
 import ttnn
 
 from .tt_penalties import TTPenalties
@@ -26,7 +24,6 @@ class SamplingGenerator:
     Typical usage:
         generator = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
         generator.reset_sampling_params(k=..., p=..., temp=...)
-        generator.reset_penalty_params(...)
         tokens = generator.sample(logits, seed=seed, enable_trace=True)
     """
 
@@ -86,26 +83,6 @@ class SamplingGenerator:
                 )
         self._trace_states.clear()
 
-    def _normalize_penalty_values(self, values):
-        if values is None:
-            return None
-        if isinstance(values, (int, float)):
-            return [float(values)]
-        if isinstance(values, torch.Tensor):
-            return values.flatten().tolist()
-        return list(values)
-
-    def reset_penalty_params(self, *, presence, frequency, repetition):
-        presence = self._normalize_penalty_values(presence)
-        frequency = self._normalize_penalty_values(frequency)
-        repetition = self._normalize_penalty_values(repetition)
-        self.tt_penalties.reset_params(presence, frequency, repetition)
-        self._penalties_active = not (
-            self._is_default_penalty(presence, self._DEFAULT_PENALTIES["presence"])
-            and self._is_default_penalty(frequency, self._DEFAULT_PENALTIES["frequency"])
-            and self._is_default_penalty(repetition, self._DEFAULT_PENALTIES["repetition"])
-        )
-
     def _is_default_penalty(self, values, default):
         if values is None:
             return True
@@ -126,8 +103,18 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, *, k, p, temp):
-        self.tt_sampling.reset_params(k=k, p=p, temp=temp)
+    def reset_sampling_params(self, sampling_params):
+        self.tt_sampling.reset_params(
+            k=sampling_params.top_k, p=sampling_params.top_p, temp=sampling_params.temperature
+        )
+        self.tt_penalties.reset_params(
+            sampling_params.presence_penalty, sampling_params.frequency_penalty, sampling_params.repetition_penalty
+        )
+        self._penalties_active = not (
+            self._is_default_penalty(sampling_params.presence_penalty, self._DEFAULT_PENALTIES["presence"])
+            and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
+            and self._is_default_penalty(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
+        )
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
