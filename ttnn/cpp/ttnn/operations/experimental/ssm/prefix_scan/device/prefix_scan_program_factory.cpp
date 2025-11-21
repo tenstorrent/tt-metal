@@ -11,7 +11,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm::program {
+namespace ttnn::operations::experimental::ssm::prefix_scan::program {
 
 using namespace tt::constants;
 
@@ -218,4 +218,4 @@ void PrefixScanProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_vars.compute_kernel_id, shared_vars.cores, compute_runtime_args);
 }
 
-}  // namespace ttnn::operations::experimental::ssm::program
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan::program

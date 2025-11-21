@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::prefix_scan {
 
 PrefixScanDeviceOperation::program_factory_t PrefixScanDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -100,4 +100,4 @@ PrefixScanDeviceOperation::invoke(
         tensor_args_t{.a = a, .bx = bx, .h_prev = h_prev}};
 }
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan

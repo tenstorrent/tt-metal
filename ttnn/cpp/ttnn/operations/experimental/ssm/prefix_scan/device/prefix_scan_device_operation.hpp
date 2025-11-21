@@ -15,13 +15,13 @@
 
 #include "prefix_scan_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::prefix_scan {
 
 struct PrefixScanDeviceOperation {
-    using operation_attributes_t = ssm::operation_attributes_t;
-    using tensor_args_t = ssm::tensor_args_t;
-    using spec_return_value_t = ssm::spec_return_value_t;
-    using tensor_return_value_t = ssm::tensor_return_value_t;
+    using operation_attributes_t = prefix_scan::operation_attributes_t;
+    using tensor_args_t = prefix_scan::tensor_args_t;
+    using spec_return_value_t = prefix_scan::spec_return_value_t;
+    using tensor_return_value_t = prefix_scan::tensor_return_value_t;
     using program_factory_t = std::variant<program::PrefixScanProgramFactory>;
     using shared_variables_t = program::PrefixScanProgramFactory::shared_variables_t;
 
@@ -46,9 +46,10 @@ struct PrefixScanDeviceOperation {
         std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan
 
 namespace ttnn::prim {
-constexpr auto prefix_scan = ttnn::
-    register_operation<"ttnn::prim::prefix_scan", ttnn::operations::experimental::ssm::PrefixScanDeviceOperation>();
+constexpr auto prefix_scan = ttnn::register_operation<
+    "ttnn::prim::prefix_scan",
+    ttnn::operations::experimental::ssm::prefix_scan::PrefixScanDeviceOperation>();
 }  // namespace ttnn::prim

@@ -7,17 +7,17 @@
 #include "prefix_scan_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ssm::program {
+namespace ttnn::operations::experimental::ssm::prefix_scan::program {
 
 struct PrefixScanSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
     tt::tt_metal::KernelHandle compute_kernel_id = 0;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    tt::tt_metal::CBHandle cb_a_in;
-    tt::tt_metal::CBHandle cb_bx_in;
-    tt::tt_metal::CBHandle cb_h_in;
-    tt::tt_metal::CBHandle cb_out;
+    tt::tt_metal::CBHandle cb_a_in{};
+    tt::tt_metal::CBHandle cb_bx_in{};
+    tt::tt_metal::CBHandle cb_h_in{};
+    tt::tt_metal::CBHandle cb_out{};
     uint32_t total_tiles = 0;
     uint32_t total_tiles_per_row = 0;
     uint32_t total_tiles_per_col = 0;
@@ -41,4 +41,4 @@ struct PrefixScanProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ssm::program
+}  // namespace ttnn::operations::experimental::ssm::prefix_scan::program
