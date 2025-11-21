@@ -118,7 +118,7 @@ jobs:
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
           else
-            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(."model-name" == $model)]' --compact-output)
             echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
           fi
 
