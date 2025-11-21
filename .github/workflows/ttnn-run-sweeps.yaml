@@ -735,9 +735,8 @@ jobs:
       - name: Run ttnn sweeps generation (all sweeps)
         if: |
           ((github.event_name == 'schedule' && github.event.schedule != '30 4 * * *') ||
-           github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' ||
-           github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)') &&
-          (github.event_name == 'workflow_dispatch' ? github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' : true) &&
+           (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)') ||
+           (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')) &&
           (matrix.generate_mode == 'non_ccl' || matrix.generate_mode == 'ccl_only')
         run: |
           # Determine which modules to skip based on generate_mode
