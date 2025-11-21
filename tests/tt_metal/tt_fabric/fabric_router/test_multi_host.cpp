@@ -802,7 +802,7 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
         }
     }
     // Verify that we found exactly 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)
-    EXPECT_EQ(z_channel_count, 8) << "Expected 4 Z channels (channels 8 and 9, bidirectional)";
+    EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
 }
 
 }  // namespace multi_host_tests
