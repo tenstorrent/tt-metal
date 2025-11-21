@@ -24,7 +24,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["lr"].as<float>();
+    config.learning_rate = training_config["learning_rate"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
     config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
     config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
@@ -39,6 +39,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
+    if (!yaml_config["model_config"]) {  
+        throw std::runtime_error("Missing required field: model_config\n Please specify the path to the model configuration YAML file.");  
+    }  
 
     auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
     std::string model_type = model_yaml["model_type"].as<std::string>();
@@ -73,7 +76,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(TrainingConfig &config) {
-    std::string text;
+    
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
 
     try {

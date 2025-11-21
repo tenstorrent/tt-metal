@@ -14,6 +14,6 @@ Arguments:
 
 `--hf_tokenizer` : name of Hugging Face pre-trained tokenizer
 
-`--output_file` : output filename without extension (defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data.yaml`)
+`--output_file` : output filename without extension (the `.yaml` extension will be added automatically; defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data`)  
 
 The tokenized dataset will be saved as a YAML file, with fields for the data, data length, and tokenizer vocab size.

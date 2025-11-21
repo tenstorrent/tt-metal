@@ -382,7 +382,6 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
-    std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
 
     try {
