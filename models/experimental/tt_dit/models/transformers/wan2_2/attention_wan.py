@@ -21,6 +21,7 @@ class WanAttention:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
+        chunk_size=256,
     ):
         assert dim % num_heads == 0
         self.dim = dim
@@ -95,8 +96,8 @@ class WanAttention:
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
