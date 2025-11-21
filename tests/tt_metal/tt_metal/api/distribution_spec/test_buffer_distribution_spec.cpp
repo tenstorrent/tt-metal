@@ -12,6 +12,8 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 
+#include "impl/buffers/buffer_distribution_spec.hpp"
+
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
@@ -94,23 +96,24 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
 
     // Check that the stored cores in local device buffer matches expected cores to be used
-    auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+    auto page_mapping = shard_view->buffer_distribution_spec()->impl()->compute_page_mapping();
     EXPECT_EQ(page_mapping.all_cores, params.expected.cores);
 
     /* These are the params allocator cares about; check all of them */
     EXPECT_EQ(shard_view->num_cores().value(), params.expected.num_cores);
     // For BufferDistributionSpec, defined as: max number of pages per core * num_cores
-    EXPECT_EQ(shard_view->num_dev_pages(), params.expected.num_dev_pages);
+    EXPECT_EQ(shard_view->impl()->num_dev_pages(), params.expected.num_dev_pages);
 
     // Alignment is handled internally, not testing that here
     // In local device buffer, defined as: num_dev_pages * aligned_page_size
-    EXPECT_EQ(shard_view->aligned_size(), params.expected.aligned_size);
+    EXPECT_EQ(shard_view->impl()->aligned_size(), params.expected.aligned_size);
     // In local device buffer, calculated from: aligned_size, aligned_page_size, num_banks, alignment
     // TODO: Fix local device buffer implementation to use aligned_size / num_cores? They should be equal...
     // - Need to make shard_view->num_cores() not optional...
     EXPECT_EQ(shard_view->aligned_size_per_bank(), params.expected.aligned_size_per_bank);
-    EXPECT_EQ(shard_view->aligned_size() % shard_view->num_cores().value(), 0);
-    EXPECT_EQ(shard_view->aligned_size_per_bank(), shard_view->aligned_size() / shard_view->num_cores().value());
+    EXPECT_EQ(shard_view->impl()->aligned_size() % shard_view->num_cores().value(), 0);
+    EXPECT_EQ(
+        shard_view->aligned_size_per_bank(), shard_view->impl()->aligned_size() / shard_view->num_cores().value());
 }
 
 // clang-format off
@@ -284,7 +287,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         // changed to another dtype
         const auto* src_ptr = static_cast<const uint8_t*>(src.data());
 
-        auto buffer_page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+        auto buffer_page_mapping = shard_view->buffer_distribution_spec()->impl()->compute_page_mapping();
         const auto& cores = buffer_page_mapping.all_cores;
         const auto& page_mapping = buffer_page_mapping.core_host_page_indices;
 

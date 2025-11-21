@@ -387,7 +387,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
 }
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
-    const HalMemType buffer_mem_type = buffer.memory_type();
+    const HalMemType buffer_mem_type = buffer.impl()->memory_type();
     const uint32_t partial_page_size = tt::align(
         DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
         MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
@@ -744,8 +744,8 @@ void write_to_device_buffer(
             }
         }
     } else {
-        auto root_buffer = buffer.root_buffer();
-        auto region = buffer.root_buffer_region();
+        auto root_buffer = buffer.impl()->root_buffer();
+        auto region = buffer.impl()->root_buffer_region();
         InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant =
             initialize_interleaved_buf_dispatch_params(
                 *root_buffer, cq_id, expected_num_workers_completed, region, sub_device_ids);
@@ -788,8 +788,8 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
-    auto root_buffer = buffer.root_buffer();
-    const BufferRegion region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl()->root_buffer();
+    const BufferRegion region = buffer.impl()->root_buffer_region();
     IDevice* device = root_buffer->device();
 
     BufferReadDispatchParams dispatch_params;

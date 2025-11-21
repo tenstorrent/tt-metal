@@ -106,14 +106,12 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-struct BufferConfig {
+struct InterleavedBufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
 };
-
-using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor
@@ -175,13 +173,8 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
+class BufferImpl;
 class Buffer final : public std::enable_shared_from_this<Buffer> {
-    // Used in public Buffer constructors so they are only callable within Buffer
-    // Buffer constructors are public so we can call std::make_shared on Buffer
-    struct Private {
-        explicit Private() = default;
-    };
-
 public:
     static std::shared_ptr<Buffer> create(
         IDevice* device,
@@ -201,72 +194,54 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
-    // Creates a view of the region of the buffer.
-    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
-    // The view keeps the underlying buffer alive as long as the view is alive.
-    std::shared_ptr<Buffer> view(const BufferRegion& region);
-
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
     Buffer(Buffer&& other) = delete;
     Buffer& operator=(Buffer&& other) = delete;
     ~Buffer();
 
-    IDevice* device() const { return device_; }
-    Allocator* allocator() const { return allocator_; }
-    DeviceAddr size() const { return size_; }
-    bool is_allocated() const;
+    IDevice* device() const;
+    // Single usage by reports.cpp
+    Allocator* allocator() const;
+    DeviceAddr size() const;
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
 
     DeviceAddr page_size() const;
+    // Single Usage from view op
     void set_page_size(DeviceAddr page_size);
 
     uint32_t num_pages() const;
-    uint32_t num_dev_pages() const;
 
-    BufferType buffer_type() const { return buffer_type_; }
-    HalMemType memory_type() const;
+    BufferType buffer_type() const;
     CoreType core_type() const;
 
     bool is_l1() const;
     bool is_dram() const;
-    bool is_trace() const;
 
-    bool is_valid_region(const BufferRegion& region) const;
-    bool is_valid_partial_region(const BufferRegion& region) const;
+    TensorMemoryLayout buffer_layout() const;
 
-    TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
-
-    bool bottom_up() const { return bottom_up_; }
-
+    // Single Usage from reports.cpp
     DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
-    DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
-    bool has_shard_spec() const { return shard_spec_.has_value(); }
     ShardSpecBuffer shard_spec() const;
+    // Single Usage from view op
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
-    // Returns the buffer that owns the underlying device memory.
-    // Typically returns itself unless the buffer was created with a view method.
-    std::shared_ptr<Buffer> root_buffer();
-    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
+    // Single usage from graph_processor
+    size_t unique_id() const;
 
-    std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
-
-    size_t unique_id() const { return unique_id_; }
-
-    // Mark the buffer as deallocated, without releasing underlying device memory
-    void mark_as_deallocated();
+    BufferImpl* impl();
+    const BufferImpl* impl() const;
 
     Buffer(
         IDevice* device,
@@ -276,67 +251,11 @@ public:
         const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
-        bool owns_data,
-        Private);
+        bool owns_data);
 
 private:
-    enum class AllocationStatus : uint8_t {
-        ALLOCATION_REQUESTED,
-        ALLOCATED,
-        DEALLOCATED,
-    };
-
-    void allocate_impl();
-
-    // Deallocate is allowed to be called multiple times on the same buffer
-    void deallocate();
-    void deallocate_impl();
-    friend void DeallocateBuffer(Buffer& buffer);
-
-    DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
-
-    IDevice* const device_;
-    const DeviceAddr size_;  // Size in bytes
-    const BufferType buffer_type_;
-    const TensorMemoryLayout buffer_layout_;
-    const bool bottom_up_;
-    const std::optional<SubDeviceId> sub_device_id_;
-    const bool owns_data_;
-
-    std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator* allocator_;
-
-    AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
-    bool hooked_allocation_ = false;
-    DeviceAddr address_ = 0;
-
-    // These members must be only accessed on the device worker thread
-    DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-    std::optional<ShardSpecBuffer> shard_spec_;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
-
-    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
-
-    // The root buffer is the buffer that owns the underlying device memory.
-    // The root buffer is populated only when the buffer was created with a view method.
-    std::shared_ptr<Buffer> root_buffer_;
-    // Offset of the current view buffer in the root buffer
-    DeviceAddr root_buffer_offset_ = 0;
-
-    size_t unique_id_ = 0;
-    static std::atomic<size_t> next_unique_id;
+    std::unique_ptr<BufferImpl> pimpl_;
 };
-
-UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
-
-using HostDataType = std::variant<
-    const std::shared_ptr<std::vector<uint8_t>>,
-    const std::shared_ptr<std::vector<uint16_t>>,
-    const std::shared_ptr<std::vector<int32_t>>,
-    const std::shared_ptr<std::vector<uint32_t>>,
-    const std::shared_ptr<std::vector<float>>,
-    const std::shared_ptr<std::vector<bfloat16>>,
-    const void*>;
 
 }  // namespace tt::tt_metal
 
