@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>

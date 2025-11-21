@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fabric.hpp"
+#include "./fabric.hpp"
 
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric.hpp>
 
 namespace ttnn::fabric {
 
