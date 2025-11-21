@@ -17,7 +17,7 @@ from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
         (True, 128, False, False, None),
         (True, 1024, False, False, None),
         (True, 2048, False, False, None),
-        (False, 1024, False, True, "models/demos/tg/falcon7b/expected_greedy_output.json"),
+        (False, 1024, False, True, "models/demos/llms/falcon7b/tg/expected_greedy_output.json"),
         (False, 1024, False, True, None),
         (False, 1024, False, False, None),
     ),
