@@ -81,7 +81,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
 
-    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
+    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
     frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
 
@@ -146,6 +146,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
+    // Multiply by 2^-23
+    // We could have scaled polynomial coefficients, but the last one would have been near the subnormal range (i.e.
+    // truncation risk)
     frac = sfpi::addexp(frac, -23);
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
