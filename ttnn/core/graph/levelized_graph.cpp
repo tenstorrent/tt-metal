@@ -82,13 +82,45 @@ void LevelizedGraph::init(const nlohmann::json& trace, std::size_t max_level) {
     populate_input_connections(trace);
 }
 
-// Populates the vertices of the graph from the trace. We only populate function start nodes that are at or below the
-// max level.
+// Populates the vertices of the graph from the trace. We populate:
+// 1. function start nodes that are at or below the max level
+// 2. tensor nodes at stacking_level 1 (input tensors)
 void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t max_level) {
     // Verify that counters are sequential (counter == index)
     auto get_counter = [](const auto& node) { return node[kCounter].template get<int>(); };
     TT_ASSERT(std::ranges::equal(trace | std::views::transform(get_counter), std::views::iota(0u, trace.size())));
 
+    // Process tensor nodes at stacking_level 1
+    auto input_tensors = trace | std::views::filter([&](const auto& node) {
+                             return node[kNodeType] == kNodeTensor && node[kStackingLevel].template get<size_t>() == 1;
+                         });
+    std::ranges::for_each(input_tensors, [&](const auto& node) {
+        // Create a new vertex for the tensor
+        Vertex vertex;
+        vertex.id = graph.size();
+        vertex.name = kNodeTensor;
+        vertex.stacking_level = 1;
+
+        // Extract tensor_id and shape from params
+        if (node.contains(kParams)) {
+            if (node[kParams].contains(kTensorId)) {
+                // override tensor name to include tensor_id:
+                vertex.name =
+                    std::string(kNodeTensor) + "[" + node[kParams][kTensorId].template get<std::string>() + "]";
+            }
+            if (node[kParams].contains(kShape)) {
+                vertex.output_shape.push_back(node[kParams][kShape].template get<std::string>());
+            }
+        }
+
+        int counter = node[kCounter].template get<int>();
+        id_map[counter] = vertex.id;
+        reverse_id_map[vertex.id] = counter;
+
+        graph.push_back(vertex);
+    });
+
+    // Process function_start nodes
     auto valid_starts =
         trace | std::views::filter([&](const auto& node) {
             return node[kNodeType] == kNodeFunctionStart && node[kStackingLevel].template get<size_t>() <= max_level;
@@ -169,42 +201,76 @@ void LevelizedGraph::populate_tensor_to_producer_end_map(const nlohmann::json& t
 void LevelizedGraph::populate_edges(const nlohmann::json& trace) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
-        int function_start_counter = reverse_id_map[vertex_id];
+        int node_counter = reverse_id_map[vertex_id];
+        const auto& node = trace[node_counter];
 
-        // Find input tensors: tensors that have connections to this function_start
-        // This represents tensors that are used as inputs to this operation
-        auto input_tensors =
-            trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeTensor; }) |
-            std::views::filter([&](const auto& node) {
-                auto connections = get_connections(node);
-                return std::ranges::find(connections, function_start_counter) != connections.end();
-            }) |
-            std::views::transform([&](const auto& node) { return node[kCounter].template get<int>(); });
-
-        // For each input tensor, find the producer operation
-        auto fn = [&](int tensor_counter) {
-            auto it = tensor_to_producer_end.find(tensor_counter);
-            if (it != tensor_to_producer_end.end()) {
-                int producer_end = it->second;
-                auto end_to_start_it = function_end_to_start.find(producer_end);
-                if (end_to_start_it != function_end_to_start.end()) {
-                    int producer_start = end_to_start_it->second;
-                    // Check if producer is in our levelized graph
-                    auto producer_id_it = id_map.find(producer_start);
-                    if (producer_id_it != id_map.end()) {
-                        size_t producer_vertex_id = producer_id_it->second;
-                        // Add edge from producer to consumer (data flow direction)
-                        // Avoid self-loops and duplicate edges
-                        auto& producer_connections = graph[producer_vertex_id].out_edges;
-                        if (producer_vertex_id != vertex_id &&
-                            std::ranges::find(producer_connections, vertex_id) == producer_connections.end()) {
-                            producer_connections.push_back(vertex_id);
-                        }
+        // Handle edges differently based on node type
+        if (node[kNodeType] == kNodeTensor) {
+            // For tensor nodes, create edges to all operations that consume this tensor
+            auto connections = get_connections(node);
+            for (int conn_counter : connections) {
+                // Check if the connection is a function_start in our graph
+                auto consumer_id_it = id_map.find(conn_counter);
+                if (consumer_id_it != id_map.end()) {
+                    size_t consumer_vertex_id = consumer_id_it->second;
+                    // Add edge from tensor to consumer
+                    auto& tensor_out_edges = graph[vertex_id].out_edges;
+                    if (std::ranges::find(tensor_out_edges, consumer_vertex_id) == tensor_out_edges.end()) {
+                        tensor_out_edges.push_back(consumer_vertex_id);
                     }
                 }
             }
-        };
-        std::ranges::for_each(input_tensors, fn);
+        } else {
+            // For function_start nodes, find input tensors and their producers
+            int function_start_counter = node_counter;
+
+            // Find input tensors: tensors that have connections to this function_start
+            // This represents tensors that are used as inputs to this operation
+            auto input_tensors =
+                trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeTensor; }) |
+                std::views::filter([&](const auto& node) {
+                    auto connections = get_connections(node);
+                    return std::ranges::find(connections, function_start_counter) != connections.end();
+                }) |
+                std::views::transform([&](const auto& node) { return node[kCounter].template get<int>(); });
+
+            // For each input tensor, find the producer operation (or the tensor vertex itself)
+            auto fn = [&](int tensor_counter) {
+                // Check if this tensor is in our levelized graph (level 1 tensor)
+                auto tensor_vertex_it = id_map.find(tensor_counter);
+                if (tensor_vertex_it != id_map.end()) {
+                    // This is a level 1 tensor vertex, create edge from it to this operation
+                    size_t tensor_vertex_id = tensor_vertex_it->second;
+                    auto& tensor_out_edges = graph[tensor_vertex_id].out_edges;
+                    if (std::ranges::find(tensor_out_edges, vertex_id) == tensor_out_edges.end()) {
+                        tensor_out_edges.push_back(vertex_id);
+                    }
+                } else {
+                    // This tensor is not in the graph, find its producer operation
+                    auto it = tensor_to_producer_end.find(tensor_counter);
+                    if (it != tensor_to_producer_end.end()) {
+                        int producer_end = it->second;
+                        auto end_to_start_it = function_end_to_start.find(producer_end);
+                        if (end_to_start_it != function_end_to_start.end()) {
+                            int producer_start = end_to_start_it->second;
+                            // Check if producer is in our levelized graph
+                            auto producer_id_it = id_map.find(producer_start);
+                            if (producer_id_it != id_map.end()) {
+                                size_t producer_vertex_id = producer_id_it->second;
+                                // Add edge from producer to consumer (data flow direction)
+                                // Avoid self-loops and duplicate edges
+                                auto& producer_connections = graph[producer_vertex_id].out_edges;
+                                if (producer_vertex_id != vertex_id &&
+                                    std::ranges::find(producer_connections, vertex_id) == producer_connections.end()) {
+                                    producer_connections.push_back(vertex_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            std::ranges::for_each(input_tensors, fn);
+        }
     });
 }
 
@@ -212,7 +278,15 @@ void LevelizedGraph::populate_edges(const nlohmann::json& trace) {
 void LevelizedGraph::populate_internals(const nlohmann::json& trace, std::size_t max_level) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
-        int function_start_counter = reverse_id_map[vertex_id];
+        int node_counter = reverse_id_map[vertex_id];
+        const auto& node = trace[node_counter];
+
+        // Skip tensor nodes - they don't have internals
+        if (node[kNodeType] == kNodeTensor) {
+            return;
+        }
+
+        int function_start_counter = node_counter;
         size_t parent_level = graph[vertex_id].stacking_level;
 
         // Find the function_end for this function_start
@@ -281,7 +355,15 @@ void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
         auto& vertex = graph[vertex_id];
-        int function_start_counter = reverse_id_map[vertex_id];
+        int node_counter = reverse_id_map[vertex_id];
+        const auto& node = trace[node_counter];
+
+        // Skip tensor nodes - they already have their shape from populate_vertices
+        if (node[kNodeType] == kNodeTensor) {
+            return;
+        }
+
+        int function_start_counter = node_counter;
 
         // Find the function_end for this function_start
         auto start_to_end_it = function_start_to_end.find(function_start_counter);
@@ -322,7 +404,31 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
         auto& vertex = graph[vertex_id];
-        int function_start_counter = reverse_id_map[vertex_id];
+        int node_counter = reverse_id_map[vertex_id];
+        const auto& node = trace[node_counter];
+
+        // Skip tensor nodes - they don't have input connections in the same way
+        if (node[kNodeType] == kNodeTensor) {
+            // For tensor nodes, find if they have a producer
+            auto tensor_producer_it = tensor_to_producer_end.find(node_counter);
+            if (tensor_producer_it != tensor_to_producer_end.end()) {
+                int producer_end = tensor_producer_it->second;
+                auto end_to_start_it = function_end_to_start.find(producer_end);
+                if (end_to_start_it != function_end_to_start.end()) {
+                    int producer_start = end_to_start_it->second;
+                    // Check if producer is in our levelized graph
+                    auto producer_id_it = id_map.find(producer_start);
+                    if (producer_id_it != id_map.end()) {
+                        size_t producer_vertex_id = producer_id_it->second;
+                        vertex.in_edges.push_back(producer_vertex_id);
+                    }
+                }
+            }
+            // If no producer, this is an input tensor (no in_edges)
+            return;
+        }
+
+        int function_start_counter = node_counter;
 
         // First, collect all input tensors with their usage counts
         std::unordered_map<int, size_t> tensor_usage_count;
@@ -371,23 +477,31 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
                 int tensor_counter = input_tensor_list[tensor_list_index];
                 tensor_list_index++;
 
-                // Find which operation produced this tensor
-                auto tensor_producer_it = tensor_to_producer_end.find(tensor_counter);
-                if (tensor_producer_it != tensor_to_producer_end.end()) {
-                    int producer_end = tensor_producer_it->second;
-                    auto end_to_start_it = function_end_to_start.find(producer_end);
-                    if (end_to_start_it != function_end_to_start.end()) {
-                        int producer_start = end_to_start_it->second;
-                        // Check if producer is in our levelized graph
-                        auto producer_id_it = id_map.find(producer_start);
-                        if (producer_id_it != id_map.end()) {
-                            size_t producer_vertex_id = producer_id_it->second;
-                            vertex.in_edges.push_back(producer_vertex_id);
+                // Check if this tensor is a vertex in our graph (level 1 tensor)
+                auto tensor_vertex_it = id_map.find(tensor_counter);
+                if (tensor_vertex_it != id_map.end()) {
+                    // This is a level 1 tensor vertex, add it as input
+                    size_t tensor_vertex_id = tensor_vertex_it->second;
+                    vertex.in_edges.push_back(tensor_vertex_id);
+                } else {
+                    // Find which operation produced this tensor
+                    auto tensor_producer_it = tensor_to_producer_end.find(tensor_counter);
+                    if (tensor_producer_it != tensor_to_producer_end.end()) {
+                        int producer_end = tensor_producer_it->second;
+                        auto end_to_start_it = function_end_to_start.find(producer_end);
+                        if (end_to_start_it != function_end_to_start.end()) {
+                            int producer_start = end_to_start_it->second;
+                            // Check if producer is in our levelized graph
+                            auto producer_id_it = id_map.find(producer_start);
+                            if (producer_id_it != id_map.end()) {
+                                size_t producer_vertex_id = producer_id_it->second;
+                                vertex.in_edges.push_back(producer_vertex_id);
+                            }
+                            // If producer is not in levelized graph (level > max_level), skip it
                         }
-                        // If producer is not in levelized graph (level > max_level), skip it
                     }
+                    // If tensor has no producer (input tensor from outside), skip it
                 }
-                // If tensor has no producer (input tensor from outside), skip it
             }
         });
     });

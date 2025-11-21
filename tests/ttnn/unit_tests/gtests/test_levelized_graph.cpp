@@ -42,12 +42,14 @@ class TestLevelizedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor = ttnn::add(input_tensor, input_tensor, std::nullopt, std::nullopt);
     };
 
@@ -55,12 +57,13 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 2);  // 2 vertices: create_device_tensor, ttnn::add
+    // Includes: 1 tensor + 1 add operation
+    EXPECT_EQ(levelized_graph.size(), 2);
     // invariants: all vertices should be at level 1 and with no internals:
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
@@ -69,7 +72,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
 
     auto vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::add");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -100,7 +103,7 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
     vertex_0 = levelized_graph_2.get_vertex(0);
     vertex_1 = levelized_graph_2.get_vertex(1);
     const auto& vertex_2 = levelized_graph_2.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::add");
     EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
 
@@ -131,12 +134,15 @@ TEST_F(TestLevelizedGraphCapture, SimpleBinaryOp) {
 TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{256, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{256, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor_1 = ttnn::sum(input_tensor, 0, true);
         const auto output_tensor_2 = ttnn::mean(input_tensor, 1, false);
     };
@@ -144,13 +150,13 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 3);  // create_device_tensor, sum, mean
+    EXPECT_EQ(levelized_graph.size(), 3);  // tensor, sum, mean
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -159,7 +165,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     const auto& vertex_2 = levelized_graph.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::sum");
     EXPECT_EQ(vertex_2.name, "ttnn::mean");
 
@@ -216,12 +222,15 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
 TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array3D{16, 32, 64}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array3D{16, 32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor_1 = ttnn::sum(input_tensor, 2, true);
         const auto output_tensor_2 = ttnn::softmax(output_tensor_1, -1);
     };
@@ -229,13 +238,13 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 3);  // create_device_tensor, sum, softmax
+    EXPECT_EQ(levelized_graph.size(), 3);  // tensor, sum, softmax
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -244,7 +253,7 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     const auto& vertex_2 = levelized_graph.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::sum");
     EXPECT_EQ(vertex_2.name, "ttnn::softmax");
 
@@ -294,12 +303,15 @@ TEST_F(TestLevelizedGraphCapture, OutputLayoutInfo) {
 TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 32}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor_1 = ttnn::matmul(input_tensor, input_tensor);
         const auto output_tensor_2 = ttnn::add(input_tensor, output_tensor_1, std::nullopt, std::nullopt);
     };
@@ -307,13 +319,13 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 3);  // create_device_tensor, matmul, add
+    EXPECT_EQ(levelized_graph.size(), 3);  // tensor, matmul, add
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -322,7 +334,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     const auto& vertex_2 = levelized_graph.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::matmul");
     EXPECT_EQ(vertex_2.name, "ttnn::add");
 
@@ -366,25 +378,26 @@ TEST_F(TestLevelizedGraphCapture, MatmulWithBiasTest) {
 TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{12, 19}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
-        const auto output_tensor_1 = ttnn::digamma(input_tensor);
-    };
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{12, 19}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) { const auto output_tensor_1 = ttnn::digamma(input_tensor); };
 
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 2);  // create_device_tensor, digamma
+    EXPECT_EQ(levelized_graph.size(), 2);  // tensor, digamma
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -392,7 +405,7 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
 
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::digamma");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -422,25 +435,28 @@ TEST_F(TestLevelizedGraphCapture, CompositeOpTest) {
 TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor = ttnn::multiply(input_tensor, input_tensor, std::nullopt, std::nullopt);
     };
 
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 2);  // create_device_tensor, multiply
+    EXPECT_EQ(levelized_graph.size(), 2);  // tensor, multiply
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
     EXPECT_TRUE(
@@ -448,7 +464,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 
     auto vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::multiply");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -477,7 +493,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
     vertex_0 = levelized_graph_2.get_vertex(0);
     vertex_1 = levelized_graph_2.get_vertex(1);
     const auto& vertex_2 = levelized_graph_2.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::multiply");
     EXPECT_EQ(vertex_2.name, "ttnn::prim::binary_ng");
 
@@ -504,12 +520,15 @@ TEST_F(TestLevelizedGraphCapture, MultiplySelfTest) {
 TEST_F(TestLevelizedGraphCapture, ForkTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor_1 = ttnn::add(input_tensor, input_tensor, std::nullopt, std::nullopt);
         const auto output_tensor_2 = ttnn::subtract(input_tensor, input_tensor, std::nullopt, std::nullopt);
     };
@@ -517,20 +536,20 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1 - fork: one input tensor feeds multiple operations
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 3);  // create_device_tensor, add, multiply
+    EXPECT_EQ(levelized_graph.size(), 3);  // tensor, add, subtract
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     auto vertex_1 = levelized_graph.get_vertex(1);
     const auto& vertex_2 = levelized_graph.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_1.name, "ttnn::add");
     EXPECT_EQ(vertex_2.name, "ttnn::subtract");
 
@@ -568,38 +587,43 @@ TEST_F(TestLevelizedGraphCapture, ForkTest) {
 TEST_F(TestLevelizedGraphCapture, JoinTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input_a = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_b = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
-        const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+    const auto input_a = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_b = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{64, 128}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+    const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+
+    auto operation = [](const auto& input_tensor_a, const auto& input_tensor_b) {
         const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b, std::nullopt, std::nullopt);
     };
 
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor_a, input_tensor_b);
         ref_json_trace = capture.end_graph_capture();
     }
 
     // Test level 1 - join: one operation uses multiple different input tensors
     ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
-    EXPECT_EQ(levelized_graph.size(), 3);  // create_device_tensor (a), create_device_tensor (b), add
+    EXPECT_EQ(levelized_graph.size(), 3);  // tensor (a), tensor (b), add
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
     const auto& vertex_0 = levelized_graph.get_vertex(0);
     const auto& vertex_1 = levelized_graph.get_vertex(1);
     auto vertex_2 = levelized_graph.get_vertex(2);
-    EXPECT_EQ(vertex_0.name, "tt::tt_metal::create_device_tensor");
-    EXPECT_EQ(vertex_1.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(vertex_0.name.find("tensor") != std::string::npos);
+    EXPECT_TRUE(vertex_1.name.find("tensor") != std::string::npos);
     EXPECT_EQ(vertex_2.name, "ttnn::add");
 
     EXPECT_TRUE(vertex_0.in_edges.empty());
@@ -630,19 +654,22 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
 TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+    const auto input = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = tt::tt_metal::create_device_tensor(input, device);
+
+    auto operation = [](const auto& input_tensor) {
         const auto output_tensor = ttnn::add(input_tensor, input_tensor, std::nullopt, std::nullopt);
     };
 
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor);
         ref_json_trace = capture.end_graph_capture();
     }
 
@@ -651,9 +678,9 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 
     // Verify JSON structure
     EXPECT_TRUE(levelized_graph_json.is_array());
-    EXPECT_EQ(levelized_graph_json.size(), 2);  // create_device_tensor, add
+    EXPECT_EQ(levelized_graph_json.size(), 2);  // tensor, add
 
-    // Verify first vertex (create_device_tensor)
+    // Verify first vertex (tensor)
     EXPECT_TRUE(levelized_graph_json[0].is_object());
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kCounter));
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kStackingLevel));
@@ -663,7 +690,7 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kInternals));
     EXPECT_TRUE(levelized_graph_json[0].contains(ttnn::graph::kOutputShape));
 
-    EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kName], "tt::tt_metal::create_device_tensor");
+    EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kName].get<std::string>().find("tensor") != std::string::npos);
     EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kStackingLevel], 1);
     EXPECT_EQ(levelized_graph_json[0][ttnn::graph::kCounter], 0);
     EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kInEdges].is_array());
@@ -720,22 +747,29 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
 TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     tt::tt_metal::IDevice* device = device_;
 
-    auto operation = [&device](tt::tt_metal::DataType datatype) {
-        const auto input_a = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
-        const auto input_b = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
-        const auto input_c = ttnn::TensorSpec(
-            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
-            tt::tt_metal::TensorLayout(
-                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-        const auto input_tensor_c = tt::tt_metal::create_device_tensor(input_c, device);
+    const auto input_a = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+    const auto input_b = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+    const auto input_c = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor_c = tt::tt_metal::create_device_tensor(input_c, device);
+
+    auto operation = [](const auto& input_tensor_a, const auto& input_tensor_b, const auto& input_tensor_c) {
         const auto output_tensor = ttnn::multiply(input_tensor_b, input_tensor_c, std::nullopt, std::nullopt);
         const auto output_tensor_1 = ttnn::add(input_tensor_a, output_tensor, std::nullopt, std::nullopt);
     };
@@ -743,7 +777,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     nlohmann::json ref_json_trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        operation(tt::tt_metal::DataType::BFLOAT16);
+        operation(input_tensor_a, input_tensor_b, input_tensor_c);
         ref_json_trace = capture.end_graph_capture();
     }
 
@@ -757,39 +791,210 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
     EXPECT_TRUE(std::ranges::none_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
 
-    const auto& v_a = levelized_graph.get_vertex(0);
-    const auto& v_b = levelized_graph.get_vertex(1);
-    const auto& v_c = levelized_graph.get_vertex(2);
+    // Tensor 1 is the first one that is used, thus it'll have the id 0
+    const auto& v_tensor_1 = levelized_graph.get_vertex(0);
+    // Tensor 2 is the second one that is used, thus it'll have the id 1
+    const auto& v_tensor_2 = levelized_graph.get_vertex(1);
+    // Tensor 0 is the third one that is used, thus it'll have the id 2
+    const auto& v_tensor_0 = levelized_graph.get_vertex(2);
     const auto& v_multiply = levelized_graph.get_vertex(3);
     const auto& v_add = levelized_graph.get_vertex(4);
-
-    EXPECT_EQ(v_a.name, "tt::tt_metal::create_device_tensor");
-    EXPECT_EQ(v_b.name, "tt::tt_metal::create_device_tensor");
-    EXPECT_EQ(v_c.name, "tt::tt_metal::create_device_tensor");
+    EXPECT_NE(v_tensor_0.name.find("tensor"), std::string::npos);
+    EXPECT_NE(v_tensor_1.name.find("tensor"), std::string::npos);
+    EXPECT_NE(v_tensor_2.name.find("tensor"), std::string::npos);
     EXPECT_EQ(v_multiply.name, "ttnn::multiply");
     EXPECT_EQ(v_add.name, "ttnn::add");
 
-    // Confirming that the multiply vertex has two inputs: v_b and v_c
-    // Also add should have two inputs: v_a and the output of the multiply vertex
+    // Confirming that the multiply vertex has two inputs from tensors
+    // Also add should have one input from tensor and one from multiply
     // Motivated by this issue: https://github.com/tenstorrent/tt-mlir/issues/5929
-    EXPECT_TRUE(v_multiply.in_edges.size() == 2);
-    EXPECT_EQ(v_multiply.in_edges[0], v_b.id);
-    EXPECT_EQ(v_multiply.in_edges[1], v_c.id);
-    EXPECT_TRUE(v_add.in_edges.size() == 2);
-    EXPECT_EQ(v_add.in_edges[0], v_a.id);
-    EXPECT_EQ(v_add.in_edges[1], v_multiply.id);
+    EXPECT_EQ(v_multiply.in_edges.size(), 2);
+    // Both inputs should be tensors
+    // Note: In the current form of trace, it's not possible to distinguish between the two tensors (order of args)
+    EXPECT_TRUE(v_multiply.in_edges[0] == v_tensor_1.id || v_multiply.in_edges[0] == v_tensor_2.id);
+    EXPECT_TRUE(v_multiply.in_edges[1] == v_tensor_1.id || v_multiply.in_edges[1] == v_tensor_2.id);
+    EXPECT_TRUE(v_multiply.in_edges[0] != v_multiply.in_edges[1]);
 
-    EXPECT_EQ(v_a.out_edges.size(), 1);
-    EXPECT_EQ(v_a.out_edges[0], v_add.id);
+    EXPECT_EQ(v_add.in_edges.size(), 2);
+    // One input should be a tensor, the other should be multiply
+    bool has_tensor_input = v_add.in_edges[0] == v_tensor_0.id || v_add.in_edges[1] == v_tensor_0.id;
+    bool has_multiply_input = v_add.in_edges[0] == v_multiply.id || v_add.in_edges[1] == v_multiply.id;
+    EXPECT_TRUE(has_tensor_input);
+    EXPECT_TRUE(has_multiply_input);
+    EXPECT_TRUE(v_add.in_edges[0] != v_add.in_edges[1]);
 
-    EXPECT_EQ(v_b.out_edges.size(), 1);
-    EXPECT_EQ(v_b.out_edges[0], v_multiply.id);
+    // Each tensor should have exactly one outgoing edge
+    EXPECT_EQ(v_tensor_0.out_edges.size(), 1);
+    EXPECT_EQ(v_tensor_0.out_edges[0], v_add.id);
+    EXPECT_EQ(v_tensor_1.out_edges.size(), 1);
+    EXPECT_EQ(v_tensor_1.out_edges[0], v_multiply.id);
+    EXPECT_EQ(v_tensor_2.out_edges.size(), 1);
+    EXPECT_EQ(v_tensor_2.out_edges[0], v_multiply.id);
 
-    EXPECT_EQ(v_c.out_edges.size(), 1);
-    EXPECT_EQ(v_c.out_edges[0], v_multiply.id);
-
+    // Multiply should output to add
     EXPECT_EQ(v_multiply.out_edges.size(), 1);
     EXPECT_EQ(v_multiply.out_edges[0], v_add.id);
 
+    // Add should be the final operation
     EXPECT_EQ(v_add.out_edges.size(), 0);
+}
+
+TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
+    tt::tt_metal::IDevice* device = device_;
+
+    // This test demonstrates that when create_device_tensor is captured (tensors created INSIDE the capture),
+    // the levelized graph includes BOTH the create_device_tensor operations AND the tensor nodes.
+    // The key difference from MultiplyAndAddTest is that tensor nodes now have in_edges pointing to
+    // their producer create_device_tensor operations, rather than having empty in_edges.
+
+    auto operation = [&device]() {
+        // Create tensors INSIDE the capture
+        const auto input_a = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+
+        const auto input_b = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_b = tt::tt_metal::create_device_tensor(input_b, device);
+
+        const auto input_c = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_c = tt::tt_metal::create_device_tensor(input_c, device);
+
+        // Perform operations
+        const auto output_tensor = ttnn::multiply(input_tensor_b, input_tensor_c, std::nullopt, std::nullopt);
+        const auto output_tensor_1 = ttnn::add(input_tensor_a, output_tensor, std::nullopt, std::nullopt);
+    };
+
+    nlohmann::json ref_json_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        operation();
+        ref_json_trace = capture.end_graph_capture();
+    }
+
+    // Test extract_levelized_graph API - level 1
+    ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
+
+    // Should have 8 vertices: 3 create_device_tensor operations + 3 tensor nodes + multiply + add
+    EXPECT_EQ(levelized_graph.size(), 8);
+    EXPECT_TRUE(std::ranges::all_of(
+        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
+    EXPECT_TRUE(
+        std::ranges::all_of(levelized_graph.vertices(), [&](const auto& vertex) { return vertex.internals.empty(); }));
+    EXPECT_TRUE(std::ranges::none_of(
+        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.output_shape.empty(); }));
+
+    // Categorize vertices by type
+    std::vector<size_t> create_tensor_ids;
+    std::vector<size_t> tensor_ids;
+    size_t multiply_id = 0, add_id = 0;
+
+    for (size_t i = 0; i < levelized_graph.size(); ++i) {
+        const auto& v = levelized_graph.get_vertex(i);
+        if (v.name == "tt::tt_metal::create_device_tensor") {
+            create_tensor_ids.push_back(i);
+        } else if (v.name.find("tensor[") != std::string::npos) {
+            tensor_ids.push_back(i);
+        } else if (v.name == "ttnn::multiply") {
+            multiply_id = i;
+        } else if (v.name == "ttnn::add") {
+            add_id = i;
+        }
+    }
+
+    // Verify we have the expected number of each type
+    EXPECT_EQ(create_tensor_ids.size(), 3);  // 3 create_device_tensor operations
+    EXPECT_EQ(tensor_ids.size(), 3);         // 3 tensor nodes
+    EXPECT_NE(multiply_id, 0);               // Found multiply
+    EXPECT_NE(add_id, 0);                    // Found add
+
+    const auto& v_multiply = levelized_graph.get_vertex(multiply_id);
+    const auto& v_add = levelized_graph.get_vertex(add_id);
+
+    // Key verification: create_device_tensor operations have no edges in the levelized graph
+    // This is expected behavior - edges connect tensor nodes to operations, not operations to tensor nodes
+    for (size_t create_id : create_tensor_ids) {
+        const auto& create_vertex = levelized_graph.get_vertex(create_id);
+        EXPECT_EQ(create_vertex.in_edges.size(), 0);   // No inputs
+        EXPECT_EQ(create_vertex.out_edges.size(), 0);  // No outgoing edges (edges go through tensor nodes)
+        EXPECT_FALSE(create_vertex.output_shape.empty());
+    }
+
+    // Key verification: Each tensor node should have exactly one incoming edge from create_device_tensor
+    // and exactly one outgoing edge to an operation
+    for (size_t tensor_id : tensor_ids) {
+        const auto& tensor_vertex = levelized_graph.get_vertex(tensor_id);
+        EXPECT_EQ(tensor_vertex.in_edges.size(), 1);   // One input from create_device_tensor
+        EXPECT_EQ(tensor_vertex.out_edges.size(), 1);  // One output to operation
+        EXPECT_FALSE(tensor_vertex.output_shape.empty());
+        EXPECT_TRUE(tensor_vertex.internals.empty());
+
+        // The input should be a create_device_tensor operation
+        size_t creator = tensor_vertex.in_edges[0];
+        EXPECT_NE(std::find(create_tensor_ids.begin(), create_tensor_ids.end(), creator), create_tensor_ids.end());
+
+        // The output should be either multiply or add
+        size_t consumer = tensor_vertex.out_edges[0];
+        EXPECT_TRUE(consumer == multiply_id || consumer == add_id);
+    }
+
+    // Verify multiply has 2 tensor inputs
+    EXPECT_EQ(v_multiply.in_edges.size(), 2);
+    for (size_t input_id : v_multiply.in_edges) {
+        EXPECT_NE(std::find(tensor_ids.begin(), tensor_ids.end(), input_id), tensor_ids.end());
+    }
+    EXPECT_EQ(v_multiply.out_edges.size(), 1);
+    EXPECT_EQ(v_multiply.out_edges[0], add_id);
+
+    // Verify add has 2 inputs: 1 tensor + 1 multiply result
+    EXPECT_EQ(v_add.in_edges.size(), 2);
+    int tensor_inputs = 0;
+    int multiply_inputs = 0;
+    for (size_t input_id : v_add.in_edges) {
+        if (std::find(tensor_ids.begin(), tensor_ids.end(), input_id) != tensor_ids.end()) {
+            tensor_inputs++;
+        } else if (input_id == multiply_id) {
+            multiply_inputs++;
+        }
+    }
+    EXPECT_EQ(tensor_inputs, 1);           // One tensor input
+    EXPECT_EQ(multiply_inputs, 1);         // One multiply result input
+    EXPECT_EQ(v_add.out_edges.size(), 0);  // Final operation
+
+    // Verify the data flow: tensor nodes track their creator and consumer
+    // This demonstrates the key difference from runtime inputs:
+    // - Runtime input tensors: empty in_edges
+    // - Captured creation tensors: in_edges point to create_device_tensor
+    for (size_t tensor_id : tensor_ids) {
+        const auto& tensor_vertex = levelized_graph.get_vertex(tensor_id);
+
+        // Verify the tensor knows its creator (create_device_tensor)
+        EXPECT_EQ(tensor_vertex.in_edges.size(), 1);
+        size_t creator_id = tensor_vertex.in_edges[0];
+        const auto& creator = levelized_graph.get_vertex(creator_id);
+        EXPECT_EQ(creator.name, "tt::tt_metal::create_device_tensor");
+
+        // Verify the tensor feeds into an operation
+        EXPECT_EQ(tensor_vertex.out_edges.size(), 1);
+        size_t operation_id = tensor_vertex.out_edges[0];
+        EXPECT_TRUE(operation_id == multiply_id || operation_id == add_id);
+    }
+
+    // This test demonstrates that the levelized graph algorithm correctly handles both:
+    // 1. Runtime input tensors (empty in_edges) - as in MultiplyAndAddTest
+    // 2. Captured tensor creation (in_edges point to creator) - as in this test
+    // The key insight: tensor nodes always represent the data flow, regardless of where tensors were created
 }

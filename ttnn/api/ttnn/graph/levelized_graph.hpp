@@ -28,12 +28,14 @@ with a couple of caveats:
       shaped [(64, 128)], it will store [(1, 128)] as the output_shape.
     - LevelizedGraph::Vertex stores the output_info of the nodes with a consumer. The output_info essentially tracks the
       layout information and sharding specs of vertices.
-    - LevelizedGraph only stores one vertex for each op (as opposed to GraphProcessor where we store function_start and
-      function_end nodes for each vertex). In LevelizedGraph we only store the function_strats of nodes (other node
+    - LevelizedGraph stores two types of vertices: 1) function_start nodes at or below max_level, and 2) tensor nodes
+      at stacking_level 1 (input tensors). This allows explicit representation of input tensors in the graph. Other node
       types such as capture_start, capture_end, buffer, buffer_allocate, buffer_deallocate, circular_buffer_allocate,
-      circular_buffer_deallocate_all, and tensor are not stored in LevelizedGraph).
+      circular_buffer_deallocate_all, and intermediate tensor nodes are not stored in LevelizedGraph.
     - The edges of LevelizedGraph represent the data flow (as opposed to the edges of GraphProcessor which represent
-      both data flow and parent-child relationship). This makes walks on LevelizedGraph much less complicated.
+      both data flow and parent-child relationship). This makes walks on LevelizedGraph much less complicated. Edges
+      can be from tensor vertices to operation vertices (for input tensors) or from operation vertices to operation
+      vertices (for intermediate results).
 */
 class LevelizedGraph {
 public:
