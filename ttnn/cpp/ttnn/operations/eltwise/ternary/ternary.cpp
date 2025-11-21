@@ -97,7 +97,7 @@ Tensor invoke_impl(
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
@@ -125,7 +125,7 @@ Tensor invoke_impl(
         output_dtype,
         ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
         output,
-        sub_core_grid);
+        sub_core_grids);
 }
 
 // TTS: tensor, tensor, scalar
@@ -135,7 +135,7 @@ Tensor invoke_impl(
     float scalar_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
@@ -148,7 +148,7 @@ Tensor invoke_impl(
         scalar_false,
         ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
         output,
-        sub_core_grid);
+        sub_core_grids);
 }
 
 // TST: tensor, scalar, tensor
@@ -158,7 +158,7 @@ Tensor invoke_impl(
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
@@ -171,7 +171,7 @@ Tensor invoke_impl(
         scalar_true,
         ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
         output,
-        sub_core_grid);
+        sub_core_grids);
 }
 
 // TSS: tensor, scalar, scalar
@@ -181,8 +181,12 @@ Tensor invoke_impl(
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
+    //  TODO: add sub_core_grids functionality to Unary Infra
+    if (sub_core_grids.has_value()) {
+        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
+    }
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
 }
 
@@ -194,14 +198,15 @@ Tensor WhereOperation::invoke(
     const TensorScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
-            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grid);
+            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
         },
         value_true,
         value_false);
 }
+
 template <typename T>
     requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
 Tensor WhereOperation::invoke(
@@ -210,7 +215,10 @@ Tensor WhereOperation::invoke(
     const T& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (sub_core_grids.has_value()) {
+        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
+    }
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
 }
 

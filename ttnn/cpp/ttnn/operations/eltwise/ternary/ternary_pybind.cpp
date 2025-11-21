@@ -130,8 +130,8 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const TensorScalarVariant& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grid) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grid);
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("predicate"),
             py::arg("true_value"),
@@ -139,7 +139,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
@@ -148,8 +148,8 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const int32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grid) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grid);
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("predicate"),
             py::arg("true_value"),
@@ -157,7 +157,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
@@ -166,8 +166,8 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const uint32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grid) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grid);
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("predicate"),
             py::arg("true_value"),
@@ -175,7 +175,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt});
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 template <typename ternary_operation_t>
