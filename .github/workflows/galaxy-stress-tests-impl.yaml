@@ -59,7 +59,7 @@ jobs:
         run: |
           for i in {1..5}; do
             echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
+            timeout --preserve-status 1200 pytest models/demos/llms/llama3_70b/galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -84,7 +84,7 @@ jobs:
           {
             name: "Llama Galaxy Long Stress Test",
             arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llms/llama3_70b/galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
             timeout: 140,
             owner_id: U053W15B6JF
           } # Djordje Ivanovic

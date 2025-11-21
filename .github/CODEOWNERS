@@ -272,7 +272,7 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT @tenstorrent/codeowner-bypass
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
-models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
+models/demos/llms/llama3_70b/galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/llms/qwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/llms/falcon7b/common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
