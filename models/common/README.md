@@ -156,8 +156,7 @@ Metric utilities are implemented in `models.common.metrics`:
 - `DEFAULT_METRICS` – dict with built‑in metrics (`"max_abs_error"`,
   `"mean_abs_error"`, `"pcc"`).
 
-Metrics support both TTNN and PyTorch tensors and automatically choose the
-fastest available path.
+Metrics support both TTNN and PyTorch tensors.
 
 ### Registry and control functions
 
