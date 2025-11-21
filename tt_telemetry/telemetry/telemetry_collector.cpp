@@ -9,6 +9,7 @@
  * metrics received from remote instances are propagated via delta updates.
  */
 
+#include <array>
 #include <functional>
 #include <future>
 #include <optional>
@@ -38,11 +39,16 @@ static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 static std::string format_end_time(std::chrono::seconds duration_from_now) {
     auto end_time_system = std::chrono::system_clock::now() + duration_from_now;
     auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
-    std::tm tm_buf;
-    localtime_r(&end_time_t, &tm_buf);
-    char time_str[32];
-    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
-    return std::string(time_str);
+    std::tm tm_buf{};
+    if (!localtime_r(&end_time_t, &tm_buf)) {
+        // Fallback to UTC if local time conversion fails
+        if (!gmtime_r(&end_time_t, &tm_buf)) {
+            return "unknown time";
+        }
+    }
+    std::array<char, 32> time_str{};
+    std::strftime(time_str.data(), time_str.size(), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    return std::string(time_str.data());
 }
 
 static std::mutex mtx_;
@@ -130,17 +136,25 @@ static std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
 static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     // Cluster-wide path is: hostname + metric path
     std::vector<std::string> path_components{static_cast<const char*>(hostname_)};
-    auto local_path = metric.telemetry_path();
+    const auto& local_path = metric.telemetry_path();
     path_components.insert(path_components.end(), local_path.begin(), local_path.end());
 
-    // Join with '/'
+    // Pre-calculate total size to avoid reallocations
+    size_t total_size = path_components.size() - 1;  // separators
+    for (const auto& component : path_components) {
+        total_size += component.length();
+    }
+
     std::string path;
-    for (auto it = path_components.begin(); it != path_components.end();) {
-        path += *it;
-        ++it;
-        if (it != path_components.end()) {
+    path.reserve(total_size);
+
+    bool first = true;
+    for (const auto& component : path_components) {
+        if (!first) {
             path += '/';
         }
+        path += component;
+        first = false;
     }
     return path;
 }
@@ -196,35 +210,72 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     log_info(tt::LogAlways, "Telemetry readout took {} ms", duration_ms);
 }
 
+// Template helper: Process metrics and add them to snapshot
+// Uses if constexpr to eliminate branching for the check_changed parameter
+// Labels are only sent in initial snapshot (CheckChanged=false) since they are immutable
+template <typename MetricType, typename ValueType, bool CheckChanged = false>
+static void process_metrics_to_snapshot(
+    const std::vector<std::unique_ptr<MetricType>>& metrics,
+    std::unordered_map<std::string, ValueType>& value_map,
+    std::unordered_map<std::string, uint64_t>& timestamp_map,
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& label_map,
+    std::unordered_map<std::string, uint16_t>* unit_map = nullptr) {
+    for (const auto& metric : metrics) {
+        if constexpr (CheckChanged) {
+            // Delta snapshot - only send changed values, no labels (immutable)
+            if (!metric->changed_since_transmission()) {
+                continue;
+            }
+
+            std::string path = get_cluster_wide_telemetry_path(*metric);
+            value_map[path] = metric->value();
+            timestamp_map[path] = metric->timestamp();
+            if (unit_map) {
+                (*unit_map)[path] = static_cast<uint16_t>(metric->units);
+            }
+
+            metric->mark_transmitted();
+        } else {
+            // Initial snapshot - send everything including labels
+            std::string path = get_cluster_wide_telemetry_path(*metric);
+            value_map[path] = metric->value();
+            timestamp_map[path] = metric->timestamp();
+            if (unit_map) {
+                (*unit_map)[path] = static_cast<uint16_t>(metric->units);
+            }
+            // Get labels from virtual method (may construct on-demand)
+            auto labels = metric->labels();
+            if (!labels.empty()) {
+                label_map[path] = std::move(labels);
+            }
+        }
+    }
+}
+
 static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
-    for (size_t i = 0; i < bool_metrics_.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
-        snapshot->bool_metrics[path] = bool_metrics_[i]->value();
-        snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
-    }
-
-    for (size_t i = 0; i < uint_metrics_.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
-        snapshot->uint_metrics[path] = uint_metrics_[i]->value();
-        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
-        snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
-    }
-
-    for (size_t i = 0; i < double_metrics_.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
-        snapshot->double_metrics[path] = double_metrics_[i]->value();
-        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
-        snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
-    }
-
-    for (size_t i = 0; i < string_metrics_.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
-        snapshot->string_metrics[path] = string_metrics_[i]->value();
-        snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
-        snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
-    }
+    // Use template helper to process metrics
+    process_metrics_to_snapshot<BoolMetric, bool>(
+        bool_metrics_, snapshot->bool_metrics, snapshot->bool_metric_timestamps, snapshot->metric_labels);
+    process_metrics_to_snapshot<UIntMetric, uint64_t>(
+        uint_metrics_,
+        snapshot->uint_metrics,
+        snapshot->uint_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->uint_metric_units);
+    process_metrics_to_snapshot<DoubleMetric, double>(
+        double_metrics_,
+        snapshot->double_metrics,
+        snapshot->double_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->double_metric_units);
+    process_metrics_to_snapshot<StringMetric, std::string>(
+        string_metrics_,
+        snapshot->string_metrics,
+        snapshot->string_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->string_metric_units);
 
     // Populate unit label maps for initial snapshot
     snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
@@ -236,48 +287,27 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
 }
 
 static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
-    for (size_t i = 0; i < bool_metrics_.size(); i++) {
-        if (!bool_metrics_[i]->changed_since_transmission()) {
-            continue;
-        }
-        std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
-        snapshot->bool_metrics[path] = bool_metrics_[i]->value();
-        snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
-        bool_metrics_[i]->mark_transmitted();
-    }
-
-    for (size_t i = 0; i < uint_metrics_.size(); i++) {
-        if (!uint_metrics_[i]->changed_since_transmission()) {
-            continue;
-        }
-        std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
-        snapshot->uint_metrics[path] = uint_metrics_[i]->value();
-        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
-        snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
-        uint_metrics_[i]->mark_transmitted();
-    }
-
-    for (size_t i = 0; i < double_metrics_.size(); i++) {
-        if (!double_metrics_[i]->changed_since_transmission()) {
-            continue;
-        }
-        std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
-        snapshot->double_metrics[path] = double_metrics_[i]->value();
-        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
-        snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
-        double_metrics_[i]->mark_transmitted();
-    }
-
-    for (size_t i = 0; i < string_metrics_.size(); i++) {
-        if (!string_metrics_[i]->changed_since_transmission()) {
-            continue;
-        }
-        std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
-        snapshot->string_metrics[path] = string_metrics_[i]->value();
-        snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
-        snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
-        string_metrics_[i]->mark_transmitted();
-    }
+    // Use template helper to process only changed metrics
+    process_metrics_to_snapshot<BoolMetric, bool, true>(
+        bool_metrics_, snapshot->bool_metrics, snapshot->bool_metric_timestamps, snapshot->metric_labels);
+    process_metrics_to_snapshot<UIntMetric, uint64_t, true>(
+        uint_metrics_,
+        snapshot->uint_metrics,
+        snapshot->uint_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->uint_metric_units);
+    process_metrics_to_snapshot<DoubleMetric, double, true>(
+        double_metrics_,
+        snapshot->double_metrics,
+        snapshot->double_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->double_metric_units);
+    process_metrics_to_snapshot<StringMetric, std::string, true>(
+        string_metrics_,
+        snapshot->string_metrics,
+        snapshot->string_metric_timestamps,
+        snapshot->metric_labels,
+        &snapshot->string_metric_units);
 
     // Add unit label maps to the snapshot (if not already present from remote aggregation)
     if (snapshot->metric_unit_display_label_by_code.empty()) {
