@@ -104,7 +104,7 @@ jobs:
               "name": "Galaxy Motif-Image-6B-Preview demo tests",
               "arch": "wormhole_b0",
               "model": "motif",
-              "timeout": 30,
+              "timeout": 20,
               "owner_id": "U08TED0JM9D"
             },
             {

@@ -89,7 +89,7 @@ jobs:
               "name": "Galaxy Motif frequent tests",
               "arch": "wormhole_b0",
               "model": "motif",
-              "timeout": 90,
+              "timeout": 10,
               "owner_id": "U08TED0JM9D"
             }
           ]' --compact-output)

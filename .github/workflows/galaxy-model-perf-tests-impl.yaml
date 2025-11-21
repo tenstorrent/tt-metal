@@ -104,7 +104,7 @@ jobs:
               "model-name": "motif",
               "arch": "wormhole_b0",
               "save-perf-data": true,
-              "timeout": 60,
+              "timeout": 15,
               "cmd": "HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/experimental/tt_dit/tests/models/motif/test_performance_motif.py -k \"4x8cfg1sp0tp1\"",
               "owner_id": "U08TED0JM9D"
             },

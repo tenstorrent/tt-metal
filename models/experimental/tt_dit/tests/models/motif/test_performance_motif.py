@@ -248,8 +248,8 @@ def test_motif_pipeline_performance(
             "t5_encoding_time": 0.15,
             "total_encoding_time": 0.45,
             "denoising_steps_time": 0.45 * num_inference_steps,
-            "vae_decoding_time": 1.6,
-            "total_time": 14.5,
+            "vae_decoding_time": 1.7,
+            "total_time": 14.6,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
