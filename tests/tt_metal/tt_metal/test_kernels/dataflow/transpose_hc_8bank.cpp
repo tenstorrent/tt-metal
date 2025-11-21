@@ -43,7 +43,7 @@ void kernel_main() {
     constexpr uint32_t onetile{1U};
     constexpr uint32_t operand0{0U};
     constexpr auto src_args{TensorAccessorArgs<1U>()};
-    const auto s0{TensorAccessor(src_args, src0_addr, 2048U)};
+    const auto s0{TensorAccessor(src_args, src0_addr, tile_size_bytes)};
 
     // The original tensor shape is [N, C, H, W]
     // It is laid out in memory as addr = W + ShapeW * H + ShapeW * ShapeH * C + ShapeW * SHapeH * ShapeC * N
