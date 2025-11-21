@@ -492,15 +492,17 @@ void TestContext::report_latency_results(const TestConfig& config) {
             static_cast<uint64_t>(responder_data[i * 4 + 2]) | (static_cast<uint64_t>(responder_data[i * 4 + 3]) << 32);
 
         // Compute latency metrics
-        if (sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts) {
-            uint64_t raw_latency = sender_end_ts - sender_start_ts;
-            uint64_t responder_time = responder_end_ts - responder_start_ts;
-            uint64_t net_latency = (raw_latency > responder_time) ? (raw_latency - responder_time) : 0;
+        TT_FATAL(
+            sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts, "Invalid latency timestamps");
+        // if (sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts) {
+        uint64_t raw_latency = sender_end_ts - sender_start_ts;
+        uint64_t responder_time = responder_end_ts - responder_start_ts;
+        uint64_t net_latency = (raw_latency > responder_time) ? (raw_latency - responder_time) : 0;
 
-            raw_latencies_cycles.push_back(raw_latency);
-            responder_times_cycles.push_back(responder_time);
-            net_latencies_cycles.push_back(net_latency);
-        }
+        raw_latencies_cycles.push_back(raw_latency);
+        responder_times_cycles.push_back(responder_time);
+        net_latencies_cycles.push_back(net_latency);
+        // }
     }
 
     if (raw_latencies_cycles.empty()) {

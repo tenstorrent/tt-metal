@@ -1230,14 +1230,29 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
+uint32_t TestDevice::create_latency_semaphore(CoreCoord core) {
+    // Allocate semaphore and return its L1 address
+    auto semaphore_id = tt::tt_metal::CreateSemaphore(program_handle_, core, 0);
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t semaphore_address = hal.get_alignment(tt::tt_metal::HalMemType::L1) * semaphore_id;
+    log_debug(
+        tt::LogTest,
+        "Created semaphore on node {} core {} with address 0x{:x}",
+        fabric_node_id_,
+        core,
+        semaphore_address);
+    return semaphore_address;
+}
+
 void TestDevice::create_latency_sender_kernel(
     CoreCoord core,
     FabricNodeId dest_node,
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    tt_metal::DeviceAddr semaphore_addr,
-    NocSendType noc_send_type) {
+    NocSendType noc_send_type,
+    uint32_t local_semaphore_address,
+    uint32_t remote_semaphore_address) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Get topology information
@@ -1280,7 +1295,8 @@ void TestDevice::create_latency_sender_kernel(
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
-        semaphore_addr,                                   // semaphore for ack
+        local_semaphore_address,                          // local semaphore address (to wait on)
+        remote_semaphore_address,                         // remote semaphore address (to signal)
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
@@ -1316,7 +1332,12 @@ void TestDevice::create_latency_sender_kernel(
 
     tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
 
-    log_debug(tt::LogTest, "Created latency sender kernel on core {}", core);
+    log_debug(
+        tt::LogTest,
+        "Created latency sender kernel on core {} with local sem 0x{:x}, remote sem 0x{:x}",
+        core,
+        local_semaphore_address,
+        remote_semaphore_address);
 }
 
 void TestDevice::create_latency_responder_kernel(
@@ -1325,8 +1346,9 @@ void TestDevice::create_latency_responder_kernel(
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    tt_metal::DeviceAddr semaphore_addr,
-    NocSendType noc_send_type) {
+    NocSendType noc_send_type,
+    uint32_t local_semaphore_address,
+    uint32_t remote_semaphore_address) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Get topology information
@@ -1373,7 +1395,8 @@ void TestDevice::create_latency_responder_kernel(
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
-        semaphore_addr,                                   // semaphore for incoming packets
+        local_semaphore_address,                          // local semaphore address (to wait on)
+        remote_semaphore_address,                         // remote semaphore address (to signal)
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
@@ -1409,7 +1432,12 @@ void TestDevice::create_latency_responder_kernel(
 
     tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
 
-    log_debug(tt::LogTest, "Created latency responder kernel on core {}", core);
+    log_debug(
+        tt::LogTest,
+        "Created latency responder kernel on core {} with local sem 0x{:x}, remote sem 0x{:x}",
+        core,
+        local_semaphore_address,
+        remote_semaphore_address);
 }
 
 // TestSender accessor implementations (need complete TestDevice)

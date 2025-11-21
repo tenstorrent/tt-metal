@@ -283,15 +283,20 @@ public:
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
 
-    // Latency test kernel creation (called directly by TestContext)
+    // Latency test semaphore and kernel creation (called directly by TestContext)
+    // Step 1: Create semaphore and return its L1 address
+    uint32_t create_latency_semaphore(CoreCoord core);
+
+    // Step 2: Create kernel with known local and remote semaphore addresses
     void create_latency_sender_kernel(
         CoreCoord core,
         FabricNodeId dest_node,
         uint32_t payload_size,
         uint32_t burst_size,
         uint32_t num_bursts,
-        tt_metal::DeviceAddr semaphore_addr,
-        NocSendType noc_send_type);
+        NocSendType noc_send_type,
+        uint32_t local_semaphore_address,
+        uint32_t remote_semaphore_address);
 
     void create_latency_responder_kernel(
         CoreCoord core,
@@ -299,8 +304,9 @@ public:
         uint32_t payload_size,
         uint32_t burst_size,
         uint32_t num_bursts,
-        tt_metal::DeviceAddr semaphore_addr,
-        NocSendType noc_send_type);
+        NocSendType noc_send_type,
+        uint32_t local_semaphore_address,
+        uint32_t remote_semaphore_address);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
