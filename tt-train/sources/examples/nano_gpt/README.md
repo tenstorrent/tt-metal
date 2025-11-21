@@ -14,6 +14,6 @@ Arguments:
 
 `--hf_tokenizer` : name of Hugging Face pre-trained tokenizer
 
-`--output_file` : output filename (defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data.csv`)
+`--output_file` : output filename without extension (defaults to `$TT_METAL_HOME/tt-train/data/tokenized_data.yaml`)
 
-Once you have a pre-tokenized dataset, ensure that the data_path in your chosen YAML config matches the path to the tokenized dataset. If using a pre-tokenized dataset, ensure that the vocab size in your chosen model's YAML config matches the vocab size of the tokenizer you used. (This will be updated in a future PR to be more automatic)
+The tokenized dataset will be saved as a YAML file, with fields for the data, data length, and tokenizer vocab size.
