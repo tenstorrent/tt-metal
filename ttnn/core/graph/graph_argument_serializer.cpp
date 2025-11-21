@@ -69,6 +69,64 @@ std::string graph_demangle(const std::string_view name) {
     return ret_val;
 }
 
+// Generic helper to serialize any iterable container
+template <typename Container>
+std::string serialize_container(const Container& container) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < container.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << container[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+// Helper for serializing containers of arrays (nested structure)
+template <typename Container, typename T, std::size_t N>
+std::string serialize_nested_array_container(const Container& vec) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << serialize_container(vec[i]);
+    }
+    oss << "]";
+    return oss.str();
+}
+
+// Specialization for SmallVector with nested arrays (e.g., SmallVector<std::array<uint, 2>, 8>)
+template <typename T, std::size_t N, std::size_t M>
+std::string serialize_container(const ttsl::SmallVector<std::array<T, N>, M>& vec) {
+    return serialize_nested_array_container<ttsl::SmallVector<std::array<T, N>, M>, T, N>(vec);
+}
+
+// Helper function to register both const and non-const reference wrappers
+// The lambda should use 'const T' for any_cast since it works for both const and non-const reference_wrappers
+template <typename T>
+void register_reference_wrapper_pair(
+    std::unordered_map<std::type_index, GraphArgumentSerializer::ConversionFunction>& registry,
+    std::function<std::string(const T&)> serializer_func) {
+    auto wrapper = [serializer_func](const std::any& value) -> std::string {
+        // Try non-const first
+        try {
+            auto ref = std::any_cast<std::reference_wrapper<T>>(value);
+            return serializer_func(ref.get());
+        } catch (const std::bad_any_cast&) {
+            // Try const
+            auto ref = std::any_cast<std::reference_wrapper<const T>>(value);
+            return serializer_func(ref.get());
+        }
+    };
+
+    registry[typeid(std::reference_wrapper<T>)] = wrapper;
+    registry[typeid(std::reference_wrapper<const T>)] = wrapper;
+}
+
 GraphArgumentSerializer::GraphArgumentSerializer() { initialize(); }
 
 GraphArgumentSerializer& GraphArgumentSerializer::instance() {
@@ -76,7 +134,7 @@ GraphArgumentSerializer& GraphArgumentSerializer::instance() {
     return new_instance;
 }
 
-std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>& GraphArgumentSerializer::registry() {
+std::unordered_map<std::type_index, GraphArgumentSerializer::ConversionFunction>& GraphArgumentSerializer::registry() {
     return map;
 }
 
@@ -88,6 +146,11 @@ void GraphArgumentSerializer::register_small_vector() {
         oss << referenced_value.get();
         return oss.str();
     };
+}
+
+template <typename T, std::size_t N>
+void GraphArgumentSerializer::register_array() {
+    register_reference_wrapper_pair<std::array<T, N>>(registry(), serialize_container<std::array<T, N>>);
 }
 
 template <typename OptionalT>
@@ -108,7 +171,7 @@ void GraphArgumentSerializer::register_optional_type() {
 
 template <typename T>
 void GraphArgumentSerializer::register_type() {
-    GraphArgumentSerializer::ConvertionFunction regular_function = [](const std::any& value) -> std::string {
+    GraphArgumentSerializer::ConversionFunction regular_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
         if (value.type() == typeid(std::reference_wrapper<T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<T>>(value);
@@ -139,6 +202,11 @@ void GraphArgumentSerializer::register_type() {
     register_small_vector<T, 4>();
     register_small_vector<T, 8>();
     register_small_vector<T, 16>();
+    // std::array
+    register_array<T, 2>();
+    register_array<T, 4>();
+    register_array<T, 8>();
+    register_array<T, 16>();
 }
 
 std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::any>& span) {
@@ -199,5 +267,29 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<std::variant<int, float>>();
     GraphArgumentSerializer::register_type<std::variant<unsigned int, float>>();
     GraphArgumentSerializer::register_type<std::variant<float, unsigned int>>();
+
+    // Register SmallVector types for various operations using generic serialize_container
+    // Note: std::array<unsigned int, N> is already registered via register_type<uint>() above
+    register_reference_wrapper_pair<ttsl::SmallVector<std::array<unsigned int, 2>, 8>>(
+        registry(), [](const ttsl::SmallVector<std::array<unsigned int, 2>, 8>& vec) -> std::string {
+            return serialize_container(vec);
+        });
+    register_reference_wrapper_pair<ttsl::SmallVector<long, 8>>(
+        registry(), [](const ttsl::SmallVector<long, 8>& vec) -> std::string { return serialize_container(vec); });
+    register_reference_wrapper_pair<ttsl::SmallVector<int, 8>>(
+        registry(), [](const ttsl::SmallVector<int, 8>& vec) -> std::string { return serialize_container(vec); });
+
+    // Register std::variant<std::array<uint, 2>, std::array<uint, 4>> for conv2d stride/dilation
+    register_reference_wrapper_pair<std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>>(
+        registry(),
+        [](const std::variant<std::array<unsigned int, 2>, std::array<unsigned int, 4>>& var) -> std::string {
+            return std::holds_alternative<std::array<unsigned int, 2>>(var)
+                       ? serialize_container(std::get<std::array<unsigned int, 2>>(var))
+                       : serialize_container(std::get<std::array<unsigned int, 4>>(var));
+        });
+
+    // Register std::nullopt_t for optional parameters
+    register_reference_wrapper_pair<std::nullopt_t>(
+        registry(), [](const std::nullopt_t&) -> std::string { return "nullopt"; });
 }
 }  // namespace ttnn::graph
