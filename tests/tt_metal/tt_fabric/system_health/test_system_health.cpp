@@ -349,12 +349,6 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::uint32_t num_connections_per_side = 0;
     std::uint32_t num_expected_mmio_chips = 0;
 
-    // Generate cluster descriptor file for the cluster
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    std::string cluster_descriptor_path = cluster.get_cluster_desc()->serialize_to_file(std::string(hostname) + "_cluster_descriptor.yaml");
-
-
     auto input_args = ::testing::internal::GetArgvs();
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {

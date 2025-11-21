@@ -108,16 +108,6 @@ ethernet_connections:
     - chip: 21
       chan: 1
   -
-    - chip: 0
-      chan: 8
-    - chip: 15
-      chan: 8
-  -
-    - chip: 0
-      chan: 9
-    - chip: 15
-      chan: 9
-  -
     - chip: 1
       chan: 0
     - chip: 5
@@ -157,11 +147,6 @@ ethernet_connections:
       chan: 7
     - chip: 28
       chan: 7
-  -
-    - chip: 1
-      chan: 9
-    - chip: 9
-      chan: 9
   -
     - chip: 2
       chan: 0
@@ -203,11 +188,6 @@ ethernet_connections:
     - chip: 25
       chan: 7
   -
-    - chip: 2
-      chan: 9
-    - chip: 21
-      chan: 9
-  -
     - chip: 3
       chan: 0
     - chip: 15
@@ -247,16 +227,6 @@ ethernet_connections:
       chan: 7
     - chip: 25
       chan: 1
-  -
-    - chip: 3
-      chan: 8
-    - chip: 31
-      chan: 8
-  -
-    - chip: 3
-      chan: 9
-    - chip: 31
-      chan: 9
   -
     - chip: 4
       chan: 0
@@ -298,16 +268,6 @@ ethernet_connections:
     - chip: 30
       chan: 1
   -
-    - chip: 4
-      chan: 8
-    - chip: 20
-      chan: 8
-  -
-    - chip: 4
-      chan: 9
-    - chip: 20
-      chan: 9
-  -
     - chip: 5
       chan: 0
     - chip: 29
@@ -327,16 +287,6 @@ ethernet_connections:
       chan: 5
     - chip: 10
       chan: 5
-  -
-    - chip: 5
-      chan: 8
-    - chip: 10
-      chan: 8
-  -
-    - chip: 5
-      chan: 9
-    - chip: 10
-      chan: 9
   -
     - chip: 6
       chan: 0
@@ -378,16 +328,6 @@ ethernet_connections:
     - chip: 7
       chan: 7
   -
-    - chip: 6
-      chan: 8
-    - chip: 23
-      chan: 8
-  -
-    - chip: 6
-      chan: 9
-    - chip: 23
-      chan: 9
-  -
     - chip: 7
       chan: 0
     - chip: 18
@@ -407,16 +347,6 @@ ethernet_connections:
       chan: 3
     - chip: 26
       chan: 5
-  -
-    - chip: 7
-      chan: 8
-    - chip: 19
-      chan: 8
-  -
-    - chip: 7
-      chan: 9
-    - chip: 19
-      chan: 9
   -
     - chip: 8
       chan: 0
@@ -457,16 +387,6 @@ ethernet_connections:
       chan: 7
     - chip: 9
       chan: 7
-  -
-    - chip: 8
-      chan: 8
-    - chip: 28
-      chan: 8
-  -
-    - chip: 8
-      chan: 9
-    - chip: 28
-      chan: 9
   -
     - chip: 9
       chan: 0
@@ -538,16 +458,6 @@ ethernet_connections:
     - chip: 21
       chan: 7
   -
-    - chip: 11
-      chan: 8
-    - chip: 25
-      chan: 8
-  -
-    - chip: 11
-      chan: 9
-    - chip: 25
-      chan: 9
-  -
     - chip: 12
       chan: 0
     - chip: 20
@@ -577,16 +487,6 @@ ethernet_connections:
       chan: 7
     - chip: 26
       chan: 7
-  -
-    - chip: 12
-      chan: 8
-    - chip: 30
-      chan: 8
-  -
-    - chip: 12
-      chan: 9
-    - chip: 30
-      chan: 9
   -
     - chip: 13
       chan: 2
@@ -618,16 +518,6 @@ ethernet_connections:
     - chip: 22
       chan: 1
   -
-    - chip: 13
-      chan: 8
-    - chip: 16
-      chan: 8
-  -
-    - chip: 13
-      chan: 9
-    - chip: 16
-      chan: 9
-  -
     - chip: 14
       chan: 0
     - chip: 24
@@ -657,16 +547,6 @@ ethernet_connections:
       chan: 7
     - chip: 23
       chan: 1
-  -
-    - chip: 14
-      chan: 8
-    - chip: 17
-      chan: 8
-  -
-    - chip: 14
-      chan: 9
-    - chip: 17
-      chan: 9
   -
     - chip: 15
       chan: 2
@@ -728,16 +608,6 @@ ethernet_connections:
     - chip: 20
       chan: 5
   -
-    - chip: 18
-      chan: 8
-    - chip: 24
-      chan: 8
-  -
-    - chip: 18
-      chan: 9
-    - chip: 24
-      chan: 9
-  -
     - chip: 19
       chan: 0
     - chip: 24
@@ -798,16 +668,6 @@ ethernet_connections:
     - chip: 30
       chan: 7
   -
-    - chip: 22
-      chan: 8
-    - chip: 26
-      chan: 8
-  -
-    - chip: 22
-      chan: 9
-    - chip: 26
-      chan: 9
-  -
     - chip: 23
       chan: 2
     - chip: 30
@@ -827,16 +687,6 @@ ethernet_connections:
       chan: 5
     - chip: 29
       chan: 5
-  -
-    - chip: 27
-      chan: 8
-    - chip: 29
-      chan: 8
-  -
-    - chip: 27
-      chan: 9
-    - chip: 29
-      chan: 9
   -
     - chip: 28
       chan: 0
@@ -858,7 +708,26 @@ ethernet_connections:
     - chip: 31
       chan: 5
 ethernet_connections_to_remote_devices:
-  []
+  -
+    - chip: 0
+      chan: 8
+    - remote_chip_id: 362017579638071129
+      chan: 8
+  -
+    - chip: 0
+      chan: 9
+    - remote_chip_id: 362017579638071129
+      chan: 9
+  -
+    - chip: 31
+      chan: 8
+    - remote_chip_id: 17379702270116604737
+      chan: 8
+  -
+    - chip: 31
+      chan: 9
+    - remote_chip_id: 17379702270116604737
+      chan: 9
 chips_with_mmio:
   - 0: 18
   - 1: 23

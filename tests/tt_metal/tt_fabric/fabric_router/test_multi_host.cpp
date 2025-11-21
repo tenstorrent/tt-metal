@@ -732,5 +732,21 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
     }
 }
 
+TEST(MultiHost, TestDual4x8ControlPlaneInit) {
+    // This test is intended for 2 meshes, each 4x8 Blackhole mesh connected with 2 connections
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path dual_4x8_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x8_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(dual_4x8_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
