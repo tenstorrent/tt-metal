@@ -70,6 +70,17 @@ void ManualSeedDeviceOperation::validate_on_program_cache_hit(
             const auto& user_ids_tensor = tensor_args.user_ids.value();
             TT_FATAL(user_ids_tensor.dtype() == DataType::UINT32, "User IDs tensor must be of type UINT32.");
             TT_FATAL(user_ids_tensor.layout() == Layout::ROW_MAJOR, "User IDs tensor must have ROW_MAJOR layout.");
+            TT_FATAL(
+                seeds_tensor.logical_volume() == user_ids_tensor.logical_volume(),
+                "Seeds tensor and User IDs tensor must have the same number of elements. Got seeds volume: {} and "
+                "user_ids volume: {}",
+                seeds_tensor.logical_volume(),
+                user_ids_tensor.logical_volume());
+            TT_FATAL(
+                seeds_tensor.logical_shape() == user_ids_tensor.logical_shape(),
+                "Seeds tensor and User IDs tensor must have the same shape.");
+            TT_FATAL(
+                seeds_tensor.logical_shape().rank() == 1, "Seeds tensor and User IDs tensor must be 1-dimensional.");
         }
         // If operation_attributes.user_ids is set, error
         TT_FATAL(

@@ -172,6 +172,9 @@ void ManualSeedSingleSeedSetCoresProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     // Get user_ids tensor info
+    TT_FATAL(
+        tensor_args.user_ids.has_value(),
+        "user_ids tensor must be provided for ManualSeedSetSeedsSetCoresProgramFactory");
     const auto& user_ids_tensor = tensor_args.user_ids.value();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
 
@@ -213,6 +216,8 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
     TT_FATAL(
         tensor_args.user_ids.has_value(),
         "user_ids tensor must be provided for ManualSeedSingleSeedSetCoresProgramFactory");
+    TT_FATAL(
+        tensor_args.seeds.has_value(), "seeds tensor must be provided for ManualSeedSetSeedsSetCoresProgramFactory");
 
     // Tensor config info
     const auto& user_ids_tensor = tensor_args.user_ids.value();
@@ -223,12 +228,23 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
     const auto user_ids_tensor_buffer = user_ids_tensor.buffer();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
 
+    const auto& seeds_tensor = tensor_args.seeds.value();
+    const tt::DataFormat seeds_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(seeds_tensor.dtype());
+    const uint32_t seeds_tensor_tile_size = seeds_tensor.tensor_spec().tile().get_tile_size(seeds_cb_data_format);
+    const auto seeds_tensor_buffer = seeds_tensor.buffer();
+
     // Circular buffers
     constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;
     const tt::tt_metal::CircularBufferConfig user_ids_cb_config =
         tt::tt_metal::CircularBufferConfig(user_ids_tensor_tile_size, {{user_ids_cb_index, user_ids_cb_data_format}})
             .set_page_size(user_ids_cb_index, user_ids_tensor_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, user_ids_cb_config);
+
+    constexpr uint32_t seeds_cb_index = tt::CBIndex::c_1;
+    const tt::tt_metal::CircularBufferConfig seeds_cb_config =
+        tt::tt_metal::CircularBufferConfig(seeds_tensor_tile_size, {{seeds_cb_index, seeds_cb_data_format}})
+            .set_page_size(seeds_cb_index, seeds_tensor_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, seeds_cb_config);
 
     // Create core kernels
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
@@ -238,24 +254,25 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
         const auto& core = cores[core_id];
 
         // Create reader kernel
-        std::vector<uint32_t> reader_compile_time_args = {core_id, user_ids_cb_index};
+        std::vector<uint32_t> reader_compile_time_args = {core_id, user_ids_cb_index, seeds_cb_index};
         TensorAccessorArgs(*user_ids_tensor_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(*seeds_tensor_buffer).append_to(reader_compile_time_args);
         tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/dataflow/"
-            "reader_manual_seed.cpp",
+            "reader_manual_seed_read_all_data.cpp",
             core,
             tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {user_ids_tensor_buffer->address()});
+        tt::tt_metal::SetRuntimeArgs(
+            program, reader_kernel_id, core, {user_ids_tensor_buffer->address(), seeds_tensor_buffer->address()});
         reader_kernel_ids.push_back(reader_kernel_id);
 
         // Create compute kernel
-        std::vector<uint32_t> compute_compile_time_args = {
-            core_id, user_ids_cb_index, operation_attributes.seeds.value_or(0)};
+        std::vector<uint32_t> compute_compile_time_args = {core_id, user_ids_cb_index, seeds_cb_index};
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/manual_seed/device/kernels/compute/"
-            "manual_seed_receive_set_seed.cpp",
+            "manual_seed_receive_all_data.cpp",
             core,
             tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {number_of_ids});
@@ -271,7 +288,14 @@ void ManualSeedSetSeedsSetCoresProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     // Get user_ids tensor info
+    TT_FATAL(
+        tensor_args.user_ids.has_value(),
+        "user_ids tensor must be provided for ManualSeedSetSeedsSetCoresProgramFactory");
+    TT_FATAL(
+        tensor_args.seeds.has_value(), "seeds tensor must be provided for ManualSeedSetSeedsSetCoresProgramFactory");
+
     const auto& user_ids_tensor = tensor_args.user_ids.value();
+    const auto& seeds_tensor = tensor_args.seeds.value();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
 
     // Override runtime args for each core
@@ -282,7 +306,8 @@ void ManualSeedSetSeedsSetCoresProgramFactory::override_runtime_arguments(
         const auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_ids[i];
 
         auto& reader_runtime_args = GetRuntimeArgs(cached_program.program, reader_kernel_id, core);
-        reader_runtime_args[0] = tensor_args.user_ids.value().buffer()->address();
+        reader_runtime_args[0] = user_ids_tensor.buffer()->address();
+        reader_runtime_args[1] = seeds_tensor.buffer()->address();
 
         auto& compute_runtime_args = GetRuntimeArgs(cached_program.program, compute_kernel_id, core);
         compute_runtime_args[0] = number_of_ids;
