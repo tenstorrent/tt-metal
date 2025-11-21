@@ -421,7 +421,7 @@ FORCE_INLINE uint32_t select_mux_connection(uint16_t dst_chip_id) {
     uint32_t mux_idx = 0;  // Default: use local connection (index 0)
     if constexpr (Direction == eth_chan_directions::EAST || Direction == eth_chan_directions::WEST) {
         // For EW relays, check if ACK packet needs NS routing by querying routing info
-        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
         auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
         uint16_t my_chip_id = routing_table->my_device_id;
 
