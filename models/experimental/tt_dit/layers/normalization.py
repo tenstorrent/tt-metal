@@ -181,7 +181,6 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
     ) -> ttnn.Tensor:
-        
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -189,7 +188,7 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
-        
+
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
