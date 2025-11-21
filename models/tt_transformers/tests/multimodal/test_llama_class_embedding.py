@@ -15,12 +15,11 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
-##### Torch op #####
-"""Loading the whole Llama model can be avoided by copying this method [HF class embedding](https://github.com/huggingface/transformers/blob/b2feaa215f1f736a2c36c2198a4e3f089e72c564/src/transformers/models/mllama/modeling_mllama.py#L1030)
-and pasting it into this custom ClassEmbedding. This allows to test only the class embedding method in HF, it generates the same identical tensor as before with meta lib.
-HF uses transformers lib which applies the class embeddding with only pytorch operations as in the TT unit test here"""
 
-
+###### Torch op #####
+# Loading the whole Llama model can be avoided by copying this method [HF class embedding](https://github.com/huggingface/transformers/blob/b2feaa215f1f736a2c36c2198a4e3f089e72c564/src/transformers/models/mllama/modeling_mllama.py#L1030)
+# and pasting it into this custom ClassEmbedding. This allows to test only the class embedding method in HF, it generates the same identical tensor as before with meta lib.
+# HF uses transformers lib which applies the class embeddding with only pytorch operations as in the TT unit test here
 class ClassEmbedding(nn.Module):
     def __init__(self, width):
         super().__init__()
@@ -31,7 +30,7 @@ class ClassEmbedding(nn.Module):
     def forward(self, hidden_state: torch.Tensor) -> torch.Tensor:
         batch_size, _, hidden_size = hidden_state.shape
         class_embedding = self.class_embedding.expand(batch_size, 1, hidden_size)
-        hidden_state = torch.cat([class_embedding, hidden_state], dim=1)
+        hidden_state = torch.cat([class_embedding, hidden_state], dim=1)  # shape = [*, grid ** 2 + 1, width]
         return hidden_state
 
 
