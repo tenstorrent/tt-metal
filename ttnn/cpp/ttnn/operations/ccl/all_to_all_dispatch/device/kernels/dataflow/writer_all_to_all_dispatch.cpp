@@ -110,6 +110,24 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
+    const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_teardown_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t local_buffer_index_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 

@@ -278,6 +278,47 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
 
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
+    uint32_t num_directions_per_link = operation_attributes.axis.has_value()
+                                           ? 2
+                                           : 4;  // along one axis, then just 2 directions, otherwise 4 directions
+    uint32_t num_mux_cores = num_directions_per_link * num_links;
+
+    auto available_mux_cores = corerange_to_cores(worker_core_range_set);
+    auto mux_core_range_set = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        available_mux_cores.at(0), num_mux_cores, available_mux_cores, true);
+    std::vector<CoreCoord> mux_cores = corerange_to_cores(mux_core_range_set);
+
+    worker_core_range_set = worker_core_range_set.subtract(mux_core_range_set);
+
+    // Kernel Runtime Args
+    uint32_t num_buffers_full_size_channels = 1;
+    uint32_t num_workers_per_link = 1;
+    uint32_t num_full_size_channels = num_workers_per_link;
+
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+    const auto num_full_size_channels = num_workers_per_link;
+    constexpr auto num_header_only_channels = 0;
+    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        0,
+        buffer_size_bytes_full_size_channel,
+        mux_base_l1_address);
+
+    // Fabric mux kernel
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     TT_FATAL(
@@ -368,7 +409,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
-    const auto& writer_compile_time_args = reader_compile_time_args;
+    auto writer_compile_time_args = reader_compile_time_args;
+    common::append_fabric_mux_connection_ct_args(
+        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        mux_kernel_config,
+        num_workers_per_link,
+        writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
@@ -450,12 +496,25 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 link_id,
                 reader_runtime_args[6],
                 reader_runtime_args[7]);
+            /*
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
                 program,
                 sender_cores.at(i),
+                writer_runtime_args);
+            */
+            common::append_fabric_mux_connection_rt_args(
+                true,
+                mux_cores.at(link_id),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                mux_kernel_config,
+                sender_cores.at(i),
+                i / num_workers_per_link,
+                i % num_workers_per_link == 0,
+                mesh_device->worker_core_from_logical_core(sender_cores.at(i)),
+                program,
                 writer_runtime_args);
         }
 
