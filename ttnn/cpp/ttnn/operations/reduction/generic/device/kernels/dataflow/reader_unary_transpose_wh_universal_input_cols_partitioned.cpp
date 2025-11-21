@@ -20,9 +20,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
+    experimental::CircularBuffer cb(cb_id_in0);
+    experimental::Noc noc(noc_index);
+
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes = cb.get_tile_size();
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(4);
@@ -60,11 +63,10 @@ void kernel_main() {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                cb.reserve_back(onetile);
+                noc.async_read(tensor_accessor, cb, tile_bytes, {.page_id = curr_id}, {});
+                noc.async_read_barrier();
+                cb.push_back(onetile);
 
                 ++w;
 
