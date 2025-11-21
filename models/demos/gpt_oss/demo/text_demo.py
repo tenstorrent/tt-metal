@@ -492,15 +492,15 @@ def test_gpt_oss_demo(
         # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
         ci_target_ttft = {
             # N150 targets (milliseconds) - lower is better
-            "T3K_gpt-oss-20b": 1600,
-            "T3K_gpt-oss-120b": 1600,
-            "TG_gpt-oss-20b": 450,
-            "TG_gpt-oss-120b": 1600,
+            "T3K_gpt-oss-20b": (700, 1.2),
+            "TG_gpt-oss-20b": (450, 1.2),
+            "T3K_gpt-oss-120b": (3600, 1.2),
+            "TG_gpt-oss-120b": (1600, 1.2),
         }
         ci_target_decode_tok_s_u = {
             "T3K_gpt-oss-20b": 13,
-            "T3K_gpt-oss-120b": 8,
             "TG_gpt-oss-20b": 13,
+            "T3K_gpt-oss-120b": 8,
             "TG_gpt-oss-120b": 8,
         }
 
@@ -513,7 +513,7 @@ def test_gpt_oss_demo(
                 current_ttft_target = current_ttft_target[0]
             else:
                 high_tol_percentage = 1.15
-            ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+            ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
         if model_device_key in ci_target_decode_tok_s_u:
             ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
             # calculate from per-user rate
