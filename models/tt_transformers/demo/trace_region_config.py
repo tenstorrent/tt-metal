@@ -3,18 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.tt_transformers.tt.common import get_base_model_name
 
 # NOTE: We need to override trace_region_size before the mesh device is opened
 # NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
 # example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we efectivly have 8 N150's with trace_region_size=X which could leed to OOM if X is too large)
 
 # TODO: For now, each confest.py should call get_supported_trace_region_size if they want to override the trace region size
+
+
+def get_base_model_name(model_name: str) -> str:
+    # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
+    match = re.search(r"(.*?\d+[bB])-", model_name)
+    return match.group(1) if match else model_name
 
 
 def get_mesh_device_name(num_devices, mesh_device_name):
@@ -99,6 +105,10 @@ def get_supported_trace_region_size(request, mesh_device):
             "TG": 50000000,
         },
         "Qwen2.5-72B": {
+            "T3K": 70000000,
+            "TG": 70000000,
+        },
+        "gemma-3-27b": {
             "T3K": 70000000,
             "TG": 70000000,
         },

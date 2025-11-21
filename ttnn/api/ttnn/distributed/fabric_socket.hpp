@@ -23,9 +23,7 @@ namespace ttnn::distributed {
  */
 class FabricSocket : public ISocket {
 public:
-    FabricSocket(
-        const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-        const tt::tt_metal::distributed::SocketConfig& socket_config);
+    FabricSocket(const tt::tt_metal::distributed::MeshSocket& mesh_socket);
     ~FabricSocket() override = default;
 
     void send(const ttnn::Tensor& tensor) override;
@@ -41,8 +39,7 @@ public:
         tt::tt_metal::distributed::SocketConfig socket_config);
 
 private:
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
-    tt::tt_metal::distributed::SocketConfig socket_config_;
+    tt::tt_metal::distributed::MeshSocket mesh_socket_;
 };
 
 }  // namespace ttnn::distributed

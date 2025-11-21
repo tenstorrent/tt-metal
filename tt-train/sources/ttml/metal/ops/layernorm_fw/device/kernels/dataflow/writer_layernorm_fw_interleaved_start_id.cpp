@@ -20,20 +20,15 @@ constexpr bool return_mean_rstd = false;
 
 constexpr uint32_t onetile = 1;
 
-template <typename AddrGen>
+template <bool wait_for_write_barrier = false, typename AddrGen>
 inline void write_cb_block_to_dram(
-    uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    uint32_t start_idx,
-    uint32_t block_size,
-    uint32_t tile_bytes,
-    bool write_barrier = false) {
+    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {
     uint32_t l1_read_addr = get_read_ptr(cb_idx);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         noc_async_write_tile(start_idx + block_idx, addr_gen, l1_read_addr);
         l1_read_addr += tile_bytes;
     }
-    if (write_barrier) {
+    if constexpr (wait_for_write_barrier) {
         noc_async_write_barrier();
     }
 }
@@ -65,13 +60,8 @@ void kernel_main() {
 
             // Write output block
             cb_wait_front(cb_output_idx, block_size);
-            write_cb_block_to_dram(
-                cb_output_idx,
-                output_addr_generator,
-                start_idx,
-                current_block_size,
-                tile_bytes,
-                /*write_barrier=*/true);
+            write_cb_block_to_dram</*wait_for_write_barrier=*/true>(
+                cb_output_idx, output_addr_generator, start_idx, current_block_size, tile_bytes);
             cb_pop_front(cb_output_idx, block_size);
         }
 
@@ -80,7 +70,8 @@ void kernel_main() {
             cb_wait_front(cb_mean_idx, onetile);
             write_cb_block_to_dram(cb_mean_idx, mean_output_addr_generator, r, 1, tile_bytes);
             cb_wait_front(cb_rstd_idx, onetile);
-            write_cb_block_to_dram(cb_rstd_idx, rstd_output_addr_generator, r, 1, tile_bytes, /*write_barrier=*/true);
+            write_cb_block_to_dram</*wait_for_write_barrier=*/true>(
+                cb_rstd_idx, rstd_output_addr_generator, r, 1, tile_bytes);
             cb_pop_front(cb_mean_idx, onetile);
             cb_pop_front(cb_rstd_idx, onetile);
         }

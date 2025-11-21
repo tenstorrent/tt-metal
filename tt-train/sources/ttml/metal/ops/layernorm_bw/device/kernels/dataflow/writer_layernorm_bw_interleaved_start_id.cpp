@@ -12,20 +12,15 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta component
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-template <typename AddrGen>
+template <bool wait_for_write_barrier = false, typename AddrGen>
 inline void write_cb_block_to_dram(
-    uint32_t cb_idx,
-    const AddrGen& addr_gen,
-    uint32_t start_idx,
-    uint32_t block_size,
-    uint32_t tile_bytes,
-    bool write_barrier = false) {
+    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {
     uint32_t l1_read_addr = get_read_ptr(cb_idx);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         noc_async_write_tile(start_idx + block_idx, addr_gen, l1_read_addr);
         l1_read_addr += tile_bytes;
     }
-    if (write_barrier) {
+    if constexpr (wait_for_write_barrier) {
         noc_async_write_barrier();
     }
 }
@@ -73,13 +68,8 @@ void kernel_main() {
 
             // Write dbeta_components block
             cb_wait_front(cb_dbeta_components, block_size);
-            write_cb_block_to_dram(
-                cb_dbeta_components,
-                dbeta_output_addr_generator,
-                start_idx,
-                current_block_size,
-                tile_bytes_dgamma,
-                /*write_barrier=*/true);
+            write_cb_block_to_dram</*wait_for_write_barrier=*/true>(
+                cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
 
             cb_pop_front(cb_dx_idx, block_size);
             cb_pop_front(cb_dgamma_components, block_size);

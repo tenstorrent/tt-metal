@@ -43,6 +43,9 @@ class TtLlamaEmbedding(LightweightModule):
             memory_config=(
                 self.args.model_config["DECODE_RESIDUAL_MEMCFG"] if x.shape[-1] <= 32 else ttnn.DRAM_MEMORY_CONFIG
             ),
+            dtype=ttnn.bfloat8_b
+            if x.shape[-1] > 32
+            else ttnn.bfloat16,  # Keep bfloat16 for decode, bfloat8_b for prefill
         )
         x = ttnn.reshape(x, ttnn.Shape((1, 1, x.shape[-2], x.shape[-1])))
         return x

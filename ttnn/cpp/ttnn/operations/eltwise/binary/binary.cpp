@@ -337,7 +337,8 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode) {
+    const std::optional<bool>& fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
@@ -394,7 +395,9 @@ inline auto invoke_binary_ng(
             fast_and_approximate_mode,
             lhs_activations,
             rhs_activations,
-            post_activations);
+            post_activations,
+            std::nullopt,
+            sub_core_grids);
 
         // if both inputs are in row major, convert the output to row major
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
@@ -420,8 +423,9 @@ inline auto invoke_binary_ng(
             fast_and_approximate_mode,
             lhs_activations,
             rhs_activations,
-            post_activations);
-
+            post_activations,
+            std::nullopt,
+            sub_core_grids);
         return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
     }
 }
@@ -438,7 +442,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -450,7 +455,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
 }
 
 template <BinaryOpType binary_op_type>
@@ -463,7 +469,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -475,7 +482,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
 }
 
 template <BinaryOpType binary_op_type>
@@ -489,7 +497,8 @@ Tensor BinaryOperationWithFastApprox<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode) {
+    const std::optional<bool>& fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -501,7 +510,8 @@ Tensor BinaryOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        sub_core_grids);
 }
 
 template <BinaryOpType binary_op_type>
@@ -515,7 +525,8 @@ Tensor BinaryOperationWithFastApprox<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode) {
+    const std::optional<bool>& fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -527,7 +538,8 @@ Tensor BinaryOperationWithFastApprox<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        sub_core_grids);
 }
 
 template <BinaryOpType binary_op_type>
@@ -540,7 +552,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -552,7 +565,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
 }
 
 template <BinaryOpType binary_op_type>
@@ -565,7 +579,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
@@ -585,7 +600,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
 }
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>
@@ -724,7 +740,8 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        /*fast_and_approximate_mode*/ false);
+        /*fast_and_approximate_mode*/ false,
+        /*sub_core_grids*/ std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
@@ -764,11 +781,34 @@ Tensor BinaryOperationHypot<binary_op_type>::invoke(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        {},      // no post_activations
-        {},      // no lhs_activations
-        {},      // no rhs_activations
-        false,   // legacy_flag
-        false);  // fast_and_approximate_mode
+        {},             // no post_activations
+        {},             // no lhs_activations
+        {},             // no rhs_activations
+        false,          // legacy_flag
+        false,          // fast_and_approximate_mode
+        std::nullopt);  // sub_core_grids
+}
+
+template <BinaryOpType binary_op_type>
+Tensor WhereOperationWithScalar<binary_op_type>::invoke(
+    const Tensor& condition,
+    const Tensor& true_false_tensor,
+    unary::ScalarVariant scalar_value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    return ttnn::prim::binary_ng(
+        condition,
+        true_false_tensor,
+        binary_op_type,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        false,          // fast_and_approximate_mode
+        none,           // lhs_activations
+        none,           // rhs_activations
+        none,           // post_activations
+        scalar_value);  // scalar
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;
@@ -839,5 +879,8 @@ template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 // Explicit template instantiations for BinaryOperationWithFastApprox
 template struct BinaryOperationWithFastApprox<BinaryOpType::DIV>;
 template struct InplaceBinaryOperationWithFastApprox<BinaryOpType::DIV>;
+
+template struct WhereOperationWithScalar<BinaryOpType::WHERE_TST>;
+template struct WhereOperationWithScalar<BinaryOpType::WHERE_TTS>;
 
 }  // namespace ttnn::operations::binary
