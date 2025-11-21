@@ -30,9 +30,9 @@ on:
         type: boolean
         default: false
       single-card-demo:
-        required: false
-        type: boolean
-        default: false
+        description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
+        default: disabled
+        type: string
       single-card-perf-models:
         required: false
         type: boolean
@@ -68,7 +68,7 @@ jobs:
         run: |
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-demo=${{ inputs.single-card-demo }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.single-card-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-perf-models=${{ inputs.single-card-perf-models }}" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
@@ -109,6 +109,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      requested-models: ${{ inputs.trigger_type == 'manual' && inputs.single-card-demo || 'all' }}
       arch: wormhole_b0
   single-card-perf-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-models == 'true' }}
