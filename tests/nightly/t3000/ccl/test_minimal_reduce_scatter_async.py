@@ -19,7 +19,7 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 
 def run_reduce_scatter_impl(
     mesh_device,
-    num_devices,
+    num_devices_UNUSED,
     rs_input_shape,
     dim,
     num_links,
@@ -45,6 +45,8 @@ def run_reduce_scatter_impl(
     torch.manual_seed(0)
 
     tile = (32, 32)
+
+    num_devices = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
 
     ##### Fabric setup #####
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -213,6 +215,7 @@ def run_reduce_scatter_impl(
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
+            # TODO how to concat tensors in 2D mesh
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
             tt_reduce_scatter_output_tensor.deallocate(True)
