@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/control_plane.hpp"
+#include <tt-metalium/experimental/control_plane.hpp>
 #include "fabric_host_utils.hpp"
 
 #include <tt-metalium/experimental/fabric.hpp>

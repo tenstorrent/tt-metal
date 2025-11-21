@@ -34,7 +34,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "core_coord.hpp"
-#include "experimental/fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 

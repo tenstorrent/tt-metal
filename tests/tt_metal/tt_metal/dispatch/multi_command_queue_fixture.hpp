@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "experimental/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"

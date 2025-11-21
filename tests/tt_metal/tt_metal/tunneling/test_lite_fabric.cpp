@@ -19,7 +19,7 @@
 #include <tt-metalium/experimental/fabric.hpp>
 
 #include "distributed.hpp"
-#include "experimental/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include "hal/blackhole_impl.hpp"
 #include "hal/lite_fabric_hal.hpp"
 #include "hal/wormhole_impl.hpp"

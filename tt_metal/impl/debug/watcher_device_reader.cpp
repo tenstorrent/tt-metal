@@ -24,7 +24,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "experimental/control_plane.hpp"
+#include <tt-metalium/experimental/control_plane.hpp>
 #include "core_descriptor.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
