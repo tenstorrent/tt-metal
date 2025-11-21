@@ -32,9 +32,7 @@ inline void calculate_elu(uint slope) {
 
 template <bool APPROXIMATION_MODE>
 inline void elu_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        exp_init<false, false>();
-    }
+    exp_init<false, false>();  // init _sfpu_exp_21f_
 }
 
 }  // namespace sfpu
