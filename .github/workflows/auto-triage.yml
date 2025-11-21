@@ -49,3 +49,23 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ env.OPENCODE_API_KEY }}
           GH_TOKEN: ${{ env.GH_TOKEN }}
+
+      - name: Publish triage report to summary
+        if: always()
+        run: |
+          if [ -f .auto_triage/output/explanation.md ]; then
+            {
+              echo "## Auto Triage Report"
+              cat .auto_triage/output/explanation.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No explanation produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload auto-triage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-triage-output
+          path: .auto_triage/output
+          if-no-files-found: ignore
