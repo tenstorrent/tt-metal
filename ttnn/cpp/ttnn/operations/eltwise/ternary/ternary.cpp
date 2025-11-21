@@ -140,15 +140,9 @@ Tensor invoke_impl(
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
-    // Currently ports only non_bcast inputs to binary_ng implementation.
-    if (broadcast_type == TernaryBroadcastType::NONE) {
-        return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
-            condition,
-            t_true,
-            scalar_false,
-            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-            output);
-    }
+    // Route all valid broadcast cases to binary_ng implementation.
+    // binary_ng handles subtile broadcasts (COL, ROW, SCALAR) and outer broadcasts (treated as NONE).
+    // Only fall back to legacy for sharded tensors or invalid broadcasts.
     if (is_sharded(condition) || is_sharded(t_true) || is_sharded(memory_config) || is_sharded(output) ||
         is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(
@@ -159,14 +153,16 @@ Tensor invoke_impl(
             output);
     }
 
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_debug(tt::LogOp, "Where LLK - TTS");
-    return ttnn::prim::ternary(
-        TernaryOpType::WHERE,
-        std::move(condition),
+    log_info(
+        tt::LogOp,
+        "Where BinaryNG - TTS (broadcast: {}, condition_shape: {}, tensor_shape: {})",
+        static_cast<int>(broadcast_type),
+        condition.logical_shape(),
+        t_true.logical_shape());
+    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
+        condition,
         t_true,
         scalar_false,
-        output_dtype,
         ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
         output);
 }
@@ -186,16 +182,9 @@ Tensor invoke_impl(
     auto broadcast_type =
         ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_false.logical_shape());
 
-    // Currently ports only non_bcast inputs to binary_ng implementation.
-    if (broadcast_type == TernaryBroadcastType::NONE) {
-        return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
-            condition,
-            t_false,
-            scalar_true,
-            ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
-            output);
-    }
-
+    // Route all valid broadcast cases to binary_ng implementation.
+    // binary_ng handles subtile broadcasts (COL, ROW, SCALAR) and outer broadcasts (treated as NONE).
+    // Only fall back to legacy for sharded tensors or invalid broadcasts.
     if (is_sharded(condition) || is_sharded(t_false) || is_sharded(memory_config) || is_sharded(output) ||
         is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(
@@ -206,14 +195,16 @@ Tensor invoke_impl(
             output);
     }
 
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-    log_debug(tt::LogOp, "Where LLK - TST");
-    return ttnn::prim::ternary(
-        TernaryOpType::WHERE,
-        std::move(condition),
-        scalar_true,
+    log_info(
+        tt::LogOp,
+        "Where BinaryNG - TST (broadcast: {}, condition_shape: {}, tensor_shape: {})",
+        static_cast<int>(broadcast_type),
+        condition.logical_shape(),
+        t_false.logical_shape());
+    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
+        condition,
         t_false,
-        output_dtype,
+        scalar_true,
         ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
         output);
 }

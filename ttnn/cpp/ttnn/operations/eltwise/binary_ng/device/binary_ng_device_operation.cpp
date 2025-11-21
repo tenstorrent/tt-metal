@@ -450,6 +450,18 @@ BinaryNgDeviceOperation::invoke(
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     bool is_where_op = (binary_op_type == BinaryOpType::WHERE_TTS || binary_op_type == BinaryOpType::WHERE_TST);
+
+    if (is_where_op) {
+        log_info(
+            tt::LogOp,
+            "BinaryNG WHERE operation invoked - op_type: {}, broadcast_type: {}, is_sfpu: {}, dtype_a: {}, dtype_b: {}",
+            binary_op_type == BinaryOpType::WHERE_TTS ? "WHERE_TTS" : "WHERE_TST",
+            static_cast<int>(subtile_broadcast_type),
+            is_sfpu_op,
+            dtype_a,
+            dtype_b);
+    }
+
     return {
         operation_attributes_t{
             binary_op_type,
