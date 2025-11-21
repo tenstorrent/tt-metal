@@ -22,27 +22,30 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(
 }
 
 
-std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + file_path);
-    }
+std::tuple<std::vector<uint32_t>, uint32_t> load_tokens_from_space_separated_file(const std::string &file_path) {
+    // std::ifstream file(file_path);
+    // if (!file.is_open()) {
+    //     throw std::runtime_error("Could not open file: " + file_path);
+    // }
+
+    auto yaml_data = YAML::LoadFile(file_path);
 
     std::vector<uint32_t> tokens;
+    std::stringstream token_stream(yaml_data["tokens"].as<std::string>());
     uint32_t token;
 
-    while (file >> token) {
+    while (token_stream >> token) {
         tokens.push_back(token);
     }
 
-    if (file.bad()) {
-        throw std::runtime_error("I/O error while reading file: " + file_path);
-    } else if (!file.eof()) {
-        throw std::runtime_error("Non-integer data encountered in file: " + file_path);
-    }
+    // if (file.bad()) {
+    //     throw std::runtime_error("I/O error while reading file: " + file_path);
+    // } else if (!file.eof()) {
+    //     throw std::runtime_error("Non-integer data encountered in file: " + file_path);
+    // }
 
-    file.close();
-    return tokens;
+    // file.close();
+    return std::make_tuple(tokens, yaml_data["tokenizer_vocab_size"].as<uint32_t>());
 }
 
 }  // namespace ttml::datasets

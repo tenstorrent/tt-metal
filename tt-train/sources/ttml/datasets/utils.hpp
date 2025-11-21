@@ -8,6 +8,9 @@
 #include <random>
 #include <span>
 #include <string>
+#include <sstream>
+
+#include <yaml-cpp/yaml.h>
 
 #include "autograd/auto_context.hpp"
 #include "dataset_subset.hpp"
@@ -53,6 +56,6 @@ std::vector<DatasetSubset<DatasetType>> random_split(
     return subsets;
 }
 
-std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string& file_path);
+std::tuple<std::vector<uint32_t>, uint32_t> load_tokens_from_space_separated_file(const std::string& file_path);
 
 }  // namespace ttml::datasets
