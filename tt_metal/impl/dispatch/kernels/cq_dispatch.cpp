@@ -719,6 +719,13 @@ void process_write_packed_large(uint32_t* l1_cache) {
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
+        // Special encoding: 0 means 64KB (max uint16_t + 1)
+        // If a uint16_t cast to max_paged_length_per_sub_cmd overflows to 0 in program/dispatch.cpp,
+        // then encode the 0 to the max uint16_t + 1 (65536). For huge kernels, this is necessary
+        // to avoid length being set to 0 in CQDispatchWritePackedLargeSubCmd
+        if (length == 0) {
+            length = 65536;
+        }
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
