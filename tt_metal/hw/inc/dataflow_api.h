@@ -2355,6 +2355,26 @@ struct noc_traits_t {
 };
 
 /**
+ * @brief RAII style wrapper for a debug scope
+ *
+ * @tparam ReleaseFunc The function to call when this instance goes out of scope.
+ */
+template <typename ReleaseFunc = void (*)()>
+class DebugScope {
+public:
+    inline __attribute__((always_inline)) DebugScope(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~DebugScope() { release_func_(); }
+
+    DebugScope(const DebugScope&) = delete;
+    DebugScope(DebugScope&&) = delete;
+    DebugScope& operator=(const DebugScope&) = delete;
+    DebugScope& operator=(DebugScope&&) = delete;
+
+private:
+    ReleaseFunc release_func_;
+};
+
+/**
  * @brief Noc class that provides a high-level interface for asynchronous read and write operations.
  *
  * It abstracts the details of source and destination address calculations.
@@ -2760,7 +2780,16 @@ public:
         return rd_ptr_bytes;
     }
 
+    [[nodiscard]] auto debug_scope() {
+        // TODO: Register with the debugger to track the lock
+        return DebugScope([this]() { debug_scope_release(); });
+    }
+
 private:
+    void debug_scope_release() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t cb_id_;
 };
 
