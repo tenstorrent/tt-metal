@@ -75,8 +75,7 @@ FastReduceNCDeviceOperation::invoke(
     operation_attributes_t operation_attributes{
         .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = compute_kernel_config};
 
-    tensor_args_t tensor_args{
-        .input = input, .preallocated_output = output ? std::optional<Tensor>(*output) : std::nullopt};
+    tensor_args_t tensor_args{.input = input, .preallocated_output = output};
 
     return {operation_attributes, tensor_args};
 }
