@@ -67,31 +67,10 @@ tensor_return_value_t FastReduceNCDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t FastReduceNCDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-
     // Hash operation attributes (all affect program structure)
     // Hash specific tensor properties that affect program structure (dtype, memory_config, shape, shard specs, tile)
     // rather than the whole tensor to avoid including runtime-only properties like buffer addresses
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<FastReduceNCDeviceOperation>(
-        args,                          // Includes dim, output_mem_config, compute_kernel_config
-        input_tensor.dtype(),          // Affects CB data format
-        input_tensor.memory_config(),  // Affects shard distribution logic
-        input_tensor.padded_shape(),  // Affects num_reduce_input_tile, num_output_tiles, input_granularity, core groups
-        input_tensor.nd_shard_spec(),        // Affects shard distribution logic
-        input_tensor.tensor_spec().tile());  // Affects shard compatibility check
-
-    // If preallocated output is provided, hash its properties that affect program structure
-    if (tensor_args.preallocated_output.has_value()) {
-        const auto& output_tensor = tensor_args.preallocated_output.value();
-        hash = tt::stl::hash::hash_objects(
-            hash,
-            output_tensor.dtype(),                // Affects CB data format
-            output_tensor.memory_config(),        // Affects buffer_distribution_spec and shard distribution
-            output_tensor.nd_shard_spec(),        // Affects shard distribution logic
-            output_tensor.tensor_spec().tile());  // Affects shard compatibility check
-        // Note: buffer_distribution_spec is derived from memory_config and shape, which are now hashed
-        // so we don't need to access buffer() here
-    }
+    auto hash = tt::tt_metal::operation::hash_operation<FastReduceNCDeviceOperation>(args, tensor_args);
 
     return hash;
 }
