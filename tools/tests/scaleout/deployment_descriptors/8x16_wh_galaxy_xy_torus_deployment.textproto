@@ -1,0 +1,32 @@
+hosts: {
+  hall: "NA"
+  aisle: "A"
+  rack: 0
+  shelf_u: 1
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-1"
+}
+hosts: {
+  hall: "NA"
+  aisle: "A"
+  rack: 0
+  shelf_u: 7
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-2"
+}
+hosts: {
+  hall: "NA"
+  aisle: "A"
+  rack: 0
+  shelf_u: 13
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-3"
+}
+hosts: {
+  hall: "NA"
+  aisle: "A"
+  rack: 0
+  shelf_u: 19
+  node_type: "WH_GALAXY_Y_TORUS"
+  host: "wh-glx-4"
+}
