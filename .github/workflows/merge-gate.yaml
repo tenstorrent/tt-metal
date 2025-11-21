@@ -270,7 +270,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       merge-gate-call: true
 
-  tt-train-cpp-merge-gate-tests:
+  tt-train-cpp-unit-tests:
     needs: [build, find-changes]
     # if: ${{ github.ref_name == 'main' ||
     #         needs.find-changes.outputs.cmake-changed == 'true' ||
