@@ -58,6 +58,8 @@ namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
 
+static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay kernel can use 1");
+
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
