@@ -92,7 +92,6 @@ class DeepseekGenerator:
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        self.hf_config.num_hidden_layers = 5
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
@@ -134,7 +133,7 @@ class DeepseekGenerator:
         self._trace_id: int | None = None
         self._trace_tokens: ttnn.Tensor | None = None
         self._trace_positions: ttnn.Tensor | None = None
-        self._trace_rot_idxs: ttnn.Tensor | None = None  # Add this
+        self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
         logger.info(f"Enable trace: {self.enable_trace}")
@@ -367,6 +366,14 @@ class DeepseekGenerator:
                 del self.paged_config
         except Exception as e:
             logger.warning(f"Failed to cleanup paged config: {e}")
+
+        # Clean up trace state
+        if self.enable_trace:
+            try:
+                if hasattr(self, "_trace_id") and self._trace_id is not None:
+                    ttnn.release_trace(self.mesh_device, self._trace_id)
+            except Exception as e:
+                logger.warning(f"Failed to release trace: {e}")
 
     def __enter__(self):
         """Context manager entry."""
@@ -794,7 +801,6 @@ class DeepseekGenerator:
                 )
                 return logits.squeeze(0).squeeze(0)
 
-            logger.info(f"Decode trace already captured, updating persistent inputs and executing")
             # Update persistent inputs and execute
             assert (
                 self._trace_tokens is not None
