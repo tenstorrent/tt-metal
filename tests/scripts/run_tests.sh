@@ -191,13 +191,18 @@ frequent_tg_device() {
 }
 
 # Run tg demo tests
+# DEPRECATED: Galaxy demo tests now call pytest directly from GitHub Actions workflow
+# See: .github/workflows/galaxy-demo-tests-impl.yaml
 demos_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
     local model=$4
 
-    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
+    echo "ERROR: demos_tg_device is deprecated."
+    echo "Galaxy demo tests now run directly from GitHub Actions workflow."
+    echo "See: .github/workflows/galaxy-demo-tests-impl.yaml"
+    exit 1
 }
 
 # Run tg model perf tests
