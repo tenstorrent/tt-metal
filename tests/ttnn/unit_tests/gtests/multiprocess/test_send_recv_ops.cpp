@@ -318,21 +318,40 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecting_coords(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     uint32_t neighbor_mesh_id,
-    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
     auto neighbor_rank = neighbor_mesh_id;
     auto my_host = physical_system_descriptor.my_host_name();
     std::string neighbor_host;
-
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto my_mesh_id = *distributed_context->rank();
     for (const auto& [host_name, rank] : physical_system_descriptor.get_host_to_rank_map()) {
         if (rank == neighbor_rank) {
             neighbor_host = host_name;
             break;
         }
     }
-    auto exit_node = physical_system_descriptor.get_connecting_exit_nodes(my_host, neighbor_host)[0];
-    auto src_mesh_coord = asic_id_to_mesh_coord.at(exit_node.src_exit_node);
-    auto dst_mesh_coord = asic_id_to_mesh_coord.at(exit_node.dst_exit_node);
-    return std::make_pair(src_mesh_coord, dst_mesh_coord);
+    auto exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(my_host, neighbor_host);
+    if (my_mesh_id == 0 && neighbor_mesh_id == 1) {
+        return std::make_pair(distributed::MeshCoordinate(1, 1), distributed::MeshCoordinate(1, 2));
+    }
+    if (my_mesh_id == 1 && neighbor_mesh_id == 0) {
+        return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(1, 1));
+    }
+    if (my_mesh_id == 1 && neighbor_mesh_id == 2) {
+        return std::make_pair(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 3));
+    }
+    if (my_mesh_id == 2 && neighbor_mesh_id == 1) {
+        return std::make_pair(distributed::MeshCoordinate(0, 3), distributed::MeshCoordinate(0, 0));
+    }
+    if (my_mesh_id == 2 && neighbor_mesh_id == 3) {
+        return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(0, 2));
+    }
+    if (my_mesh_id == 3 && neighbor_mesh_id == 2) {
+        return std::make_pair(distributed::MeshCoordinate(0, 2), distributed::MeshCoordinate(1, 2));
+    }
+    TT_FATAL(false, "No connecting coords found for mesh {} and neighbor {}", my_mesh_id, neighbor_mesh_id);
+    return std::make_pair(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
 }
 
 PhysicalSystemDescriptor create_physical_system_descriptor() {
@@ -389,7 +408,10 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     constexpr uint32_t num_iters = 100000;
     uint64_t start_time = 0;
     uint64_t end_time = 0;
-
+    // for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
+    //     std::cout << "Mesh: " << *distributed_context->rank() << " Coord: " << coord << " Fabric Node ID: " <<
+    //     mesh_device_->get_fabric_node_id(coord) << std::endl;
+    // }
     if (*distributed_context->rank() == *pipeline_start_rank) {
         const auto& input_shape = tensor_spec.logical_shape();
         const auto& memory_config = tensor_spec.memory_config();
@@ -397,9 +419,8 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         auto layout = tensor_spec.layout();
         auto dtype = tensor_spec.data_type();
         auto [my_sender, downstream_recv] =
-            get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord);
-
-        distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(1, 3);
+            get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord, mesh_device_);
+        distributed::MeshCoordinate start_coord = distributed::MeshCoordinate(0, 3);
         auto start_fabric_node_id = mesh_device_->get_fabric_node_id(start_coord);
         auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(my_sender);
         std::cout << "Sender coords: " << my_sender[0] << ", " << my_sender[1] << std::endl;
@@ -443,7 +464,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         ttnn::experimental::socket_copy(input_tensor, intermed_recv, send_socket, num_elems * sizeof(uint32_t));
     } else {
         auto [my_recv, upstream_send] =
-            get_connecting_coords(physical_system_descriptor, send_mesh_id, asic_id_to_mesh_coord);
+            get_connecting_coords(physical_system_descriptor, send_mesh_id, asic_id_to_mesh_coord, mesh_device_);
         bwd_connection = {.sender_core = {upstream_send, CoreCoord(0, 0)}, .receiver_core = {my_recv, CoreCoord(0, 0)}};
 
         distributed::SocketConfig recv_socket_config = {
@@ -457,7 +478,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
         distributed::MeshSocket intermed_recv;
         if (*distributed_context->rank() < *pipeline_end_rank) {
             auto [my_sender, downstream_recv] =
-                get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord);
+                get_connecting_coords(physical_system_descriptor, recv_mesh_id, asic_id_to_mesh_coord, mesh_device_);
             fwd_connection = {
                 .sender_core = {my_sender, CoreCoord(0, 0)}, .receiver_core = {downstream_recv, CoreCoord(0, 0)}};
             distributed::SocketConfig send_socket_config = {
@@ -477,7 +498,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             std::tie(intermed_send, intermed_recv) =
                 distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, intermed_socket_config);
         } else {
-            distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(0, 0);
+            distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(1, 0);
             distributed::SocketConnection end_connection = {
                 .sender_core = {my_recv, CoreCoord(0, 0)}, .receiver_core = {end_coord, CoreCoord(0, 0)}};
             distributed::SocketConfig end_socket_config = {

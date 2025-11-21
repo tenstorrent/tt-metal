@@ -87,7 +87,7 @@ void kernel_main() {
     // uint32_t curr_num_bytes_sent = 0;
     // uint32_t prev_bytes_sent = 0;
 
-    for (int i = 0; i < 10000000; i++) {
+    for (int i = 0; i < 50000000; i++) {
         socket_reserve_pages(send_socket, 1);
         socket_wait_for_pages(recv_socket, 1);
         auto l1_read_addr = recv_socket.read_ptr;
@@ -124,10 +124,13 @@ void kernel_main() {
         // Notify Upstream and Downstream that data has been consumed or produced
         socket_push_pages(send_socket, 1);
         socket_pop_pages(recv_socket, 1);
-        // if (i % 20 == 0) {
-        fabric_socket_notify_sender_stateful(
-            recv_socket, upstream_fabric_connection, upstream_socket_packet_header_addr, upstream_bytes_acked_noc_addr);
-        // }
+        if (i % 20 == 0) {
+            fabric_socket_notify_sender_stateful(
+                recv_socket,
+                upstream_fabric_connection,
+                upstream_socket_packet_header_addr,
+                upstream_bytes_acked_noc_addr);
+        }
     }
     update_socket_config(send_socket);
     update_socket_config(recv_socket);

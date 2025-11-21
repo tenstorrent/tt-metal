@@ -307,7 +307,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = eth_chan;  // std::get<1>(remote_info);
-            if (eth_chan == 8 || eth_chan == 9) {
+            if (eth_chan == 8 || eth_chan == 9 || eth_chan == 2 || eth_chan == 3) {
                 // Skip Z Links for now
                 continue;
             }

@@ -85,7 +85,7 @@ void kernel_main() {
     }
     // Large pages. We write page chunks from multiple packets.
     else {
-        for (int i = 0; i < 10000000; i++) {
+        for (int i = 0; i < 50000000; i++) {
             uint32_t page_index = 0;
             auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
             // DPRINT << "Wait for pages:" << i << ENDL();
@@ -102,10 +102,10 @@ void kernel_main() {
             noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
             page_index++;
             socket_pop_pages(receiver_socket, 1);
-            // if (i % 20 == 0) {
-            noc_async_writes_flushed();
-            fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-            // }
+            if (i % 20 == 0) {
+                noc_async_writes_flushed();
+                fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+            }
         }
     }
     update_socket_config(receiver_socket);

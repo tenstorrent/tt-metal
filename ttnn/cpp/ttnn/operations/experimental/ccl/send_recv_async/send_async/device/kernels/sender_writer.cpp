@@ -99,7 +99,7 @@ void kernel_main() {
     }
     // Large pages. We pack page chunks into a single packet.
     else {
-        for (int i = 0; i < 10000000; i++) {
+        for (int i = 0; i < 50000000; i++) {
             DPRINT << "Reserving page:" << i << ENDL();
             socket_reserve_pages(sender_socket, 1);
             DPRINT << "Done reserving page:" << i << ENDL();
