@@ -409,7 +409,7 @@ void TestContext::set_comparison_statistics_csv_file_path() {
 }
 
 void TestContext::collect_latency_results() {
-    log_info(tt::LogTest, "Collecting latency results from sender device");
+    log_info(tt::LogTest, "Collecting latency results from sender and responder devices");
 
     // Find the sender device
     const TestDevice* sender_device = nullptr;
@@ -421,18 +421,33 @@ void TestContext::collect_latency_results() {
             break;
         }
     }
-
     TT_FATAL(sender_device != nullptr, "Could not find latency sender device");
+
+    // Find the responder device
+    const TestDevice* responder_device = nullptr;
+    MeshCoordinate responder_coord{0, 0};
+    for (const auto& [coord, device] : test_devices_) {
+        if (device.get_node_id() == latency_responder_device_) {
+            responder_device = &device;
+            responder_coord = coord;
+            break;
+        }
+    }
+    TT_FATAL(responder_device != nullptr, "Could not find latency responder device");
 
     // Use stored latency parameters (latency tests use specialized kernels, not normal sender workers)
     uint32_t num_samples = latency_num_bursts_;
     uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);  // 2 timestamps per sample
 
     // Read latency samples from sender device using the latency worker core
-    auto result_data = fixture_->read_buffer_from_cores(
+    auto sender_result_data = fixture_->read_buffer_from_cores(
         sender_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
 
-    log_info(tt::LogTest, "Collected {} latency samples from core {}", num_samples, latency_worker_core_);
+    // Read responder timestamps from responder device
+    auto responder_result_data = fixture_->read_buffer_from_cores(
+        responder_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+
+    log_info(tt::LogTest, "Collected {} latency samples from sender and responder", num_samples);
 }
 
 void TestContext::report_latency_results(const TestConfig& config) {
@@ -448,8 +463,19 @@ void TestContext::report_latency_results(const TestConfig& config) {
             break;
         }
     }
-
     TT_FATAL(sender_device != nullptr, "Could not find latency sender device");
+
+    // Find the responder device
+    const TestDevice* responder_device = nullptr;
+    MeshCoordinate responder_coord{0, 0};
+    for (const auto& [coord, device] : test_devices_) {
+        if (device.get_node_id() == latency_responder_device_) {
+            responder_device = &device;
+            responder_coord = coord;
+            break;
+        }
+    }
+    TT_FATAL(responder_device != nullptr, "Could not find latency responder device");
 
     // Use stored latency parameters
     uint32_t num_samples = latency_num_bursts_;
@@ -457,63 +483,123 @@ void TestContext::report_latency_results(const TestConfig& config) {
     uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);
 
     // Read latency samples from sender device
-    auto result_data = fixture_->read_buffer_from_cores(
+    auto sender_result_data = fixture_->read_buffer_from_cores(
         sender_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+    const auto& sender_data = sender_result_data.at(latency_worker_core_);
 
-    const auto& data = result_data.at(latency_worker_core_);
+    // Read responder timestamps from responder device
+    auto responder_result_data = fixture_->read_buffer_from_cores(
+        responder_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+    const auto& responder_data = responder_result_data.at(latency_worker_core_);
 
     // Parse timestamp pairs and compute latencies
     // Data is stored as uint64_t pairs but read as uint32_t array
     // Each sample has 4 uint32_t values (2 uint64_t timestamps)
-    std::vector<uint64_t> latencies_cycles;
-    latencies_cycles.reserve(num_samples);
+    std::vector<uint64_t> raw_latencies_cycles;
+    std::vector<uint64_t> responder_times_cycles;
+    std::vector<uint64_t> net_latencies_cycles;
+
+    raw_latencies_cycles.reserve(num_samples);
+    responder_times_cycles.reserve(num_samples);
+    net_latencies_cycles.reserve(num_samples);
 
     for (uint32_t i = 0; i < num_samples; i++) {
-        uint64_t start_ts = static_cast<uint64_t>(data[i * 4]) | (static_cast<uint64_t>(data[i * 4 + 1]) << 32);
-        uint64_t end_ts = static_cast<uint64_t>(data[i * 4 + 2]) | (static_cast<uint64_t>(data[i * 4 + 3]) << 32);
+        // Parse sender timestamps (start and end of round-trip)
+        uint64_t sender_start_ts =
+            static_cast<uint64_t>(sender_data[i * 4]) | (static_cast<uint64_t>(sender_data[i * 4 + 1]) << 32);
+        uint64_t sender_end_ts =
+            static_cast<uint64_t>(sender_data[i * 4 + 2]) | (static_cast<uint64_t>(sender_data[i * 4 + 3]) << 32);
 
-        if (end_ts > start_ts) {
-            latencies_cycles.push_back(end_ts - start_ts);
+        // Parse responder timestamps (start and end of response processing)
+        uint64_t responder_start_ts =
+            static_cast<uint64_t>(responder_data[i * 4]) | (static_cast<uint64_t>(responder_data[i * 4 + 1]) << 32);
+        uint64_t responder_end_ts =
+            static_cast<uint64_t>(responder_data[i * 4 + 2]) | (static_cast<uint64_t>(responder_data[i * 4 + 3]) << 32);
+
+        // Compute latency metrics
+        if (sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts) {
+            uint64_t raw_latency = sender_end_ts - sender_start_ts;
+            uint64_t responder_time = responder_end_ts - responder_start_ts;
+            uint64_t net_latency = (raw_latency > responder_time) ? (raw_latency - responder_time) : 0;
+
+            raw_latencies_cycles.push_back(raw_latency);
+            responder_times_cycles.push_back(responder_time);
+            net_latencies_cycles.push_back(net_latency);
         }
     }
 
-    if (latencies_cycles.empty()) {
+    if (raw_latencies_cycles.empty()) {
         log_warning(tt::LogTest, "No valid latency samples collected");
         return;
     }
 
     // Sort for percentile calculation
-    std::sort(latencies_cycles.begin(), latencies_cycles.end());
+    std::sort(raw_latencies_cycles.begin(), raw_latencies_cycles.end());
+    std::sort(responder_times_cycles.begin(), responder_times_cycles.end());
+    std::sort(net_latencies_cycles.begin(), net_latencies_cycles.end());
 
     // Get device frequency for conversion to ns
     uint32_t freq_mhz = get_device_frequency_mhz(latency_sender_device_);
     double freq_ghz = static_cast<double>(freq_mhz) / 1000.0;
     double ns_per_cycle = 1.0 / freq_ghz;
 
-    // Calculate statistics
-    uint64_t min_cycles = latencies_cycles.front();
-    uint64_t max_cycles = latencies_cycles.back();
-    uint64_t sum_cycles = std::accumulate(latencies_cycles.begin(), latencies_cycles.end(), 0ULL);
-    double avg_cycles = static_cast<double>(sum_cycles) / latencies_cycles.size();
+    // Helper lambda to calculate statistics
+    auto calc_stats = [](const std::vector<uint64_t>& data) {
+        struct Stats {
+            uint64_t min, max, p50, p99;
+            double avg;
+        };
+        Stats stats;
+        stats.min = data.front();
+        stats.max = data.back();
+        uint64_t sum = std::accumulate(data.begin(), data.end(), 0ULL);
+        stats.avg = static_cast<double>(sum) / data.size();
+        stats.p50 = data[data.size() / 2];
+        stats.p99 = data[static_cast<size_t>(data.size() * 0.99)];
+        return stats;
+    };
 
-    uint64_t p50_cycles = latencies_cycles[latencies_cycles.size() / 2];
-    uint64_t p99_cycles = latencies_cycles[static_cast<size_t>(latencies_cycles.size() * 0.99)];
+    auto raw_stats = calc_stats(raw_latencies_cycles);
+    auto responder_stats = calc_stats(responder_times_cycles);
+    auto net_stats = calc_stats(net_latencies_cycles);
 
-    // Convert to nanoseconds
-    double min_ns = min_cycles * ns_per_cycle;
-    double max_ns = max_cycles * ns_per_cycle;
-    double avg_ns = avg_cycles * ns_per_cycle;
-    double p50_ns = p50_cycles * ns_per_cycle;
-    double p99_ns = p99_cycles * ns_per_cycle;
-
-    // Log results
+    // Log results in table format
+    log_info(tt::LogTest, "");
     log_info(tt::LogTest, "=== Latency Test Results for {} ===", config.parametrized_name);
-    log_info(tt::LogTest, "  Payload size: {} bytes", payload_size);
-    log_info(tt::LogTest, "  Num samples: {}", latencies_cycles.size());
-    log_info(tt::LogTest, "  Min latency: {:.2f} ns ({} cycles)", min_ns, min_cycles);
-    log_info(tt::LogTest, "  Max latency: {:.2f} ns ({} cycles)", max_ns, max_cycles);
-    log_info(tt::LogTest, "  Avg latency: {:.2f} ns ({:.0f} cycles)", avg_ns, avg_cycles);
-    log_info(tt::LogTest, "  P50 latency: {:.2f} ns ({} cycles)", p50_ns, p50_cycles);
-    log_info(tt::LogTest, "  P99 latency: {:.2f} ns ({} cycles)", p99_ns, p99_cycles);
-    log_info(tt::LogTest, "=====================================");
+    log_info(tt::LogTest, "Payload size: {} bytes | Num samples: {}", payload_size, raw_latencies_cycles.size());
+    log_info(tt::LogTest, "");
+    log_info(tt::LogTest, "Metric    Raw Latency (ns)    Responder Time (ns)    Net Latency (ns)");
+    log_info(tt::LogTest, "------------------------------------------------------------------------");
+    log_info(
+        tt::LogTest,
+        "Min       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        raw_stats.min * ns_per_cycle,
+        responder_stats.min * ns_per_cycle,
+        net_stats.min * ns_per_cycle);
+    log_info(
+        tt::LogTest,
+        "Max       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        raw_stats.max * ns_per_cycle,
+        responder_stats.max * ns_per_cycle,
+        net_stats.max * ns_per_cycle);
+    log_info(
+        tt::LogTest,
+        "Avg       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        raw_stats.avg * ns_per_cycle,
+        responder_stats.avg * ns_per_cycle,
+        net_stats.avg * ns_per_cycle);
+    log_info(
+        tt::LogTest,
+        "P50       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        raw_stats.p50 * ns_per_cycle,
+        responder_stats.p50 * ns_per_cycle,
+        net_stats.p50 * ns_per_cycle);
+    log_info(
+        tt::LogTest,
+        "P99       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        raw_stats.p99 * ns_per_cycle,
+        responder_stats.p99 * ns_per_cycle,
+        net_stats.p99 * ns_per_cycle);
+    log_info(tt::LogTest, "========================================================================");
+    log_info(tt::LogTest, "");
 }

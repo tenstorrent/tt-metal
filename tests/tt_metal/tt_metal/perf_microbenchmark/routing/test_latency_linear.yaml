@@ -10,7 +10,7 @@ Tests:
         patterns:
           - ftype: unicast
             ntype: unicast_write
-            size: 1024
+            size: 16
             num_packets: 100  # num_packets represents num_bursts in latency mode
             destination:
               device: [0, 1]
@@ -35,6 +35,54 @@ Tests:
     latency_test_mode: true
     fabric_setup:
       topology: Linear
+
+    senders:
+      - device: [0, 0]
+        latency_burst_size: 1
+        patterns:
+          - ftype: unicast
+            ntype: fused_atomic_inc
+            size: 4096
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: "LatencyRingUnicast"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Ring
+
+    senders:
+      - device: [0, 0]
+        latency_burst_size: 1
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 16
+            num_packets: 100  # num_packets represents num_bursts in latency mode
+            destination:
+              device: [0, 1]
+
+  - name: "LatencyRingSemIncOnly"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Ring
+
+    senders:
+      - device: [0, 0]
+        latency_burst_size: 1
+        patterns:
+          - ftype: unicast
+            ntype: atomic_inc
+            size: 0  # sem_inc only (no payload)
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: "LatencyRingFusedAtomicInc"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Ring
 
     senders:
       - device: [0, 0]
