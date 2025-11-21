@@ -13,6 +13,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "common/env_lib.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include <umd/device/types/core_coordinates.hpp>
@@ -30,7 +31,25 @@ HalCoreInfoType create_tensix_mem_map() {
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
-    const uint32_t default_l1_kernel_config_size = 69 * 1024;
+    // 69KB is the default value for the kernel config buffer size
+    const uint32_t default_l1_kernel_config_size =
+        tt::parse_env<uint32_t>("TT_METAL_KERNEL_CONFIG_BUFFER_SIZE", 69 * 1024);
+
+    // Validate against known physical constraints
+    // There are other constraints, but that's dependent on runtime
+    constexpr uint32_t total_l1_size = MEM_L1_SIZE;    // 1536 * 1024
+    constexpr uint32_t system_reserved = MEM_MAP_END;  // 32880
+    constexpr uint32_t max_kernel_buffer = total_l1_size - system_reserved;
+
+    TT_FATAL(
+        default_l1_kernel_config_size <= max_kernel_buffer,
+        "Kernel config buffer size {} B exceeds maximum available L1 space {} B. "
+        "Total L1: {} B, System reserved: {} B. "
+        "Reduce TT_METAL_KERNEL_CONFIG_BUFFER_SIZE.",
+        default_l1_kernel_config_size,
+        max_kernel_buffer,
+        total_l1_size,
+        system_reserved);
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;

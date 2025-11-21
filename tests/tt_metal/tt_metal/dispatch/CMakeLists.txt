@@ -10,6 +10,7 @@ target_sources(
         dispatch_event/test_events.cpp
         dispatch_program/test_dispatch_stress.cpp
         dispatch_program/test_sub_device.cpp
+        dispatch_program/test_kernel_config_buffer.cpp
         dispatch_util/test_device_command.cpp
         dispatch_util/test_dispatch_settings.cpp
 )
@@ -19,10 +20,16 @@ target_include_directories(
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/ttnn/api
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
+target_link_libraries(
+    unit_tests_dispatch_smoke
+    PRIVATE
+        test_metal_common_libs
+        TTNN::CPP
+)
 
 # Basic tests (too slow for smoke; will run less frequently)
 add_library(unit_tests_dispatch_basic OBJECT)
@@ -86,4 +93,5 @@ target_link_libraries(
         TT::Metalium::Test::Dispatch::Smoke
         TT::Metalium::Test::Dispatch::Basic
         TT::Metalium::Test::Dispatch::Slow
+        TTNN::CPP
 )
