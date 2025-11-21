@@ -683,3 +683,6 @@ class GptOssForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def warmup_model_metal():
+        logger.info("I AM INSIDE TT-METAL OF WARMUP_MODEL_METAL")
