@@ -696,9 +696,19 @@ void TestDevice::create_kernels() {
         this->create_sync_kernel();
     }
 
-    this->create_sender_kernels();
-
-    this->create_receiver_kernels();
+    // Latency test mode uses specialized kernels (no validation)
+    if (latency_test_mode_) {
+        if (is_latency_sender_) {
+            this->create_latency_sender_kernel();
+        } else if (is_latency_responder_) {
+            this->create_latency_responder_kernel();
+        }
+        // Skip create_receiver_kernels() entirely in latency mode (no packet validation)
+    } else {
+        // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
+        this->create_sender_kernels();
+        this->create_receiver_kernels();
+    }
 }
 
 void TestDevice::create_mux_kernels() {
@@ -1227,6 +1237,97 @@ void TestDevice::set_local_runtime_args_for_core(
     uint32_t local_args_address,
     const std::vector<uint32_t>& args) const {
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
+}
+
+void TestDevice::create_latency_sender_kernel() {
+    log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
+
+    CoreCoord core = latency_worker_core_;
+    FabricNodeId dest_node = latency_peer_node_;
+
+    // Compute num hops to responder using routing calculation
+    // For simple 1D case, compute hop distance
+    uint32_t num_hops = 1;  // Default to 1 hop, will be computed by routing
+
+    // Compile-time args
+    bool enable_fused_payload_with_sync = (latency_noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+    bool sem_inc_only = (latency_payload_size_ == 0);
+    std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
+
+    // Runtime args
+    std::vector<uint32_t> rt_args = {
+        sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
+        latency_semaphore_address_,                       // semaphore for ack
+        latency_payload_size_,                            // payload size
+        latency_burst_size_,                              // burst size (typically 1)
+        num_bursts_,                                      // num bursts
+        num_hops                                          // hops to responder
+    };
+
+    // Add fabric connection args
+    uint32_t link_idx = 0;  // Default to link 0
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
+
+    // Create kernel
+    auto kernel_handle = tt::tt_metal::CreateKernel(
+        program_handle_,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_sender.cpp",
+        {core},
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
+
+    log_debug(tt::LogTest, "Created latency sender kernel on core {}", core);
+}
+
+void TestDevice::create_latency_responder_kernel() {
+    log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
+
+    CoreCoord core = latency_worker_core_;
+    FabricNodeId sender_node = latency_peer_node_;  // In responder, peer is the sender
+
+    // Compute num hops back to sender
+    uint32_t num_hops_back = 1;  // Default to 1 hop, will be computed by routing
+
+    // Compile-time args
+    bool enable_fused_payload_with_sync = (latency_noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+    bool sem_inc_only = (latency_payload_size_ == 0);
+    std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
+
+    // Runtime args
+    std::vector<uint32_t> rt_args = {
+        sender_memory_map_->get_result_buffer_address(),  // buffer for receiving payload
+        latency_semaphore_address_,                       // semaphore for incoming packets
+        latency_payload_size_,                            // payload size
+        latency_burst_size_,                              // burst size (typically 1)
+        num_bursts_,                                      // num bursts
+        num_hops_back                                     // hops back to sender
+    };
+
+    // Add fabric connection args (back to sender)
+    uint32_t link_idx = 0;  // Default to link 0
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
+
+    // Create kernel
+    auto kernel_handle = tt::tt_metal::CreateKernel(
+        program_handle_,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_responder.cpp",
+        {core},
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = ct_args,
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+    tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
+
+    log_debug(tt::LogTest, "Created latency responder kernel on core {}", core);
 }
 
 // TestSender accessor implementations (need complete TestDevice)

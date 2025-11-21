@@ -283,6 +283,28 @@ public:
     void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
     void create_kernels();
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_latency_test_mode(
+        bool latency_test_mode,
+        bool is_sender,
+        bool is_responder,
+        uint32_t burst_size,
+        uint32_t num_bursts,
+        tt_metal::DeviceAddr semaphore_addr,
+        uint32_t payload_size,
+        NocSendType noc_send_type,
+        FabricNodeId peer_node,
+        CoreCoord worker_core) {
+        latency_test_mode_ = latency_test_mode;
+        is_latency_sender_ = is_sender;
+        is_latency_responder_ = is_responder;
+        latency_burst_size_ = burst_size;
+        num_bursts_ = num_bursts;
+        latency_semaphore_address_ = semaphore_addr;
+        latency_payload_size_ = payload_size;
+        latency_noc_send_type_ = noc_send_type;
+        latency_peer_node_ = peer_node;
+        latency_worker_core_ = worker_core;
+    }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
@@ -351,6 +373,8 @@ private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     void create_sender_kernels();
     void create_receiver_kernels();
+    void create_latency_sender_kernel();
+    void create_latency_responder_kernel();
     void validate_sender_results() const;
     void validate_receiver_results() const;
     void create_sync_kernel();
@@ -381,6 +405,16 @@ private:
     std::unordered_map<CoreCoord, TestMux> muxes_;            // Mux workers
 
     bool benchmark_mode_ = false;
+    bool latency_test_mode_ = false;
+    bool is_latency_sender_ = false;
+    bool is_latency_responder_ = false;
+    uint32_t latency_burst_size_ = 1;
+    uint32_t num_bursts_ = 0;
+    tt_metal::DeviceAddr latency_semaphore_address_ = 0;
+    uint32_t latency_payload_size_ = 0;
+    NocSendType latency_noc_send_type_ = NocSendType::NOC_UNICAST_WRITE;
+    FabricNodeId latency_peer_node_{MeshId{0}, 0};
+    CoreCoord latency_worker_core_{0, 0};
     bool global_sync_ = false;
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;

@@ -146,6 +146,9 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["link_id"]) {
         config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
     }
+    if (sender_yaml["latency_burst_size"]) {
+        config.latency_burst_size = parse_scalar<uint32_t>(sender_yaml["latency_burst_size"]);
+    }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
     TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
@@ -222,6 +225,38 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
 
     if (test_yaml["benchmark_mode"]) {
         test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+    }
+
+    if (test_yaml["latency_test_mode"]) {
+        test_config.latency_test_mode = parse_scalar<bool>(test_yaml["latency_test_mode"]);
+    }
+
+    // Validate mutual exclusivity of benchmark_mode and latency_test_mode
+    TT_FATAL(
+        !(test_config.benchmark_mode && test_config.latency_test_mode),
+        "Test '{}': benchmark_mode and latency_test_mode are mutually exclusive",
+        test_config.name);
+
+    // Validate latency test mode requirements
+    if (test_config.latency_test_mode) {
+        TT_FATAL(
+            !test_config.patterns.has_value() || test_config.patterns.value().empty(),
+            "Test '{}': latency_test_mode does not support high-level patterns",
+            test_config.name);
+        TT_FATAL(
+            test_config.senders.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one sender, got {}",
+            test_config.name,
+            test_config.senders.size());
+        TT_FATAL(
+            test_config.senders[0].patterns.size() == 1,
+            "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+            test_config.name,
+            test_config.senders[0].patterns.size());
+        TT_FATAL(
+            test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+            "Test '{}': latency_test_mode only supports unicast",
+            test_config.name);
     }
 
     if (test_yaml["sync"]) {
