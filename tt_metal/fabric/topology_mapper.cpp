@@ -627,10 +627,25 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         log_to_idx[log_nodes[i]] = i;
     }
 
-    std::vector<std::vector<size_t>> log_adj_idx(n_log);
+    // Build connection count maps for STRICT mode validation
+    // log_conn_count[i][j] = number of channels from logical node i to logical node j
+    std::vector<std::map<size_t, size_t>> log_conn_count(n_log);
     for (size_t i = 0; i < n_log; ++i) {
         for (const auto& neigh : log_adj.at(log_nodes[i])) {
-            log_adj_idx[i].push_back(log_to_idx.at(neigh));
+            size_t idx = log_to_idx.at(neigh);
+            log_conn_count[i][idx]++;
+        }
+    }
+
+    std::vector<std::vector<size_t>> log_adj_idx(n_log);
+    for (size_t i = 0; i < n_log; ++i) {
+        std::unordered_set<size_t> seen_indices;  // Track seen indices for deduplication
+        for (const auto& neigh : log_adj.at(log_nodes[i])) {
+            size_t idx = log_to_idx.at(neigh);
+            // Deduplicate: only add if we haven't seen this index before
+            if (seen_indices.insert(idx).second) {
+                log_adj_idx[i].push_back(idx);
+            }
         }
         std::sort(log_adj_idx[i].begin(), log_adj_idx[i].end());
     }
@@ -638,6 +653,19 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     std::map<tt::tt_metal::AsicID, size_t> phys_to_idx;
     for (size_t i = 0; i < n_phys; ++i) {
         phys_to_idx[phys_nodes[i]] = i;
+    }
+
+    // Build connection count maps for STRICT mode validation
+    // phys_conn_count[i][j] = number of channels from physical node i to physical node j
+    std::vector<std::map<size_t, size_t>> phys_conn_count(n_phys);
+    for (size_t i = 0; i < n_phys; ++i) {
+        for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
+            auto it = phys_to_idx.find(neigh);
+            if (it != phys_to_idx.end()) {
+                size_t idx = it->second;
+                phys_conn_count[i][idx]++;
+            }
+        }
     }
 
     std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
@@ -655,6 +683,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
         std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
     }
+
+    bool strict_mode = !mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
 
     // mapping[logical_index] = physical_index
     std::vector<int> mapping(n_log, -1);
@@ -1167,6 +1197,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     ok = false;
                     break;
                 }
+                // In STRICT mode, also validate connection counts
+                if (ok && strict_mode && log_connected) {
+                    size_t log_count = log_conn_count[li].at(lk);
+                    size_t phys_count = phys_conn_count[j].at(pk);
+                    if (phys_count < log_count) {
+                        ok = false;
+                        break;
+                    }
+                }
             }
             if (!ok) {
                 if ((dfs_calls & ((1u << 17) - 1)) == 0) {
@@ -1228,6 +1267,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                         if (log_conn2 && !phys_conn2) {
                             consistent = false;
                             break;
+                        }
+                        // In STRICT mode, also validate connection counts
+                        if (consistent && strict_mode && log_conn2) {
+                            size_t log_count = log_conn_count[v].at(lv);
+                            size_t phys_count = phys_conn_count[pj].at(pk2);
+                            if (phys_count < log_count) {
+                                consistent = false;
+                                break;
+                            }
                         }
                     }
                     if (consistent) {
@@ -1526,6 +1574,43 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         tt::tt_metal::AsicID asic = phys_nodes[mapping[i]];
         fabric_node_id_to_asic_id_.emplace(fn, asic);
         asic_id_to_fabric_node_id_.emplace(asic, fn);
+    }
+
+    // Final validation: In STRICT mode, verify all logical edges have sufficient physical connections
+    if (strict_mode) {
+        for (size_t i = 0; i < n_log; ++i) {
+            size_t phys_i = static_cast<size_t>(mapping[i]);
+            for (const auto& [neigh_log_idx, log_count] : log_conn_count[i]) {
+                size_t phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
+                // Connection should exist (validated earlier), but check to be safe
+                auto it = phys_conn_count[phys_i].find(phys_neigh_idx);
+                TT_FATAL(
+                    it != phys_conn_count[phys_i].end(),
+                    "Graph specified in MGD could not fit in the discovered physical topology for mesh {} under the "
+                    "given pinning constraints. Logical edge from node {} to {} exists, but physical edge from {} to "
+                    "{} does not. Either relax pinnings or modify the MGD. If this is unexpected, run "
+                    "./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
+                    mesh_id.get(),
+                    log_nodes[i],
+                    log_nodes[neigh_log_idx],
+                    phys_nodes[phys_i],
+                    phys_nodes[phys_neigh_idx]);
+                size_t phys_count = it->second;
+                TT_FATAL(
+                    phys_count >= log_count,
+                    "Graph specified in MGD could not fit in the discovered physical topology for mesh {} under the "
+                    "given pinning constraints. Logical edge from node {} to {} requires {} channels, but physical "
+                    "edge from {} to {} only has {} channels. Either relax pinnings or modify the MGD. If this is "
+                    "unexpected, run ./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
+                    mesh_id.get(),
+                    log_nodes[i],
+                    log_nodes[neigh_log_idx],
+                    log_count,
+                    phys_nodes[phys_i],
+                    phys_nodes[phys_neigh_idx],
+                    phys_count);
+            }
+        }
     }
 }
 
