@@ -7,7 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
+from models.demos.llms.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
