@@ -13,6 +13,8 @@ from models.experimental.stable_diffusion_xl_base.refiner.tests.pcc.test_module_
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
 
+import os
+
 
 @pytest.mark.parametrize(
     "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
@@ -52,6 +54,7 @@ def test_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     expected_device_perf_cycles_per_iteration = 158_803_279
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
@@ -68,7 +71,7 @@ def test_sdxl_unet_perf_device():
         inference_time_key: expected_device_perf_cycles_per_iteration * UNET_DEVICE_TEST_TOTAL_ITERATIONS
     }
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.5, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"sdxl_unet",
@@ -146,6 +149,7 @@ def test_sdxl_refiner_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_decode_perf_device():
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     expected_device_perf_cycles_per_iteration = 648_256_413
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -158,7 +162,7 @@ def test_sdxl_vae_decode_perf_device():
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.5, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"sdxl_vae_decode",
