@@ -2790,8 +2790,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2811,8 +2811,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2832,8 +2832,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2853,8 +2853,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2944,8 +2944,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2965,8 +2965,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -2986,8 +2986,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3007,8 +3007,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3028,8 +3028,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3049,8 +3049,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3070,8 +3070,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3091,8 +3091,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3112,8 +3112,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3133,8 +3133,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3154,8 +3154,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
@@ -3175,8 +3175,8 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ftype: [unicast, mcast]
     defaults:
-      ftype: mcast
       size: 512
       num_packets: 2000
       destination:
