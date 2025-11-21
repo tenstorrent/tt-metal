@@ -7,7 +7,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <memory>
 #include <optional>
-#include <string>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -23,6 +22,7 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal::distributed {
