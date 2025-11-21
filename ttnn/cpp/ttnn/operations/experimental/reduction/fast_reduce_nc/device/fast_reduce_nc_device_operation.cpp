@@ -65,16 +65,6 @@ tensor_return_value_t FastReduceNCDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t FastReduceNCDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Hash operation attributes (all affect program structure)
-    // Hash specific tensor properties that affect program structure (dtype, memory_config, shape, shard specs, tile)
-    // rather than the whole tensor to avoid including runtime-only properties like buffer addresses
-    auto hash = tt::tt_metal::operation::hash_operation<FastReduceNCDeviceOperation>(args, tensor_args);
-
-    return hash;
-}
-
 std::tuple<FastReduceNCDeviceOperation::operation_attributes_t, FastReduceNCDeviceOperation::tensor_args_t>
 FastReduceNCDeviceOperation::invoke(
     const Tensor& input,
