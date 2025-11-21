@@ -1,0 +1,169 @@
+graph_templates {
+  key: "extracted_topology"
+  value {
+    children {
+      name: "bh"
+      node_ref {
+        node_descriptor: "BH_GALAXY"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 1
+          }
+          port_b {
+            path: "bh"
+            tray_id: 2
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 3
+            port_id: 1
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 3
+            port_id: 2
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 2
+          }
+          port_b {
+            path: "bh"
+            tray_id: 2
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 3
+          }
+          port_b {
+            path: "bh"
+            tray_id: 3
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 4
+          }
+          port_b {
+            path: "bh"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 5
+          }
+          port_b {
+            path: "bh"
+            tray_id: 3
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 1
+            port_id: 6
+          }
+          port_b {
+            path: "bh"
+            tray_id: 3
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 2
+            port_id: 3
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 2
+            port_id: 4
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 2
+            port_id: 5
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "bh"
+            tray_id: 2
+            port_id: 6
+          }
+          port_b {
+            path: "bh"
+            tray_id: 4
+            port_id: 6
+          }
+        }
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "extracted_topology"
+  child_mappings {
+    key: "bh"
+    value {
+      host_id: 0
+    }
+  }
+}

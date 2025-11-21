@@ -1,0 +1,25 @@
+graph_templates {
+  key: "extracted_topology"
+  value {
+    children {
+      name: "wh"
+      node_ref {
+        node_descriptor: "WH_GALAXY"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "extracted_topology"
+  child_mappings {
+    key: "wh"
+    value {
+      host_id: 0
+    }
+  }
+}
