@@ -293,7 +293,8 @@ public:
         uint32_t payload_size,
         uint32_t burst_size,
         uint32_t num_bursts,
-        NocSendType noc_send_type);
+        NocSendType noc_send_type,
+        CoreCoord responder_virtual_core);
 
     void create_latency_responder_kernel(
         CoreCoord core,
@@ -301,7 +302,10 @@ public:
         uint32_t payload_size,
         uint32_t burst_size,
         uint32_t num_bursts,
-        NocSendType noc_send_type);
+        NocSendType noc_send_type,
+        uint32_t sender_send_buffer_address,
+        uint32_t sender_receive_buffer_address,
+        CoreCoord sender_virtual_core);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
@@ -368,6 +372,10 @@ public:
 
     std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
 
+    // Latency buffer address getters (public so TestContext can query them)
+    size_t get_latency_send_buffer_address() const;
+    size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
+
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     void create_sender_kernels();
@@ -376,8 +384,6 @@ private:
     void validate_receiver_results() const;
     void create_sync_kernel();
     void create_mux_kernels();
-
-    size_t get_latency_scratch_buffer_address() const;
 
     // Helper: Common connection registration logic for senders and receivers
     // Registers a fabric connection for the specified direction and link

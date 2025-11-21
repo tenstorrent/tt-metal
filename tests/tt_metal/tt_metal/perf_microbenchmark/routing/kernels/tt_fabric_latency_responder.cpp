@@ -20,7 +20,6 @@ constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
     set_l1_data_cache<false>();
-    DPRINT << "kernel_main responder\n";
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
@@ -31,10 +30,12 @@ void kernel_main() {
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
-    const size_t sender_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);     // For echoing back to sender
+    const size_t responder_receive_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Responder's receive buffer (receives from sender)
+    const size_t sender_receive_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Sender's receive buffer (responder writes here)
     const uint8_t sender_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Sender's virtual NOC X
     const uint8_t sender_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Sender's virtual NOC Y
-    const size_t responder_scratch_buffer_address = sender_scratch_buffer_address;        // For receiving payload
 
     // Topology-specific routing args (for sending back to sender)
     uint32_t num_hops_back_to_sender = 0;
@@ -70,8 +71,9 @@ void kernel_main() {
 
     // Setup NOC addresses for destination (sender device)
     // Use sender's virtual core coordinates (not responder's coordinates)
+    // Write to sender's receive buffer (not responder's buffer)
     auto dest_semaphore_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, semaphore_address, 0);
-    auto dest_payload_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, sender_scratch_buffer_address, 0);
+    auto dest_payload_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, sender_receive_buffer_address, 0);
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -90,16 +92,7 @@ void kernel_main() {
             (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
 
-    auto send_payload_packet =
-        [&fabric_connection, payload_packet_header, responder_scratch_buffer_address, payload_size_bytes]() {
-            fabric_connection.wait_for_empty_write_slot();
-            if (payload_size_bytes > 0) {
-                fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    responder_scratch_buffer_address, payload_size_bytes);
-            }
-            fabric_connection.send_payload_flush_non_blocking_from_address(
-                (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-        };
+    // Note: send_payload_packet will be updated inline where needed
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
         noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
@@ -112,6 +105,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_bursts; i++) {
         result_ptr[i] = 0;
     }
+    volatile uint32_t* responder_receive_ptr = reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address);
+    *responder_receive_ptr = 0;
     // Warmup: respond to flush packet
     {
         wait_for_semaphore_then_reset(1);
@@ -120,14 +115,12 @@ void kernel_main() {
 
     // Validate burst size
     if (burst_size > 1) {
-        DPRINT << "ERROR: burst_size > 1 not supported for accurate latency measurement\n";
         while (1);  // Invalid config - hang instead of reporting garbage numbers
     }
 
     // Main response loop
     // Wait for incoming packets and immediately send ack back
-    // Use scratch buffer for receiving payloads to avoid overwriting timestamps
-    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(responder_scratch_buffer_address);
+    // Use receive buffer for receiving payloads to avoid overwriting timestamps
 
     if (burst_size == 1) {
         // for burst size one, we can safely assume we don't need to wait for space because
@@ -136,7 +129,7 @@ void kernel_main() {
         for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
             // Wait for incoming packet from sender
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+                noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
             } else {
                 noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
             }
@@ -147,7 +140,7 @@ void kernel_main() {
             if constexpr (enable_fused_payload_with_sync) {
                 if (payload_size_bytes > 0) {
                     fabric_connection.send_payload_without_header_non_blocking_from_address(
-                        responder_scratch_buffer_address, payload_size_bytes);
+                        responder_receive_buffer_address, payload_size_bytes);
                 }
                 fabric_connection.send_payload_flush_non_blocking_from_address(
                     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -158,7 +151,7 @@ void kernel_main() {
                 } else {
                     if (payload_size_bytes > 0) {
                         fabric_connection.send_payload_without_header_non_blocking_from_address(
-                            responder_scratch_buffer_address, payload_size_bytes);
+                            responder_receive_buffer_address, payload_size_bytes);
                     }
                     fabric_connection.send_payload_flush_non_blocking_from_address(
                         (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -176,7 +169,7 @@ void kernel_main() {
         for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
             // Wait for incoming packet from sender
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+                noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
             } else {
                 noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
             }
@@ -186,7 +179,7 @@ void kernel_main() {
 
             for (size_t i = 0; i < burst_size; i++) {
                 if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                    noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+                    noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
                 } else {
                     noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
                 }
@@ -195,7 +188,7 @@ void kernel_main() {
                     fabric_connection.wait_for_empty_write_slot();
                     if (payload_size_bytes > 0) {
                         fabric_connection.send_payload_without_header_non_blocking_from_address(
-                            responder_scratch_buffer_address, payload_size_bytes);
+                            responder_receive_buffer_address, payload_size_bytes);
                     }
                     fabric_connection.send_payload_flush_non_blocking_from_address(
                         (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -208,7 +201,7 @@ void kernel_main() {
                         fabric_connection.wait_for_empty_write_slot();
                         if (payload_size_bytes > 0) {
                             fabric_connection.send_payload_without_header_non_blocking_from_address(
-                                responder_scratch_buffer_address, payload_size_bytes);
+                                responder_receive_buffer_address, payload_size_bytes);
                         }
                         fabric_connection.send_payload_flush_non_blocking_from_address(
                             (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -227,5 +220,6 @@ void kernel_main() {
 
     fabric_connection.close();
 
+    noc_semaphore_set(reinterpret_cast<volatile uint32_t*>(semaphore_address), 0);
     noc_async_full_barrier();
 }
