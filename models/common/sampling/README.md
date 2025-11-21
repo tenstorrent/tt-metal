@@ -27,8 +27,6 @@ tt_tokens = sampling.sample(
     tt_logits,
     seed=seed,
     tt_out_tok=tt_out_buffer,
-    batch_size=args.max_batch_size,
-    num_outputs=1,
 )
 ```
 

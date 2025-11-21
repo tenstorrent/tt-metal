@@ -682,8 +682,6 @@ class Generator:
                     sampling_module.sample(
                         logits=outputs[i],
                         tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
-                        batch_size=self.model_args[i].max_batch_size,
-                        num_outputs=1,
                     )
                 )
             return new_outputs

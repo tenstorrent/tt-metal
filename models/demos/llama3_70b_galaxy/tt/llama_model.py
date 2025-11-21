@@ -583,7 +583,6 @@ class TtTransformer(LightweightModule):
         tt_toks = self.sampling.sample(
             tt_logits[0],
             tt_out_tok=x,
-            batch_size=self.args.max_batch_size,
             enable_trace=False,
         )
         return tt_toks

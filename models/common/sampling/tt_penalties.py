@@ -178,7 +178,7 @@ class TTPenalties(LightweightModule):
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask
 
-    def apply(self, tt_logits: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
+    def apply(self, tt_logits: ttnn.Tensor) -> ttnn.Tensor:
         if tt_logits is None:
             return tt_logits
 

@@ -225,7 +225,6 @@ class SamplingGenerator:
                     logits,
                     seed=seed,
                     tt_out_tok=tt_out_tok,
-                    penalties_on=penalties_on,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)

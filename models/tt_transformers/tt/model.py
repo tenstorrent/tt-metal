@@ -436,7 +436,6 @@ class Transformer(LightweightModule):
                 tt_logits,
                 tt_out_tok=x,
                 enable_trace=False,
-                batch_size=self.args.max_batch_size,
             )
             return tt_toks
 
