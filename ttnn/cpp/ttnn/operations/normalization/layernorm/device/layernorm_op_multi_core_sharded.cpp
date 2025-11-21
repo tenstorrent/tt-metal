@@ -557,7 +557,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     } e{}, one{};
     e.f = eps;
     one.f = 1.0f;
-    auto bfloat_one_value = bfloat16(winv.f);
+    auto bfloat_one_value = bfloat16(one.f);
     uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     for (uint32_t i = 0; i < num_cores; ++i) {
