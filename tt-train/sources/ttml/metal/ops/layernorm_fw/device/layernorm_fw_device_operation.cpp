@@ -136,7 +136,7 @@ tensor_return_value_t LayerNormForwardDeviceOperation::create_output_tensors(
 
     // output
     if (tensor_args.preallocated_output.has_value()) {
-        output_tensors.push_back(tensor_args.preallocated_output.value());
+        output_tensors.push_back(tensor_args.preallocated_output);
     } else {
         output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
     }
