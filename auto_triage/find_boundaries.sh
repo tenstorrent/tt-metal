@@ -344,45 +344,8 @@ fi
 if [ -n "$SUMMARY_JSON_PATH" ]; then
     tmp_summary="$(mktemp)"
     jq -n \
-        --arg workflow "$WORKFLOW_NAME" \
-        --arg subjob "$SUBJOB_NAME" \
-        --arg last_success_commit "${LAST_SUCCESSFUL_COMMIT:-}" \
-        --arg last_success_run "${LAST_SUCCESSFUL_RUN:-}" \
-        --arg last_success_run_id "${LAST_SUCCESSFUL_RUN_ID:-}" \
-        --arg last_success_job "${LAST_SUCCESSFUL_JOB_URL:-}" \
-        --arg first_fail_commit "${FIRST_FAILING_COMMIT:-}" \
-        --arg first_fail_run "${FIRST_FAILING_RUN:-}" \
-        --arg first_fail_run_id "${FIRST_FAILING_RUN_ID:-}" \
-        --arg first_fail_job "${FIRST_FAILING_JOB_URL:-}" \
-        --arg compare_url "${COMPARE_URL:-}" \
-        --arg commit_count "${COMMIT_COUNT:-}" \
         --argjson runs "$SUBJOB_RUNS_JSON" \
-        --argjson failed_runs "$FAILED_RUNS_JSON" \
-        '{
-            workflow: $workflow,
-            subjob: $subjob,
-            last_success: {
-                commit: $last_success_commit,
-                run_url: $last_success_run,
-                run_id: $last_success_run_id,
-                job_url: $last_success_job
-            },
-            first_failure: {
-                commit: $first_fail_commit,
-                run_url: $first_fail_run,
-                run_id: $first_fail_run_id,
-                job_url: $first_fail_job
-            },
-            compare_url: $compare_url,
-            commit_count: (
-                if ($commit_count | test("^[0-9]+$")) then ($commit_count | tonumber)
-                elif ($commit_count | length) > 0 then $commit_count
-                else null
-                end
-            ),
-            runs: $runs,
-            failed_runs: $failed_runs
-        }' > "$tmp_summary"
+        '{runs: $runs}' > "$tmp_summary"
     mv "$tmp_summary" "$SUMMARY_JSON_PATH"
     echo "$SUBJOB_RUNS_JSON" > "$RUNS_JSON_PATH"
 fi

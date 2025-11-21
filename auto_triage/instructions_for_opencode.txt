@@ -1,73 +1,113 @@
-You are an automated pipeline triage tool. You have been given a workflow file and a subjob in that workflow that is currently failing on main.
+Auto Triage Playbook (LLM-Friendly)
+==================================
 
-Your goal is to determine which commit has caused the specific subjob in the pipeline to fail on main. To accomplish this goal, you have access to several shell scripts and a summary data file that make the investigation faster.
+Mission
+-------
+You are diagnosing a single failing subjob in a GitHub Actions workflow that is currently red on `main`. Your job is to identify the exact commit that introduced the deterministic failure.
 
-The key data files live under `auto_triage/data/`:
+High-Level Workflow
+-------------------
+1. Read `auto_triage/data/boundaries_summary.json` (or `subjob_runs.json`) to understand the ordered run history.
+2. Download logs for candidate runs, starting from the oldest failing run whose logs still exist.
+3. Confirm the first deterministic failure by comparing consecutive runs.
+4. Once determinism is proven, analyze commits between the last good run and the first deterministic bad run.
+5. Select the most likely culprit commit, note credible alternatives, and document everything in `auto_triage/output/`.
 
-* `boundaries_summary.json` – contains the **last successful run** (job URL, job ID, commit SHA, run_number) and again lists **every subsequent failing run** with the same metadata. the higher the count number, the more recent the run with run 0 being the last run where the job passed. Use `runs` for the full history and `failed_runs` when you only care about failures.
-* `subjob_runs.json` – just the `runs` array in isolation (handy if you only need the ordered list of runs).
+Key Data Files (under `auto_triage/data/`)
+-----------------------------------------
+- `boundaries_summary.json`: includes the last successful run (`run_number` 0) plus every subsequent failing run. Each entry has job URL, job ID, commit SHA, and run_number. Use `runs` for the full timeline or `failed_runs` for failures only.
+- `subjob_runs.json`: the same `runs` array in isolation, handy for quick chronological reference.
 
-You might think that you only need the last successful job run and the first failing job run to determine the general range where the job started failing. While this might often be the case, you must remember, jobs can often fail for non-deterministic reasons.
+Deterministic Failure Rules
+---------------------------
+- A run is deterministic only if the **same test failure** is observed in two consecutive runs (unless it is the most recent failing run, which you may assume is deterministic).
+- Ignore failures caused by infrastructure issues (runner disconnects, OOM before tests, GitHub outages, setup steps). The failing logs must show the actual test failure.
+- Do **not** analyze any commits until you have identified the first deterministic failure with concrete evidence from logs.
+- Document why the chosen run is deterministic in your final explanation.
 
-Lets say the job was run 5 times, with runs A, B, C, D, and E (in chronological order). Run A might have had a successful subjob run, while run B had a failed subjob run. However, in run B, the subjob may have failed because the runner lost connection to the server, and run C failed immediately because the runner just happened to run out of memory on this one instance. It's possible that the first DETERMINISTIC error occurred in run D, after a developer pushed some change that, lets say, caused a file path to break. Then run E has the exact same error as run D.
+Understanding the Example Scenario
+----------------------------------
+Runs A–E happen in order. A passes. B and C fail due to flaky infrastructure. D and E both fail with the same test assertion. The first deterministic failure is therefore run D, and the culprit commit lies between runs A and D. Only after confirming this pattern can you analyze commits in that interval.
 
-As you can see, the problematic commit would be somewhere between runs A and D, since B and C wouldn't be valid runs to use. Basically, to be certain that a run was the first instance of the job breaking, you need the next run to fail with the exact same error (so run D was only known to be the first instance of the job deterministically breaking because run E also failed with the same error). The only exception is for the most recent failing job run. In that case, you can assume the failure is deterministic because we wouldn’t ask you to triage unless the job is currently broken on `main`.
+Log Download Policy
+-------------------
+- Use `auto_triage/get_logs.sh <job_url> [output_dir]`.
+  ```
+  auto_triage/get_logs.sh https://github.com/tenstorrent/tt-metal/actions/runs/<run_id>/job/<job_id>
+  ```
+  Output defaults to `auto_triage/logs/job_<job_id>/` with `full/` archives and, when possible, `job_specific/` subsets.
+- Always attempt to download the **oldest available failing run**. If logs are missing or `get_logs.sh` errors out, stop chasing older runs and switch to the newest run that still has logs (Edge Case A guidance below).
+- If the newest run fails before tests execute, try the next-newest run, repeating until you find a run where the test actually ran.
+- If you cannot find the test log within the archive, assume that run was non-deterministic (test never executed).
+- Never run `find_boundaries.sh`; it has already been executed.
 
-However, there is a caveat. Just because an error appears more than 2 times in a row doesn't necessarily mean the error is deterministic. lets say that github was experiencing issues one day, and so 10 runs all ran and all experienced server issues. All these runs might have the same error, but none are deterministic because it's not a test failure, but a github failure. You should consider a job to be the first instance of a deterministic error only if the error in the logs are from the ACTUAL TEST ITSELF, not a failure in setup steps or other steps in the job. This is in addition to the requirement that the error repeat in two successive job runs.
+Edge Case A (Expired Logs)
+--------------------------
+- Trigger: `get_logs.sh` fails for the oldest failing run because logs expired.
+- Response: stop searching for older logs. Use the most recent run that has logs to understand the current deterministic failure.
+- Deliverables: only `auto_triage/output/explanation.md`, explicitly noting that logs expired and providing the best root-cause hypothesis plus remediation guidance. Do **not** analyze commits in this case.
 
-This next part is very important: you are not allowed to analyze any commits unless you have verified that the failed jobs have failed due to deterministic reasons. For example, if job A succeeds, and then job B fails, you might think to look for the commits between jobs A and B. however, you are not allowed to do this unless you have shown for certain that job B failed due to a deterministic error. This means job B failed due to a test failure, and it failed the same way that the next job C failed (with the exception being that job B is the most recent job).
+Efficiency + Log Parsing
+------------------------
+- Logs are large. Prefer `grep`, small helper scripts, or search terms like `FAILED`, `AssertionError`, `summary`.
+- Once you find an error signature, reuse it (via `grep`) when checking other logs so you never manually re-scan for the same string twice.
+- Always explain your thought process before running commands.
 
-You also are not allowed to analyze any commits between jobs until you have determined that the job failure is deterministic. Your explanation must explain why a job failure is deterministic
-
-As a helper mechanism, if you cannot find the log for the actual test after downloading logs for a run, that means that the test probably didn't execute, so you can assume that that run was non-deterministic
-
-Also don't run find_boundaries.sh. That command was already run before you were given this task. Running it wastes compute time.
-
-### Tools Available
-
-1. **Download logs (full run + job-specific subset)**
+Toolbox Reference
+-----------------
+1. **Download logs**
    ```
    auto_triage/get_logs.sh <job_url> [output_dir]
-   # Example:
-   auto_triage/get_logs.sh \
-     https://github.com/tenstorrent/tt-metal/actions/runs/19475473285/job/55735804849
    ```
-   Output directory defaults to `auto_triage/logs/job_<job_id>/`. The script copies the **entire run archive** into `full/` and, when possible, saves a `job_specific/` subset whose names match the job. Compare consecutive runs to confirm determinism; if the job-specific folder is empty, fall back to the `full/` logs.
-
-2. **List candidate commits between a good and bad run**
+2. **List commits between a known good commit and the first deterministic bad commit**
    ```
    auto_triage/download_data_between_commits.sh <good_commit> <bad_commit> [output_json]
-   # Example:
-   auto_triage/download_data_between_commits.sh 8221a4dd 8e97c34c
    ```
-   Output defaults to `auto_triage/data/commit_info.json`. Each entry includes commit metadata, Copilot overview, authors, etc.
-
-3. **Inspect files changed by a commit**
+   Default output: `auto_triage/data/commit_info.json` (includes Copilot summaries, author, etc.).
+3. **Changed files for a specific commit**
    ```
    auto_triage/get_changed_files.sh <commit> [output_json]
-   # Example:
-   auto_triage/get_changed_files.sh 8e97c34c
    ```
-   Writes `auto_triage/data/commit_<commit>_files.json`.
-4. **Inspect line-by-line diffs**
+   Default output: `auto_triage/data/commit_<commit>_files.json`.
+4. **Full diff for a commit**
    ```
    auto_triage/get_commit_diff.sh <commit> [output_patch]
-   # Example:
-   auto_triage/get_commit_diff.sh 8e97c34c
    ```
-   Writes `auto_triage/data/commit_<commit>_diff.patch`.
+   Default output: `auto_triage/data/commit_<commit>_diff.patch`.
 
-Use these tools to gather evidence: confirm the first deterministic failure, narrow to the correct commit window, and dig into the likely offending commit(s).
+Commit Analysis Requirements
+----------------------------
+- Only begin commit analysis after identifying the first deterministic failing run.
+- Use `download_data_between_commits.sh` to gather commit metadata (especially Copilot summaries) for the range between the last passing run and the first deterministic failing run.
+- The final explanation must cite the Copilot overview (or other metadata) that justifies why a commit is suspect.
 
-keep in mind, the log files are very long, so it will be more efficient to run grep commands or write your own parsing scripts then trying to just read the entire log yourself. Feel free to edit and then run auto_triage/llm_script.sh if you need to run long bash commands, as that script already has execution privileges. make sure it only runs read commands though.
+Outputs (when **not** in Edge Case A)
+-------------------------------------
+Write the following files under `auto_triage/output/`:
+- `chosen_commit.json`: commit SHA and justification for the most likely culprit.
+- `alternatives.json`: other plausible commits with short rationales.
+- `explanation.md`: a detailed report covering:
+  - Which job/run was the first deterministic failure and why.
+  - The commit window examined and how it was derived.
+  - The repeated error signature.
+  - Which Copilot summaries and file/diff details you relied on.
+  - Fix-forward guidance beyond “revert the commit”.
+- Contact guidance:
+  - Identify the most relevant engineer(s) to loop in. If a culprit commit is named, list the author first.
+  - Otherwise, use `git log`, `git blame`, and `.github/CODEOWNERS` to find owners of the failing files/tests.
+  - For each suggested contact, include a GitHub profile URL (e.g., `https://github.com/<handle>`). If you know the real name, show both name and handle.
+  - Mention these contacts, with hyperlinks, explicitly in `explanation.md`.
 
-Also, to justify which commit you think caused the failure, you must use the commit information retrieved by download_data_between_commits.sh as that explains what the commit did.
+Outputs (Edge Case A)
+---------------------
+- Only produce `auto_triage/output/explanation.md`.
+- State that logs expired and provide best-effort debugging guidance referencing the most recent logs that still exist.
+- Still include a “Who to contact” section using `git log`, `git blame`, and `.github/CODEOWNERS` to identify likely owners for the failing area, and provide a GitHub URL for each handle.
 
-At the end, write your results to thre files in `auto_triage/output/`:
-* `chosen_commit.json`: your best guess for the commit that broke the subjob.
-* `alternatives.json`: other plausible commits that might be responsible.
-* `explanation.md`: a markdown report detailing your reasoning (why the chosen commit is most likely, and why the alternatives still deserve mention).
-
-explanation.md should explain exactly which job you chose as the first indication of deterministic failure, which commit range you used, and what copilot summary you used in your analysis, what the repeated error was, as well as any other information (like files changed or lines changed) that you used to choose the commit.
-
-Accurate analysis is critical—developers will act on your findings. Keep the workflow deterministic and document your reasoning clearly.***
+Final Reminders
+---------------
+- Stay deterministic: every conclusion must be backed by logs or data.
+- Be concise but explicit about reasoning.
+- Efficiency matters—avoid redundant work.
+- Accuracy is critical; developers act on this analysis.
+- Always recommend specific people to contact, prioritizing commit authors and file owners identified via `git log`, `git blame`, and `.github/CODEOWNERS`, and share their GitHub URLs for easy follow-up.
