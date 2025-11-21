@@ -27,7 +27,7 @@ on:
         type: string
         default: "in-service"
       t3000-unit:
-        description: "Unit tests: Select `all`, specific model or `disabled`"
+        description: "Unit tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
@@ -52,7 +52,7 @@ on:
           - qwen25_vl
           - gemma3-small
       t3000-demo:
-        description: "Demo tests: Select `all`, specific model or `disabled`"
+        description: "Demo tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
@@ -78,7 +78,7 @@ on:
           - wan22
           - mochi
       t3000-frequent:
-        description: "Frequent tests: Select `all`, specific model or `disabled`"
+        description: "Frequent tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
@@ -104,7 +104,7 @@ on:
           - wan2.2
           - mochi
       t3000-model-perf:
-        description: "Model perf tests (needs tracy): Select `all`, specific model or `disabled`"
+        description: "Model perf tests (needs tracy): Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:
