@@ -26,7 +26,7 @@ using FabricRelayChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_REL
 
 template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
 using FabricRelayStaticSizedChannelWorkerInterface =
-    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
+    StaticSizedSenderChannelWorkerInterface<noc_index, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
 
 using FabricRelayChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 
@@ -38,6 +38,8 @@ using FabricRelayStatus = EDMStatus;
 template <uint8_t NUM_EDM_BUFFERS>
 using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
+
+static_assert(noc_index == 1, "Relay kernel requires noc_index to be 1 for correct noc address calculation");
 
 constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
 constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(1);
@@ -116,7 +118,7 @@ constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
@@ -139,8 +141,8 @@ FORCE_INLINE void wait_for_mux_endpoint_ready(
 
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
-    tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>* channel_ptr,
+    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
     size_t buffer_size_bytes,
     size_t channel_base_address,
@@ -148,7 +150,7 @@ void setup_channel(
     size_t connection_handshake_address,
     size_t sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
-    new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
+    new (channel_ptr) tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>(
         channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE));
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
