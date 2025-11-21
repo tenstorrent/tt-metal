@@ -21,14 +21,12 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 
 #### Single Device (BS=1):
 - For `640x640`, end-2-end perf is `64` FPS :
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
 #### Multi Device (DP=2):
 - For `640x640`:
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
@@ -50,7 +48,6 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 
 #### COCO-2017 dataset:
 - Use the following command to run demo for `640x640` resolution :
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/demo/demo.py::test_demo_dataset
   ```
@@ -59,7 +56,6 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 
 #### Custom Images:
 - Use the following command to run demo for `640x640` resolution :
-
   ```bash
   pytest --disable-warnings models/demos/blackhole/yolov12x/demo/demo.py::test_demo_dp
   ```
@@ -68,14 +64,12 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 
 #### COCO-2017 dataset:
 - Use the following command to run demo for `640x640` resolution :
-
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/demo/demo.py::test_demo_dataset_dp
   ```
 
 ### Performant evaluation with Trace+2CQ
 - Use the following command to run the performant evaluation with Trace+2CQs:
-
   ```
   pytest models/demos/yolo_eval/evaluate.py::test_yolov12x[device_params0-tt_model]
   ```
