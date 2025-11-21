@@ -10,9 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::matmul::program {
-
-using namespace ttnn::operations::experimental::matmul::group_attn_matmul;
+namespace ttnn::operations::experimental::matmul::group_attn_matmul::program {
 
 struct GroupAttnMatmulSharedVariables {
     tt::tt_metal::KernelHandle reader_id = 0;
@@ -62,4 +60,4 @@ struct GroupAttnMatmulProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::matmul::program
+}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul::program

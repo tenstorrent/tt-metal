@@ -15,7 +15,7 @@
 #include "group_attn_matmul_device_operation_types.hpp"
 #include "group_attn_matmul_program_factory.hpp"
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::operations::experimental::matmul::group_attn_matmul {
 
 struct GroupAttnMatmulDeviceOperation {
     using operation_attributes_t = group_attn_matmul::operation_attributes_t;
@@ -56,10 +56,10 @@ struct GroupAttnMatmulDeviceOperation {
         std::optional<Tensor> preallocated_output);
 };
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
 
 namespace ttnn::prim {
 constexpr auto group_attn_matmul = ttnn::register_operation<
     "ttnn::prim::group_attn_matmul",
-    ttnn::operations::experimental::matmul::GroupAttnMatmulDeviceOperation>();
+    ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation>();
 }  // namespace ttnn::prim
