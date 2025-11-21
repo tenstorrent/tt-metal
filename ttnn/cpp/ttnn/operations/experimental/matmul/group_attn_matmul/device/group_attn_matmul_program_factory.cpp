@@ -9,12 +9,11 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul::program {
+namespace ttnn::operations::experimental::matmul::group_attn_matmul::program {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace ttnn::operations::experimental::matmul::group_attn_matmul;
 
 namespace {
 
@@ -637,4 +636,4 @@ void GroupAttnMatmulProgramFactory::override_runtime_arguments(
         cached_program.shared_variables);
 }
 
-}  // namespace ttnn::operations::experimental::matmul::program
+}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul::program

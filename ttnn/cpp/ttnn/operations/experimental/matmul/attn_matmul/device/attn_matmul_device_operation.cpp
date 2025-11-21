@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::operations::experimental::matmul::attn_matmul {
 
 AttnMatmulDeviceOperation::program_factory_t AttnMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -166,4 +166,4 @@ AttnMatmulDeviceOperation::invoke(
     return {attributes, tensor_args};
 }
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul

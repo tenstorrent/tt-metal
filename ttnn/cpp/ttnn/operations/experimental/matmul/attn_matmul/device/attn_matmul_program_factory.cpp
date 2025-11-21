@@ -9,7 +9,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul::program {
+namespace ttnn::operations::experimental::matmul::attn_matmul::program {
 
 using namespace tt;
 using namespace tt::constants;
@@ -242,17 +242,17 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
         num_blocks_written += num_output_blocks_per_core;
     }
 
-    AttnMatmulProgramFactory::shared_variables_t shared_variables{
-        .reader_id = reader_id,
-        .writer_id = writer_id,
-        .eltwise_binary_kernel_id = eltwise_binary_kernel_id,
-        .total_num_cores = total_num_cores,
-        .in0_single_tile_size = in0_single_tile_size,
-        .cb_src0 = cb_src0,
-        .src0_cb_index = src0_cb_index,
-        .num_cores_y = num_cores_y};
-
-    return cached_program_t{std::move(program), shared_variables};
+    return cached_program_t(
+        std::move(program),
+        shared_variables_t{
+            .reader_id = reader_id,
+            .writer_id = writer_id,
+            .eltwise_binary_kernel_id = eltwise_binary_kernel_id,
+            .total_num_cores = total_num_cores,
+            .in0_single_tile_size = in0_single_tile_size,
+            .cb_src0 = cb_src0,
+            .src0_cb_index = src0_cb_index,
+            .num_cores_y = num_cores_y});
 }
 
 void AttnMatmulProgramFactory::override_runtime_arguments(
@@ -369,4 +369,4 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::matmul::program
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul::program

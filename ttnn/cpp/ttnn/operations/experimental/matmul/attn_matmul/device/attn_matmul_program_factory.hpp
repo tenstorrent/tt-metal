@@ -7,7 +7,7 @@
 #include "attn_matmul_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::matmul::program {
+namespace ttnn::operations::experimental::matmul::attn_matmul::program {
 
 struct AttnMatmulProgramFactory {
     struct shared_variables_t {
@@ -35,4 +35,4 @@ struct AttnMatmulProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::matmul::program
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul::program

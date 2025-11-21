@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::operations::experimental::matmul::attn_matmul {
 
 struct operation_attributes_t {
     const std::optional<const uint32_t> num_tokens;
@@ -19,8 +19,8 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor_a;
-    const Tensor& input_tensor_b;
+    Tensor input_tensor_a;
+    Tensor input_tensor_b;
     std::optional<Tensor> preallocated_output;
 };
 
@@ -28,4 +28,4 @@ using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul
