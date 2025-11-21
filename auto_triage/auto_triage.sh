@@ -2,19 +2,20 @@
 #
 # Full triage driver: wipes old data/logs, finds boundaries, then invokes OpenCode.
 # Usage:
-#   ./auto_triage.sh <workflow_name> <subjob_name>
+#   ./auto_triage.sh <workflow_name> <subjob_name> <model>
 # Example:
-#   ./auto_triage.sh galaxy-quick quick-wh-glx-quick
+#   ./auto_triage.sh galaxy-quick quick-wh-glx-quick openai/gpt-5.1-codex-mini
 
 set -euo pipefail
 
-if [ $# -lt 2 ]; then
-    echo "Usage: $0 <workflow_name> <subjob_name>" >&2
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <workflow_name> <subjob_name> <model>" >&2
     exit 1
 fi
 
 WORKFLOW="$1"
 SUBJOB="$2"
+MODEL="$3"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${ROOT}/auto_triage/data"
@@ -53,5 +54,5 @@ You are operating in a CI environment with no interactive approval. Complete the
 $(cat "$INSTRUCTIONS_FILE")
 EOF
 
-echo "=== Launching OpenCode ==="
-opencode run -m openai/gpt-5.1-codex-mini "$PROMPT"
+echo "=== Launching OpenCode (model: ${MODEL}) ==="
+opencode run -m "$MODEL" "$PROMPT"
