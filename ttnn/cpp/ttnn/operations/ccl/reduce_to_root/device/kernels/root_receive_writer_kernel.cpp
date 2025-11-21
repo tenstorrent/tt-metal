@@ -20,9 +20,11 @@ inline void write_data(
     uint32_t cb_int_cb_l,
     uint32_t cb_int_cb_s,
     uint32_t cb_int_cb_m,
-    uint32_t onetile) {
+    uint32_t onetile,
+    uint32_t input_num_tiles) {
+    DPRINT << "start writing data\n";
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
-    uint32_t chunk_size = 8;
+    uint32_t chunk_size = input_num_tiles;  // to be modified with tiny tiles HERE
     for (uint32_t i = 0; i < num_tiles_l / chunk_size; ++i) {
         cb_wait_front(cb_int_cb_l, chunk_size);
         uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
@@ -31,14 +33,18 @@ inline void write_data(
         noc_async_write_barrier();
         cb_pop_front(cb_int_cb_l, chunk_size);
     }
-
+    DPRINT << "finished writing l tensor\n";
     // for tensor s
     cb_wait_front(cb_int_cb_s, onetile);
+    DPRINT << "waiting front for s tensor\n";
     uint32_t l1_read_addr = get_read_ptr(cb_int_cb_s);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_s, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
     noc_async_write_barrier();
+    DPRINT << "after noc write for s tensor\n";
     cb_pop_front(cb_int_cb_s, onetile);
+
+    DPRINT << "finished writing s tensor\n";
 
     // for tensor m
     cb_wait_front(cb_int_cb_m, onetile);
@@ -47,8 +53,10 @@ inline void write_data(
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
     noc_async_write_barrier();
     cb_pop_front(cb_int_cb_m, onetile);
+    DPRINT << "finished writing m tensor\n";
 }
 void kernel_main() {
+    DPRINT << "root writer kernel started\n";
     uint32_t inter_dst_addr_l = get_arg_val<uint32_t>(0);
     uint32_t num_tiles_l = get_arg_val<uint32_t>(1);
     uint32_t inter_dst_addr_s = get_arg_val<uint32_t>(2);
@@ -65,8 +73,11 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
+    uint32_t input_num_tiles = 2;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
+
+    DPRINT << "BEFORE writing first output to intermediate buffer\n";
 
     // write l, s, m from device 0 to intermediate buffers
     write_data(
@@ -80,7 +91,9 @@ void kernel_main() {
         cb_int_cb_l,
         cb_int_cb_s,
         cb_int_cb_m,
-        onetile);
+        onetile,
+        input_num_tiles);
+    DPRINT << "after writing first output to intermediate buffer\n";
     // write l, s, m from device 2 to final buffers
     write_data(
         final_dst_addr_l,
@@ -93,5 +106,7 @@ void kernel_main() {
         cb_int_cb_l,
         cb_int_cb_s,
         cb_int_cb_m,
-        onetile);
+        onetile,
+        input_num_tiles);
+    DPRINT << "root writer kernel completed\n";
 }
