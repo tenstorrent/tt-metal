@@ -53,6 +53,11 @@ COMMIT_COUNT=$(echo "$COMMITS" | grep -c . || echo "0")
 echo -e "${GREEN}Found $COMMIT_COUNT commits${NC}"
 echo ""
 
+if [ "$COMMIT_COUNT" -gt 100 ]; then
+    echo -e "${RED}Error: too many commits. cannot download${NC}"
+    exit 1
+fi
+
 # Initialize JSON output
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
 mkdir -p "$OUTPUT_DIR"
