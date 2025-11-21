@@ -227,8 +227,8 @@ SECTIONS {
   {
     LONG(ADDR(.text)) LONG(ADDR(.text)) LONG(TEXT_SIZE)
     LONG(ADDR(.tdata)) LONG(__ldm_tdata_init)
-       LONG(TLS_SIZE - STACK_MIN_SIZE - (__ldm_tdata_init - TLS_START))
-    LONG(ADDR(.data)) LONG(__ldm_data_init) LONG(DATA_SIZE - (__ldm_data_init - DATA_START))
+       LONG(TLS_SIZE - STACK_MIN_SIZE - (__ldm_tdata_init - ADDR(.tdata)))
+    LONG(ADDR(.data)) LONG(__ldm_data_start) LONG(DATA_SIZE - (__ldm_data_start - ADDR(.data)))
     IF_NOT_TLS(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
   }
 
