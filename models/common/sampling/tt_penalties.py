@@ -8,7 +8,7 @@ On-device penalties module with persistent buffers, mirroring TTSampling.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import torch
 
@@ -25,30 +25,36 @@ class PenaltyContext:
     presence_penalties: ttnn.Tensor
     frequency_penalties: ttnn.Tensor
     repetition_penalties: ttnn.Tensor
+    sub_core_grids: Any | None = None
 
 
 def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
     if context is None:
         return logits
+
+    op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
+
     # freqeuncy
-    freq_term = ttnn.multiply(context.output_counts, context.frequency_penalties)
-    logits = ttnn.subtract(logits, freq_term, output_tensor=logits)
+    freq_term = ttnn.multiply(context.output_counts, context.frequency_penalties, **op_kwargs)
+    logits = ttnn.subtract(logits, freq_term, output_tensor=logits, **op_kwargs)
 
     # presence
-    presence_term = ttnn.multiply(context.output_mask, context.presence_penalties)
-    logits = ttnn.subtract(logits, presence_term, output_tensor=logits)
+    presence_term = ttnn.multiply(context.output_mask, context.presence_penalties, **op_kwargs)
+    logits = ttnn.subtract(logits, presence_term, output_tensor=logits, **op_kwargs)
 
     # repetition
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
-    combined_mask = ttnn.add(context.prompt_mask, context.output_mask)
-    penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0)
-    inverse_penalties = ttnn.reciprocal(penalties)
+
+    combined_mask = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
+    penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0, **op_kwargs)
+    inverse_penalties = ttnn.reciprocal(penalties, **op_kwargs)
 
     # If logits are positive, divide by penalty, otherwise multiply by penalty.
-    scaling = ttnn.where(ttnn.gt(logits, 1), inverse_penalties, penalties)
 
-    logits = ttnn.multiply(logits, scaling, output_tensor=logits)
+    scaling = ttnn.where(ttnn.gt(logits, 1), inverse_penalties, penalties, **op_kwargs)
+
+    logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
 
     return logits
 
@@ -58,12 +64,14 @@ class TTPenalties(LightweightModule):
     Penalty module with persistent device tensors, similar to TTSampling.
     """
 
-    def __init__(self, mesh_device, max_batch_size: int, vocab_size: int):
+    def __init__(self, mesh_device, max_batch_size: int, vocab_size: int, sub_core_grids=None):
         super().__init__()
         self.mesh_device = mesh_device
         self.cluster_shape = mesh_device.shape
-        self.max_batch_size = max_batch_size
-        self.vocab_size = vocab_size
+        self.max_batch_size = 32  # max_batch_size
+        self.vocab_size = 128 * 1024  # vocab_size
+        self.sub_core_grids = sub_core_grids
+        self._op_kwargs = {"sub_core_grids": sub_core_grids} if sub_core_grids else {}
 
         self.prompt_mask = self._alloc_int_buffer()
         self.output_mask = self._alloc_int_buffer()
@@ -86,8 +94,9 @@ class TTPenalties(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape),
         )
 
-    def _alloc_int_buffer(self, shard_dims=(None, 1)):
-        host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
+    def _alloc_int_buffer(self, shard_dims=(None, 1), host=None):
+        if host is None:
+            host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
         return ttnn.from_torch(
             host,
             dtype=ttnn.int32,
@@ -124,6 +133,9 @@ class TTPenalties(LightweightModule):
         return tensor.view(self.max_batch_size, 1)
 
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor | None):
+        prompt_tokens = self._alloc_int_buffer(
+            host=prompt_tokens.reshape(-1, prompt_tokens.shape[-1]), shard_dims=(None, None)
+        )
         self.token_bin_counts_and_mask(new_tokens=prompt_tokens, mask=self.prompt_mask)
 
     def reset_output_tokens(self):
@@ -143,7 +155,6 @@ class TTPenalties(LightweightModule):
 
     def token_bin_counts_and_mask(self, new_tokens, mask, counts=None, counts_sliced=None):
         # counts_new = ttnn.scatter_add(1, new_tokens)
-
         # fallback
         new_tokens = ttnn.to_torch(ttnn.get_device_tensors(new_tokens)[0]).to(torch.int64)
         counts_new = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
@@ -152,7 +163,7 @@ class TTPenalties(LightweightModule):
         counts_new = ttnn.from_torch(counts_new, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
 
         if counts:
-            counts = ttnn.add(counts, counts_new, output_tensor=counts)
+            counts = ttnn.add(counts, counts_new, output_tensor=counts, **self._op_kwargs)
         else:
             counts = counts_new
         counts_sliced = ttnn.slice(
@@ -162,8 +173,9 @@ class TTPenalties(LightweightModule):
             output_tensor=counts_sliced,
             slice_dim=1,
             num_devices=self.cluster_shape[-1],
+            **self._op_kwargs,
         )
-        mask = ttnn.gt(counts_sliced, 0, output_tensor=mask)
+        mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **self._op_kwargs)
         return counts, mask
 
     def apply(self, tt_logits: ttnn.Tensor, batch_size: int) -> ttnn.Tensor:
@@ -178,8 +190,14 @@ class TTPenalties(LightweightModule):
             presence_penalties=self.presence_penalties,
             frequency_penalties=self.frequency_penalties,
             repetition_penalties=self.repetition_penalties,
+            sub_core_grids=self.sub_core_grids,
+        )
+        tt_logits = ttnn.typecast(tt_logits, ttnn.bfloat16)
+        tt_logits = ttnn.pad(
+            tt_logits, [(0, 0), (0, 0), (0, 0), (0, self.vocab_size // self.cluster_shape[-1] - tt_logits.shape[-1])], 0
         )
 
         reshaped = ttnn.reshape(tt_logits, (-1, tt_logits.shape[-1]))
+
         apply_penalties(reshaped, context)
         return ttnn.reshape(reshaped, (1, 1, -1, tt_logits.shape[-1]))

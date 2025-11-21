@@ -83,7 +83,7 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
-        self.enable_split_sampling = False
+        self.enable_split_sampling = True
 
     def _set_sampling_trace_mode(self, enabled: bool):
         for model_instance in self.model:
@@ -232,6 +232,7 @@ class Generator:
         model_id_warmup=None,
         **kwargs,
     ):
+        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -457,6 +458,8 @@ class Generator:
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         prompt_tokens: torch.Tensor | None = None,
     ):
+        reset_inputs = self.mode == "prefill"
+        self.mode = "decode"
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
@@ -529,8 +532,10 @@ class Generator:
             sampling_module = getattr(self.model[i], "sampling", None)
             if sampling_module is None:
                 continue
-            sampling_module.reset_prompt_tokens(prompt_chunks[i])
-            sampling_module.reset_output_state()
+            if reset_inputs:
+                sampling_module.reset_prompt_tokens(prompt_chunks[i])
+                sampling_module.reset_output_state()
+
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -654,19 +659,6 @@ class Generator:
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        if sampling_on_device:
-            for i in range(self.data_parallel):
-                if not split_sampling_per_device[i]:
-                    continue
-                sampling_module = self.model[i].sampling
-                sampling_module.reset_trace()
-                sampling_module.capture_trace(
-                    tt_out_trace[i],
-                    tt_out_tok=device_inputs[i][0],
-                    batch_size=self.model_args[i].max_batch_size,
-                    num_outputs=1,
-                )
-
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
@@ -710,15 +702,24 @@ class Generator:
 
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
         outputs = self.trace_output_decode[sampling_on_device]
         if sampling_on_device:
+            new_outputs = []
             for i in range(self.data_parallel):
                 sampling_module = getattr(self.model[i], "sampling", None)
                 if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
+                    new_outputs.append(outputs[i])
                     continue
-                outputs[i] = sampling_module.execute_trace(num_outputs=1)
 
+                new_outputs.append(
+                    sampling_module.sample(
+                        logits=outputs[i],
+                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
+                        batch_size=self.model_args[i].max_batch_size,
+                        num_outputs=1,
+                    )
+                )
+            return new_outputs
         return outputs
 
     def _prefill_forward_single_user(

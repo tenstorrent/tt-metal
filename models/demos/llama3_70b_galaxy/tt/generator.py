@@ -409,6 +409,7 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        prompt_tokens: torch.Tensor | None = None,
     ):
         if sampling_params is None:
             return_logits = True
@@ -441,10 +442,10 @@ class Generator:
             "is_cur_pos_sharded": is_cur_pos_sharded,
             "is_page_table_sharded": is_page_table_sharded,
         }
+        sampling_module = getattr(self.model, "sampling", None)
         if reset_inputs and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
-            sampling_module = getattr(self.model, "sampling", None)
             if sampling_module is not None:
                 sampling_module.reset_sampling_params(
                     k=sampling_params.top_k,
@@ -457,6 +458,8 @@ class Generator:
                         frequency=sampling_params.frequency_penalty,
                         repetition=sampling_params.repetition_penalty,
                     )
+                    sampling_module.reset_prompt_tokens(prompt_tokens)
+                    sampling_module.reset_output_state()
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
