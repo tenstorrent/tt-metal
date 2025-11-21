@@ -209,7 +209,6 @@ public:
     }
 };
 
-// profiler base and size should be passed as args
 void Hal::initialize_wh(bool is_base_routing_fw_enabled, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
