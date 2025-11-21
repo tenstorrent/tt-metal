@@ -300,7 +300,7 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
 struct MeshTensorWriteTestParams {
     ttnn::Shape shape;
 
-    // If true, uses pre-allocated tensor APIs (allocate_tensor_on_device/device + write_tensor).
+    // If true, uses pre-allocated tensor APIs (allocate_tensor_on_device/device + copy_to_device/host).
     bool use_pre_allocated_tensor_api = false;
 
     // Shape of the resulting shards.
@@ -340,7 +340,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto device_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor device_tensor = allocate_tensor_on_device(input_host_shards.at(0).tensor_spec(), mesh_device_.get());
-            write_tensor(input_host_tensor_sharded, device_tensor, /*blocking=*/false);
+            tensor_impl::copy_to_device(input_host_tensor_sharded, device_tensor);
             return device_tensor;
         } else {
             return tensor_impl::to_device(input_host_tensor_sharded, mesh_device_.get());
@@ -356,7 +356,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     auto output_host_tensor = [&]() {
         if (GetParam().use_pre_allocated_tensor_api) {
             Tensor host_tensor = allocate_tensor_on_host(device_tensor.tensor_spec(), mesh_device_.get());
-            write_tensor(device_tensor, host_tensor, /*blocking=*/true);
+            tensor_impl::copy_to_host(device_tensor, host_tensor, /*blocking=*/true);
             return host_tensor;
         } else {
             return tensor_impl::to_host(device_tensor);
