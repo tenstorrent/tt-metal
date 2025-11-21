@@ -225,7 +225,7 @@ test_suite_bh_ttnn_stress_tests() {
 test_suite_bh_glx_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
     # Fabric
-    ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/tt_fabric/test_system_health --system-topology MESH
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml

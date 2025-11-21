@@ -580,9 +580,25 @@ void py_module(py::module& module) {
 
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
     py_tensor_topology
+        .def(
+            py::init<
+                tt::tt_metal::distributed::MeshShape,
+                ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+                std::vector<tt::tt_metal::distributed::MeshCoordinate>>(),
+            py::arg("distribution_shape"),
+            py::arg("placements"),
+            py::arg("mesh_coords"),
+            "Constructor for TensorTopology")
         .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal)
+        .def("__eq__", [](const TensorTopology& self, const TensorTopology& other) { return self == other; })
+        .def("__ne__", [](const TensorTopology& self, const TensorTopology& other) { return self != other; })
+        .def("__repr__", [](const TensorTopology& self) {
+            std::ostringstream oss;
+            oss << self;
+            return oss.str();
+        });
 
     module.def(
         "get_device_tensors",

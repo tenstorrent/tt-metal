@@ -68,7 +68,7 @@ from models.tt_transformers.tt.model_config import CheckpointType, DecodersPreci
     (1, None),
     ids=["1layer", "all_layers"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 17000000}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,
@@ -200,7 +200,12 @@ def test_model_inference(
                 or any(
                     [
                         f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                        for name in [
+                            "tok_embeddings.weight",
+                            "learnable_embedding.weight",
+                            "norm.weight",
+                            "output.weight",
+                        ]
                     ]
                 )
             )
@@ -209,7 +214,17 @@ def test_model_inference(
         reference_model.load_state_dict(reference_state_dict)
         # Embedding on host
         embd = model_args.reference_embedding()
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
+        if model_args.is_llama_vision():
+            weight = torch.cat(
+                [
+                    state_dict[f"{state_dict_prefix}tok_embeddings.weight"],
+                    state_dict[f"{state_dict_prefix}learnable_embedding.weight"],
+                ],
+                dim=0,
+            )
+        else:
+            weight = state_dict[f"{state_dict_prefix}tok_embeddings.weight"]
+        embd.load_state_dict({"emb.weight": weight})
         logger.info("Finished loading reference model.")
 
     # Select the first token from the prompt for initial decoding

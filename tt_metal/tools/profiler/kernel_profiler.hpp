@@ -280,18 +280,19 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    bool do_noc = true;
-    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        do_noc = false;
-    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+    bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
 
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+        bool do_noc = true;
+        if (!is_dram_set) {
+            do_noc = false;
+        }
 #if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
 #else
