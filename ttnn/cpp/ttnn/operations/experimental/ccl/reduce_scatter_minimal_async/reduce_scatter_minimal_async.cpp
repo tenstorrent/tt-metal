@@ -8,7 +8,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -37,7 +37,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             input_tensor, dim, num_links, topology, memory_config, subdevice_id, cluster_axis);
     } else {
         log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
-        return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+        auto output_tensors = ttnn::prim::reduce_scatter_minimal_async(
             input_tensor,
             persistent_output_buffers,
             dim,
@@ -52,6 +52,8 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel);
+        // Return the output tensor (index 1), intermediate is at index 0
+        return output_tensors[1];
     }
 }
 }  // namespace ttnn::operations::experimental::ccl

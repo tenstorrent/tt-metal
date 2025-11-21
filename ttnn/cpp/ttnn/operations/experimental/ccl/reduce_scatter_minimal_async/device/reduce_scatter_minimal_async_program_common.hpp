@@ -17,6 +17,17 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
+
+struct ReduceScatterProgramArtifacts {
+    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id;
+    std::vector<tt::tt_metal::CoreCoord> all_cores;
+    uint32_t num_directions_per_link;
+    uint32_t num_workers_per_direction;
+    uint32_t num_mux_cores_per_direction_per_link;
+    uint32_t num_cores_per_link;
+    uint32_t num_links;
+};
 namespace operations::experimental::ccl::detail {
 
 uint32_t reduce_scatter_minimal_async_core_count_per_link(

@@ -19,9 +19,42 @@
 #include <optional>
 #include <vector>
 
-namespace ttnn {
+// Includes for program factory
+#include "reduce_scatter_minimal_async_types.hpp"
+#include "reduce_scatter_minimal_async_program_common.hpp"
 
-struct ReduceScatterProgramArtifacts;
+#include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
+
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::line {
+
+struct LineReduceScatterMinimalAsyncProgramFactory {
+    using shared_variables_t = ReduceScatterProgramArtifacts;
+
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::line
+
+namespace ttnn {
 
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,

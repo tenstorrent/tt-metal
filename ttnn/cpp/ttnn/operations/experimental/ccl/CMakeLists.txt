@@ -40,7 +40,11 @@ target_sources(
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
             composite_common.hpp
-            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program_common.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_types.hpp
+            reduce_scatter_minimal_async/device/ring_reduce_scatter_minimal_async_program.hpp
+            reduce_scatter_minimal_async/device/line_reduce_scatter_minimal_async_program.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -87,7 +91,7 @@ target_sources(
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
-        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
+        reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program_common.cpp
         reduce_scatter_minimal_async/device/ring_reduce_scatter_minimal_async_program.cpp
         reduce_scatter_minimal_async/device/line_reduce_scatter_minimal_async_program.cpp

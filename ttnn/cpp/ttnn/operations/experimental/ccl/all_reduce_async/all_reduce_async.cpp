@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -206,7 +206,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
-    ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+    auto scattered_tensors = ttnn::prim::reduce_scatter_minimal_async(
         interleaved_tensor,
         std::nullopt,
         dim,
@@ -216,7 +216,12 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
-        worker_subdevice_id_opt);
+        worker_subdevice_id_opt,
+        std::nullopt,                                      // cluster_axis
+        std::nullopt,                                      // chunks_per_sync
+        std::nullopt,                                      // num_workers_per_link
+        std::nullopt);                                     // num_buffers_per_channel
+    ttnn::Tensor scattered_tensor = scattered_tensors[1];  // Return output tensor (index 1)
     interleaved_tensor.deallocate();
     auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
@@ -308,7 +313,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     log_debug(tt::LogOp, "Using reduce scatter + all gather");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
-        scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+        auto scattered_tensors = ttnn::prim::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
             dim,
@@ -319,7 +324,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             std::nullopt,
             topology_,
             worker_subdevice_id_opt,
-            cluster_axis);
+            cluster_axis,
+            std::nullopt,                         // chunks_per_sync
+            std::nullopt,                         // num_workers_per_link
+            std::nullopt);                        // num_buffers_per_channel
+        scattered_tensor = scattered_tensors[1];  // Return output tensor (index 1)
     } else {
         scattered_tensor = ttnn::reduce_scatter(
             interleaved_tensor,

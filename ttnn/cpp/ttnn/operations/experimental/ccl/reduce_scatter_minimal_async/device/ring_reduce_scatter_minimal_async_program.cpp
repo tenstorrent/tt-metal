@@ -12,7 +12,6 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -663,7 +662,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         num_directions_per_link,
         num_workers_per_direction,
         num_mux_cores_per_direction_per_link,
-        num_cores_per_link};
+        num_cores_per_link,
+        num_links};
 }
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -742,7 +742,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_ring_reduce_scatter_minimal
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link] =
+         num_cores_per_link,
+         num_links_unused] =
             build_ring_reduce_scatter_minimal_async_program_artifacts(
                 program,
                 input_tensor,
@@ -783,8 +784,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_ring_reduce_scatter_minimal
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
-            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-            auto semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
+            // TODO: Update matmul_reduce_scatter_async to use new TMP device operation pattern
+            // The old ReduceScatterMinimalAsync struct no longer exists. This callback needs to be
+            // updated when matmul_reduce_scatter_async is migrated.
+            TT_THROW(
+                "create_ring_reduce_scatter_minimal_async_program callback is deprecated. "
+                "Please migrate matmul_reduce_scatter_async to use the new TMP device operation pattern.");
+            std::optional<GlobalSemaphore> barrier_semaphore = std::nullopt;
+            std::vector<GlobalSemaphore> semaphore;
             ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 program,
                 reader_kernel_id,
@@ -806,3 +813,147 @@ tt::tt_metal::operation::ProgramWithCallbacks create_ring_reduce_scatter_minimal
 }
 
 }  // namespace ttnn
+
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::ring {
+
+typename RingReduceScatterMinimalAsyncProgramFactory::cached_mesh_workload_t
+RingReduceScatterMinimalAsyncProgramFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    // Verify tensor_return_value has both tensors
+    TT_FATAL(
+        tensor_return_value.size() >= 2,
+        "tensor_return_value must contain both intermediate and output tensors. "
+        "Expected size >= 2, got {}",
+        tensor_return_value.size());
+
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    }
+
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+ttnn::device_operation::CachedProgram<RingReduceScatterMinimalAsyncProgramFactory::shared_variables_t>
+RingReduceScatterMinimalAsyncProgramFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::Program program{};
+
+    uint32_t target_ring_size =
+        ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
+
+    const std::optional<MeshCoordinate> forward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+
+    const std::optional<MeshCoordinate> backward_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor,
+        mesh_coordinate,
+        -1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
+
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "forward_coord or backward_coord is null");
+
+    uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+
+    // Get intermediate tensor from tensor_return_value (index 0 is intermediate, index 1 is output)
+    TT_FATAL(
+        tensor_return_value.size() >= 2,
+        "tensor_return_value must contain both intermediate and output tensors. "
+        "Expected size >= 2, got {}",
+        tensor_return_value.size());
+    Tensor& intermediate_tensor = tensor_return_value[0];  // Non-const reference needed for build function
+
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> empty_fused_op_signaler;
+
+    auto
+        [reader_kernel_id,
+         writer_kernel_id,
+         all_cores,
+         num_directions_per_link,
+         num_workers_per_direction,
+         num_mux_cores_per_direction_per_link,
+         num_cores_per_link,
+         num_links_unused] =
+            build_ring_reduce_scatter_minimal_async_program_artifacts(
+                program,
+                tensor_args.input_tensor,
+                intermediate_tensor,
+                mesh_coordinate,
+                forward_coord,
+                backward_coord,
+                tensor_return_value[1],  // Use output tensor (index 1)
+                operation_attributes.dim,
+                operation_attributes.num_links,
+                target_ring_size,
+                device_index,
+                operation_attributes.topology,
+                operation_attributes.semaphore,
+                operation_attributes.barrier_semaphore,
+                operation_attributes.using_persistent_buffers,
+                operation_attributes.sub_device_id,
+                empty_fused_op_signaler,
+                operation_attributes.chunks_per_sync,
+                operation_attributes.num_workers_per_link,
+                operation_attributes.num_buffers_per_channel,
+                CoreCoord(0, 0));
+
+    shared_variables_t shared_vars{
+        reader_kernel_id,
+        writer_kernel_id,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link,
+        operation_attributes.num_links};
+
+    return {std::move(program), std::move(shared_vars)};
+}
+
+void RingReduceScatterMinimalAsyncProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Get intermediate tensor from tensor_return_value (index 0 is intermediate, index 1 is output)
+    TT_FATAL(
+        tensor_return_value.size() >= 2,
+        "tensor_return_value must contain both intermediate and output tensors. "
+        "Expected size >= 2, got {}",
+        tensor_return_value.size());
+    const Tensor& intermediate_tensor = tensor_return_value[0];
+
+    auto& programs = cached_workload.workload.get_programs();
+    for (auto& [range, shared_vars] : cached_workload.shared_variables) {
+        auto& program = programs.at(range);
+        ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+            program,
+            shared_vars.reader_kernel_id,
+            shared_vars.writer_kernel_id,
+            shared_vars.all_cores,
+            shared_vars.num_links,
+            shared_vars.num_directions_per_link,
+            shared_vars.num_workers_per_direction,
+            shared_vars.num_mux_cores_per_direction_per_link,
+            shared_vars.num_cores_per_link,
+            operation_attributes.barrier_semaphore,
+            operation_attributes.semaphore,
+            tensor_args.input_tensor,
+            intermediate_tensor,
+            tensor_return_value[1]);  // Use output tensor (index 1)
+    }
+}
+
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::ring
