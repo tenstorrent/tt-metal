@@ -62,7 +62,12 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
             output_shape.push_back(output_spec.logical_shape()[i]);
         }
         auto output_tensor = ttnn::moreh_full(
-            output_shape, 0.0f, input_tensor, input_tensor.dtype(), input_tensor.layout(), output_spec.memory_config());
+            output_shape,
+            0.0f,
+            input_tensor.device(),
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            output_spec.memory_config());
         // set optional_output_tensor to the output tensor
         optional_output_tensor_ = output_tensor;
     }
