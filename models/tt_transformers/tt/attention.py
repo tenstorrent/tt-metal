@@ -399,7 +399,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
+        breakpoint()
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -410,7 +410,7 @@ class Attention(LightweightModule):
             else self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
         # FIXME: File bug against dram-sharded matmuls with bias

@@ -148,7 +148,12 @@ class PrefetcherSubDevice:
 
 class Prefetcher(LightweightModule):
     def __init__(
-        self, mesh_device: ttnn.MeshDevice, num_tensors: int, num_receiver_cores: int, num_layers: int, mode: str
+        self,
+        mesh_device: ttnn.MeshDevice,
+        num_tensors: int,
+        num_receiver_cores: int,
+        num_layers: int,
+        mode: Optional[str] = None,
     ):
         """
         Prefetcher class that prefetches tensors from DRAM to
@@ -185,6 +190,11 @@ class Prefetcher(LightweightModule):
         self.all_cores = None
 
         ### Initialize sub device manager
+        mode = "decode" if mode is None else mode
+        assert mode in [
+            "decode",
+            "prefill",
+        ], f"Provided mode {mode} is not supported, only `decode` and `prefill` are supported"
         self.init(mode)
         self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
 
@@ -213,12 +223,7 @@ class Prefetcher(LightweightModule):
         ).receiver_cores
 
         self.all_cores = [ttnn.CoreCoord(i, j) for i in range(self.width_cores) for j in range(self.height_cores)]
-        self.all_sender_cores = [ttnn.CoreCoord(0, i) for i in range(self.height_cores)] + [
-            ttnn.CoreCoord(7, i) for i in range(self.height_cores)
-        ]
-        self.all_worker_cores = [ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(1, 7)] + [
-            ttnn.CoreCoord(j, i) for i in range(self.height_cores) for j in range(8, self.width_cores)
-        ]
+
         self.all_worker_cores_range_set = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 9)),
@@ -234,16 +239,11 @@ class Prefetcher(LightweightModule):
         match mode:
             case "decode":
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
-                self.prefetcher_sub_device.add_sub_device(
-                    self.all_worker_cores_range_set
-                    # self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True))
-                )
+                self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
             case "prefill":
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.all_cores))
                 self.prefetcher_sub_device.init_sub_device_manager()
-            case _:
-                raise ValueError(f"Provided mode {mode} is not supported, only `prefill` and `decode` are supported")
 
     def create_address_tensor(self):
         """
