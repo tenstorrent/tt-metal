@@ -646,26 +646,29 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+        if seq_len > 2048:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
 
-        output_11SH = ttnn.experimental.minimal_matmul(
-            input_tensor=attn_output_11SH,
-            weight_tensor=self.wo_interleaved,
-            config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # output_11SH = ttnn.linear(
-        #     attn_output_11SH,
-        #     self.wo_interleaved,
-        #     compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-        #     dtype=ttnn.bfloat8_b,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
-        # )
+        ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        if seq_len < 4096:
+            output_11SH = ttnn.linear(
+                attn_output_11SH,
+                self.wo_interleaved,
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
+            )
+        else:
+            output_11SH = ttnn.experimental.minimal_matmul(
+                input_tensor=attn_output_11SH,
+                weight_tensor=self.wo_interleaved,
+                config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        if seq_len > 1024:
+        if seq_len > 2048:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
