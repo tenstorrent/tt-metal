@@ -90,6 +90,8 @@ inline void mul_int32_init() {
     // Load instruction templates 0-3.  This is more efficient than using
     // SFPCONFIG, but requires DISABLE_BACKDOOR_LOAD=false (the default).
     // Instruction template `i` is specified using `VD=12+i`.
+    // Other register parameters (e.g. VA, VB, or VC) are set to 0 if they're
+    // expected to be overridden by a macro.
 
     TTI_SFPSHFT2(-23 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, sfpi::SFPMUL24_MOD1_LOWER);
