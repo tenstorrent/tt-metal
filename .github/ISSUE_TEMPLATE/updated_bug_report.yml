@@ -28,12 +28,19 @@ body:
     id: priority
     attributes:
       label: Priority
-      description: Select priority and **add the same P0/P1/P2/P3 label manually** after submission.
+      description: |
+        Select the correct priority level.
+        **Important:** After submitting this issue, please manually add the corresponding label (`P0`, `P1`, `P2`, or `P3`).
+        Do **not** create new labels like “P0 (Blocking)”.
+        - P0 = Blocking  
+        - P1 = High  
+        - P2 = Medium  
+        - P3 = Low
       options:
-        - P0 (Blocking)
-        - P1 (High)
-        - P2 (Medium)
-        - P3 (Low)
+        - P0
+        - P1
+        - P2
+        - P3
     validations:
       required: true
 
