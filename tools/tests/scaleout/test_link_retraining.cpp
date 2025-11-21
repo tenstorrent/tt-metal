@@ -9,13 +9,6 @@
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
-#include <thread>
-#include <chrono>
-#include <filesystem>
-#include "protobuf/deployment.pb.h"
-#include "protobuf/cluster_config.pb.h"
-#include "protobuf/node_config.pb.h"
-#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -68,7 +61,7 @@ protected:
 
         // Initialize physical system descriptor
         physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-            *driver_, distributed_context_, &context_->hal(), context_->rtoptions(), true);
+            *driver_, distributed_context_, &context_->hal(), context_->rtoptions(), true /* run_discovery*/);
 
         // Populate asic_id_to_chip_id map
         for (const auto& [chip_id, asic_id] : cluster_->get_unique_chip_ids()) {
