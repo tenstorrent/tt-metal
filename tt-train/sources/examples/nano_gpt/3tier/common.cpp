@@ -76,13 +76,16 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    uint32_t loaded_vocab_size = 0;
 
     try {
         // check file extension:
         if (config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(config.data_path);
         } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+            auto [tokens, vocab_size] = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+            text_or_tokens = tokens;
+            std::visit([&](auto &&arg) { loaded_vocab_size = vocab_size; }, config.transformer_config);
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;

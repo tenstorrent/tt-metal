@@ -384,12 +384,15 @@ int main(int argc, char **argv) {
 
     std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+
     try {
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(training_config.data_path);
         } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+            auto [tokens, vocab_size] = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+            text_or_tokens = tokens;
+            std::visit([&](auto &&arg) { arg.vocab_size = vocab_size; }, model_config.transformer_config);
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;

@@ -49,7 +49,7 @@ def save_to_yaml(data, vocab_size, output_file):
 
     csv_str = output.getvalue()
     yaml_data = {
-        "tokenizer_vocab_size" : vocab_size,
+        "tokenizer_vocab_size": vocab_size,
         "data_length": len(data),
         "tokens": csv_str.strip(),
     }
@@ -58,6 +58,7 @@ def save_to_yaml(data, vocab_size, output_file):
         yaml.dump(yaml_data, file)
 
     print(f"Saved tokenized data as YAML to {output_file}")
+
 
 def main():
     parser = argparse.ArgumentParser(
