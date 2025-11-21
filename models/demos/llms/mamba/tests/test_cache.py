@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.wormhole.mamba.tt.cache import TensorCache
+from models.demos.llms.mamba.tt.cache import TensorCache
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 

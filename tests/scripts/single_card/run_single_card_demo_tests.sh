@@ -278,7 +278,7 @@ run_falcon7b_perf() {
 
 run_mamba_perf() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/llms/mamba/demo/prompts.json' models/demos/llms/mamba/demo/demo.py --timeout 420
 
 }
 

@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.wormhole.mamba.tt.preprocessing import (
+from models.demos.llms.mamba.tt.preprocessing import (
     select_chunk_size,
     split_input_into_prefill_and_decode_segments,
     split_sequence_length,

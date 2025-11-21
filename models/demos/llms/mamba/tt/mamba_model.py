@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
+from models.demos.llms.mamba.reference.args import ModelMode
+from models.demos.llms.mamba.tt.residual_block import TtResidualBlock
 
 
 class TtTensorLoader:

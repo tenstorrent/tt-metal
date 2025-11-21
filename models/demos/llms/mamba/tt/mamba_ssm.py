@@ -7,8 +7,8 @@ from typing import Callable
 import torch
 
 import ttnn
-from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
-from models.demos.wormhole.mamba.tt.cache import TensorCache
+from models.demos.llms.mamba.reference.args import ModelArgs, ModelMode
+from models.demos.llms.mamba.tt.cache import TensorCache
 
 
 class TtMambaSSM(torch.nn.Module):

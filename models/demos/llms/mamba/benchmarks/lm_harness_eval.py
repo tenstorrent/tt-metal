@@ -12,8 +12,8 @@ from lm_eval.api.registry import register_model
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from models.demos.wormhole.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
-from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.llms.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
+from models.demos.llms.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 
 
 @register_model("mamba-cpu-reference")

@@ -5,7 +5,7 @@
 import os
 
 import ttnn
-from models.demos.wormhole.mamba.reference.args import ModelMode
+from models.demos.llms.mamba.reference.args import ModelMode
 
 MAMBA_MAX_SEQUENCE_LEN = 128
 

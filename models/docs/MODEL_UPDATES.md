@@ -208,7 +208,7 @@
 ### [Mistral7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b)
 - Updated the demo to support multiple batches of users
 
-### [Mamba-2.8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mamba)
+### [Mamba-2.8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/mamba)
 - Updated the demo to use the full prefill graph instead of processing a single token of the prompt at a time using decode
 
 ### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)

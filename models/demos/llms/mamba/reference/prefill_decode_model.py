@@ -49,7 +49,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from models.demos.wormhole.mamba.reference.args import ModelArgs
+from models.demos.llms.mamba.reference.args import ModelArgs, ModelMode
 
 MambaPretrainedModelName = Literal[
     "state-spaces/mamba-2.8b-slimpj",
@@ -61,7 +61,7 @@ MambaPretrainedModelName = Literal[
 ]
 
 
-class MambaDecode(nn.Module):
+class Mamba(nn.Module):
     def __init__(self, args: ModelArgs):
         """Full Mamba model."""
         super().__init__()
@@ -97,18 +97,39 @@ class MambaDecode(nn.Module):
 
         return logits
 
-    def generate(self, inputs: torch.Tensor, num_tokens_to_generate: int) -> torch.Tensor:
-        num_tokens_in_full_sequence = num_tokens_to_generate + inputs.shape[1]
-        for idx in range(num_tokens_in_full_sequence - 1):
-            logits = self.forward(inputs[:, idx].unsqueeze(1))
-            probs = torch.nn.functional.softmax(logits, dim=-1)
-            next_token = torch.argmax(probs, dim=-1)
-            if idx >= inputs.shape[1] - 1:
-                inputs = torch.cat([inputs, next_token], dim=1)
-        assert (
-            inputs.shape[1] == num_tokens_in_full_sequence
-        ), f"Expected {num_tokens_in_full_sequence} tokens in the returned result"
-        return inputs
+    def logits_to_token(self, logits: torch.Tensor, sample: bool = False, top_k: Optional[int] = None) -> torch.Tensor:
+        probs = F.softmax(logits, dim=-1)
+
+        if top_k is not None:
+            (values, indices) = torch.topk(probs, k=top_k)
+            probs[probs < values[:, -1, None]] = 0
+            probs = probs / probs.sum(1, keepdim=True)
+
+        if sample:
+            next_token_id = torch.multinomial(probs, num_samples=1)
+        else:
+            next_token_id = torch.argmax(probs, dim=-1)[:, None]
+
+        return next_token_id
+
+    def generate(self, input_ids, n_tokens_to_gen: int = 51, sample: bool = False, top_k: Optional[int] = None):
+        # prefill
+        self.args.mode = ModelMode.PREFILL
+        with torch.no_grad():
+            next_token_logits = self.forward(input_ids)[:, -1]
+        next_token_id = self.logits_to_token(next_token_logits, sample=sample, top_k=top_k)
+        generated_token_ids = next_token_id.clone()
+
+        # decode
+        self.args.mode = ModelMode.DECODE
+        for _ in range(n_tokens_to_gen - 1):
+            with torch.no_grad():
+                next_token_logits = self.forward(next_token_id)  # shape (b, 1, vocab_size)
+                next_token_logits = next_token_logits[:, -1]
+            next_token_id = self.logits_to_token(next_token_logits, sample=sample, top_k=top_k)
+            generated_token_ids = torch.cat([generated_token_ids, next_token_id], dim=1)
+
+        return torch.cat([input_ids, generated_token_ids], dim=1)
 
     def initialize_states(self):
         for layer in self.layers:
@@ -155,7 +176,7 @@ class MambaDecode(nn.Module):
             vocab_size=config_data["vocab_size"],
             batch_size=batch_size,
         )
-        model = MambaDecode(args)
+        model = Mamba(args)
 
         state_dict = load_state_dict_hf(pretrained_model_name)
         new_state_dict = {}
@@ -165,6 +186,26 @@ class MambaDecode(nn.Module):
         model.load_state_dict(new_state_dict)
 
         return model
+
+    @staticmethod
+    def from_random(pretrained_model_name: MambaPretrainedModelName, batch_size: int = 1):
+        from transformers.utils import CONFIG_NAME
+        from transformers.utils.hub import cached_file
+
+        def load_config_hf(model_name):
+            resolved_archive_file = cached_file(model_name, CONFIG_NAME, _raise_exceptions_for_missing_entries=False)
+            if not resolved_archive_file:
+                raise RuntimeError("Unable to load Mamba archive file from HF")
+            return json.load(open(resolved_archive_file))
+
+        config_data = load_config_hf(pretrained_model_name)
+        args = ModelArgs(
+            d_model=config_data["d_model"],
+            n_layer=config_data["n_layer"],
+            vocab_size=config_data["vocab_size"],
+            batch_size=batch_size,
+        )
+        return Mamba(args)
 
 
 class ResidualBlock(nn.Module):
@@ -238,8 +279,6 @@ class MambaBlock(nn.Module):
             dtype=self.conv1d.weight.dtype,
         )  # (b, 4, d_inner)*n_layer
 
-        self.act = nn.SiLU()
-
     def forward(self, x):
         """Mamba block forward. This looks the same as Figure 3 in Section 3.4 in the Mamba paper [1].
 
@@ -260,13 +299,19 @@ class MambaBlock(nn.Module):
         (x, res) = x_and_res.split(split_size=[self.args.d_inner, self.args.d_inner], dim=-1)
 
         x = rearrange(x, "b l d_in -> b d_in l")
+        if self.args.mode == ModelMode.PREFILL:
+            last_state_idx = -min(self.args.d_conv, l)
+            self.conv_states[:, :, last_state_idx:] = x[:, :, last_state_idx:].clone()
+            x = self.conv1d(x)[:, :, :l]
 
-        self.conv_states.copy_(torch.roll(self.conv_states, shifts=-1, dims=-1))  # Update state (B D W)
-        self.conv_states[:, :, -1] = x.squeeze(-1)
-        x = torch.sum(self.conv_states * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
-        if self.conv1d.bias is not None:
-            x = x + self.conv1d.bias
-        x = x.unsqueeze(-1)
+        elif self.args.mode == ModelMode.DECODE:
+            self.conv_states.copy_(torch.roll(self.conv_states, shifts=-1, dims=-1))  # Update state (B D W)
+            self.conv_states[:, :, -1] = x.squeeze(-1)
+            x = torch.sum(self.conv_states * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+            if self.conv1d.bias is not None:
+                x = x + self.conv1d.bias
+            x = x.unsqueeze(-1)
+
         x = rearrange(x, "b d_in l -> b l d_in")
 
         x = F.silu(x)
@@ -311,8 +356,12 @@ class MambaBlock(nn.Module):
         )  # delta: (b, l, dt_rank). B, C: (b, l, n)
         delta = F.softplus(self.dt_proj(delta))  # (b, l, d_in)
 
-        # y = self.selective_scan(x, delta, A, B, C, D)  # This is similar to run_SSM(A, B, C, u) in The Annotated S4 [2]
-        y = self.one_step_ssm(x, delta, A, B, C, D)
+        if self.args.mode == ModelMode.PREFILL:
+            y = self.selective_scan(
+                x, delta, A, B, C, D
+            )  # This is similar to run_SSM(A, B, C, u) in The Annotated S4 [2]
+        elif self.args.mode == ModelMode.DECODE:
+            y = self.one_step_ssm(x, delta, A, B, C, D)
         return y
 
     def one_step_ssm(self, u, delta, A, B, C, D):
@@ -323,13 +372,12 @@ class MambaBlock(nn.Module):
         deltaB_u = einsum(delta, B, u, "b l d_in, b l n, b l d_in -> b l d_in n")
 
         # on step ssm
-        x = deltaA[:, -1] * self.prev_hidden_states + deltaB_u[:, -1]
-        y = einsum(x, C[:, -1], "b d_in n, b n -> b d_in")
+        self.prev_hidden_states = deltaA[:, -1] * self.prev_hidden_states + deltaB_u[:, -1]
+        y = einsum(self.prev_hidden_states, C[:, -1], "b d_in n, b n -> b d_in")
 
         y = y.unsqueeze(1)
         y = y + u * D
 
-        self.prev_hidden_states = x
         return y
 
     def selective_scan(self, u, delta, A, B, C, D):
@@ -375,8 +423,8 @@ class MambaBlock(nn.Module):
         x = torch.zeros((b, d_in, n), device=deltaA.device)
         ys = []
         for i in range(l):
-            x = deltaA[:, i] * x + deltaB_u[:, i]
-            y = einsum(x, C[:, i, :], "b d_in n, b n -> b d_in")
+            self.prev_hidden_states = deltaA[:, i] * self.prev_hidden_states + deltaB_u[:, i]
+            y = einsum(self.prev_hidden_states, C[:, i, :], "b d_in n, b n -> b d_in")
             ys.append(y)
         y = torch.stack(ys, dim=1)  # shape (b, l, d_in)
 

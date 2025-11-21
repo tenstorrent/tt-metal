@@ -14,15 +14,15 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
-from models.demos.wormhole.mamba.tt import model_config
-from models.demos.wormhole.mamba.tt.preprocessing import (
+from models.demos.llms.mamba.reference.args import ModelMode
+from models.demos.llms.mamba.reference.decode_model import MambaPretrainedModelName
+from models.demos.llms.mamba.tt import model_config
+from models.demos.llms.mamba.tt.preprocessing import (
     select_chunk_size,
     split_input_into_prefill_and_decode_segments,
     split_sequence_length,
 )
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -49,7 +49,7 @@ class TokenDisplay:
 
 
 def get_cpu_reference_model(version: MambaPretrainedModelName, batch_size: int):
-    from models.demos.wormhole.mamba.reference.decode_model import MambaDecode
+    from models.demos.llms.mamba.reference.decode_model import MambaDecode
 
     return MambaDecode.from_pretrained(version, batch_size=batch_size)
 
@@ -63,8 +63,8 @@ def get_tt_metal_model(
     seq_len: int = 1,
     num_layers: int = 64,
 ):
-    from models.demos.wormhole.mamba.tt import model_config
-    from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
+    from models.demos.llms.mamba.tt import model_config
+    from models.demos.llms.mamba.tt.mamba_model import MambaTT
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
     config = model_config.create_model_config(batch_size, reference_model.args.d_model, mode=mode, seq_len=seq_len)

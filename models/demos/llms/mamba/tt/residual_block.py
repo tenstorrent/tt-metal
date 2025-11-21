@@ -7,8 +7,8 @@ from typing import Callable
 import torch
 
 import ttnn
-from models.demos.wormhole.mamba.reference.args import ModelArgs
-from models.demos.wormhole.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.llms.mamba.reference.args import ModelArgs
+from models.demos.llms.mamba.tt.mamba_block import TtMambaBlock
 
 
 class TtResidualBlock(torch.nn.Module):

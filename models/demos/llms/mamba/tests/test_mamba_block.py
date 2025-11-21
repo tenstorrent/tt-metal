@@ -2,23 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
-from models.demos.wormhole.mamba.tt import model_config
-from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
-from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
+from models.demos.llms.mamba.reference.args import ModelMode
+from models.demos.llms.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
+from models.demos.llms.mamba.tt import model_config
+from models.demos.llms.mamba.tt.mamba_block import TtMambaBlock
+from models.demos.llms.mamba.tt.mamba_model import TtTensorLoader
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
-class PytorchResidualBlock(torch.nn.Module):
+class PytorchMambaBlock(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
-        self.block = hf_reference_model.layers[layer_num]
+        self.block = hf_reference_model.layers[layer_num].mixer
         self.block.eval()
 
     def forward(self, x):
@@ -26,6 +28,7 @@ class PytorchResidualBlock(torch.nn.Module):
         return result
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("layer", [0])
 @pytest.mark.parametrize(
     "use_pretrained_weights",
@@ -44,18 +47,18 @@ class PytorchResidualBlock(torch.nn.Module):
             ModelMode.PREFILL,
             1,
             128,
-            0.9973,
+            0.985,
         ),
         (
             "state-spaces/mamba-2.8b",
             ModelMode.DECODE,
             32,
             1,
-            0.9996,
+            0.973,
         ),
     ),
 )
-def test_residual_block(
+def test_mamba_block_inference(
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
     batch: int,
@@ -73,13 +76,16 @@ def test_residual_block(
     d_model = reference_model.args.d_model
     input = torch.rand(batch, seq_len, d_model)
 
-    reference_output = PytorchResidualBlock(reference_model, layer)(input)
+    reference_output = PytorchMambaBlock(reference_model, layer)(input)
 
     config = model_config.create_model_config(batch, reference_model.args.d_model, mode=mode, seq_len=seq_len)
 
     loader = TtTensorLoader(reference_model.state_dict(), device)
 
-    model = TtResidualBlock(reference_model.args, device, config, loader.get_tensor_loader(layer))
+    logger.info(f"Initalizing Mamba block from layer {layer}")
+    start = time.time()
+    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(layer))
+    logger.info(f"Finished initializing Mamba block (took {time.time() - start:.3f} sec)")
 
     tt_input = input.view(1, 1, config["outer_dim"], d_model)
     tt_input = ttnn.to_device(
@@ -96,5 +102,5 @@ def test_residual_block(
     logger.info(f"PCC value: {output_pcc}")
 
     if not does_pass:
-        logger.warning("Mamba Residual Block output failed")
+        logger.warning("Mamba Block output failed")
         assert does_pass, f"PCC value is lower than {pcc}"
