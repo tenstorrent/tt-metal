@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
 
-run-name: ${{ inputs.trigger_type }}
+run-name: ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
   # Centralized logic to determine what should run
   determine-tests:
