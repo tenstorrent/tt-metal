@@ -64,16 +64,6 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         tensor_args.input_tensor.memory_config());
 }
 
-// tt::tt_metal::operation::OpPerformanceModelGeneral<StridedAllGatherAsync::tensor_return_value_t>
-// StridedAllGatherAsync::create_op_performance_model(
-//     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, const Tensor& output_tensor) {
-//     const auto& input_tensor = tensor_args.input_tensor;
-//     int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output_tensor);
-//     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
-//         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
-//     return result;
-// }
-
 std::tuple<StridedAllGatherAsync::operation_attributes_t, StridedAllGatherAsync::tensor_args_t>
 StridedAllGatherAsync::invoke(
     const Tensor& input_tensor,

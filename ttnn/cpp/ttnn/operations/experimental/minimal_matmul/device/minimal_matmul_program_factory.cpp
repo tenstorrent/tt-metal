@@ -16,7 +16,56 @@
 #include <utility>
 #include <vector>
 
-namespace ttnn::operations::experimental::minimal_matmul::detail {
+namespace ttnn::operations::experimental::minimal_matmul {
+namespace helpers {
+void override_program_parameters(
+    const ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t& override_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    auto in0_addr = input_tensors.at(0).buffer()->address();
+    auto in1_addr = input_tensors.at(1).buffer()->address();
+    auto output_addr = output_tensors.at(0).buffer()->address();
+    auto in2_addr =
+        optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+
+    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
+    auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
+    auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
+    auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
+
+    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
+        CoreCoord core = override_variables.cores.at(i);
+        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
+        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
+        if (in1_idx == 0) {
+            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
+            in0_sender_args[0] = in0_addr;
+            in0_sender_args[1] = output_addr;
+            in0_sender_args[2] = in2_addr;
+        } else {
+            auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
+            in0_receiver_args[1] = output_addr;
+            in0_receiver_args[2] = in2_addr;
+        }
+        if (in0_idx == 0) {
+            auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
+            in1_sender_args[0] = in1_addr;
+            in1_sender_args[1] = output_addr;
+            in1_sender_args[2] = in2_addr;
+        } else {
+            auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
+            in1_receiver_args[1] = output_addr;
+            in1_receiver_args[2] = in2_addr;
+        }
+    }
+}
+
+}  // namespace helpers
+
+namespace detail {
 
 static inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
@@ -106,19 +155,32 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
-    return minimal_matmul_factory_helper(
-        program,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        fused_activation,
-        config,
-        output_tensor,
-        compute_kernel_config,
-        empty_fused_op_signaler);
+    ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t shared_vars =
+        minimal_matmul_factory_helper(
+            program,
+            input_tensor,
+            weight_tensor,
+            bias_tensor,
+            fused_activation,
+            config,
+            output_tensor,
+            compute_kernel_config,
+            empty_fused_op_signaler);
+
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            helpers::override_program_parameters(
+                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
+        };
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
+ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t minimal_matmul_factory_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
@@ -642,57 +704,15 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores,
-         cores,
-         in0_sender_kernels_id,
-         in0_receiver_kernels_id,
-         in1_sender_kernels_id,
-         in1_receiver_kernels_id,
-         transpose_core_grid](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto in0_addr = input_tensors.at(0).buffer()->address();
-            auto in1_addr = input_tensors.at(1).buffer()->address();
-            auto output_addr = output_tensors.at(0).buffer()->address();
-            auto in2_addr =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-
-            auto& in0_sender_runtime_args = GetRuntimeArgs(program, in0_sender_kernels_id);
-            auto& in0_receiver_runtime_args = GetRuntimeArgs(program, in0_receiver_kernels_id);
-            auto& in1_sender_runtime_args = GetRuntimeArgs(program, in1_sender_kernels_id);
-            auto& in1_receiver_runtime_args = GetRuntimeArgs(program, in1_receiver_kernels_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = cores.at(i);
-                uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
-                uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
-                if (in1_idx == 0) {
-                    auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-                    in0_sender_args[0] = in0_addr;
-                    in0_sender_args[1] = output_addr;
-                    in0_sender_args[2] = in2_addr;
-                } else {
-                    auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-                    in0_receiver_args[1] = output_addr;
-                    in0_receiver_args[2] = in2_addr;
-                }
-                if (in0_idx == 0) {
-                    auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-                    in1_sender_args[0] = in1_addr;
-                    in1_sender_args[1] = output_addr;
-                    in1_sender_args[2] = in2_addr;
-                } else {
-                    auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-                    in1_receiver_args[1] = output_addr;
-                    in1_receiver_args[2] = in2_addr;
-                }
-            }
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t{
+        num_cores,
+        cores,
+        in0_sender_kernels_id,
+        in0_receiver_kernels_id,
+        in1_sender_kernels_id,
+        in1_receiver_kernels_id,
+        transpose_core_grid};
 }
 
-}  // namespace ttnn::operations::experimental::minimal_matmul::detail
+}  // namespace detail
+}  // namespace ttnn::operations::experimental::minimal_matmul

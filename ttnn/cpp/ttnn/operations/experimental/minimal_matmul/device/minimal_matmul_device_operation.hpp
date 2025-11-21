@@ -16,6 +16,16 @@
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
+struct minimal_matmul_override_variables_t {
+    uint32_t num_cores;
+    std::vector<CoreCoord> cores;
+    tt::tt_metal::KernelHandle in0_sender_kernels_id;
+    tt::tt_metal::KernelHandle in0_receiver_kernels_id;
+    tt::tt_metal::KernelHandle in1_sender_kernels_id;
+    tt::tt_metal::KernelHandle in1_receiver_kernels_id;
+    bool transpose_core_grid;
+};
+
 struct MinimalMatmulConfig {
     MinimalMatmulConfig(
         uint32_t M_block_size_ = 1,
