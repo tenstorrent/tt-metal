@@ -96,7 +96,8 @@ Tensor invoke_impl(
     const Tensor& t_true,
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
@@ -123,7 +124,8 @@ Tensor invoke_impl(
         t_false,
         output_dtype,
         ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output);
+        output,
+        sub_core_grid);
 }
 
 // TTS: tensor, tensor, scalar
@@ -132,7 +134,8 @@ Tensor invoke_impl(
     const Tensor& t_true,
     float scalar_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
@@ -144,7 +147,8 @@ Tensor invoke_impl(
         t_true,
         scalar_false,
         ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output);
+        output,
+        sub_core_grid);
 }
 
 // TST: tensor, scalar, tensor
@@ -153,7 +157,8 @@ Tensor invoke_impl(
     float scalar_true,
     const Tensor& t_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
@@ -165,7 +170,8 @@ Tensor invoke_impl(
         t_false,
         scalar_true,
         ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
-        output);
+        output,
+        sub_core_grid);
 }
 
 // TSS: tensor, scalar, scalar
@@ -174,7 +180,8 @@ Tensor invoke_impl(
     float t_true,
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     log_debug(tt::LogOp, "Where LLK - TSS");
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
 }
@@ -186,10 +193,11 @@ Tensor WhereOperation::invoke(
     const TensorScalarVariant& value_true,
     const TensorScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
-            return invoke_impl(predicate, true_val, false_val, memory_config, output);
+            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grid);
         },
         value_true,
         value_false);
@@ -201,14 +209,25 @@ Tensor WhereOperation::invoke(
     const T& value_true,
     const T& value_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
 }
 
 template Tensor WhereOperation::invoke<int32_t>(
-    const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    const Tensor&,
+    const int32_t&,
+    const int32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
 template Tensor WhereOperation::invoke<uint32_t>(
-    const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    const Tensor&,
+    const uint32_t&,
+    const uint32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
 
 Tensor AddcmulOperation::invoke(
     const Tensor& input_a,
@@ -245,7 +264,8 @@ Tensor AddcmulOperation::invoke(
         value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
         ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
-        output);
+        output,
+        std::nullopt);
 }
 
 }  // namespace ternary
