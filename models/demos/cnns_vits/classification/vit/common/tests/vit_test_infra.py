@@ -8,8 +8,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
+from models.demos.cnns_vits.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 
 if is_wormhole_b0():
     from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
@@ -18,7 +18,7 @@ elif is_blackhole():
 elif is_grayskull():
     from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
 else:
-    from models.demos.vit.tt import ttnn_optimized_sharded_vit
+    from models.demos.cnns_vits.classification.vit.common.tt import ttnn_optimized_sharded_vit
 
 
 class VitTestInfra:

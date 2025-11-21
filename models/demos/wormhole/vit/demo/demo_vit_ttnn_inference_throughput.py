@@ -17,8 +17,8 @@ from models.common.utility_functions import (
     is_blackhole,
     torch2tt_tensor,
 )
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
+from models.demos.cnns_vits.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.perf.perf_utils import prep_perf_report
 

@@ -13,13 +13,14 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_functional_vit
+from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
+from models.demos.cnns_vits.classification.vit.common.tt import ttnn_optimized_interleaved_vit
 
 
 def get_expected_times(functional_vit):
     return {
         ttnn_functional_vit: (12, 17),
+        ttnn_optimized_interleaved_vit: (12, 0.08),
     }[functional_vit]
 
 
@@ -29,8 +30,8 @@ def get_expected_times(functional_vit):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
-@pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
+@pytest.mark.parametrize("sequence_size", [196])  ## padded from 197 to 224
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_interleaved_vit])
 def test_performance_vit_encoder(
     device, model_name, batch_size, sequence_size, functional_vit, model_location_generator
 ):
@@ -41,8 +42,8 @@ def test_performance_vit_encoder(
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
 
-    if functional_vit == ttnn_functional_vit:
-        tt_model_name = f"ttnn_{model_name}"
+    if functional_vit == ttnn_optimized_interleaved_vit:
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
 
@@ -52,12 +53,26 @@ def test_performance_vit_encoder(
         device=device,
     )
 
-    hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    hidden_states = ttnn.from_torch(
+        torch_hidden_states,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     if torch_attention_mask is not None:
-        head_masks = ttnn.from_torch(torch_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        head_masks = [
+            ttnn.from_torch(
+                torch_attention_mask[index].reshape(1, 1, 1, sequence_size).expand(batch_size, -1, -1, -1),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            for index in range(config.num_hidden_layers)
+        ]
     else:
-        head_masks = None
-    head_masks = None
+        head_masks = [None for _ in range(config.num_hidden_layers)]
 
     durations = []
     for _ in range(1):
@@ -84,7 +99,7 @@ def test_performance_vit_encoder(
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_interleaved_vit])
 def test_performance_vit_e2e(
     device, model_name, batch_size, image_size, sequence_size, functional_vit, model_location_generator
 ):
@@ -107,15 +122,13 @@ def test_performance_vit_e2e(
     else:
         torch_cls_token = torch.nn.Parameter(torch_cls_token)
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
+    cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    position_embeddings = ttnn.from_torch(
+        torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
-    if functional_vit == ttnn_functional_vit:
-        cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        position_embeddings = ttnn.from_torch(
-            torch_position_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
-
-    if functional_vit == ttnn_functional_vit:
-        tt_model_name = f"ttnn_{model_name}"
+    if functional_vit == ttnn_optimized_interleaved_vit:
+        tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
 

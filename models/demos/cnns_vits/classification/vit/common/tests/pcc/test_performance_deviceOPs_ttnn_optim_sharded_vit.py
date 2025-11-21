@@ -12,22 +12,97 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    is_wormhole_b0,
-    torch_random,
-)
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_interleaved_vit
-from models.perf.perf_utils import prep_perf_report
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor, torch_random
+from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
 
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_interleaved_vit: (12, 0.08),
+        ttnn_functional_vit: (12, 17),
+        ttnn_optimized_sharded_vit_gs: (12, 0.08),
     }[functional_vit]
+
+
+@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("image_size", [224])
+@pytest.mark.parametrize("image_channels", [3])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
+def test_performance_vit_embeddings(
+    device, model_name, batch_size, image_size, image_channels, functional_vit, model_location_generator
+):
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
+
+    torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
+
+    # cls_token & position embeddings expand to batch_size
+    # TODO: pass batch_size to preprocess_model_parameters
+    model_state_dict = model.state_dict()
+    torch_cls_token = model_state_dict["vit.embeddings.cls_token"]
+    torch_position_embeddings = model_state_dict["vit.embeddings.position_embeddings"]
+    if batch_size > 1:
+        torch_cls_token = torch.nn.Parameter(torch_cls_token.expand(batch_size, -1, -1))
+        torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings.expand(batch_size, -1, -1))
+    else:
+        torch_cls_token = torch.nn.Parameter(torch_cls_token)
+        torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
+
+    torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
+    torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
+    cls_position_embeddings = ttnn.from_torch(
+        torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=device,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
+    )
+
+    torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+    torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+    batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
+    patch_size = 16
+    torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
+    N, H, W, C = torch_pixel_values.shape
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
+            ),
+        }
+    )
+    n_cores = 8
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJORs)
+
+    pixel_values = torch2tt_tensor(
+        torch_pixel_values,
+        device,
+        ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+        tt_dtype=ttnn.bfloat16,
+    )
+
+    durations = []
+    for _ in range(1):
+        start = time.time()
+        tt_output = functional_vit.vit_embeddings(
+            config,
+            pixel_values,
+            cls_position_embeddings,
+            parameters=parameters,
+        )
+        tt_output = ttnn.from_device(tt_output)
+        end = time.time()
+        durations.append(end - start)
+
+    inference_time, *_ = durations
+    logger.info(f"Inference time: {inference_time}")
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
@@ -37,12 +112,10 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [196])  ## padded from 197 to 224
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_interleaved_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_encoder(
     device, model_name, batch_size, sequence_size, functional_vit, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator)
     config = model.config
     model = model.vit.encoder
@@ -50,7 +123,7 @@ def test_performance_vit_encoder(
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
 
-    if functional_vit == ttnn_optimized_interleaved_vit:
+    if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
@@ -82,8 +155,10 @@ def test_performance_vit_encoder(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
+
     durations = []
-    for _ in range(2):
+    for _ in range(1):
         start = time.time()
         tt_output = functional_vit.vit_encoder(
             config,
@@ -94,25 +169,9 @@ def test_performance_vit_encoder(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
-    inference_and_compile_time, inference_time, *_ = durations
-
-    expected_compile_time, expected_inference_time = get_expected_times(functional_vit)
-    prep_perf_report(
-        model_name=tt_model_name,
-        batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments="",
-        inference_time_cpu=0.0,
-    )
-
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    inference_time, *_ = durations
     logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
@@ -123,12 +182,10 @@ def test_performance_vit_encoder(
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_interleaved_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_e2e(
     device, model_name, batch_size, image_size, sequence_size, functional_vit, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator)
     config = model.config
 
@@ -148,12 +205,13 @@ def test_performance_vit_e2e(
     else:
         torch_cls_token = torch.nn.Parameter(torch_cls_token)
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
+    torch_position_embeddings = torch.nn.functional.pad(torch_position_embeddings, (0, 0, 0, 27, 0, 0))
     cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    if functional_vit == ttnn_optimized_interleaved_vit:
+    if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
@@ -179,15 +237,18 @@ def test_performance_vit_e2e(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
+
     durations = []
-    for _ in range(2):
+    for _ in range(1):
         start = time.time()
-        pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
-        pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
-        batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
+
+        torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+        torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+        batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
         patch_size = 16
-        pixel_values = pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
-        N, H, W, C = pixel_values.shape
+        torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
+        N, H, W, C = torch_pixel_values.shape
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -200,7 +261,7 @@ def test_performance_vit_e2e(
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         pixel_values = torch2tt_tensor(
-            pixel_values,
+            torch_pixel_values,
             device,
             ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
@@ -218,22 +279,6 @@ def test_performance_vit_e2e(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
-    inference_and_compile_time, inference_time, *_ = durations
-
-    expected_compile_time, expected_inference_time = get_expected_times(functional_vit)
-    prep_perf_report(
-        model_name=tt_model_name,
-        batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments="",
-        inference_time_cpu=0.0,
-    )
-
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    inference_time, *_ = durations
     logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")

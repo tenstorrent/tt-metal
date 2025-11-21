@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.vit.tests.vit_test_infra import create_test_infra
+from models.demos.cnns_vits.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 try:

@@ -2,60 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import pytest
 import torch
 import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
-from models.demos.vit.reference import torch_functional_vit
+from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
+from models.demos.cnns_vits.classification.vit.common.reference import torch_functional_vit
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
 
 
-def interpolate_pos_encoding(
-    position_embeddings: torch.Tensor, patch_size, num_patches, height: int, width: int
-) -> torch.Tensor:
-    """
-    This method allows to interpolate the pre-trained position encodings, to be able to use the model on higher
-    resolution images.
-
-    Source:
-    https://github.com/facebookresearch/dino/blob/de9ee3df6cf39fac952ab558447af1fa1365362a/vision_transformer.py#L174
-    """
-
-    num_positions = position_embeddings.shape[1] - 1
-    if num_patches == num_positions and height == width:
-        return position_embeddings
-    class_pos_embed = position_embeddings[:, 0]
-    patch_pos_embed = position_embeddings[:, 1:]
-    dim = position_embeddings.shape[-1]
-    h0 = height // patch_size
-    w0 = width // patch_size
-    # we add a small number to avoid floating point error in the interpolation
-    # see discussion at https://github.com/facebookresearch/dino/issues/8
-    h0, w0 = h0 + 0.1, w0 + 0.1
-    patch_pos_embed = patch_pos_embed.reshape(1, int(math.sqrt(num_positions)), int(math.sqrt(num_positions)), dim)
-    patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
-    patch_pos_embed = torch.nn.functional.interpolate(
-        patch_pos_embed,
-        scale_factor=(h0 / math.sqrt(num_positions), w0 / math.sqrt(num_positions)),
-        mode="bicubic",
-        align_corners=False,
-    )
-    assert int(h0) == patch_pos_embed.shape[-2] and int(w0) == patch_pos_embed.shape[-1]
-    patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-    return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
-
-
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("image_size", [1280])
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_patch_embeddings(model_name, batch_size, image_size, image_channels):
     torch.manual_seed(0)
@@ -64,7 +28,7 @@ def test_vit_patch_embeddings(model_name, batch_size, image_size, image_channels
     model = transformers.models.vit.modeling_vit.ViTPatchEmbeddings(config).eval()
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_pixel_values, interpolate_pos_encoding=True)
+    torch_output, *_ = model(torch_pixel_values)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -82,8 +46,8 @@ def test_vit_patch_embeddings(model_name, batch_size, image_size, image_channels
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("image_size", [1280])
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
     torch.manual_seed(0)
@@ -92,7 +56,7 @@ def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
     model = transformers.models.vit.modeling_vit.ViTEmbeddings(config).eval()
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_pixel_values, interpolate_pos_encoding=True)
+    torch_output, *_ = model(torch_pixel_values)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -103,12 +67,7 @@ def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
     # TODO: integrate within parameters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["cls_token"])
-    init_position_embeddings = torch.nn.Parameter(model_state_dict["position_embeddings"])
-    patch_size = 16
-    tot_patch_count = (image_size // patch_size) * (image_size // patch_size)
-    torch_position_embeddings = torch.nn.Parameter(
-        interpolate_pos_encoding(init_position_embeddings, patch_size, tot_patch_count, image_size, image_size)
-    )
+    torch_position_embeddings = torch.nn.Parameter(model_state_dict["position_embeddings"])
 
     output = torch_functional_vit.vit_embeddings(
         config,
@@ -118,36 +77,6 @@ def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
         parameters=parameters,
     )
     assert_with_pcc(torch_output, output[0], 0.9999)
-
-
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("sequence_size", [198])
-def test_vit_layernorm_before(model_name, batch_size, sequence_size):
-    torch.manual_seed(0)
-
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.models.vit.modeling_vit.ViTLayer.layernorm_before(config).eval()
-
-    torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -0.1, 0.1, dtype=torch.float32)
-    torch_attention_mask = torch.ones(1, sequence_size)
-    torch_output, *_ = model(torch_hidden_states, interpolate_pos_encoding=True)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-    )
-
-    output = torch_functional_vit.vit_layer.layernorm_before(
-        config,
-        torch_hidden_states,
-        attention_mask=torch_attention_mask,
-        parameters=parameters,
-    )
-
-    assert_with_pcc(torch_output, output, 0.9999)
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
@@ -303,17 +232,16 @@ def test_vit_encoder(model_name, batch_size, sequence_size):
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("image_size", [1280])
+@pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
-def test_vit(model_name, batch_size, image_size, image_channels):
+def test_vit(model_name, batch_size, image_size, image_channels, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
-    model = model.to(torch.bfloat16)
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.bfloat16)
-    torch_output, *_ = model(torch_pixel_values, interpolate_pos_encoding=True).logits
+    torch_output, *_ = model(torch_pixel_values).logits
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -324,12 +252,7 @@ def test_vit(model_name, batch_size, image_size, image_channels):
     # TODO: integrate within parameters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["vit.embeddings.cls_token"])
-    init_position_embeddings = torch.nn.Parameter(model_state_dict["vit.embeddings.position_embeddings"])
-    patch_size = 16
-    tot_patch_count = (image_size // patch_size) * (image_size // patch_size)
-    torch_position_embeddings = torch.nn.Parameter(
-        interpolate_pos_encoding(init_position_embeddings, patch_size, tot_patch_count, image_size, image_size)
-    )
+    torch_position_embeddings = torch.nn.Parameter(model_state_dict["vit.embeddings.position_embeddings"])
 
     output = torch_functional_vit.vit(
         config,
@@ -340,4 +263,5 @@ def test_vit(model_name, batch_size, image_size, image_channels):
         parameters=parameters,
     )
 
+    print(torch_output.shape, output.shape)
     assert_with_pcc(torch_output, output[0], 0.9999)
