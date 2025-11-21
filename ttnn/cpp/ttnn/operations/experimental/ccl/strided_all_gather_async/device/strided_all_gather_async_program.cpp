@@ -34,7 +34,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn {
+namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program {
 
 namespace detail {
 
@@ -48,7 +48,7 @@ uint32_t strided_all_gather_async_core_count_per_link(
 uint32_t strided_default_workers(
     const MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     uint32_t output_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
@@ -64,7 +64,7 @@ uint32_t strided_default_workers(
     // if per link data moved is greater than 0.25 MB, we search greedily for 4 workers, otherwise we search greedily
     // for 2 workers. for ring, half the data is moved per link, so we divide by 2
     double data_moved_per_link_bytes = double(output_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
-                                       (topology == ccl::Topology::Ring ? 2 : 1);
+                                       (topology == ttnn::ccl::Topology::Ring ? 2 : 1);
     if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
         candidate_worker_counts = {4, 2, 1};
     } else {
@@ -88,8 +88,6 @@ uint32_t strided_default_workers(
         num_links);
 }
 }  // namespace detail
-
-using namespace ccl;
 
 void strided_fabric_mux_connection_ct_args(
     const bool is_termination_master,
@@ -131,54 +129,119 @@ void strided_fabric_mux_connection_rt_args(
     worker_rt_args.push_back(num_workers_per_direction);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default(
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<uint32_t> tiles_per_chunk,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt) {
+StridedAllGatherAsyncProgramFactory::cached_mesh_workload_t StridedAllGatherAsyncProgramFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+void StridedAllGatherAsyncProgramFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+        auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
+        auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
+        auto& all_cores = shared_variables.all_cores;
+        auto& num_links = shared_variables.num_links;
+        auto& num_directions_per_link = shared_variables.num_directions_per_link;
+        auto& num_workers_per_direction = shared_variables.num_workers_per_direction;
+        auto& num_mux_cores_per_direction_per_link = shared_variables.num_mux_cores_per_direction_per_link;
+        auto& num_cores_per_link = shared_variables.num_cores_per_link;
+
+        const auto& input = tensor_args.input_tensor;
+        const auto& output = output_tensor;
+
+        auto barrier_semaphore = attributes.barrier_semaphore;
+        // update senders
+        uint32_t core_idx = 0;
+        for (uint32_t link = 0; link < num_links; link++) {
+            for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+                for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                    uint32_t mux_core_offset =
+                        (link * num_cores_per_link) +
+                        (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+                    CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+
+                    auto out_ready_semaphore = attributes.semaphore.at(dir);
+                    // sender reader
+                    auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+                    worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                    worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                    worker_reader_sender_runtime_args[9] = out_ready_semaphore.address();
+                    // sender writer
+                    auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+                    worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                    worker_writer_sender_runtime_args[11] = out_ready_semaphore.address();
+
+                    if (barrier_semaphore.has_value()) {
+                        worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
+                    }
+
+                    core_idx++;
+                }
+            }
+        }
+    }
+}
+
+StridedAllGatherAsyncProgramFactory::cached_program_t StridedAllGatherAsyncProgramFactory::create_at(
+    const operation_attributes_t& attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, attributes.topology, attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
     tt::tt_metal::Program program{};
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> empty_fused_op_signaler;
     return strided_all_gather_async_minimal_default_helper(
         program,
-        input_tensor,
-        sender_device_coord,
+        tensor_args.input_tensor,
+        mesh_coordinate,
         forward_coord,
         backward_coord,
         output_tensor,
-        dim,
-        num_links,
-        ring_size,
-        ring_index,
-        topology,
-        semaphore,
-        barrier_semaphore,
-        sub_device_id,
+        attributes.dim,
+        attributes.num_links,
+        attributes.ring_size,
+        device_index,
+        attributes.topology,
+        attributes.semaphore,
+        attributes.barrier_semaphore,
+        attributes.sub_device_id,
         empty_fused_op_signaler,
-        tiles_per_chunk,
-        num_workers_per_link,
-        num_buffers_per_channel,
-        mm_cores_y,
-        mm_block_ht,
-        mm_block_wt,
+        attributes.tiles_per_chunk,
+        attributes.num_workers_per_link,
+        attributes.num_buffers_per_channel,
+        attributes.mm_cores_y,
+        attributes.mm_block_ht,
+        attributes.mm_block_wt,
         CoreCoord(0, 0));
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default_helper(
+StridedAllGatherAsyncProgramFactory::cached_program_t
+StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -189,11 +252,11 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
@@ -233,9 +296,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     bool fuse_op = fused_op_signaler.has_value();
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_forward;
-    std::optional<experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_backward;
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> fused_op_signaler_backward;
     if (fuse_op) {
         fused_op_signaler_sender_workers = fused_op_signaler.value();
         fused_op_signaler_forward = fused_op_signaler.value();
@@ -245,20 +308,21 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
-        ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
+    auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
-    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology,
-        sender_device_coord,
-        forward_coord,
-        backward_coord,
-        num_targets_forward,
-        num_targets_backward,
-        mesh_device);
+    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] =
+        ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            topology,
+            sender_device_coord,
+            forward_coord,
+            backward_coord,
+            num_targets_forward,
+            num_targets_backward,
+            mesh_device);
 
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -564,59 +628,16 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_ids,
+    return {
+        std::move(program),
+        {reader_kernel_ids,
          writer_kernel_ids,
          all_cores,
          num_links,
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
-
-            auto barrier_semaphore = static_cast<const ttnn::StridedAllGatherAsync*>(operation)->barrier_semaphore;
-            // update senders
-            uint32_t core_idx = 0;
-            for (uint32_t link = 0; link < num_links; link++) {
-                for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-                    for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                        uint32_t mux_core_offset =
-                            (link * num_cores_per_link) +
-                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                        CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
-                        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
-
-                        auto out_ready_semaphore =
-                            static_cast<const ttnn::StridedAllGatherAsync*>(operation)->semaphore.at(dir);
-                        // sender reader
-                        auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                        worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                        worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[9] = out_ready_semaphore.address();
-                        // sender writer
-                        auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                        worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[11] = out_ready_semaphore.address();
-
-                        if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
-                        }
-
-                        core_idx++;
-                    }
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+         num_cores_per_link}};
 }
 
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async::program

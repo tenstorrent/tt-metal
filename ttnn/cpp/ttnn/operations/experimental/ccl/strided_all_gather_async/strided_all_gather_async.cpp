@@ -29,7 +29,7 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt) {
-    return ttnn::operations::experimental::ccl::strided_all_gather_async(
+    return ttnn::prim::strided_all_gather_async(
         input_tensor,
         dim,
         multi_device_global_semaphore,
