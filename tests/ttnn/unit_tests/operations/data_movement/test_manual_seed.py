@@ -7,14 +7,14 @@ import torch
 import ttnn
 
 
-def test_manual_seed(device):
-    """Test manual_seed with explicit keyword arguments for device and seeds (integer scalar)."""
-    ttnn.manual_seed(seeds=42, device=device)
+# def test_manual_seed(device):
+#     """Test manual_seed with explicit keyword arguments for device and seeds (integer scalar)."""
+#     ttnn.manual_seed(seeds=42, device=device)
 
 
-# def test_manual_seed_with_user_id(device):
-#     """Test manual_seed with both seed and user_id as integer scalars using keyword arguments."""
-#     ttnn.manual_seed(seeds=42, device=device,  user_ids=7)
+def test_manual_seed_with_user_id(device):
+    """Test manual_seed with both seed and user_id as integer scalars using keyword arguments."""
+    ttnn.manual_seed(seeds=42, device=device, user_ids=7)
 
 
 # def test_manual_short(device):
