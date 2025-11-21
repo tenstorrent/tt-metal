@@ -14,7 +14,7 @@
 #include <random>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {

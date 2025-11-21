@@ -14,8 +14,8 @@
 
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric_edm_types.hpp>
-#include <tt-metalium/experimental/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using Topology = tt::tt_fabric::Topology;
 using NocSendType = tt::tt_fabric::NocSendType;

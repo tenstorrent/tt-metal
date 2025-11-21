@@ -19,13 +19,13 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/experimental/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -33,7 +33,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
-#include <tt-metalium/experimental/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"

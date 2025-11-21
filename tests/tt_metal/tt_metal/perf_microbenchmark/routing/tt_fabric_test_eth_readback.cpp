@@ -7,7 +7,7 @@
 
 // Include the necessary headers for the implementation
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 // Include the test device and fixture headers

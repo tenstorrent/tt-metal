@@ -14,7 +14,7 @@
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 

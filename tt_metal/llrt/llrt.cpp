@@ -21,7 +21,7 @@
 
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
