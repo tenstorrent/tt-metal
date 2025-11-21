@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "dev_mem_map.h"
 #include "debug/sanitize.h"
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
