@@ -306,29 +306,29 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["2D_FF2_SEQ_LEN_1024"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=10,  # max is 20, 10 seems optimal
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,  # max is 20, 10 seems optimal
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(7, 8),
-            in0_block_w=5,  # max is 10
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,  # max is 10
             out_subblock_h=1,
-            out_subblock_w=3,
+            out_subblock_w=4,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["1D_RESNET_LINEAR"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=10,  # max is 40, 10 seems optimal
             out_subblock_h=1,
             out_subblock_w=1,
@@ -341,11 +341,11 @@ class ModelOptimisations:
 
         in_0_block_w_geglu_640 = 5
         per_core_M_geglu_640 = 16
-        per_core_N_geglu_640 = 10
+        per_core_N_geglu_640 = 16
         out_subblock_h_geglu_640 = 1
-        out_subblock_w_geglu_640 = 5
+        out_subblock_w_geglu_640 = 8
         self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=in_0_block_w_geglu_640,
             per_core_M=per_core_M_geglu_640,
             per_core_N=per_core_N_geglu_640,
@@ -356,8 +356,8 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=in_0_block_w_geglu_640,
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=1,
             per_core_M=per_core_M_geglu_640,
             per_core_N=per_core_N_geglu_640,
             out_subblock_h=out_subblock_h_geglu_640,
@@ -366,13 +366,13 @@ class ModelOptimisations:
             fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
 
-        in_0_block_w_geglu_1280 = 5  # max is 5
+        in_0_block_w_geglu_1280 = 4  # max is 5
         per_core_M_geglu_1280 = 4
-        per_core_N_geglu_1280 = 20
+        per_core_N_geglu_1280 = 32
         out_subblock_h_geglu_1280 = 1
-        out_subblock_w_geglu_1280 = 5
+        out_subblock_w_geglu_1280 = 8
         self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=in_0_block_w_geglu_1280,
             per_core_M=per_core_M_geglu_1280,
             per_core_N=per_core_N_geglu_1280,
@@ -383,7 +383,7 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=in_0_block_w_geglu_1280,
             per_core_M=per_core_M_geglu_1280,
             per_core_N=per_core_N_geglu_1280,
@@ -394,81 +394,81 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=5,  # block sharded input cant use 2 for now, needs optimising
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=1,
-            out_subblock_w=3,  # block sharded output Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.
+            out_subblock_w=4,  # block sharded output Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_TM_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=5,
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_ATTN_OUT_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=4,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=2,
-            out_subblock_w=3,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_320_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=2,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=2,
-            out_subblock_w=3,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
         )
 
         self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=5,
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_640_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=4,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_ATTN_QKV_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=4,
             per_core_M=16,
-            per_core_N=8,
+            per_core_N=12,
             out_subblock_h=1,
-            out_subblock_w=8,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
         )
@@ -499,79 +499,79 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["2D_RESNET_CONV_2560_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=2,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=5,
+            compute_with_storage_grid_size=(5, 8),
+            in0_block_w=4,
             per_core_M=4,
-            per_core_N=15,
+            per_core_N=24,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=True,
         )
 
         self.matmul_configs["2D_RESNET_CONV_1920_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=5,
             per_core_M=4,
-            per_core_N=5,
+            per_core_N=8,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
         )
 
         self.matmul_configs["2D_RESNET_CONV_1920_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=3,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=2,
-            out_subblock_w=3,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_RESNET_CONV_1280_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=1,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=2,
-            out_subblock_w=3,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["2D_RESNET_CONV_960_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=2,
             per_core_M=16,
-            per_core_N=3,
+            per_core_N=4,
             out_subblock_h=1,
-            out_subblock_w=3,
+            out_subblock_w=4,
             transpose_mcast=False,
             fused_activation=None,
         )
 
         self.matmul_configs["1D_RESNET_CONV_960_320"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(8, 5),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=5,
-            per_core_M=8,
+            per_core_M=13,
             per_core_N=10,
             mcast_in0=False,
             gather_in0=False,
@@ -580,11 +580,11 @@ class ModelOptimisations:
         )
 
         self.matmul_configs["1D_RESNET_CONV_640_320"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(5, 8),
             in0_block_w=1,
-            out_subblock_h=2,
-            out_subblock_w=2,
-            per_core_M=8,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            per_core_M=13,
             per_core_N=10,
             mcast_in0=False,
             gather_in0=False,

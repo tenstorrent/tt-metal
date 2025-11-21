@@ -94,10 +94,10 @@ class TtBasicTransformerBlock(LightweightModule):
             is_base = True
         elif W == 1280:
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-                subblock_w=5,
+                compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+                subblock_w=8,
                 block_h=4,
-                block_w=5,
+                block_w=8,
                 inplace=False,
                 legacy_reduction=True,
                 legacy_rsqrt=True,
