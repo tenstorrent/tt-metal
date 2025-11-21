@@ -377,7 +377,7 @@ void EmbeddingProgramFactory::override_runtime_arguments(
 
 Hash is based on operation attributes and input arguments and helps reuse already compiled programs.
 
-Know, the default legacy implementation hashes both operation attributes and input tensors.
+Note, the default legacy implementation hashes both operation attributes and input tensors.
 Tensor hash includes:
  - Storage variant index (0 or 1)
  - Logical shape dimensions (vector of uint32_t)
