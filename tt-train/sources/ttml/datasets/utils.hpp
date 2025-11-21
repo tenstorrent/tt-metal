@@ -8,7 +8,6 @@
 #include <random>
 #include <span>
 #include <string>
-#include <sstream>
 
 #include <yaml-cpp/yaml.h>
 

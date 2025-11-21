@@ -38,21 +38,15 @@ def tokenize_text_data(tokenizer_file, text_data):
     return tokenized_data
 
 
-def save_to_yaml(data, vocab_size, output_file):
+def save_to_yaml(data_list, vocab_size, output_file):
     """
     Saves the tokenized data as a single space-separated line + data length in a YAML file.
     """
 
-    output = StringIO()
-    writer = csv.writer(output, delimiter=" ", quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(data)
-
-    csv_str = output.getvalue()
-
     yaml_data = {
         "tokenizer_vocab_size": vocab_size,
-        "data_length": len(data),
-        "tokens": list(map(int, csv_str.strip().split())),
+        "data_length": len(data_list),
+        "tokens": data_list,
     }
 
     with open(output_file, "w", encoding="utf-8") as file:
