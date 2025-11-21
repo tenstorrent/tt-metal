@@ -21,18 +21,17 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
+#include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {
+    namespace kutil = norm::kernel_util;
+    namespace numeric = kutil::compute::numeric;
+    namespace policies = kutil::generic::policies;
+
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -119,68 +118,24 @@ void MAIN {
 #endif
         // by the end of this loop we should end up with Wt tiles in cb_x
 #else
-#ifndef RMSNORM
-        reconfig_data_format(cb_in, cb_scaler);
-        pack_reconfig_data_format(cb_ex);
-#else
+#ifdef RMSNORM
         reconfig_data_format(cb_in, cb_in);
         pack_reconfig_data_format(cb_xmm2);
 #endif
 #endif
 
 #ifndef RMSNORM
-        /*
-         * E[x]
-         * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
-         */
-        ACQ();
-        cb_reserve_back(cb_ex, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_x, wt + blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                // if (wt + blk >= Wt) {
-                //     tt::compute::common::print_full_tile(cb_x, wt + j, true);
-                // }
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, wt + j, scaler0, dst0);
-            }
-            // we don't pop cb_x until we compute Ex
-        }
-        // Divide by W
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst0, one_over_W);
-        pack_tile(dst0, cb_ex);
-        reduce_uninit();
-        REL();
+        // E[x]
+        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, Wt, blk);
 
-        cb_push_back(cb_ex, 1);
-
-        /*
-         * x - E[x]
-         * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
-         */
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_x, cb_ex);
-        }
-        cb_wait_front(cb_ex, 1);  // should have 1 tile
-        // DPRINT << "small first input tile" << ENDL();
-        // tt::compute::common::print_full_tile(cb_x, 0, true);
-        // DPRINT << "small Ex tile" << ENDL();
-        // tt::compute::common::print_full_tile(cb_ex, 0, true);
+        // x - E[x]
+        reconfig_data_format(cb_x, cb_ex);
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
-                // if (wt == 0) {
-                //     DPRINT << "small first sub tile iter: " << wt << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
-                // if (wt == 1) {
-                //     DPRINT << "small second sub tile iter: " << wt << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
+                sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);
                 pack_tile(wtr, cb_xmm);
             }
             cb_push_back(cb_xmm, blk);
@@ -188,9 +143,6 @@ void MAIN {
         }
         cb_pop_front(cb_ex, 1);
         cb_pop_front(cb_x, Wt);
-        // cb_wait_front(cb_xmm, Wt);
-        // DPRINT << "small first xmm tile" << ENDL();
-        // tt::compute::common::print_full_tile(cb_xmm, 0, true);
 
 #ifndef FUSE_PRE_ADD
         reconfig_data_format_srca(cb_x, cb_xmm);
@@ -202,8 +154,8 @@ void MAIN {
          */
         mul_tiles_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
+            cb_wait_front(cb_xmm, wt + blk);
+            cb_reserve_back(cb_xmm2, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
@@ -217,66 +169,12 @@ void MAIN {
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
 
-        /* Var(x)
-         * compute E[(x-E[x])^2]
-         * IIRC E[x^2] - E[x]^2 trick was unstable
-         * TODO(AP): can save space here by reusing CB
-         */
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_xmm2, cb_scaler);
-        }
-        cb_reserve_back(cb_ex2, 1);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);
-        ACQ();
-        cb_wait_front(cb_xmm2, Wt);
-        // DPRINT << "small first xmm2 tile" << ENDL();
-        // tt::compute::common::print_full_tile(cb_xmm2, 0, true);
-        // DPRINT << "second (x-E[x])^2 tile small (using square_tile)" << ENDL();
-        // tt::compute::common::print_full_tile(cb_xmm2, 1, true);
-        // cb_wait_front(cb_xmm, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // reduce
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
-                // if (wt == 0 && wtr == 0) {
-                //     pack_tile(dst0, cb_ex2);
-                //     REL();
-                //     cb_push_back(cb_ex2, 1);
-                //     cb_wait_front(cb_ex2, 1);
-                //     DPRINT << "small first var reduce iter" << ENDL();
-                //     tt::compute::common::print_full_tile(cb_ex2, 0, true);
-                // }
-                // if (wt + wtr == 0) {
-                //     DPRINT << "small first var reduce iter: " << wt + wtr << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
-                // if (wt + wtr == 1) {
-                //     DPRINT << "small second var reduce iter: " << wt + wtr << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
-            }
-        }
-        cb_pop_front(cb_xmm2, Wt);
-        // Divide by W
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst0, one_over_W);
-        pack_reconfig_data_format(cb_ex2);
-        pack_tile(dst0, cb_ex2);
-        reduce_uninit();
-        REL();
+        // Var[x]
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+            cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
 
-        cb_push_back(cb_ex2, 1);
-        cb_wait_front(cb_ex2, 1);
-
-        // DPRINT << "small var reduce result after first block" << ENDL();
-        // tt::compute::common::print_full_tile(cb_ex2, 0, true);
-
-        /* Var(x) + eps
-         * add epsilon E[(x-E[x])^2]+eps
-         */
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_ex2, cb_eps);
-        }
+        // Var[x] + eps
+        reconfig_data_format(cb_ex2, cb_eps);
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
@@ -290,11 +188,7 @@ void MAIN {
         REL();
         cb_pop_front(cb_ex2, 1);
 
-        /* ln(x) * gamma + beta (gamma and beta are optional)
-         * now xmm = (x-E[x])
-         * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
-         * just need to bcast_mul xmm with cb_ex2pe
-         */
+        // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             reconfig_data_format(cb_xmm, cb_ex2pe);
@@ -369,8 +263,5 @@ void MAIN {
         cb_pop_front(cb_xmm, Wt);
 
     }  // NCHt loop
-    // cb_pop_front(cb_scaler, 1); // optional for correctness
-    // cb_pop_front(cb_eps, 1); // optional for correctness
-    // cb_pop_front(cb_col1, 1); // optional for correctness
 }
 }  // namespace NAMESPACE
