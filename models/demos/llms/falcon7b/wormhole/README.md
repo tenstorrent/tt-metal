@@ -22,14 +22,14 @@ pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES
 - To run the demo using prewritten prompts for a batch of 32 users run (currently only supports same token-length inputs):
 
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k default_mode_1024_stochastic
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/llms/falcon7b/common/demo/input_data.json' models/demos/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k default_mode_1024_stochastic
 ```
 The default decoding method is top-k/top-p (stochastic) sampling, however greedy decoding can also be used by replacing `stochastic` with `greedy` in the command above.
 
 ### Performance Measurement Mode
 - To measure the performance of generating the `i`'th token while the KV cache is filled with `i-1` rows (where `i` is 128 in the command below):
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "perf_mode_128_stochastic and not verify"
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/llms/falcon7b/common/demo/input_data.json' models/demos/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "perf_mode_128_stochastic and not verify"
 ```
 Supported sequence lengths: Currently `i` can only be set to 128, 1024, or 2048 for performance measurement mode.
 

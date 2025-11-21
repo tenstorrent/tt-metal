@@ -8,28 +8,28 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.falcon7b_common.tests.test_utils import (
+from models.demos.llms.falcon7b.common.tests.test_utils import (
     concat_device_outputs,
     get_num_devices,
     get_rand_falcon_inputs,
     load_hf_model,
 )
-from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.llms.falcon7b.common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-class PytorchFalconDecoderModel(torch.nn.Module):
+class PytorchFalconAttentionModel(torch.nn.Module):
     def __init__(self, hf_reference_model, layer_num):
         super().__init__()
-        self.decoder = hf_reference_model.transformer.h[layer_num]
+        self.attention = hf_reference_model.transformer.h[layer_num].self_attention
 
         # Disable dropout
-        self.decoder.eval()
+        self.attention.eval()
 
     def forward(self, x, alibi, attention_mask, layer_past, use_cache):
-        result = self.decoder(
+        result = self.attention(
             hidden_states=x,
             alibi=alibi,
             attention_mask=attention_mask,
@@ -39,14 +39,13 @@ class PytorchFalconDecoderModel(torch.nn.Module):
         return result
 
 
-def run_test_FalconDecoder_inference(
+def run_test_FalconAttention_inference(
     mesh_device,
     model_version,
     llm_mode,
     batch,
     seq_len,
     kv_cache_len,
-    layer_num,
     pcc,
     model_config,
     tt_cache_path,
@@ -57,20 +56,22 @@ def run_test_FalconDecoder_inference(
     hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
-    # Prepare input ========================================================================
-    torch.manual_seed(0)
-    base_url = "transformer.h"
-    max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
     user_id = 0
 
+    # Prepare input
+    torch.manual_seed(0)
+    layer_num = 0
+    base_url = "transformer.h"
+    max_position_embeddings = 2048
+    head_dim = configuration.hidden_size // configuration.num_attention_heads
+
     # Generate input, attention_mask, and kv_cache --------------------------------------
     (
-        decoder_input,
+        attention_input,
         attention_mask_bool,
         layer_past,
-        tt_decoder_input,
+        tt_attention_input,
         tt_attention_mask,
         tt_layer_past,
         kv_len,
@@ -91,33 +92,43 @@ def run_test_FalconDecoder_inference(
         layer_past = (layer_past[0].squeeze(1), layer_past[1].squeeze(1))
     tt_layer_past = tt_layer_past[0]
 
-    # PyTorch output =======================================================================
-    pytorch_FalconDecoder_model = PytorchFalconDecoderModel(hugging_face_reference_model, layer_num)
-    pytorch_out, pytorch_layer_present = pytorch_FalconDecoder_model(
-        x=decoder_input,
+    # PyTorch output --------------------------------------------------------------------
+    pytorch_FalconAttention_model = PytorchFalconAttentionModel(hugging_face_reference_model, layer_num)
+    pytorch_out, pytorch_layer_present = pytorch_FalconAttention_model(
+        attention_input,
         alibi=None,
         attention_mask=attention_mask_bool,
         layer_past=layer_past,
         use_cache=use_cache,
     )
+    if llm_mode == "decode":
+        ttFalconAttention = TtFalconAttentionDecode
+    elif llm_mode == "prefill":
+        ttFalconAttention = TtFalconAttentionPrefill
+    else:
+        raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
-    # TT hardware execution =================================================================
-    tt_FalconDecoder_model = TtFalconDecoderLayer(
+    # TT hardware execution -------------------------------------------------------------
+    tt_FalconAttention_model = ttFalconAttention(
         mesh_device,
         state_dict,
+        # None,
         base_url,
         layer_num,
-        configuration,
+        configuration.hidden_size,
+        configuration.num_attention_heads,
+        # 4544,
+        # 71,
         max_position_embeddings,
         model_config,
         tt_cache_path,
     )
 
-    tt_out, tt_layer_present = tt_FalconDecoder_model(
-        hidden_states=tt_decoder_input,
-        llm_mode=llm_mode,
+    tt_out, tt_layer_present = tt_FalconAttention_model(
+        tt_attention_input,
         alibi=None,
         attention_mask=tt_attention_mask,
+        llm_mode=llm_mode,
         user_id=user_id,
         layer_past=tt_layer_past,
         layer_past_len=kv_cache_len,
@@ -140,9 +151,9 @@ def run_test_FalconDecoder_inference(
     does_pass = does_pass and does_pass2
 
     if does_pass:
-        logger.info("Falcon Decoder output Passed!")
+        logger.info("Falcon Attention output Passed!")
     else:
-        logger.warning("Falcon Decoder output Failed!")
+        logger.warning("Falcon Attention output Failed!")
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
@@ -158,17 +169,16 @@ def run_test_FalconDecoder_inference(
     ids=["prefill_seq128", "prefill_seq1024", "prefill_seq2048", "decode_batch32"],
 )
 @pytest.mark.parametrize(
-    "model_version, layer_num, pcc",
-    (("tiiuae/falcon-7b-instruct", 0, 0.98),),
+    "model_version, pcc",
+    (("tiiuae/falcon-7b-instruct", 0.98),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
-def test_FalconDecoder_inference(
+def test_FalconAttention_inference(
     model_version,
     llm_mode,
     batch,
     seq_len,
     kv_cache_len,
-    layer_num,
     pcc,
     model_config_str,
     mesh_device,
@@ -179,14 +189,13 @@ def test_FalconDecoder_inference(
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
-    run_test_FalconDecoder_inference(
+    run_test_FalconAttention_inference(
         mesh_device,
         model_version,
         llm_mode,
         batch,
         seq_len,
         kv_cache_len,
-        layer_num,
         pcc,
         model_config,
         tt_cache_path,

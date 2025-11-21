@@ -69,7 +69,7 @@ jobs:
           device_perf_model_name: "non-civ2_tests"
           commands: |
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-            pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            pytest models/demos/llms/falcon7b/common/tests -m models_device_performance_bare_metal
             pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}

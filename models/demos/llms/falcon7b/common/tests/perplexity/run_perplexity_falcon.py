@@ -19,9 +19,9 @@ from models.datasets.llm_dataset_utils import (
     prepare_textgen_dataset,
     verify_acc_metrics,
 )
-from models.demos.falcon7b_common.tests.test_utils import initialize_kv_cache, load_hf_model
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.llms.falcon7b.common.tests.test_utils import initialize_kv_cache, load_hf_model
+from models.demos.llms.falcon7b.common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 

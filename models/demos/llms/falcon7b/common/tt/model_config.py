@@ -9,7 +9,7 @@ from transformers import FalconConfig
 
 import ttnn
 from models.common.utility_functions import is_grayskull, is_wormhole_b0
-from models.demos.falcon7b_common.tt.model_utils import get_default_hifi2_kernel_config
+from models.demos.llms.falcon7b.common.tt.model_utils import get_default_hifi2_kernel_config
 
 OP_KEYS = (
     # Inputs
@@ -193,7 +193,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
-        "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon7b_common/datasets/"),
+        "DEFAULT_CACHE_PATH": Path(f"models/demos/llms/falcon7b/common/datasets/"),
     }  # DEFAULT_MEMCFG also used to determine banking for ttnn.experimental.device.InitializeDevice
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})

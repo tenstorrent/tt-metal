@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.falcon7b_common.tests.perplexity.run_perplexity_falcon import run_test_perplexity
+from models.demos.llms.falcon7b.common.tests.perplexity.run_perplexity_falcon import run_test_perplexity
 
 
 @pytest.mark.parametrize(

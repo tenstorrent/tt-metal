@@ -7,8 +7,8 @@ from torch import nn
 
 import ttnn
 from models.common.utility_functions import is_grayskull, is_wormhole_b0
-from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
-from models.demos.falcon7b_common.tt.model_utils import (
+from models.demos.llms.falcon7b.common.tests.test_utils import tt_from_torch
+from models.demos.llms.falcon7b.common.tt.model_utils import (
     get_default_hifi2_kernel_config,
     get_falcon_default_core_grid,
     get_weights_cached,
