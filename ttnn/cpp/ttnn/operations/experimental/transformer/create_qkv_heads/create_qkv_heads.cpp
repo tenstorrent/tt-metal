@@ -9,7 +9,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::invoke(
     const Tensor& input_tensor,
@@ -39,4 +39,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
         input_tensor, num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, memory_config, preallocated_outputs);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads

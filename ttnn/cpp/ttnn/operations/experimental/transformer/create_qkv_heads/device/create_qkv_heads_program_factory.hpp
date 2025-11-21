@@ -7,7 +7,11 @@
 #include "create_qkv_heads_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::create_qkv_heads::program {
+
+using ttnn::operations::experimental::create_qkv_heads::operation_attributes_t;
+using ttnn::operations::experimental::create_qkv_heads::tensor_args_t;
+using ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t;
 
 struct CreateQKVHeadsSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -36,4 +40,4 @@ struct CreateQKVHeadsProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::create_qkv_heads::program

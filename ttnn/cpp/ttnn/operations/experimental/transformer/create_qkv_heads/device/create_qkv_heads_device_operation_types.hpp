@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads {
 
 using tt::tt_metal::MemoryConfig;
 
@@ -30,4 +30,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
 using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads

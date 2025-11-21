@@ -13,14 +13,15 @@
 
 #include "create_qkv_heads_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads {
 
 struct CreateQKVHeadsDeviceOperation {
-    using operation_attributes_t = ttnn::operations::experimental::transformer::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::experimental::transformer::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::experimental::transformer::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::experimental::transformer::tensor_return_value_t;
-    using program_factory_t = std::variant<program::CreateQKVHeadsProgramFactory>;
+    using operation_attributes_t = ttnn::operations::experimental::create_qkv_heads::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::experimental::create_qkv_heads::tensor_args_t;
+    using spec_return_value_t = ttnn::operations::experimental::create_qkv_heads::spec_return_value_t;
+    using tensor_return_value_t = ttnn::operations::experimental::create_qkv_heads::tensor_return_value_t;
+    using program_factory_t =
+        std::variant<ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -44,10 +45,10 @@ struct CreateQKVHeadsDeviceOperation {
         const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads
 
 namespace ttnn::prim {
 constexpr auto create_qkv_heads = ttnn::register_operation<
     "ttnn::prim::create_qkv_heads",
-    ttnn::operations::experimental::transformer::CreateQKVHeadsDeviceOperation>();
+    ttnn::operations::experimental::create_qkv_heads::CreateQKVHeadsDeviceOperation>();
 }  // namespace ttnn::prim

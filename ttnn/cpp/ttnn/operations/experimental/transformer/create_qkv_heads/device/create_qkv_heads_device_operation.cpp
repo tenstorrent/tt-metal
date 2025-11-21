@@ -9,11 +9,11 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads {
 
 CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::CreateQKVHeadsProgramFactory{};
+    return ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory{};
 }
 
 void CreateQKVHeadsDeviceOperation::validate_on_program_cache_hit(
@@ -143,7 +143,8 @@ tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
         args.head_dim,
         args.transpose_k_heads,
         args.output_mem_config,
-        input_tensor);
+        input_tensor,
+        input_tensor.device()->compute_with_storage_grid_size());
 
     return hash;
 }
@@ -168,4 +169,4 @@ CreateQKVHeadsDeviceOperation::invoke(
         tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads

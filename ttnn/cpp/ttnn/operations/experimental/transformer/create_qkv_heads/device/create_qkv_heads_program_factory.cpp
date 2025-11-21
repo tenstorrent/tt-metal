@@ -12,7 +12,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::create_qkv_heads::program {
 
 CreateQKVHeadsProgramFactory::cached_program_t CreateQKVHeadsProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -237,4 +237,4 @@ void CreateQKVHeadsProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::create_qkv_heads::program
