@@ -131,7 +131,6 @@ tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         args.transpose_hw,
         args.output_mem_config,
         args.output_dtype,
-        args.transpose_hw,
         tensor_args.input_tensor_a.dtype(),
         tensor_args.input_tensor_a.memory_config(),
         tensor_args.input_tensor_b.dtype(),
