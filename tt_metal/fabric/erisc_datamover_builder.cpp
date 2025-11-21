@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -34,7 +34,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "core_coord.hpp"
-#include "fabric_edm_types.hpp"
+#include "experimental/fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 

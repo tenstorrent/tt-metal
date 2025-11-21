@@ -8,9 +8,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric_types.hpp>
+#include <tt-metalium/experimental/routing_table_generator.hpp>
 
 namespace tt::tt_metal {
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "routing_table_generator.hpp"
+#include "experimental/routing_table_generator.hpp"
 
 #include <enchantum/enchantum.hpp>
 #include <algorithm>

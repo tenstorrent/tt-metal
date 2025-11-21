@@ -11,8 +11,8 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>

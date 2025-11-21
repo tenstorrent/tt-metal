@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric.hpp>
 
 // Include the test device and fixture headers
 #include "tt_fabric_test_device_setup.hpp"

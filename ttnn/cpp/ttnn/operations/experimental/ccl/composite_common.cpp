@@ -1,14 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <tt-metalium/fabric.hpp>
-#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+///
+#include <tt-metalium/experimental/fabric.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace composite_common {

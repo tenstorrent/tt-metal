@@ -21,7 +21,7 @@
 #include "metal_soc_descriptor.h"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/types/arch.hpp>

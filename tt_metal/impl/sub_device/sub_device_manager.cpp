@@ -22,7 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
