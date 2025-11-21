@@ -51,8 +51,8 @@ struct GroupAttnMatmulDeviceOperation {
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<const uint32_t> num_tokens,
         std::optional<const bool> transpose_hw,
-        const uint32_t out_subblock_w,
-        const bool row_major,
+        uint32_t out_subblock_w,
+        bool row_major,
         std::optional<Tensor> preallocated_output);
 };
 

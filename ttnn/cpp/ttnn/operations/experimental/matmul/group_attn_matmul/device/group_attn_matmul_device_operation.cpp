@@ -262,8 +262,8 @@ GroupAttnMatmulDeviceOperation::invoke(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<const uint32_t> num_tokens,
     std::optional<const bool> transpose_hw,
-    const uint32_t out_subblock_w,
-    const bool row_major,
+    uint32_t out_subblock_w,
+    bool row_major,
     std::optional<Tensor> preallocated_output) {
     return std::make_tuple(
         operation_attributes_t{
@@ -279,7 +279,7 @@ GroupAttnMatmulDeviceOperation::invoke(
         tensor_args_t{
             .input_tensor_a = input_tensor_a,
             .input_tensor_b = input_tensor_b,
-            .preallocated_output = preallocated_output,
+            .preallocated_output = std::move(preallocated_output),
         });
 }
 
