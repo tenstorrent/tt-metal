@@ -316,7 +316,7 @@ def main():
                 except ValueError as exc:
                     trySystem = True
                 if trySystem:
-                    subprocess.run(progname, shell=True, check=True)
+                    subprocess.run(" ".join(args), shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True
