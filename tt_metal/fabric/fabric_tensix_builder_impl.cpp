@@ -933,7 +933,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
         }
 
         // Check inter-mux channels (all other directions have muxes that may connect to this mux)
-        auto upstream_mux_dirs = get_all_other_directions(direction_);  // Upstream for me = downstream for them
+        auto upstream_mux_dirs = get_all_other_directions(direction_);
         for (auto upstream_dir : upstream_mux_dirs) {
             auto noc_coords = tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
             if (noc_coords) {

@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
 
 #include <cstddef>
 #include <array>
@@ -190,11 +191,12 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, uint32_t Direction>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
+    std::array<tt::tt_fabric::FabricMuxToMuxSender, NUM_DOWNSTREAM_MUX_CONNECTIONS>& downstream_mux_connections,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
     bool is_persistent_channel,
@@ -212,10 +214,10 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
-
-        fabric_connection.send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+        // TODO: once we group the channels into udm-worker, relay-mux, mux-mux, then we only need to check the
+        // directions for the udm-worker channels.
+        tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
+            packet_header, fabric_connection, downstream_mux_connections);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -415,10 +417,11 @@ void kernel_main() {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
+                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL, direction>(
                         full_size_channels[channel_id],
                         full_size_channel_worker_interfaces[channel_id],
                         fabric_connection,
+                        downstream_mux_connections,
                         full_size_channel_connection_established[channel_id],
                         StreamId{channel_stream_ids[channel_id]},
                         is_persistent_channels[channel_id],
@@ -427,10 +430,11 @@ void kernel_main() {
             }
 
             for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL, direction>(
                     header_only_channels[channel_id],
                     header_only_channel_worker_interfaces[channel_id],
                     fabric_connection,
+                    downstream_mux_connections,
                     header_only_channel_connection_established[channel_id],
                     StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
                     is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],

@@ -406,6 +406,51 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     noc_async_writes_flushed();
 }
 
+// Map downstream direction to mux array index [0-2], excluding my_direction
+// Examples:
+// - EAST Mux (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+// - WEST Mux (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+// - NORTH Mux (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+// - SOUTH Mux (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+constexpr uint32_t direction_to_mux_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
+    {0, 0, 1, 2},  // EAST Mux -> WEST, NORTH, SOUTH
+    {0, 0, 1, 2},  // WEST Mux -> EAST, NORTH, SOUTH
+    {0, 1, 0, 2},  // NORTH Mux -> EAST, WEST, SOUTH
+    {0, 1, 2, 0},  // SOUTH Mux -> EAST, WEST, NORTH
+};
+
+template <
+    uint32_t Direction,
+    typename FabricConnectionType,
+    typename DownstreamMuxConnectionType,
+    size_t NumConnections>
+FORCE_INLINE void forward_to_downstream_mux_or_local_router(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    FabricConnectionType& fabric_connection,
+    std::array<DownstreamMuxConnectionType, NumConnections>& downstream_mux_connections) {
+    uint32_t mux_dir;
+    NocSendType packet_type = packet_header->get_noc_send_type();
+    // TODO: remove this check when we commonize some common fields between read/write
+    if (packet_type == NOC_UNICAST_READ) {
+        mux_dir = packet_header->udm_control.read.initial_direction;
+    } else {
+        mux_dir = packet_header->udm_control.write.initial_direction;
+    }
+
+    if (Direction != mux_dir) {
+        // Forward to the correct downstream mux
+        uint32_t mux_index = direction_to_mux_index_map[Direction][mux_dir];
+        downstream_mux_connections[mux_index].wait_for_empty_write_slot();
+        downstream_mux_connections[mux_index].send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+    } else {
+        // Forward to local router (this mux's direction matches the packet's direction)
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+    }
+}
+
 /**
  * @brief Select the appropriate mux connection index based on relay direction and destination
  *
@@ -417,7 +462,7 @@ FORCE_INLINE void fabric_fast_atomic_inc(
  * @return Mux connection index: 0=local, 1=downstream_en, 2=downstream_ws
  */
 template <uint32_t Direction>
-FORCE_INLINE uint32_t select_mux_connection(uint16_t dst_chip_id) {
+FORCE_INLINE uint32_t select_relay_to_mux_connection(uint16_t dst_chip_id) {
     uint32_t mux_idx = 0;  // Default: use local connection (index 0)
     if constexpr (Direction == eth_chan_directions::EAST || Direction == eth_chan_directions::WEST) {
         // For EW relays, check if ACK packet needs NS routing by querying routing info
@@ -486,7 +531,7 @@ FORCE_INLINE void fabric_fast_ack(
     fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
 
     // Determine which mux connection to use for sending the ACK
-    uint32_t mux_idx = select_mux_connection<Direction>(src_chip_id);
+    uint32_t mux_idx = select_relay_to_mux_connection<Direction>(src_chip_id);
 
     connections[mux_idx].wait_for_empty_write_slot();
     // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
@@ -631,7 +676,7 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     uint64_t counter_noc_addr = get_noc_addr(src_noc_x, src_noc_y, counter_addr);
 
     // Determine which mux connection to use
-    uint32_t mux_idx = select_mux_connection<Direction>(src_chip_id);
+    uint32_t mux_idx = select_relay_to_mux_connection<Direction>(src_chip_id);
 
     fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
     while (size_bytes > max_fabric_payload_size) {
