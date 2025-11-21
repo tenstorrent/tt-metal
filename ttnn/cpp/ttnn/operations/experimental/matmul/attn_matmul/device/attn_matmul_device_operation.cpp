@@ -123,31 +123,19 @@ tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
 
-    const auto& ashape = tensor_args.input_tensor_a.padded_shape();
-    const auto& bshape = tensor_args.input_tensor_b.padded_shape();
-
     auto program_factory = select_program_factory(args, tensor_args);
 
-    // Hash includes:
-    // - args: all operation attributes (num_tokens, compute_with_storage_grid_size,
-    //   output_mem_config, output_dtype, compute_kernel_config)
-    // - args.transpose_hw: explicitly included because it's used in compile-time args (reader and compute kernels)
-    // - program_factory.index(): factory variant index (always 0 for single factory, but included for consistency)
-    // - Tensor dtypes: affect CB data formats
-    // - Tensor memory configs: affect program structure
-    // - Tensor shapes: affect CB configs (Kt from ashape[3]) and core groups (ashape[1] for num_output_blocks_total)
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
         program_factory.index(),
-        args.transpose_hw,  // Explicitly included: used in compile-time args for reader and compute kernels
+        args.transpose_hw,
+        args.output_mem_config,
+        args.output_dtype,
+        args.transpose_hw,
         tensor_args.input_tensor_a.dtype(),
         tensor_args.input_tensor_a.memory_config(),
         tensor_args.input_tensor_b.dtype(),
-        tensor_args.input_tensor_b.memory_config(),
-        ashape[1],   // num_output_blocks_total - affects core group assignments
-        ashape[3],   // K dimension - affects Kt and CB config (cb0_num_input_tiles = Kt * 2)
-        bshape[2],   // B K dimension - affects in1_Kt calculation
-        bshape[3]);  // B N dimension - affects Nt calculation
+        tensor_args.input_tensor_b.memory_config());
 }
 
 std::tuple<AttnMatmulDeviceOperation::operation_attributes_t, AttnMatmulDeviceOperation::tensor_args_t>
