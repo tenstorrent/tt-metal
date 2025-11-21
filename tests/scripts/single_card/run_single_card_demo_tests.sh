@@ -285,7 +285,7 @@ run_mamba_perf() {
 run_whisper_perf() {
 
   # Whisper conditional generation
-  pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  pytest models/demos/speech_to_text/whisper/demo/demo.py --input-path="models/demos/speech_to_text/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
