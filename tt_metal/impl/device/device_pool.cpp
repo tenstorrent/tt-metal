@@ -19,13 +19,13 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include "experimental/control_plane.hpp"
+#include <tt-metalium/experimental/control_plane.hpp>
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include "experimental/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>

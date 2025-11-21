@@ -26,23 +26,23 @@
 #include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
-#include "experimental/control_plane.hpp"
+#include <tt-metalium/experimental/control_plane.hpp>
 #include "core_coord.hpp"
 #include "compressed_direction_table.hpp"
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
-#include "experimental/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include "hal_types.hpp"
 #include "host_api.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
-#include "experimental/mesh_graph.hpp"
+#include <tt-metalium/experimental/mesh_graph.hpp>
 #include "metal_soc_descriptor.h"
-#include "experimental/routing_table_generator.hpp"
+#include <tt-metalium/experimental/routing_table_generator.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>

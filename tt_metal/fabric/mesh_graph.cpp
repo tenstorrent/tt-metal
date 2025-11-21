@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/mesh_graph.hpp"
+#include <tt-metalium/experimental/mesh_graph.hpp>
 #include "fabric_host_utils.hpp"
 
 #include <enchantum/enchantum.hpp>

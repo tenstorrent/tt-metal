@@ -14,11 +14,11 @@
 #include <nlohmann/json.hpp>
 #include <enchantum/enchantum.hpp>
 
-#include "experimental/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric_types.hpp>
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
-#include "experimental/fabric.hpp"
+#include <tt-metalium/experimental/fabric.hpp>
 #include "tt_metal.hpp"
 
 namespace tt {
