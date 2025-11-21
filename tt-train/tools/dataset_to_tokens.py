@@ -14,6 +14,8 @@ import argparse
 import numpy as np
 import msgpack_numpy as m
 import csv
+from io import StringIO
+import yaml
 from transformers import AutoTokenizer
 
 
@@ -36,19 +38,30 @@ def tokenize_text_data(tokenizer_file, text_data):
     return tokenized_data
 
 
-def save_to_csv(data, output_file):
+def save_to_yaml(data, vocab_size, output_file):
     """
-    Saves the tokenized data as a single space-separated line in a CSV file.
+    Saves the tokenized data as a single space-separated line + data length in a YAML file.
     """
-    with open(output_file, "w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, delimiter=" ", quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(data)
-    print(f"Saved tokenized data as CSV to {output_file}")
 
+    output = StringIO()
+    writer = csv.writer(output, delimiter=" ", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(data)
+
+    csv_str = output.getvalue()
+    yaml_data = {
+        "tokenizer_vocab_size" : vocab_size,
+        "data_length": len(data),
+        "tokens": csv_str.strip(),
+    }
+
+    with open(output_file, "w", encoding="utf-8") as file:
+        yaml.dump(yaml_data, file)
+
+    print(f"Saved tokenized data as YAML to {output_file}")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Preprocess a text dataset using a tokenizer and save all tokens as a single flat list in MessagePack or CSV format."
+        description="Preprocess a text dataset using a tokenizer and save all tokens as a single flat list in YAML format."
     )
     parser.add_argument(
         "--text_file",
@@ -87,7 +100,7 @@ def main():
         tokenized_data.extend(tokenized_data_split)
 
     # Save tokenized data
-    save_to_csv(tokenized_data, f"{args.output_file}.csv")
+    save_to_yaml(tokenized_data, tokenizer.vocab_size, f"{args.output_file}.yaml")
 
 
 if __name__ == "__main__":
