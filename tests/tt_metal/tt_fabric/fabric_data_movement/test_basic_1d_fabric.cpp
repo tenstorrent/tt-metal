@@ -2270,7 +2270,8 @@ void UDMFabricUnicastCommon(
     NocSendType noc_send_type,
     const std::variant<
         std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
-        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info) {
+        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
+    std::optional<RoutingDirection> override_initial_direction) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -2364,11 +2365,25 @@ void UDMFabricUnicastCommon(
     compile_time_args.push_back(req_notification_size_bytes);
 
     // Set up fabric connection runtime args
+    // If override_initial_direction is provided, connect to the mux in that direction instead
+    FabricNodeId fabric_connection_dest_node_id = dest_fabric_node_id;
+    if (override_initial_direction.has_value()) {
+        // Get the neighbor in the override direction - this will be the mux we connect to
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, override_initial_direction.value());
+        if (neighbors.empty()) {
+            GTEST_SKIP() << "No neighbor found in the specified initial direction "
+                         << static_cast<int>(override_initial_direction.value()) << " from node "
+                         << src_fabric_node_id.chip_id;
+        }
+        // Use the first neighbor in override_initial_direction as the fabric connection destination
+        fabric_connection_dest_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
+    }
+
     uint32_t sender_link_idx = 0;
     std::vector<uint32_t> sender_runtime_args;
     append_fabric_connection_rt_args(
         src_fabric_node_id,
-        dest_fabric_node_id,
+        fabric_connection_dest_node_id,  // Connect to the mux in override direction if specified
         sender_link_idx,
         sender_program,
         sender_logical_core,

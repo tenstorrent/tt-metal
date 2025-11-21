@@ -216,8 +216,14 @@ void forward_data(
 
         // TODO: once we group the channels into udm-worker, relay-mux, mux-mux, then we only need to check the
         // directions for the udm-worker channels.
+        // if (is_persistent_channel) {
+        //     fabric_connection.wait_for_empty_write_slot();
+        //     fabric_connection.send_payload_flush_non_blocking_from_address(
+        //         (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+        // } else {
         tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
             packet_header, fabric_connection, downstream_mux_connections);
+        // }
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -411,7 +417,6 @@ void kernel_main() {
                 header_only_channel_worker_interfaces[i]);
         }
     }
-    // DPRINT << "mux start loop" <<ENDL();
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
