@@ -135,14 +135,6 @@ body:
     validations:
       required: false
 
-  - type: checkboxes
-    id: privacy
-    attributes:
-      label: Privacy & Security
-      options:
-        - label: I confirm logs/traces are redacted and free of PII.
-        - label: This may be a security issue — follow SECURITY.md and keep details private.
-
   - type: textarea
     id: attachments
     attributes:
