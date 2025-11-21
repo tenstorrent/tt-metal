@@ -24,12 +24,6 @@ class RunTimeOptions;
 
 namespace tt_metal {
 
-// static function should store default op support count and return the actual op support count, outside of the class
-
-// env var should control PROFILER_OP_SUPPORT_COUNT; cli option in tracy module shouldn't be a number, it should be
-// {small, medium, large} default to 1000 if env var is not set
-constexpr inline static uint32_t DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT = 1000;
-
 uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions);
 uint32_t get_profiler_dram_bank_size_per_risc_bytes();
 
