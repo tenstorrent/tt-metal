@@ -51,12 +51,12 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     // hi = mul24_hi(a, b)
     // result = ((hi + cross0 + cross1) << 23) + lo
 
-    constexpr uint a0 = 0;
-    constexpr uint b0 = 0;
-    constexpr uint a1 = 1;
-    constexpr uint b1 = 2;
-    constexpr uint b2 = 3;
-    constexpr uint c = 4;
+    constexpr uint a0 = p_sfpu::LREG0;
+    constexpr uint b0 = p_sfpu::LREG0;
+    constexpr uint a1 = p_sfpu::LREG1;
+    constexpr uint b1 = p_sfpu::LREG2;
+    constexpr uint b2 = p_sfpu::LREG3;
+    constexpr uint c = p_sfpu::LREG4;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -84,11 +84,12 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
-    constexpr uint b1 = 2;
-    constexpr uint c = 4;
+    constexpr uint b1 = p_sfpu::LREG2;
+    constexpr uint c = p_sfpu::LREG4;
 
-    // Load instruction templates.  This is more efficient than using
+    // Load instruction templates 0-3.  This is more efficient than using
     // SFPCONFIG, but requires DISABLE_BACKDOOR_LOAD=false (the default).
+    // Instruction template `i` is specified using `VD=12+i`.
 
     TTI_SFPSHFT2(-23 & 0xfff, 0, 12, sfpi::SFPSHFT2_MOD1_SHFT_IMM);
     TTI_SFPMUL24(0, 0, p_sfpu::LCONST_0, 13, sfpi::SFPMUL24_MOD1_LOWER);
