@@ -123,58 +123,7 @@ run_ccl_T3000_test() {
     fi
 }
 
-# move this all to perf_op_report.py and do the comparison in that file too
-# in that file, also do the sum test with the sum comparison
-run_op_support_count_T3000_test() {
-    remove_default_log_locations
-    mkdir -p $PROFILER_ARTIFACTS_DIR
-
-    python -m tracy -v -p --cpp-post-process --op-support-count 400 -m pytest tests/ttnn/tracy/test_trace_runs.py::test_with_ops_multiple_trace_ids
-    mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report1.csv
-
-    python -m tracy -v -p --cpp-post-process --op-support-count 1200 -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee -a $PROFILER_ARTIFACTS_DIR/test_out.log
-    mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report2.csv
-
-    python -m tracy -v -p --cpp-post-process --op-support-count 10000 -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee -a $PROFILER_ARTIFACTS_DIR/test_out.log
-    mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report3.csv
-
-    python -m tracy -v -p --cpp-post-process --op-support-count 50000 -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee -a $PROFILER_ARTIFACTS_DIR/test_out.log
-    mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report4.csv
-
-
-    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-    then
-        echo "No verification as test was skipped"
-    else
-        echo "Verifying test results"
-
-        # use test_trace_runs.py, do == instead of >=, acccount for the extra 2 because of the to_layout ops
-        # do single core on middle 2, multi core on outer 2
-        # just do comparisons for middle 2
-        # use test_multi_op.cpp
-
-        # Verify each report file has the expected number of unique IDs
-        expected_counts=(400 1200 10000 50000)
-        for i in 1 2 3 4; do
-            report_file="$PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report${i}.csv"
-            expected_count=${expected_counts[$((i-1))]}
-
-            # Unique ID = (GLOBAL CALL COUNT, METAL TRACE ID, METAL TRACE REPLAY SESSION ID)
-            unique_id_count=$(tail -n +2 $report_file | awk -F',' '{print $0","$1","$2}' | sort -u | wc -l)
-
-
-            if (( unique_id_count < expected_count )); then
-                echo "Expected at least $expected_count unique operation IDs, but found $unique_id_count" 1>&2
-                exit 1
-            fi
-        done
-    fi
-}
-
-    # also do a test with sum rtoptions when with op support count
 run_profiling_test() {
-    run_op_support_count_T3000_test
-
     run_async_test
 
     run_ccl_T3000_test

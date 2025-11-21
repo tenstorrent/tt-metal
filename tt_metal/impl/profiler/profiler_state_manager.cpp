@@ -41,11 +41,10 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             div_up(kernel_profiler::PROFILER_L1_BUFFER_SIZE, dram_bank_size_per_risc_bytes_single_program);
         log_warning(
             tt::LogMetal,
-            "Profiler DRAM bank size per RISC must be > {} bytes. Increasing profiler DRAM bank size per RISC from {} "
-            "bytes to {} bytes.",
-            kernel_profiler::PROFILER_L1_BUFFER_SIZE,
-            old_profiler_program_support_count * dram_bank_size_per_risc_bytes_single_program,
-            profiler_program_support_count.value() * dram_bank_size_per_risc_bytes_single_program);
+            "Profiler program support count must be >= {}. Increasing program support count from {} to {}.",
+            profiler_program_support_count.value(),
+            old_profiler_program_support_count,
+            profiler_program_support_count.value());
     }
 
     const uint32_t dram_bank_size_per_risc_bytes =
