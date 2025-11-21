@@ -33,9 +33,19 @@ on:
         type: boolean
         default: false
       galaxy-unit:
+        description: 'Unit tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - unit
+          - fabric
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
+        default: 'disabled'
       galaxy-demo:
         description: 'Demo tests: Select all, specific model, or disabled'
         required: false
@@ -107,7 +117,7 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.galaxy-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.galaxy-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
@@ -181,6 +191,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: 'topology-6u'
   galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}

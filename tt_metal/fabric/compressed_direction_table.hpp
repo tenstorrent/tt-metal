@@ -8,7 +8,7 @@
 
 namespace tt::tt_fabric {
 
-extern template struct compressed_routing_table_t<MAX_MESH_SIZE>;
-extern template struct compressed_routing_table_t<MAX_NUM_MESHES>;
+extern template struct direction_table_t<MAX_MESH_SIZE>;
+extern template struct direction_table_t<MAX_NUM_MESHES>;
 
 }  // namespace tt::tt_fabric
