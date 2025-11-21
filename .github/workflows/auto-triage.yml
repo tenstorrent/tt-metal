@@ -41,7 +41,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run auto triage
-        uses: tenstorrent/tt-github-actions/.github/actions/auto-triage@main
+        uses: tenstorrent/metal-infra-actions/.github/actions/auto-triage@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
