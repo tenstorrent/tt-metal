@@ -16,7 +16,9 @@ if is_wormhole_b0():
         ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit,
     )
 elif is_blackhole():
-    from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
+    from models.demos.cnns_vits.classification.vit.blackhole.tt import (
+        ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit,
+    )
 elif is_grayskull():
     from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
 else:
