@@ -201,15 +201,10 @@ string get_noc_target_str(
 }
 
 string get_l1_target_str(
-    tt::ChipId device_id,
-    HalProgrammableCoreType programmable_core_type,
-    int noc,
-    dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
+    HalProgrammableCoreType programmable_core_type, dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     string out = fmt::format(
-        "{} core w/ virtual coords {} overflowed L1 {:#x}",
+        "{} core overflowed L1 with access to {:#x}",
         get_riscv_name(programmable_core_type, san.which_risc()),
-        virtual_noc_coordinate(device_id, noc, {NOC_UNICAST_ADDR_X(san.noc_addr()), NOC_UNICAST_ADDR_Y(san.noc_addr())})
-            .str(),
         san.l1_addr(),
         san.len());
     return out;
@@ -708,8 +703,8 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         case dev_msgs::DebugSanitizeL1AddrOverflow:
-            error_msg = get_l1_target_str(reader_.device_id, programmable_core_type_, noc, san);
-            error_msg += " (local L1 access overflow).";
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (read or write past the end of local memory).";
             break;
         default:
             error_msg = fmt::format(
