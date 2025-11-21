@@ -81,13 +81,6 @@ jobs:
               echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=false" >> $GITHUB_OUTPUT
               ;;
-            "models-accuracy")
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-perf-models=false" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=false" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=false" >> $GITHUB_OUTPUT
-              ;;
           esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
