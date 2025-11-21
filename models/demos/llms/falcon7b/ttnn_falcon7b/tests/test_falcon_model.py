@@ -9,10 +9,20 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import (
+    create_custom_preprocessor,
+    create_kv_cache,
+    strip_state_dict_prefix,
+)
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_model import TtFalconModel
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
+
+
+def get_model_prefix(layer_index: int = 0):
+    return f"transformer"
 
 
 @pytest.mark.parametrize(
@@ -28,7 +38,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     (
         (1, 0.98),
         (2, 0.98),
-        (32, 0.60),
+        (32, 0.98),
     ),
     ids=[
         "layers_1",
@@ -42,7 +52,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-def test_falcon_causal_lm(
+def test_falcon_model(
     device,
     model_version,
     llm_mode,
@@ -54,11 +64,18 @@ def test_falcon_causal_lm(
     model_config_str,
 ):
     torch.manual_seed(0)
+
+    causual_model = transformers.FalconForCausalLM.from_pretrained(PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True).eval()
+    state_dict = causual_model.state_dict()
+    filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
+
     configuration = transformers.FalconConfig.from_pretrained(model_version)
     configuration.num_hidden_layers = num_layers
-    model = transformers.models.falcon.modeling_falcon.FalconForCausalLM.from_pretrained(
+    torch_model = transformers.models.falcon.modeling_falcon.FalconModel.from_pretrained(
         model_version, config=configuration
     ).eval()
+
+    torch_model.load_state_dict(filtered_state_dict, strict=False)
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
     kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
@@ -71,12 +88,9 @@ def test_falcon_causal_lm(
         for i in range(num_layers):
             _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
             tt_layer_past += (tt_current_layer_past,)
+        attention_mask = None
 
     elif llm_mode == "decode":
-        q_len, kv_len = seq_len, kv_cache_len + 1
-        assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
-        assert q_len == 1, "For decode, q_len must be 1!"
-
         past_key_values = ()
         tt_layer_past = ()
         for i in range(num_layers):
@@ -89,25 +103,33 @@ def test_falcon_causal_lm(
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
-    pytorch_out, pytorch_layer_present = model(
+    pytorch_out, pytorch_layer_present = torch_model(
         input_ids=model_input,
-        attention_mask=None,  # when attention_mask is None, a causal mask is created under the hood
+        attention_mask=None,
         past_key_values=past_key_values,
         use_cache=True,
         return_dict=False,
     )
 
+    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
+    # since we don't yet have embedding support on device
+    # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     def convert_to_ttnn(model, name):
         return not isinstance(model, torch.nn.Embedding)
 
-    tt_cache_path = get_tt_cache_path(model_version)
+    tt_cache_path = get_tt_cache_path(f"{model_version}")
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
+        initialize_model=lambda: torch_model,
         device=device,
-        custom_preprocessor=create_custom_preprocessor(model_config, tt_cache_path=tt_cache_path, device=device),
+        custom_preprocessor=create_custom_preprocessor(
+            model_config,
+            tt_cache_path=tt_cache_path,
+            device=device,
+            base_file_name=get_model_prefix(),
+        ),
         convert_to_ttnn=convert_to_ttnn,
     )
-    tt_FalconCausalLM = TtFalconCausalLM(
+    tt_FalconModel = TtFalconModel(
         device,
         num_layers,
         configuration,
@@ -121,12 +143,12 @@ def test_falcon_causal_lm(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                tt_FalconModel.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
         for user_id in range(batch):
-            tt_out, tt_layer_present = tt_FalconCausalLM(
+            tt_out, tt_layer_present = tt_FalconModel(
                 input_embeddings=tt_embeddings[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
@@ -139,10 +161,10 @@ def test_falcon_causal_lm(
         tt_out = torch.vstack(tt_outs)
 
     elif llm_mode == "decode":
-        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
+        tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-        tt_out, tt_layer_present = tt_FalconCausalLM(
+        tt_out, tt_layer_present = tt_FalconModel(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
@@ -153,8 +175,7 @@ def test_falcon_causal_lm(
         tt_out = ttnn.to_torch(tt_out).squeeze(1)
         tt_out = tt_out.transpose(0, 1)
 
-    passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
-    logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
+    assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
 
     for i in range(num_layers):
         tt_layer_pres = (
@@ -177,13 +198,7 @@ def test_falcon_causal_lm(
                 tt_layer_pres[1][:, :, kv_cache_len, :],
             )
 
-        passed, pcc = assert_with_pcc(
-            pytorch_layer_pres[0], tt_layer_pres[0].to(pytorch_layer_pres[0].dtype), expected_pcc
-        )
-        logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
-        passed, pcc = assert_with_pcc(
-            pytorch_layer_pres[1], tt_layer_pres[1].to(pytorch_layer_pres[1].dtype), expected_pcc
-        )
-        logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
+        assert_with_pcc(pytorch_layer_pres[0], tt_layer_pres[0].to(pytorch_layer_pres[0].dtype), expected_pcc)
+        assert_with_pcc(pytorch_layer_pres[1], tt_layer_pres[1].to(pytorch_layer_pres[1].dtype), expected_pcc)
 
-    logger.info("Falcon CausalLM Passed!")
+    logger.info("Falcon Model Passed!")

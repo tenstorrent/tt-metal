@@ -9,9 +9,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_e75
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 
 
 def run_test_FalconCausalLM_end_to_end(

@@ -8,8 +8,8 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
-from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
-from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import create_attention_mask
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from ttnn import ShardTensorToMesh
 
 

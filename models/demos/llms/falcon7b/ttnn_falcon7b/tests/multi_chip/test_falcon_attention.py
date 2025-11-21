@@ -9,7 +9,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.ttnn_falcon7b.tt.common import (
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import (
     create_attention_input,
     create_attention_mask,
     create_custom_preprocessor,
@@ -17,8 +17,8 @@ from models.demos.ttnn_falcon7b.tt.common import (
     create_position_ids,
     strip_state_dict_prefix,
 )
-from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_attention import TtFalconAttention
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
@@ -26,7 +26,7 @@ PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 
 
 def get_model_prefix(layer_index: int = 0):
-    return f"transformer.h.{layer_index}"
+    return f"transformer.h.{layer_index}.self_attention"
 
 
 @pytest.fixture(scope="module")
@@ -35,11 +35,11 @@ def torch_model():
         PRETRAINED_MODEL_NAME, low_cpu_mem_usage=True
     ).eval()
     state_dict = hugging_face_reference_model.state_dict()
-    mlp_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
+    filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_model = transformers.models.falcon.modeling_falcon.FalconDecoderLayer(configuration, layer_idx=0).eval()
-    torch_model.load_state_dict(mlp_state_dict)
+    torch_model = transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval()
+    torch_model.load_state_dict(filtered_state_dict)
     return torch_model
 
 
@@ -53,7 +53,7 @@ def torch_model():
 )
 @pytest.mark.parametrize(
     "model_name, expected_pcc",
-    (("tiiuae/falcon-7b-instruct", 0.98),),
+    (("tiiuae/falcon-7b-instruct", 0.99),),
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @pytest.mark.parametrize(
@@ -63,7 +63,7 @@ def torch_model():
     ],
     indirect=True,
 )
-def test_falcon_decoder(
+def test_falcon_attention(
     mesh_device,
     model_name,
     llm_mode,
@@ -78,15 +78,17 @@ def test_falcon_decoder(
     batch = device_batch_size * mesh_device.get_num_devices()
     if llm_mode == "decode":
         shard_dim = 2
+        concat_dim = 1
     else:
         shard_dim = 0
+        concat_dim = 0
 
     configuration = transformers.FalconConfig.from_pretrained(model_name)
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
     kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
 
-    decoder_input, tt_decoder_input = create_attention_input(
+    attention_input, tt_attention_input = create_attention_input(
         llm_mode,
         dtype,
         batch,
@@ -99,7 +101,7 @@ def test_falcon_decoder(
     attention_mask, tt_attention_mask = create_attention_mask(
         llm_mode,
         dtype,
-        decoder_input,
+        attention_input,
         batch,
         seq_len,
         configuration.num_attention_heads,
@@ -116,10 +118,10 @@ def test_falcon_decoder(
         mesh_device,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
-    position_embeddings = torch_model.self_attention.rotary_emb(decoder_input, position_ids)
+    position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
 
     pytorch_out, pytorch_layer_present = torch_model(
-        hidden_states=decoder_input,
+        attention_input,
         alibi=None,
         attention_mask=attention_mask,
         position_ids=position_ids,
@@ -138,29 +140,32 @@ def test_falcon_decoder(
             weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
         ),
     )
-    tt_FalconDecoder_model = TtFalconDecoderLayer(
-        mesh_device,
-        configuration,
+    tt_FalconAttention_model = TtFalconAttention(
+        configuration.hidden_size,
+        configuration.num_attention_heads,
+        configuration.max_position_embeddings,
         model_config,
-        parameters,
+        parameters=parameters,
+        core_grid=mesh_device.core_grid,
     )
 
-    tt_out, tt_layer_present = tt_FalconDecoder_model(
-        hidden_states=tt_decoder_input,
-        llm_mode=llm_mode,
+    tt_out, tt_layer_present = tt_FalconAttention_model(
+        tt_attention_input,
         alibi=None,
         attention_mask=tt_attention_mask,
+        llm_mode=llm_mode,
         user_id=0,
         layer_past=tt_layer_past,
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=shard_dim)).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=concat_dim)).squeeze(1)
 
     tt_layer_present = (
         ttnn.to_torch(tt_layer_present[0], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)).squeeze(1),
         ttnn.to_torch(tt_layer_present[1], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)).squeeze(1),
     )
+
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
     tt_layer_present = (

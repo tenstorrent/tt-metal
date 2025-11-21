@@ -19,9 +19,9 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     profiler,
 )
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from models.perf.perf_utils import prep_perf_report
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 

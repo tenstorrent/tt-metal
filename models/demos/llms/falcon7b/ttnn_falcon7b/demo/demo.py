@@ -19,9 +19,13 @@ from models.common.utility_functions import (
     nearest_32,
     profiler,
 )
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
-from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import create_custom_preprocessor
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    model_config_entries,
+)
 
 END_OF_TEXT = 11
 SPACE = 204
