@@ -69,9 +69,8 @@ def set_env_vars(**kwargs):
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
-        print(f"arg: {arg}, argVal: {argVal}")
         if arg == "set_program_support_count":
-            # Only set the program support count here if it not equal to the default program support count and the environment variable isn't already set
+            # Only set the program support count here if it's not equal to the default program support count and the environment variable isn't already set
             if (
                 argVal
                 and argVal != PROFILER_DEFAULT_OP_SUPPORT_COUNT
@@ -81,7 +80,6 @@ def set_env_vars(**kwargs):
         else:
             if argVal:
                 envVarsStr += f"{envVarsDict[arg]}"
-    print(f"envVarsStr: {envVarsStr}")
     return envVarsStr
 
 
