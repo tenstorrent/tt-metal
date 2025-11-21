@@ -614,9 +614,9 @@ class Generator:
         )
 
         if self.enable_split_sampling:
-            return sampling_module.sample(
-                logits=trace_tok_rm,
-                tt_out_tok=self.trace_inputs_decode[return_logits],
+            return self.model.sampling.sample(
+                logits=trace_tok_rm[0],
+                tt_out_tok=self.trace_inputs_decode[return_logits][0],
             )
 
         return trace_tok_rm
