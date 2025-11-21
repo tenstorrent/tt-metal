@@ -99,7 +99,8 @@ class TtGroupNormParameters:
             parallel_config.device,
         )
 
-        torch_mask = ttnn.create_group_norm_input_mask(num_channels, num_groups, num_virtual_cols)
+        tt_mask = ttnn.create_group_norm_input_mask(num_channels, num_groups, num_virtual_cols, ttnn.bfloat8_b)
+        tt_mask = ttnn.to_device(tt_mask, parallel_config.device)
 
         memory_config = ttnn.DRAM_MEMORY_CONFIG
         return cls(
@@ -119,13 +120,7 @@ class TtGroupNormParameters:
                 device=parallel_config.device,
                 memory_config=memory_config,
             ),
-            mask=ttnn.from_torch(
-                torch_mask,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=parallel_config.device,
-                memory_config=memory_config,
-            ),
+            mask=tt_mask,
             num_channels=num_channels,
             num_groups=num_groups,
             eps=torch_groupnorm.eps,
