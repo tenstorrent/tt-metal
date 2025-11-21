@@ -35,15 +35,11 @@ void log_output_rank0(const std::string& message);
 // ============================================================================
 
 void configure_fabric_routing(
-    PhysicalSystemDescriptor& physical_system_descriptor,
     const std::optional<std::string>& fabric_config,
     const std::optional<std::string>& reliability_mode,
     const std::optional<uint8_t>& num_routing_planes,
     const std::optional<std::string>& fabric_tensix_config,
     const std::filesystem::path& output_path);
-
-void initialize_fabric_system(
-    PhysicalSystemDescriptor& physical_system_descriptor, const std::filesystem::path& output_path);
 
 // ============================================================================
 // Fabric Information and Monitoring Functions
