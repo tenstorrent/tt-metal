@@ -21,16 +21,17 @@ inline void read_from_local(
     uint32_t cb_id_in_l,  // compute cb for l
     uint32_t cb_id_in_s,  // compute cb for s
     uint32_t cb_id_in_m,  // compute cb for m
-    uint32_t onetile) {
+    uint32_t onetile,
+    uint32_t input_num_tiles) {
     // read l, s, m data from own device and push it to compute cbs
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    for (uint32_t i = 0; i < num_tiles_l / 8; ++i) {
-        cb_reserve_back(cb_id_in_l, 8);
+    for (uint32_t i = 0; i < num_tiles_l / input_num_tiles; ++i) {
+        cb_reserve_back(cb_id_in_l, input_num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
-        noc_async_read(read_addr, l1_write_addr, 8 * page_bytes);
-        read_addr += 8 * page_bytes;
+        noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
+        read_addr += input_num_tiles * page_bytes;
         noc_async_read_barrier();
-        cb_push_back(cb_id_in_l, 8);
+        cb_push_back(cb_id_in_l, input_num_tiles);
     }
 
     // for tensor s
@@ -51,6 +52,7 @@ inline void read_from_local(
 }
 
 void kernel_main() {
+    DPRINT << "root2 reader kernel started\n";
     constexpr uint32_t accessor_2_idx = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
@@ -85,9 +87,12 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 13;
+    uint32_t input_num_tiles = 2;  // to be modified with tiny tiles HERE
 
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
     const auto packet_buffer_2 = TensorAccessor(packet_buffer_args_2, intermediate_base_addr_2, packet_size_bytes);
+
+    DPRINT << "after packet buffer setup\n";
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -102,6 +107,8 @@ void kernel_main() {
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
 
+    DPRINT << "after sending semaphore incremement\n";
+
     fabric_connection.open_finish();
     auto& connection_direction =
         tt::point_to_point::common::connection_direction_collection(sender_is_forward, fabric_connection);
@@ -111,9 +118,15 @@ void kernel_main() {
 
     fabric_connection.close();
 
+    DPRINT << "after closing fabric connection\n";
+
+    DPRINT << "before reserving back packet cb\n";
+    DPRINT << "the packet cb id: " << (uint32_t)packet_cb_id << "\n";
     cb_reserve_back(packet_cb_id, 1);
+    DPRINT << "reserving back packet cb\n";
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
+    DPRINT << "before reading from local\n";
     // read local data from own device and push to compute cbs
     read_from_local(
         src_addr_l,
@@ -126,10 +139,12 @@ void kernel_main() {
         compute_cb_l,
         compute_cb_s,
         compute_cb_m,
-        1);
+        1,
+        input_num_tiles);
+    DPRINT << "after root 2 reads from local\n";
 
     // device 3 is sending data to device 2
-    uint32_t chunk_size = 8;
+    uint32_t chunk_size = input_num_tiles;  // 8; HERE
 
     // receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
@@ -174,10 +189,13 @@ void kernel_main() {
         }
     }
     cb_push_back(packet_cb_id, 1);
+    DPRINT << "after receiving packet l\n";
 
     // now receiving s and m
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
+
+    DPRINT << "after reserving back s and m cb\n";
     const uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     const uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
@@ -187,10 +205,13 @@ void kernel_main() {
     // then copy first tile to s and second tile to m
     noc_async_read(packet_noc_addr2, packet_l1_addr, page_size_bytes * 2);
     noc_async_read_barrier();
+    DPRINT << "after NOC reading s and m packet\n";
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr_s, packet_l1_addr, page_size_bytes);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
 
+    DPRINT << "after memmove of s and m\n";
     noc_semaphore_set(local_semaphore_ptr, 0);
+    DPRINT << "ROOT 2 reader kernel completed\n";
 }
