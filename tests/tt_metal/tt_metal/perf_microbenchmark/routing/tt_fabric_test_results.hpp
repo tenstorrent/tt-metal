@@ -88,6 +88,12 @@ struct LatencyResult {
     double raw_max_ns{};
     double raw_avg_ns{};
     double raw_p99_ns{};
+
+    // Statistics for per-hop latency (net latency / num_hops)
+    double per_hop_min_ns{};
+    double per_hop_max_ns{};
+    double per_hop_avg_ns{};
+    double per_hop_p99_ns{};
 };
 
 // Golden latency comparison structures
@@ -97,9 +103,9 @@ struct GoldenLatencyEntry : LatencyResult {
 };
 
 struct LatencyComparisonResult {
-    double speedup() const { return golden_net_avg_ns / current_net_avg_ns; }  // Lower is better for latency
+    double speedup() const { return golden_per_hop_avg_ns / current_per_hop_avg_ns; }  // Lower is better for latency
     double difference_percent() const {
-        return ((current_net_avg_ns - golden_net_avg_ns) / golden_net_avg_ns) * 100.0;
+        return ((current_per_hop_avg_ns - golden_per_hop_avg_ns) / golden_per_hop_avg_ns) * 100.0;
     }
 
     std::string test_name;
@@ -111,9 +117,9 @@ struct LatencyComparisonResult {
     uint32_t num_samples{};
     uint32_t payload_size{};
 
-    // Current vs golden for net latency average (primary comparison metric)
-    double current_net_avg_ns{};
-    double golden_net_avg_ns{};
+    // Current vs golden for per-hop latency average (primary comparison metric)
+    double current_per_hop_avg_ns{};
+    double golden_per_hop_avg_ns{};
 
     bool within_tolerance{};
     std::string status;

@@ -1230,6 +1230,12 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
+size_t TestDevice::get_latency_scratch_buffer_address() const {
+    // Scratch buffer starts after the latency result buffer
+    // Results are stored as uint32_t elapsed times (1 per sample)
+    return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
 void TestDevice::create_latency_sender_kernel(
     CoreCoord core,
     FabricNodeId dest_node,
@@ -1264,8 +1270,7 @@ void TestDevice::create_latency_sender_kernel(
         enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
 
     // Runtime args
-    // Calculate scratch buffer address after timestamp storage (256 samples * 16 bytes = 4KB)
-    constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    // Calculate scratch buffer address after timestamp storage (1024 samples * 4 bytes = 4KB)
     TT_FATAL(
         num_bursts <= MAX_LATENCY_SAMPLES,
         "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
@@ -1273,12 +1278,10 @@ void TestDevice::create_latency_sender_kernel(
         num_bursts,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t scratch_buffer_address =
-        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+    uint32_t scratch_buffer_address = get_latency_scratch_buffer_address();
 
-    // Responder also uses same memory layout, so its scratch buffer is at same offset
-    uint32_t responder_scratch_buffer_address =
-        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+    // Get responder's virtual core coordinates for NOC addressing
+    CoreCoord responder_virtual_core = device_info_provider_->get_virtual_core_from_logical_core(core);
 
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
@@ -1287,8 +1290,9 @@ void TestDevice::create_latency_sender_kernel(
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        scratch_buffer_address,                           // sender's scratch buffer for receiving echo
-        responder_scratch_buffer_address                  // responder's scratch buffer for sending payload TO
+        scratch_buffer_address,                           // sender's/receiver's scratch buffer for receiving echo
+        static_cast<uint32_t>(responder_virtual_core.x),  // responder's virtual NOC X coordinate
+        static_cast<uint32_t>(responder_virtual_core.y),  // responder's virtual NOC Y coordinate
     };
 
     // Add topology-specific routing information
@@ -1341,7 +1345,6 @@ void TestDevice::create_latency_responder_kernel(
 
     // Get topology information
     const bool is_2d_fabric = device_info_provider_->is_2D_routing_enabled();
-    const bool use_dynamic_routing = device_info_provider_->is_dynamic_routing_enabled();
 
     // Compute routing information
     uint32_t num_hops_back = 0;
@@ -1354,18 +1357,15 @@ void TestDevice::create_latency_responder_kernel(
         }
     }
 
-    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, use_dynamic_routing
+    // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {
-        enable_fused_payload_with_sync ? 1u : 0u,
-        sem_inc_only ? 1u : 0u,
-        is_2d_fabric ? 1u : 0u,
-        use_dynamic_routing ? 1u : 0u};
+        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
 
     // Runtime args
     // Calculate sender's scratch buffer address (where responder writes echo back to)
-    constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
     TT_FATAL(
         num_bursts <= MAX_LATENCY_SAMPLES,
         "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
@@ -1373,12 +1373,11 @@ void TestDevice::create_latency_responder_kernel(
         num_bursts,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t sender_scratch_buffer_address =
-        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+    uint32_t scratch_buffer_address =
+        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * sizeof(uint32_t));
 
-    // Responder also needs scratch buffer to avoid overwriting timestamp storage
-    uint32_t responder_scratch_buffer_address =
-        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+    // Get sender's virtual core coordinates for NOC addressing
+    CoreCoord sender_virtual_core = device_info_provider_->get_virtual_core_from_logical_core(core);
 
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
@@ -1387,8 +1386,9 @@ void TestDevice::create_latency_responder_kernel(
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        sender_scratch_buffer_address,                    // sender's scratch buffer (for echo back)
-        responder_scratch_buffer_address                  // responder's scratch buffer (for receiving payload)
+        scratch_buffer_address,                           // sender's/receiver's scratch buffer for receiving echo
+        static_cast<uint32_t>(sender_virtual_core.x),     // sender's virtual NOC X coordinate
+        static_cast<uint32_t>(sender_virtual_core.y),     // sender's virtual NOC Y coordinate
     };
 
     // Add topology-specific routing information (for sending back to sender)

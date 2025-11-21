@@ -412,7 +412,7 @@ void TestContext::collect_latency_results() {
 
     // Use stored latency parameters (latency tests use specialized kernels, not normal sender workers)
     uint32_t num_samples = latency_num_bursts_;
-    uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);  // 2 timestamps per sample
+    uint32_t result_buffer_size = num_samples * sizeof(uint32_t);  // 1 elapsed time per sample
 
     // Read latency samples from sender device using the latency worker core
     auto sender_result_data = fixture_->read_buffer_from_cores(
@@ -452,57 +452,76 @@ void TestContext::report_latency_results(const TestConfig& config) {
     }
     TT_FATAL(responder_device != nullptr, "Could not find latency responder device");
 
+    // Calculate number of hops between sender and responder
+    uint32_t num_hops_to_responder = 0;
+    auto hops_map = fixture_->get_hops_to_chip(latency_sender_device_, latency_responder_device_);
+    for (const auto& [dir, hop_count] : hops_map) {
+        num_hops_to_responder += hop_count;
+    }
+    TT_FATAL(num_hops_to_responder != 0, "Number of hops to responder is 0");
+    // Multiply by 2 for round-trip (sender -> responder -> sender)
+    num_hops_to_responder *= 2;
+
     // Use stored latency parameters
     uint32_t num_samples = latency_num_bursts_;
     uint32_t payload_size = latency_payload_size_;
-    uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);
+    uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
 
     // Read latency samples from sender device
     auto sender_result_data = fixture_->read_buffer_from_cores(
         sender_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
     const auto& sender_data = sender_result_data.at(latency_worker_core_);
 
-    // Read responder timestamps from responder device
+    // Read responder elapsed times from responder device
     auto responder_result_data = fixture_->read_buffer_from_cores(
         responder_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
     const auto& responder_data = responder_result_data.at(latency_worker_core_);
 
-    // Parse timestamp pairs and compute latencies
-    // Data is stored as uint64_t pairs but read as uint32_t array
-    // Each sample has 4 uint32_t values (2 uint64_t timestamps)
+    // Parse elapsed times and compute latencies
+    // Data is stored as uint32_t elapsed times (in cycles)
     std::vector<uint64_t> raw_latencies_cycles;
     std::vector<uint64_t> responder_times_cycles;
     std::vector<uint64_t> net_latencies_cycles;
+    std::vector<uint64_t> per_hop_latency_cycles;
 
     raw_latencies_cycles.reserve(num_samples);
     responder_times_cycles.reserve(num_samples);
     net_latencies_cycles.reserve(num_samples);
+    per_hop_latency_cycles.reserve(num_samples);
 
     for (uint32_t i = 0; i < num_samples; i++) {
-        // Parse sender timestamps (start and end of round-trip)
-        uint64_t sender_start_ts =
-            static_cast<uint64_t>(sender_data[i * 4]) | (static_cast<uint64_t>(sender_data[i * 4 + 1]) << 32);
-        uint64_t sender_end_ts =
-            static_cast<uint64_t>(sender_data[i * 4 + 2]) | (static_cast<uint64_t>(sender_data[i * 4 + 3]) << 32);
+        // Read elapsed times directly (already computed on device)
+        uint64_t raw_latency = sender_data[i];
+        uint64_t responder_time = responder_data[i];
 
-        // Parse responder timestamps (start and end of response processing)
-        uint64_t responder_start_ts =
-            static_cast<uint64_t>(responder_data[i * 4]) | (static_cast<uint64_t>(responder_data[i * 4 + 1]) << 32);
-        uint64_t responder_end_ts =
-            static_cast<uint64_t>(responder_data[i * 4 + 2]) | (static_cast<uint64_t>(responder_data[i * 4 + 3]) << 32);
+        // Validate that responder time is reasonable
+        TT_FATAL(raw_latency > 0, "Invalid sender latency (zero) for sample {}", i);
+        TT_FATAL(responder_time > 0, "Invalid responder time (zero) for sample {}", i);
 
-        // Compute latency metrics
-        TT_FATAL(
-            sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts, "Invalid latency timestamps");
-        // if (sender_end_ts > sender_start_ts && responder_end_ts > responder_start_ts) {
-        uint64_t raw_latency = sender_end_ts - sender_start_ts;
-        uint64_t responder_time = responder_end_ts - responder_start_ts;
-        uint64_t net_latency = (raw_latency > responder_time) ? (raw_latency - responder_time) : 0;
+        // Check for clock synchronization issues between sender and responder devices
+        // If responder time exceeds raw latency, this indicates unsynchronized clocks
+        if (responder_time >= raw_latency) {
+            log_warning(
+                tt::LogTest,
+                "Sample {}: Responder time ({} cycles) exceeds raw latency ({} cycles). "
+                "This indicates clock drift/skew between devices. Sender and responder timestamps "
+                "cannot be directly compared without clock synchronization.",
+                i,
+                responder_time,
+                raw_latency);
+            TT_FATAL(
+                false,
+                "Clock synchronization issue detected: responder processing time cannot exceed round-trip time. "
+                "The sender device clock and responder device clock are not synchronized.");
+        }
+
+        uint64_t net_latency = raw_latency - responder_time;
+        uint64_t per_hop_latency = net_latency / num_hops_to_responder;
 
         raw_latencies_cycles.push_back(raw_latency);
         responder_times_cycles.push_back(responder_time);
         net_latencies_cycles.push_back(net_latency);
-        // }
+        per_hop_latency_cycles.push_back(per_hop_latency);
     }
 
     if (raw_latencies_cycles.empty()) {
@@ -514,6 +533,7 @@ void TestContext::report_latency_results(const TestConfig& config) {
     std::sort(raw_latencies_cycles.begin(), raw_latencies_cycles.end());
     std::sort(responder_times_cycles.begin(), responder_times_cycles.end());
     std::sort(net_latencies_cycles.begin(), net_latencies_cycles.end());
+    std::sort(per_hop_latency_cycles.begin(), per_hop_latency_cycles.end());
 
     // Get device frequency for conversion to ns
     uint32_t freq_mhz = get_device_frequency_mhz(latency_sender_device_);
@@ -526,7 +546,7 @@ void TestContext::report_latency_results(const TestConfig& config) {
             uint64_t min, max, p50, p99;
             double avg;
         };
-        Stats stats;
+        Stats stats{};
         stats.min = data.front();
         stats.max = data.back();
         uint64_t sum = std::accumulate(data.begin(), data.end(), 0ULL);
@@ -539,44 +559,51 @@ void TestContext::report_latency_results(const TestConfig& config) {
     auto raw_stats = calc_stats(raw_latencies_cycles);
     auto responder_stats = calc_stats(responder_times_cycles);
     auto net_stats = calc_stats(net_latencies_cycles);
+    auto per_hop_latency_stats = calc_stats(per_hop_latency_cycles);
 
     // Log results in table format
     log_info(tt::LogTest, "");
     log_info(tt::LogTest, "=== Latency Test Results for {} ===", config.parametrized_name);
     log_info(tt::LogTest, "Payload size: {} bytes | Num samples: {}", payload_size, raw_latencies_cycles.size());
     log_info(tt::LogTest, "");
-    log_info(tt::LogTest, "Metric    Raw Latency (ns)    Responder Time (ns)    Net Latency (ns)");
+    log_info(
+        tt::LogTest, "Metric    Raw Latency (ns)    Responder Time (ns)    Net Latency (ns)    Per-Hop Latency (ns)");
     log_info(tt::LogTest, "------------------------------------------------------------------------");
     log_info(
         tt::LogTest,
-        "Min       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        "Min       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.min * ns_per_cycle,
         responder_stats.min * ns_per_cycle,
-        net_stats.min * ns_per_cycle);
+        net_stats.min * ns_per_cycle,
+        per_hop_latency_stats.min * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "Max       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        "Max       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.max * ns_per_cycle,
         responder_stats.max * ns_per_cycle,
-        net_stats.max * ns_per_cycle);
+        net_stats.max * ns_per_cycle,
+        per_hop_latency_stats.max * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "Avg       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        "Avg       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.avg * ns_per_cycle,
         responder_stats.avg * ns_per_cycle,
-        net_stats.avg * ns_per_cycle);
+        net_stats.avg * ns_per_cycle,
+        per_hop_latency_stats.avg * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "P50       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        "P50       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.p50 * ns_per_cycle,
         responder_stats.p50 * ns_per_cycle,
-        net_stats.p50 * ns_per_cycle);
+        net_stats.p50 * ns_per_cycle,
+        per_hop_latency_stats.p50 * ns_per_cycle);
     log_info(
         tt::LogTest,
-        "P99       {:>15.2f}    {:>18.2f}    {:>15.2f}",
+        "P99       {:>15.2f}    {:>18.2f}    {:>15.2f}    {:>15.2f}",
         raw_stats.p99 * ns_per_cycle,
         responder_stats.p99 * ns_per_cycle,
-        net_stats.p99 * ns_per_cycle);
+        net_stats.p99 * ns_per_cycle,
+        per_hop_latency_stats.p99 * ns_per_cycle);
     log_info(tt::LogTest, "========================================================================");
     log_info(tt::LogTest, "");
 
@@ -612,6 +639,12 @@ void TestContext::report_latency_results(const TestConfig& config) {
     latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
     latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
     latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
+
+    // Per-hop latency statistics
+    latency_result.per_hop_min_ns = per_hop_latency_stats.min * ns_per_cycle;
+    latency_result.per_hop_max_ns = per_hop_latency_stats.max * ns_per_cycle;
+    latency_result.per_hop_avg_ns = per_hop_latency_stats.avg * ns_per_cycle;
+    latency_result.per_hop_p99_ns = per_hop_latency_stats.p99 * ns_per_cycle;
 
     // Add to results vector
     latency_results_.push_back(latency_result);
