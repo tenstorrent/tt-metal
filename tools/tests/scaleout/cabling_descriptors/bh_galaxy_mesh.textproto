@@ -1,5 +1,5 @@
 graph_templates {
-  key: "extracted_topology"
+  key: "bh_galaxy"
   value {
     children {
       name: "bh"
@@ -7,15 +7,10 @@ graph_templates {
         node_descriptor: "BH_GALAXY"
       }
     }
-    internal_connections {
-      key: "QSFP_DD"
-      value {
-      }
-    }
   }
 }
 root_instance {
-  template_name: "extracted_topology"
+  template_name: "bh_galaxy"
   child_mappings {
     key: "bh"
     value {
