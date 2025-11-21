@@ -12,7 +12,9 @@ from models.demos.cnns_vits.classification.vit.common.common import load_torch_m
 from models.demos.cnns_vits.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 
 if is_wormhole_b0():
-    from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+    from models.demos.cnns_vits.classification.vit.wormhole.tt import (
+        ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit,
+    )
 elif is_blackhole():
     from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
 elif is_grayskull():

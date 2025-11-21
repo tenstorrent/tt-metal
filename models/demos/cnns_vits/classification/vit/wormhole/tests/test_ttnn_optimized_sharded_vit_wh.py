@@ -12,7 +12,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
-from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+from models.demos.cnns_vits.classification.vit.wormhole.tt import (
+    ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

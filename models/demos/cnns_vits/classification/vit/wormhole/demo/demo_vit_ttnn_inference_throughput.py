@@ -19,7 +19,7 @@ from models.common.utility_functions import (
 )
 from models.demos.cnns_vits.classification.vit.common.common import load_torch_model
 from models.demos.cnns_vits.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
-from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.cnns_vits.classification.vit.wormhole.tt import ttnn_optimized_sharded_vit_wh
 from models.perf.perf_utils import prep_perf_report
 
 
