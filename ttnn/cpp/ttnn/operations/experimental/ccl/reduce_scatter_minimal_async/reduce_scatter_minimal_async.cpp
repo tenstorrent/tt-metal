@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         log_debug(tt::LogOp, "DEBUG: using composite_reduce_scatter");
         return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links, topology, memory_config, subdevice_id, cluster_axis);
     } else {
         log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
