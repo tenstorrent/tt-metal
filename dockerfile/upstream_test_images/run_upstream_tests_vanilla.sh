@@ -115,7 +115,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         echo "Health checks failed, retrying..."
         sleep 5
     done
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
     ./build/test/tt_metal/unit_tests_eth
