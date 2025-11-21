@@ -742,3 +742,69 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
     ttnn.where(ttnn_C, ttnn_T, ttnn_F, output_tensor=ttnn_out)
     result = ttnn.to_torch(ttnn_out)
     assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape, sub_core_grid",
+    [
+        (
+            (torch.Size([1, 2, 32, 960])),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+        (
+            (torch.Size([1, 7, 32, 96])),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            (torch.Size([1, 8, 32, 128])),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+        (
+            (torch.Size([1, 17, 32, 32])),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_where_subcore_grid(device, shape, sub_core_grid, dtype):
+    torch.manual_seed(0)
+    tor_dtype = dtype
+
+    ttnn_dtype = ttnn.bfloat16
+    if dtype == torch.float32:
+        ttnn_dtype = ttnn.float32
+
+    C = torch.arange(shape[0] * shape[1] * shape[2] * shape[3], dtype=tor_dtype)
+    C = (C % 2).float()  # Alternates 0, 1, 0, 1, ...
+    C = C.reshape(shape)
+    T = torch.randn(shape, dtype=tor_dtype)
+    F = torch.rand(shape, dtype=tor_dtype) * 10.0
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F, sub_core_grid=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    print("result", result)
+    print("golden", golden)
+
+    assert torch.equal(result, golden)
