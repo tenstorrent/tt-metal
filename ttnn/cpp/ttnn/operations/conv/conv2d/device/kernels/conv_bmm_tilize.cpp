@@ -170,8 +170,8 @@ inline void reblock_and_untilize(
 
 namespace NAMESPACE {
 void MAIN {
-    // UNPACK( TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*
-    // Set ContextIdInc */, 0, 0, 0) ); // UNPACR_NOP, ZEROSRC, FLUSHDMA dont work, only this works
+    // UNPACK( TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0
+    // /*Set ContextIdInc */, 0, 0, 0) ); // UNPACR_NOP, ZEROSRC, FLUSHDMA dont work, only this works
 
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -483,15 +483,15 @@ void MAIN {
 
                         // // print out input values -> these are the same (not the problem)
                         // if (counter < 1) {
-                        //     volatile uint16_t *data_ptr = reinterpret_cast<uint16_t
-                        //     *>(get_local_cb_interface(mm_in0_cb_id).fifo_rd_ptr << 4); const char* digits =
-                        //     "0123456789ABCDEF";
+                        //     volatile uint16_t *data_ptr =
+                        //     reinterpret_cast<uint16_t*>(get_local_cb_interface(mm_in0_cb_id).fifo_rd_ptr << 4); const
+                        //     char* digits ="0123456789ABCDEF";
 
                         //     DPRINT_UNPACK({ DPRINT << "data_ptr_in0: " << data_ptr << ENDL(); })
                         //     DPRINT_UNPACK({ DPRINT << "in0 subblock id " << counter++ << " num tiles: " << 8 <<
                         //     ENDL(); })
 
-                        //     for (int i = 0; i < (int)8; i++) {
+                        //     for (int i = 0; i < (int)1; i++) {
                         //         for (int r = 0; r < 34; r++) {
                         //             for (int c = 0; c < 16; c++) {
                         //                 DPRINT_UNPACK({ DPRINT << digits[(data_ptr[i*34*16+r*16+c] & 0xf000)>>12]
@@ -504,7 +504,7 @@ void MAIN {
                         //         }
                         //         DPRINT_UNPACK({ DPRINT << ENDL(); })
                         //     }
-                        // }
+                    }
 
                         // // print out input values 2 -> these are the same (not the problem)
                         // if (counter_in1 < 1) {
@@ -516,65 +516,65 @@ void MAIN {
                         //     DPRINT_UNPACK({ DPRINT << "in1 subblock id " << counter_in1++ << " num tiles: " << 4 <<
                         //     ENDL(); })
 
-                        //     for (int i = 0; i < (int)4; i++) {
-                        //         for (int r = 0; r < 34; r++) {
-                        //             for (int c = 0; c < 16; c++) {
-                        //                 DPRINT_UNPACK({ DPRINT << digits[(data_ptr2[i*34*16+r*16+c] & 0xf000)>>12]
-                        //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x0f00)>>8]
-                        //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x00f0)>>4]
-                        //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x000f)>>0] <<
-                        //                                        " "; })
-                        //             }
-                        //             DPRINT_UNPACK({ DPRINT << ENDL(); })
-                        //         }
-                        //         DPRINT_UNPACK({ DPRINT << ENDL(); })
-                        //     }
-                        // }
+                    //     for (int i = 0; i < (int)1; i++) {
+                    //         for (int r = 0; r < 34; r++) {
+                    //             for (int c = 0; c < 16; c++) {
+                    //                 DPRINT_UNPACK({ DPRINT << digits[(data_ptr2[i*34*16+r*16+c] & 0xf000)>>12]
+                    //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x0f00)>>8]
+                    //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x00f0)>>4]
+                    //                                        << digits[(data_ptr2[i*34*16+r*16+c] & 0x000f)>>0] <<
+                    //                                        " "; })
+                    //             }
+                    //             DPRINT_UNPACK({ DPRINT << ENDL(); })
+                    //         }
+                    //         DPRINT_UNPACK({ DPRINT << ENDL(); })
+                    //     }
+                    // }
 
-                        // // print out config register values -> these are the same (not the problem)
-                        // if (config_counter < 1) {
-                        //     DPRINT_MATH({ DPRINT << "check config reg count: " << config_counter++ << ENDL(); })
-                        //     dprint_tensix_alu_config();
-                        // }
+                    // // print out config register values -> these are the same (not the problem)
+                    // if (config_counter < 1) {
+                    //     DPRINT_MATH({ DPRINT << "check config reg count: " << config_counter++ << ENDL(); })
+                    //     dprint_tensix_alu_config();
+                    // }
 
-                        // tensix_sync(); // this helps?????
-                        // // MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(mm_in0_cb_id, in1_cb_id, 0,
-                        // out_subblock_w, out_subblock_h, in0_block_w)));
-                        // MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-                        // MATH((llk_math_hw_configure_disaggregated(mm_in0_cb_id, in1_cb_id)));
-                        // tensix_sync();
+                    // tensix_sync(); // this helps?????
+                    // // MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(mm_in0_cb_id, in1_cb_id, 0,
+                    // out_subblock_w, out_subblock_h, in0_block_w)));
+                    // MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+                    // MATH((llk_math_hw_configure_disaggregated(mm_in0_cb_id, in1_cb_id)));
+                    // tensix_sync();
 
-                        // if (config_counter < 1) {
-                        //     // dprint_tensix_unpack_config();
-                        //     // dprint_tensix_unpack_tile_descriptor();
+                    // if (config_counter < 1) {
+                    //     // dprint_tensix_unpack_config();
+                    //     // dprint_tensix_unpack_tile_descriptor();
 
-                        //     config_counter++;
-                        // }
+                    //     config_counter++;
+                    // }
 
-                        // MATH( TTI_RDCFG(p_gpr_math::TMP0, THCON_SEC0_REG3_Base_address_ADDR32); )
-                        // UNPACK( TTI_RDCFG(p_gpr_unpack::TMP1, THCON_SEC0_REG3_Base_address_ADDR32); )
+                    // MATH( TTI_RDCFG(p_gpr_math::TMP0, THCON_SEC0_REG3_Base_address_ADDR32); )
+                    // UNPACK( TTI_RDCFG(p_gpr_unpack::TMP1, THCON_SEC0_REG3_Base_address_ADDR32); )
 
-                        // MATH( asm volatile("ebreak"); )
-                        // PACK( asm volatile("ebreak"); )
-                        // UNPACK( asm volatile("ebreak"); )
-                        for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
-                            // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                            // accumulation is done by iterating matmul_block across inner dim
-                            // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
-                            matmul_block(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                in0_index,
-                                in1_index,
-                                dst_index,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
-                            in0_index++;               // stride right by 1
-                            in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
-                                                       // called in1_block_w)
-                        }
+                    // MATH( asm volatile("ebreak"); )
+                    // PACK( asm volatile("ebreak"); )
+                    // UNPACK( asm volatile("ebreak"); )
+                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < 1; inner_dim_idx++) {
+                        // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
+                        // accumulation is done by iterating matmul_block across inner dim
+                        // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                        matmul_block(
+                            mm_in0_cb_id,
+                            in1_cb_id,
+                            in0_index,
+                            in1_index,
+                            dst_index,
+                            false,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
+                        in0_index++;               // stride right by 1
+                        in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
+                                                   // called in1_block_w)
+                    }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
@@ -598,6 +598,31 @@ void MAIN {
                         //     // dprint_tensix_dest_reg(6);
                         //     // dprint_tensix_dest_reg(7);
                         //     // dprint_tensix_dest_reg(8);
+                        // }
+
+                        // // print out input values -> these are the same (not the problem)
+                        // if (counter < 2) {
+                        //     volatile uint16_t *data_ptr4 =
+                        //     reinterpret_cast<uint16_t*>(get_local_cb_interface(mm_in0_cb_id).fifo_rd_ptr << 4); const
+                        //     char* digits ="0123456789ABCDEF";
+
+                        //     DPRINT_UNPACK({ DPRINT << "data_ptr_in0: " << data_ptr4 << ENDL(); })
+                        //     DPRINT_UNPACK({ DPRINT << "in0 subblock id " << counter++ << " num tiles: " << 8 <<
+                        //     ENDL(); })
+
+                        //     for (int i = 0; i < (int)1; i++) {
+                        //         for (int r = 0; r < 34; r++) {
+                        //             for (int c = 0; c < 16; c++) {
+                        //                 DPRINT_UNPACK({ DPRINT << digits[(data_ptr4[i*34*16+r*16+c] & 0xf000)>>12]
+                        //                                        << digits[(data_ptr4[i*34*16+r*16+c] & 0x0f00)>>8]
+                        //                                        << digits[(data_ptr4[i*34*16+r*16+c] & 0x00f0)>>4]
+                        //                                        << digits[(data_ptr4[i*34*16+r*16+c] & 0x000f)>>0] <<
+                        //                                        " "; })
+                        //             }
+                        //             DPRINT_UNPACK({ DPRINT << ENDL(); })
+                        //         }
+                        //         DPRINT_UNPACK({ DPRINT << ENDL(); })
+                        //     }
                         // }
 
                         tile_regs_commit();
@@ -628,7 +653,7 @@ void MAIN {
 
                         //     DPRINT_PACK({ DPRINT << "out block " << counter_out++ << ENDL(); })
 
-                        //     for (int i = 0; i < (int)out_subblock_num_tiles; i++) {
+                        //     for (int i = 0; i < (int)1; i++) {
                         //         for (int r = 0; r < 34; r++) {
                         //             for (int c = 0; c < 16; c++) {
                         //                 DPRINT_PACK({ DPRINT << digits[(data_ptr_out[i*34*16+r*16+c] & 0xf000)>>12]

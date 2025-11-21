@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
 
         uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
         TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
-        uint32_t num_tiles = 2048;
+        uint32_t num_tiles = 2;
         uint32_t dram_buffer_size = single_tile_size * num_tiles;  // num_tiles of BFP8_B
 
         tt_metal::InterleavedBufferConfig dram_config{
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         uint32_t src0_cb_index = 0;
-        uint32_t num_input_tiles = 1;
+        uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Bfp8_b}})
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
         tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 1;
+        uint32_t num_output_tiles = 2;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Bfp8_b}})
@@ -158,6 +158,31 @@ int main(int argc, char** argv) {
         // ////////////////////////////////////////////////////////////////////////////
 
         pass &= (src_vec == result_vec);
+
+        std::cout << "Source vector:\n";
+        size_t src_half = src_vec.size() / 2;
+        for (size_t i = 0; i < src_vec.size(); ++i) {
+            std::cout << std::hex << std::setw(8) << src_vec[i] << " ";
+            if ((i + 1) % 16 == 0) {
+                std::cout << std::endl;
+            }
+            if ((i + 1) == src_half) {
+                std::cout << std::endl;
+            }
+        }
+        std::cout << std::dec << std::endl;
+        std::cout << "Result vector:\n";
+        size_t res_half = result_vec.size() / 2;
+        for (size_t i = 0; i < result_vec.size(); ++i) {
+            std::cout << std::hex << std::setw(8) << result_vec[i] << " ";
+            if ((i + 1) % 16 == 0) {
+                std::cout << std::endl;
+            }
+            if ((i + 1) == res_half) {
+                std::cout << std::endl;
+            }
+        }
+        std::cout << std::dec << std::endl;
 
         pass &= tt_metal::CloseDevice(device);
 

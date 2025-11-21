@@ -97,7 +97,13 @@ class ResnetConvTest(OpTestBase):
 
     # Remove weights shape
     def generate_torch_activations(self, shape):
-        torch_input_tensor_nchw = torch.randn(self.in0_shape, dtype=torch.bfloat16).float()
+        # torch_input_tensor_nchw = torch.randn(self.in0_shape, dtype=torch.bfloat16).float()
+        torch_input_tensor = torch.arange(start=0, end=35, dtype=torch.bfloat16).float()
+        torch_input_tensor = torch_input_tensor.repeat(
+            1, 1, 1, int(self.in0_shape[0] * self.in0_shape[1] * self.in0_shape[2])
+        )
+        # torch_input_tensor_nchw = torch.ones(self.in0_shape, dtype=torch.bfloat16).float()
+        torch_input_tensor_nchw = torch_input_tensor.reshape(self.in0_shape)
         torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
         return torch_input_tensor
 
@@ -171,7 +177,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
     if is_blackhole():
         compute_grid = get_blackhole_grid_size(mesh_device)
         # compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
-        compute_with_storage_grid_size = (1, 1)
+        compute_with_storage_grid_size = (2, 1)
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
     # scale batch_size with num cores to keep sub_block dims
     batch_size = compute_with_storage_grid_size[0] * compute_with_storage_grid_size[1]

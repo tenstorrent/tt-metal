@@ -20,7 +20,7 @@ auto create_random_vector_of_bfp(uint32_t num_bytes, bool is_exp_a, int rand_max
     TT_ASSERT(num_bytes % single_bfp_tile_size == 0);
     uint32_t num_tiles = num_bytes / single_bfp_tile_size;
 
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
+    // auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
     int packed_data_size = num_bytes / sizeof(float);
     int num_float_in_tile = 1024;
@@ -28,7 +28,7 @@ auto create_random_vector_of_bfp(uint32_t num_bytes, bool is_exp_a, int rand_max
 
     std::vector<float> fp32_vec(float_data_size, 0);
     for (int i = 0; i < fp32_vec.size(); i++) {
-        fp32_vec.at(i) = rand_float() + offset;
+        fp32_vec.at(i) = i % 1024 * 1.0f + offset;
     }
 
     std::vector<uint32_t> packed_result =
