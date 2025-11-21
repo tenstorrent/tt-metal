@@ -1134,12 +1134,12 @@ def test_qwen_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
+            f"ttft_e2e_6U",
             round(avg_time_to_first_token * 1000, 2),
         )  # average TTFT in ms
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            run_type=f"tg_qwen_text_demo_prefill_6U",
+            ml_model_name="qwen32b-tg",
         )
