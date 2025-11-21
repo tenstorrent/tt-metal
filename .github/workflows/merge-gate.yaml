@@ -272,11 +272,11 @@ jobs:
 
   tt-train-cpp-merge-gate-tests:
     needs: [build, find-changes]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.test-tt-train == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+    #         needs.find-changes.outputs.test-tt-train == 'true'
+    #     }}
     secrets: inherit
     strategy:
       fail-fast: false
