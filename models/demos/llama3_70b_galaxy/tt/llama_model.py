@@ -171,15 +171,13 @@ class TtTransformer(LightweightModule):
         )
         if mesh_sub_device_manager_id_decode is None:
             self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
-        else:
-            self.tt_ccl = self.tt_ccl_decode
-
-        if getattr(self, "sampling", None) is None:
             self.sampling = SamplingGenerator(
                 args=self.args,
                 mesh_device=self.mesh_device,
                 tt_ccl=self.tt_ccl,
             )
+        else:
+            self.tt_ccl = self.tt_ccl_decode
 
     def prepare_prefill_inputs_host(
         self, tokens, user_id=0, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None, batch_size=1
@@ -536,7 +534,6 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
-        sampling_on_device=False,
         capture_sampling_trace=False,
     ):
         """
@@ -553,19 +550,12 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        if sampling_on_device and self.sampling is not None:
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
-            if capture_sampling_trace:
-                return tt_logits
-            tt_toks = self.sampling.sample(
-                tt_logits[0],
-                tt_out_tok=x,
-                batch_size=self.args.max_batch_size,
-                enable_trace=False,
-            )
-            return tt_toks
+        self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
-        if return_logits or self.sampling is None:
+        if capture_sampling_trace:
+            return tt_logits
+
+        if return_logits:
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
@@ -590,8 +580,13 @@ class TtTransformer(LightweightModule):
             tt_out_logits = tt_out_logits[0, 0, 0, :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
 
-        self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
-        return tt_logits
+        tt_toks = self.sampling.sample(
+            tt_logits[0],
+            tt_out_tok=x,
+            batch_size=self.args.max_batch_size,
+            enable_trace=False,
+        )
+        return tt_toks
 
     def switch_mode(self, mode):
         if mode == "decode":

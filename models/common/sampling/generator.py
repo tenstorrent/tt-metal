@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _TraceKey:
     penalties_on: bool
-    num_outputs: int
 
 
 class SamplingGenerator:
@@ -43,7 +42,6 @@ class SamplingGenerator:
         args,
         mesh_device,
         tt_ccl,
-        enable_penalties: bool = True,
         enable_internal_trace: bool = True,
         cq_id: int = 0,
     ):
@@ -53,25 +51,22 @@ class SamplingGenerator:
         self.enable_internal_trace = enable_internal_trace
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
-        self.tt_penalties = (
-            TTPenalties(
-                mesh_device=mesh_device,
-                max_batch_size=args.max_batch_size,
-                vocab_size=args.vocab_size,
-                sub_core_grids=getattr(args, "sub_core_grids", None),
-            )
-            if enable_penalties
-            else None
+        self.tt_penalties = TTPenalties(
+            mesh_device=mesh_device,
+            max_batch_size=args.max_batch_size,
+            vocab_size=args.vocab_size,
+            sub_core_grids=getattr(args, "sub_core_grids", None),
         )
+
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
 
     def _new_trace_state(self):
-        return {"id": None, "input": None, "output": None, "kwargs": {}, "batch_size": None}
+        return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool, num_outputs: int):
-        key = _TraceKey(penalties_on=penalties_on, num_outputs=num_outputs)
+    def _trace_slot(self, penalties_on: bool):
+        key = _TraceKey(penalties_on=penalties_on)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -85,18 +80,11 @@ class SamplingGenerator:
         for key, slot in self._trace_states.items():
             if slot["id"] is not None:
                 logger.debug(
-                    "Resetting sampling trace (penalties=%s, num_outputs=%s, trace_id=%s)",
+                    "Resetting sampling trace (penalties=%s, trace_id=%s)",
                     key.penalties_on,
-                    key.num_outputs,
                     slot["id"],
                 )
         self._trace_states.clear()
-
-    # ---------------------------------------------------------------------
-    # Penalties helpers
-    # ---------------------------------------------------------------------
-    def _penalties_enabled(self) -> bool:
-        return self.tt_penalties is not None and self._penalties_active
 
     def _normalize_penalty_values(self, values):
         if values is None:
@@ -108,8 +96,6 @@ class SamplingGenerator:
         return list(values)
 
     def reset_penalty_params(self, *, presence, frequency, repetition):
-        if self.tt_penalties is None:
-            return
         presence = self._normalize_penalty_values(presence)
         frequency = self._normalize_penalty_values(frequency)
         repetition = self._normalize_penalty_values(repetition)
@@ -128,19 +114,14 @@ class SamplingGenerator:
         return all(value == default for value in values)
 
     def reset_prompt_tokens(self, prompt_tokens):
-        if not self._penalties_enabled():
+        if not self._penalties_active:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens)
 
     def reset_output_state(self):
-        if not self._penalties_enabled():
+        if not self._penalties_active:
             return
         self.tt_penalties.reset_output_tokens()
-
-    def apply_penalties(self, tt_logits, batch_size: int):
-        if not self._penalties_enabled():
-            return tt_logits
-        return self.tt_penalties.apply(tt_logits, batch_size)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
@@ -163,30 +144,18 @@ class SamplingGenerator:
                 "Call `reset_trace()` before tracing with new tensors."
             )
 
-    def _extract_tokens_host(self, tt_tokens: ttnn.Tensor, batch_size: int) -> torch.Tensor:
-        host = ttnn.to_torch(tt_tokens).view(-1)
-        return host[:batch_size].to(torch.int64)
-
-    def _update_penalties_from_tokens(self, tt_tokens: ttnn.Tensor, batch_size: int):
-        # TODO: penalty histograms disabled for now
-        return
-
     def _run_sampling(
         self,
         logits,
         *,
         penalties_on: bool,
-        batch_size: int,
         seed: Optional[int],
         tt_out_tok: Optional[ttnn.Tensor],
-        num_outputs: int,
     ):
         if penalties_on:
-            self.tt_penalties.apply(logits, batch_size)
+            self.tt_penalties.apply(logits)
         tt_tokens = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
         target_tokens = tt_out_tok or tt_tokens
-        if num_outputs != 1:
-            raise NotImplementedError("num_outputs > 1 not yet supported on device")
         return tt_tokens
 
     def capture_trace(
@@ -195,38 +164,29 @@ class SamplingGenerator:
         *,
         seed: Optional[int] = None,
         tt_out_tok: Optional[ttnn.Tensor] = None,
-        penalties_on: Optional[bool] = None,
-        batch_size: Optional[int] = None,
-        num_outputs: int = 1,
     ) -> ttnn.Tensor:
         """
         Capture a trace of the sampling pipeline for the given configuration.
         """
-        if penalties_on is None:
-            penalties_on = self._penalties_enabled()
-        batch_size = batch_size or self.args.max_batch_size
+        penalties_on = self._penalties_active
 
-        key, slot = self._trace_slot(penalties_on, num_outputs)
+        key, slot = self._trace_slot(penalties_on)
         print("at capture, ", slot, key)
 
         logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(
             logits,
             penalties_on=penalties_on,
-            batch_size=batch_size,
             seed=seed,
             tt_out_tok=tt_out_tok,
-            num_outputs=num_outputs,
         )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
             logits,
             penalties_on=penalties_on,
-            batch_size=batch_size,
             seed=seed,
             tt_out_tok=tt_out_tok,
-            num_outputs=num_outputs,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
@@ -235,7 +195,6 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = tt_out_tok or sampled
         slot["kwargs"] = {"seed": seed, "tt_out_tok": tt_out_tok}
-        slot["batch_size"] = batch_size
 
         return slot["output"]
 
@@ -250,11 +209,6 @@ class SamplingGenerator:
 
         return slot["output"]
 
-    def execute_trace(self, *, num_outputs: int = 1) -> ttnn.Tensor:
-        penalties_on = self._penalties_enabled()
-        key = _TraceKey(penalties_on=penalties_on, num_outputs=num_outputs)
-        return self._execute_trace(key)
-
     def sample(
         self,
         logits: ttnn.Tensor,
@@ -262,44 +216,35 @@ class SamplingGenerator:
         enable_trace: bool = True,
         seed: Optional[int] = None,
         tt_out_tok: Optional[ttnn.Tensor] = None,
-        batch_size: Optional[int] = None,
-        num_outputs: int = 1,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
         """
-        batch_size = batch_size or self.args.max_batch_size
-        penalties_on = self._penalties_enabled()
+        penalties_on = self._penalties_active
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
-                batch_size=batch_size,
                 seed=seed,
                 tt_out_tok=tt_out_tok,
-                num_outputs=num_outputs,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, num_outputs)
+            key, slot = self._trace_slot(penalties_on)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
                     seed=seed,
                     tt_out_tok=tt_out_tok,
                     penalties_on=penalties_on,
-                    batch_size=batch_size,
-                    num_outputs=num_outputs,
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
-            slot["batch_size"] = batch_size
             tt_out = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
-            print("tt_out", tt_out.shape)
             tt_out = ttnn.reshape(tt_out, [32, 1])
             self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
