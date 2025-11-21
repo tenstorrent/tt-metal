@@ -133,13 +133,13 @@ private:
         // TODO: Make sure that there is no noticeable overhead in eager mode
         // Regular eager execution
         auto outputs = device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& t) {
-                // TODO: We should probably update siblings too, but it seems a bit complex and expensive to do so
-                t.lazy()->set_op(lazy_op);
-                t.lazy()->set_op_inputs(lazy_inputs);
-            },
-            outputs);
+        // tt::stl::reflection::visit_object_of_type<Tensor>(
+        //     [&](const Tensor& t) {
+        //         // TODO: We should probably update siblings too, but it seems a bit complex and expensive to do so
+        //         t.lazy()->set_op(lazy_op);
+        //         t.lazy()->set_op_inputs(lazy_inputs);
+        //     },
+        //     outputs);
         return outputs;
     }
 
