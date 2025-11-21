@@ -400,15 +400,15 @@ int main(int argc, char **argv) {
     }
 
     auto create_dataset =
-        [](const auto &text, const auto sequence_length, const auto &config) {
-
-            std::string tokenizer_type = config.tokenizer_type;
+        [](const auto &text, const auto sequence_length, const auto &train_config, auto &model_config) {
+            std::string tokenizer_type = train_config.tokenizer_type;
 
             if (tokenizer_type == "char") {
                 auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
                     std::get<std::string>(text), sequence_length);
 
-                    std::visit([&](auto &&arg) { arg.vocab_size = vocab_size; }, config.transformer_config);
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
 
                 return dataset;
             }
@@ -428,7 +428,7 @@ int main(int argc, char **argv) {
             }
         };
 
-    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config);
+    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 

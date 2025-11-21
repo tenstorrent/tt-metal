@@ -72,11 +72,9 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
     return ranks;
 }
 
-std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-
+std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(TrainingConfig &config) {
     std::string text;
     std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    uint32_t loaded_vocab_size = 0;
 
     try {
         // check file extension:
@@ -85,7 +83,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         } else {
             auto [tokens, vocab_size] = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
             text_or_tokens = tokens;
-            std::visit([&](auto &&arg) { loaded_vocab_size = vocab_size; }, config.transformer_config);
+            std::visit([&](auto &&arg) { arg.vocab_size = vocab_size; }, config.transformer_config);
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -93,10 +91,13 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     }
 
     auto create_dataset =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_type, auto &train_config) {
             if (tokenizer_type == "char") {
                 auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
                     std::get<std::string>(text), sequence_length);
+
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, train_config.transformer_config);
 
                 return dataset;
             }
@@ -107,7 +108,8 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
                 } catch (const std::exception &e) {
                     std::cerr << e.what() << std::endl;
-                    std::cerr << "\nExpected tokenized data file for BPE tokenizer, but received a .txt file or an invalid format. Did you tokenize the dataset? See the README for details." << std::endl;                    exit(-1);
+                    std::cerr << "\nExpected tokenized data file for BPE tokenizer, but received a .txt file or an invalid format. Did you tokenize the dataset? See the README for details." << std::endl;
+                    exit(-1);
                 }
             }
             else {
@@ -126,7 +128,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         },
         config.transformer_config);
 
-    auto dataset = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type);
+    auto dataset = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
     auto dataset_size = dataset.get_size();
