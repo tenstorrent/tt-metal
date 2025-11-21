@@ -206,7 +206,7 @@ void kernel_main() {
             uint32_t barrier_sem_val = *barrier_sem_ptr;
             DPRINT << "BARRIER SEMAPHORE ADDRESS IS: " << barrier_sem << "\n";
             DPRINT << "BARRIER SEMAPHORE VALUE IS: " << barrier_sem_val << "\n";
-            DPRINT << "Waiting for  " << (uint32_t)(ring_size - 1) << " devices in RS\n";
+            // DPRINT << "Waiting for  " << (uint32_t)(ring_size - 1) << " devices in RS\n";
             uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
             fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
