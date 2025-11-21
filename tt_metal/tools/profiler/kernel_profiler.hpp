@@ -44,6 +44,7 @@ extern uint32_t traceCount;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
 constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
@@ -54,6 +55,11 @@ constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
 constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
+#endif
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+constexpr bool DO_SUM = true;
+#else
+constexpr bool DO_SUM = false;
 #endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
@@ -653,15 +659,19 @@ __attribute__((noinline)) void trace_only_init() {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
 
-#define DeviceZoneScopedSumN1(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
+#define DeviceZoneScopedSumN1(name)                                                                                 \
+    if constexpr (kernel_profiler::DO_SUM) {                                                                        \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                                \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                                  \
+        kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>(); \
+    }
 
-#define DeviceZoneScopedSumN2(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
+#define DeviceZoneScopedSumN2(name)                                                                                 \
+    if constexpr (kernel_profiler::DO_SUM) {                                                                        \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                                \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                                  \
+        kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>(); \
+    }
 
 #define DeviceZoneSetCounter(counter)                  \
     if constexpr (!kernel_profiler::TRACE_ON_TENSIX) { \

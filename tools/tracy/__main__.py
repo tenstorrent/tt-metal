@@ -77,6 +77,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--enable-sum-profiling",
+        dest="do_sum",
+        action="store_true",
+        help="Enable sum profiling",
+        default=False,
+    )
+    parser.add_option(
         "--cpp-post-process",
         dest="cpp_post_process",
         action="store_true",
@@ -196,6 +203,9 @@ def main():
 
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
+
+    if options.do_sum:
+        os.environ["TT_METAL_PROFILER_SUM"] = "1"
 
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
