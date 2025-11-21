@@ -159,12 +159,12 @@
 ### [Llama 3.2 - 1B/3B/11B](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Created a new shared codebase for the Llama3 family of models, with newly added support for Llama3.2-1B/3B/11B.
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/llama3_70b/t3000)
 - Added support for the `ttnn.experimental.rotary_embedding_llama` op in decode mode, eliminating unnecessary device transfers of rotation matrices.
 
 ## October 21, 2024
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/llama3_70b/t3000)
 - Enabled prefill workloads to pad to multiples of 1024 instead of powers of 2, improving overall performance for longer sequences
 
 ## October 7, 2024
@@ -176,7 +176,7 @@
 
 ## September 23, 2024
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/llama3_70b/t3000)
 - Added support for 128K context length using PagedAttention
 - Added a continuous batching demo for running multiple batches of users consecutively
 - Added the option to enable TT-NN tracing
@@ -222,7 +222,7 @@
 - Runs fast prefill for sequence lengths of up to 512 tokens
 - Supports a maximum context length of 8K tokens
 
-### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama3_70b)
+### [Llama 3/3.1 - 70B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llms/llama3_70b/t3000)
 - Added support for LLaMA 3.1 70B (new scaled rotary position embeddings)
 - Prefill and decode now support 8K context length with batch size 16
 
