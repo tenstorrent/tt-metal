@@ -8,22 +8,58 @@
 #include "profiler_state_manager.hpp"
 #include <tt_stl/assert.hpp>
 #include "hostdevcommon/profiler_common.h"
+#include "context/metal_context.hpp"
+#include "math.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
-uint32_t get_profiler_dram_bank_size_per_risc_bytes(std::optional<uint32_t> profiler_program_support_count) {
+// PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT is controlled by rtoptions. when env var is set, pass that bit through jit
+// build and in kernel_profiler.hpp, use that bit to determine the value of PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT.
+
+uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtoptions) {
+    std::optional<uint32_t> profiler_program_support_count = rtoptions.get_profiler_program_support_count();
+    const bool do_profiler_sum = rtoptions.get_profiler_sum();
+
     if (!profiler_program_support_count.has_value()) {
         profiler_program_support_count = DEFAULT_PROFILER_PROGRAM_SUPPORT_COUNT;
     }
-    const uint32_t dram_bank_size_per_risc_bytes =
+
+    const uint32_t profiler_l1_op_min_optional_marker_count =
+        do_profiler_sum ? kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT : 0;
+    const uint32_t dram_bank_size_per_risc_bytes_single_program =
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
         (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
-         kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) *
-        profiler_program_support_count.value() * sizeof(uint32_t);
+         profiler_l1_op_min_optional_marker_count) *
+        sizeof(uint32_t);
+
+    if (profiler_program_support_count <=
+        ((kernel_profiler::PROFILER_L1_BUFFER_SIZE) / dram_bank_size_per_risc_bytes_single_program)) {
+        const uint32_t old_profiler_program_support_count = profiler_program_support_count.value();
+        profiler_program_support_count =
+            div_up(kernel_profiler::PROFILER_L1_BUFFER_SIZE, dram_bank_size_per_risc_bytes_single_program);
+        log_warning(
+            tt::LogMetal,
+            "Profiler DRAM bank size per RISC must be > {} bytes. Increasing profiler DRAM bank size per RISC from {} "
+            "bytes to {} bytes.",
+            kernel_profiler::PROFILER_L1_BUFFER_SIZE,
+            old_profiler_program_support_count * dram_bank_size_per_risc_bytes_single_program,
+            profiler_program_support_count.value() * dram_bank_size_per_risc_bytes_single_program);
+    }
+
+    const uint32_t dram_bank_size_per_risc_bytes =
+        dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
+
+    rtoptions.set_profiler_program_support_count(profiler_program_support_count.value());
+
     TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
     return dram_bank_size_per_risc_bytes;
+}
+
+uint32_t get_profiler_dram_bank_size_per_risc_bytes() {
+    llrt::RunTimeOptions& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return get_profiler_dram_bank_size_per_risc_bytes(rtoptions);
 }
 
 ProfilerStateManager::ProfilerStateManager() : do_sync_on_close(true) {}

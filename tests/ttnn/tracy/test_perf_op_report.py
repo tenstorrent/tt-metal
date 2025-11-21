@@ -138,3 +138,7 @@ class TestCppPostProc:
             generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
         )
         compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
+
+
+# do the comparison here and call it explicitly when t3k bash script
+# do sum comparison here too
