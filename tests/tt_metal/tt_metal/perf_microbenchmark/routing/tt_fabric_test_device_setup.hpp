@@ -13,8 +13,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/experimental/fabric.hpp>
-#include <tt-metalium/experimental/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 #include "impl/context/metal_context.hpp"
 

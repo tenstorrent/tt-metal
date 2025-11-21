@@ -8,9 +8,9 @@
 #include <random>
 #include <stdint.h>
 
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include <tt-metalium/experimental/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 

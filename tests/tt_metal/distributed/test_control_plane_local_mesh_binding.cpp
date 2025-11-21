@@ -8,9 +8,9 @@
 #include <optional>
 #include <memory>
 #include <filesystem>
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include "gmock/gmock.h"
 #include <fmt/format.h>

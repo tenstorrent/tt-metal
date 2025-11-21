@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <cstddef>
 
-#include <tt-metalium/experimental/fabric_types.hpp>
-#include <tt-metalium/experimental/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
 

@@ -9,7 +9,7 @@
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
-#include <tt-metalium/experimental/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"

@@ -20,8 +20,8 @@
 #include <unordered_set>
 #include <utility>
 
-#include <tt-metalium/experimental/control_plane.hpp>
-#include <tt-metalium/experimental/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

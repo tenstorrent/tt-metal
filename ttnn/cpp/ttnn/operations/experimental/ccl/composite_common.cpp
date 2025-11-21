@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include <tt-metalium/experimental/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace composite_common {

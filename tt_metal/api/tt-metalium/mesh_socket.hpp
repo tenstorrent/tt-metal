@@ -7,7 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <utility>
 
 namespace tt::tt_metal::distributed {
