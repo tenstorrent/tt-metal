@@ -224,7 +224,7 @@ int __attribute__((noinline)) main(void) {
     }
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
-if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     ncrisc_noc_counters_init<1>();
 #endif
 
