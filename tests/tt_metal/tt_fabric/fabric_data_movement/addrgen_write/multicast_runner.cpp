@@ -22,6 +22,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_fabric::test {
 
