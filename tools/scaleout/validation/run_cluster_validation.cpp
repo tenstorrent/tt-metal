@@ -16,6 +16,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 
