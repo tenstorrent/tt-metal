@@ -15,6 +15,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
+from models.common.utility_functions import comp_pcc
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
@@ -239,13 +240,19 @@ def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
         # [1, 1, 32, 128256],  # llama on T3K with 8 chips
     ],
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
 def test_log_probs_calculation(shape, mesh_device):
     seed = 1234
     torch.manual_seed(seed)
 
-    input_values = torch.randn(shape)
-    input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
-
+    input_values = torch.randn(shape, dtype=torch.bfloat16)
     tt_input_values_tensor = ttnn.from_torch(
         input_values,
         device=mesh_device,
@@ -255,32 +262,20 @@ def test_log_probs_calculation(shape, mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tt_input_indices_tensor = ttnn.from_torch(
-        input_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
     log_probs_calculator = LogProbsCalculator(input_values.shape[-1], mesh_device)
     # calculate global stats
     log_probs_calculator.compute_global_stats(tt_input_values_tensor)
 
-    # print shapes of global_sum and global_max
-    print(f"global_sum_tensor shape={log_probs_calculator.global_exp_sum.shape}")
-    print(f"global_max_tensor shape={log_probs_calculator.global_max.shape}")
     # reference implementation of log-probability computation in pytorch
     ref_log_softmax = F.log_softmax(input_values, dim=-1)
 
     # calculate on device log-probability computation
-    # split input values into 8 chips
-
     log_probs = log_probs_calculator.calculate_log_probs(tt_input_values_tensor)
-    log_probs_host = ttnn.to_torch(log_probs)
-
-    # Compare against PyTorch log_softmax over the full vocab.
-    assert torch.allclose(log_probs_host, ref_log_softmax, atol=1e-2, rtol=1e-2)
+    # Return the log-probability tensor to host
+    log_probs_host = ttnn.to_torch(log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    # Compare the log-probability computation with the reference implementation
+    pcc_pass = comp_pcc(ref_log_softmax, log_probs_host, pcc=0.99)
+    assert pcc_pass, "Log-probability computation is not correct, pcc={pcc_pass}"
 
 
 @pytest.mark.parametrize(
