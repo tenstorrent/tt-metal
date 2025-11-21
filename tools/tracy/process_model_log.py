@@ -92,8 +92,8 @@ def run_device_profiler(
 
     cmd_call = "" if is_command_binary_exe else "-m"
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
-    quoted_command = command if is_command_binary_exe else shlex.quote(command)
-    profiler_cmd = f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {cpp_post_process_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
+    command = command if is_command_binary_exe else shlex.quote(command)
+    profiler_cmd = f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {cpp_post_process_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {command}"
     logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 
