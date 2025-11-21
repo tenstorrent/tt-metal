@@ -224,14 +224,8 @@ test_suite_bh_ttnn_stress_tests() {
 
 test_suite_bh_glx_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
-    # Fabric
-    # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
-    # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
-    # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
-    # TODO (Raymond Kim): Expose this for cluster operator use.
-    # ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 
-    # BH Galaxy 2D Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
+    # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
@@ -271,6 +265,15 @@ test_suite_bh_glx_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+}
+
+test_suite_bh_glx_torus_xyz_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus + Z links topology on BH 6U Galaxy"
+    # Fabric
+    # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
+    # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
+    # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
 # Define test suite mappings for different hardware topologies
