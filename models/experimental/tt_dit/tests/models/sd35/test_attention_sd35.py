@@ -11,7 +11,7 @@ from ....utils.tensor import bf16_tensor
 from ....utils.check import assert_quality
 from ....models.transformers.attention_sd35 import SD35JointAttention
 from ....parallel.manager import CCLManager
-from .....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from ....utils.padding import PaddingConfig
 
 
@@ -136,7 +136,8 @@ def test_sd35_joint_attention(
     spatial_input = torch.randn((B, spatial_seq_len, query_dim), dtype=torch_dtype)
     prompt_input = torch.randn((B, prompt_seq_len, query_dim), dtype=torch_dtype)
 
-    torch_spatial, torch_prompt = torch_model(spatial=spatial_input, prompt=prompt_input)
+    # torch_spatial, torch_prompt = torch_model(spatial=spatial_input, prompt=prompt_input)
+    torch_spatial, torch_prompt = torch_model(hidden_states=spatial_input, encoder_hidden_states=prompt_input)
 
     spatial_input_4d = spatial_input.unsqueeze(0)
     prompt_input_4d = prompt_input.unsqueeze(0)
