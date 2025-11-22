@@ -59,7 +59,6 @@ struct StridedAllGatherMinimalMatmulAsync {
         const uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config_ag,
         const ttnn::ccl::Topology topology,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
         const std::optional<const Tensor>& bias,

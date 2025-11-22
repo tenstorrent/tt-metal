@@ -88,10 +88,6 @@ def run_strided_all_gather_impl(
         create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
-
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
     logger.info(f"All gather dim: {dim}")
@@ -129,7 +125,6 @@ def run_strided_all_gather_impl(
             memory_config=mem_config_ag,
             topology=all_gather_topology,
             subdevice_id=worker_sub_device_id,
-            barrier_semaphore=barrier_semaphore_handles[i],
             cluster_axis=cluster_axis,
             tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,

@@ -162,7 +162,6 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
 
-    auto barrier_semaphore = attributes.barrier_semaphore;
     // update senders
     uint32_t core_idx = 0;
     for (uint32_t link = 0; link < num_links; link++) {
@@ -184,10 +183,6 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[11] = out_ready_semaphore.address();
-
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
-                }
 
                 core_idx++;
             }
@@ -238,7 +233,6 @@ StridedAllGatherAsyncProgramFactory::cached_program_t StridedAllGatherAsyncProgr
             device_index,
             attributes.topology,
             attributes.semaphore,
-            attributes.barrier_semaphore,
             attributes.sub_device_id,
             empty_fused_op_signaler,
             attributes.tiles_per_chunk,
@@ -264,7 +258,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
@@ -321,15 +314,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
-    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] =
-        ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            topology,
-            sender_device_coord,
-            forward_coord,
-            backward_coord,
-            num_targets_forward,
-            num_targets_backward,
-            mesh_device);
 
     const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -576,17 +560,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 if (dir) {
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        barrier_mcast_backward_args.begin(),
-                        barrier_mcast_backward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
                         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        barrier_mcast_forward_args.begin(),
-                        barrier_mcast_forward_args.end());
                 }
                 tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -610,10 +586,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     virtual_core.y,                     // out_ready_sem_noc0_y
                     ring_size,                          // ring_size
                     semaphore.at(dir).address(),        // out_ready_semaphore_forward
-                    barrier_semaphore.has_value(),      // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()       // synchronize barrier semaphore
-                        ? barrier_semaphore.value().address()
-                        : 0,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
                     mm_block_wt_val,
