@@ -49,7 +49,6 @@ struct StridedAllGatherAsyncProgramFactory {
         uint32_t ring_index,
         ttnn::ccl::Topology topology,
         const std::vector<GlobalSemaphore>& semaphore,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         std::optional<uint32_t> tiles_per_chunk,

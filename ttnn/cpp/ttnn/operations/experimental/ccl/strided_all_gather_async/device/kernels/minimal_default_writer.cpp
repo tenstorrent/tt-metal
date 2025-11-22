@@ -53,11 +53,8 @@ constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_va
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
-constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_unicast_args>();
 
-inline constexpr uint32_t sharded_args_start_idx =
-    25 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 25 + ccl_routing_utils::num_line_unicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -77,8 +74,6 @@ void kernel_main() {
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
