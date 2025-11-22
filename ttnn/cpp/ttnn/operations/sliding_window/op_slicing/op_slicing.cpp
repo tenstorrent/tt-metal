@@ -68,7 +68,7 @@ void run_sliced_op(
                 output_slice_coords.push_back({input_slice_start, input_slice_end});
                 std::tie(input_slice_start, input_slice_end) =
                     (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
-                log_info(
+                log_debug(
                     tt::LogOp,
                     "Input Slice Start: {}, End: {} for op {}",
                     input_slice_start,
@@ -101,7 +101,7 @@ void run_sliced_op(
                 output_slice_coords.push_back({input_slice_start, input_slice_end});
                 std::tie(input_slice_start, input_slice_end) =
                     (*op_attributes_iter)->get_input_slice(input_slice_start, input_slice_end);
-                log_info(
+                log_debug(
                     tt::LogOp,
                     "Input Slice Start: {}, End: {} for op {}",
                     input_slice_start,
@@ -123,25 +123,6 @@ void run_sliced_op(
             }
         }
         std::reverse(output_slice_coords.begin(), output_slice_coords.end());
-        // log_trace(
-        //     tt::LogOp,
-        //     "Op {} DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
-        //     op_slice_attr->name(),
-        //     slice_index,
-        //     output_slice_height_start,
-        //     output_slice_width_start,
-        //     output_slice_height_end,
-        //     output_slice_width_end);
-        // log_trace(
-        //     tt::LogOp,
-        //     "Op {} DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
-        //     op_slice_attr->name(),
-        //     slice_index,
-        //     input_slice_height_start,
-        //     input_slice_width_start,
-        //     input_slice_height_end,
-        //     input_slice_width_end);
-
         const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
 
         const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
