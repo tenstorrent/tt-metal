@@ -404,7 +404,9 @@ class Attention(LightweightModule):
             x,
             self.wqkv,
             # bias=self.wqkv_bias,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_SHARDED_QKV_OUT_RING_MEMCFG"],
             program_config=self.model_config["XQKV_DECODE_PROGCFG"]
             if self.prefetcher is None
             else self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"],

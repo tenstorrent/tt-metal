@@ -1064,6 +1064,7 @@ class ModelArgs:
                 self.dim // self.cluster_shape[0],
                 self.qkv_size // self.cluster_shape[1],  # Use padded N
                 self.prefetcher.ring_size,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
                 untilize_out=True,
             )
 
@@ -1089,7 +1090,7 @@ class ModelArgs:
                 self.dim,
                 self.hidden_dim // self.cluster_shape[1],  # Use padded N
                 self.prefetcher.ring_size,
-                num_global_cb_receivers=4,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
             )
             # FF2 program configs
             self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
@@ -1098,7 +1099,7 @@ class ModelArgs:
                 self.hidden_dim // self.cluster_shape[1],
                 self.dim,  # Use padded N
                 self.prefetcher.ring_size,
-                num_global_cb_receivers=4,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
             )
 
             # Prefetcher Memory config for Input, FF1 and FF3 output
@@ -2350,8 +2351,8 @@ class ModelArgs:
         K,
         N,
         num_cores,
+        num_global_cb_receivers,
         prefetch=True,
-        num_global_cb_receivers=2,
         untilize_out=False,
     ):
         breakpoint()
