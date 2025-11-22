@@ -53,7 +53,6 @@ struct StridedAllGatherAsync {
         const uint32_t num_links,
         const std::optional<MemoryConfig>& memory_config,
         const ttnn::ccl::Topology topology,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         const std::optional<uint32_t>& cluster_axis,
         const std::optional<uint32_t>& tiles_per_chunk,
         const std::optional<uint32_t>& num_workers_per_link,
