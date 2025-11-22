@@ -25,6 +25,7 @@ from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
     PROFILER_ARTIFACTS_DIR,
+    PROFILER_PERF_COUNTER_LOG,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
@@ -466,7 +467,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         df = df.fillna(value={"trace id counter": 0})
         df['trace id counter'] = df['trace id counter'].astype(int)
         print(df)
-        print(df.columns)
         
         # SFPU Counter aggregations
         agg_sfpu_util_min = df[df["counter type"] == "SFPU_COUNTER"].groupby(["runtime id", "trace id counter"], group_keys=True)["Util"].min()
@@ -487,7 +487,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         total_math_count = df[df["counter type"] == "MATH_COUNTER"].groupby(["runtime id", "trace id counter"], group_keys=True)["value"].sum()
 
         print(agg_sfpu_util_median)
-        print(agg_sfpu_util_median.keys())
 
         op_lists = [ops, traceOps]
         for op_list in op_lists:
@@ -740,6 +739,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
+    if os.path.isfile(f"{logFolder / PROFILER_PERF_COUNTER_LOG}"):
+        os.system(f"cp {logFolder / PROFILER_PERF_COUNTER_LOG} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")

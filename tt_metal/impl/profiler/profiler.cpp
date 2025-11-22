@@ -1987,7 +1987,7 @@ void dumpPerfCounters(const std::map<CoreCoord, std::map<tracy::RiscType, std::s
     for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
-                if (isMarkerATimestampedDatapoint(marker) && marker.marker_id == 12345) {
+                if (isMarkerATimestampedDatapoint(marker) && marker.marker_id == 9090) {
                     const std::string trace_id_str =
                         marker.trace_id == tracy::TTDeviceMarker::INVALID_NUM ? "" : fmt::format("{}", marker.trace_id);
                     const std::string trace_id_counter_str = marker.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM

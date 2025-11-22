@@ -2,7 +2,13 @@
 """
 Cleanup script for performance counter reports.
 
-This script:
+This script provides both a command-line interface and reusable functions for cleaning
+performance counter data:
+
+Core function:
+- process_cleanup_data(df): Takes a DataFrame and returns cleaned data with statistics
+
+Command-line functionality:
 1. Removes all rows with op type "signpost"
 2. Finds the highest METAL TRACE REPLAY SESSION ID
 3. Keeps only rows with the highest session ID
@@ -14,6 +20,83 @@ import argparse
 import sys
 import os
 from pathlib import Path
+
+
+def process_cleanup_data(df):
+    """
+    Clean up the performance report dataframe.
+    
+    Args:
+        df (pd.DataFrame): Input dataframe to clean
+    
+    Returns:
+        tuple: (cleaned_dataframe, stats_dict) or (None, None) on error
+    """
+    try:
+        original_rows = len(df)
+        
+        # Check if required columns exist
+        if 'OP TYPE' not in df.columns:
+            raise ValueError("Column 'OP TYPE' not found in dataframe")
+        
+        if 'METAL TRACE REPLAY SESSION ID' not in df.columns:
+            raise ValueError("Column 'METAL TRACE REPLAY SESSION ID' not found in dataframe")
+        
+        # Step 1: Remove rows with op type "signpost"
+        signpost_count = len(df[df['OP TYPE'] == 'signpost'])
+        df = df[df['OP TYPE'] != 'signpost']
+        
+        # Step 2: Remove rows that don't have a value for METAL TRACE REPLAY SESSION ID
+        # This includes NaN, empty strings, and None values
+        session_id_col = 'METAL TRACE REPLAY SESSION ID'
+        before_filter = len(df)
+        
+        # Filter out rows with empty/null session IDs
+        df = df[df[session_id_col].notna()]  # Remove NaN values
+        df = df[df[session_id_col] != '']    # Remove empty strings
+        df = df[df[session_id_col] != ' ']   # Remove whitespace-only strings
+        
+        empty_session_count = before_filter - len(df)
+        
+        if len(df) == 0:
+            return None, None
+        
+        # Step 3: Find the highest METAL TRACE REPLAY SESSION ID and keep only those rows
+        try:
+            # Convert to numeric, handling any string values that might exist
+            df[session_id_col] = pd.to_numeric(df[session_id_col], errors='coerce')
+            
+            # Remove any rows where conversion failed (became NaN)
+            df = df[df[session_id_col].notna()]
+            
+            if len(df) == 0:
+                return None, None
+            
+            # Find the maximum session ID
+            max_session_id = df[session_id_col].max()
+            
+            # Keep only rows with the highest session ID
+            df_filtered = df[df[session_id_col] == max_session_id]
+            
+            other_session_count = len(df) - len(df_filtered)
+            
+        except Exception as e:
+            raise Exception(f"Error processing session IDs: {e}")
+        
+        # Prepare statistics
+        stats = {
+            'original_rows': original_rows,
+            'signpost_count': signpost_count,
+            'empty_session_count': empty_session_count,
+            'other_session_count': other_session_count,
+            'final_rows': len(df_filtered),
+            'max_session_id': max_session_id
+        }
+        
+        return df_filtered, stats
+        
+    except Exception as e:
+        raise Exception(f"Error processing dataframe: {e}")
 
 
 def cleanup_report(input_file, output_file=None):
@@ -34,63 +117,21 @@ def cleanup_report(input_file, output_file=None):
         
         print(f"Original number of rows: {len(df)}")
         
-        # Check if required columns exist
-        if 'OP TYPE' not in df.columns:
-            raise ValueError("Column 'OP TYPE' not found in CSV file")
+        # Process the data using the core function
+        df_filtered, stats = process_cleanup_data(df)
         
-        if 'METAL TRACE REPLAY SESSION ID' not in df.columns:
-            raise ValueError("Column 'METAL TRACE REPLAY SESSION ID' not found in CSV file")
-        
-        # Step 1: Remove rows with op type "signpost"
-        signpost_count = len(df[df['OP TYPE'] == 'signpost'])
-        print(f"Removing {signpost_count} rows with OP TYPE = 'signpost'")
-        df = df[df['OP TYPE'] != 'signpost']
-        print(f"Rows after removing signpost: {len(df)}")
-        
-        # Step 2: Remove rows that don't have a value for METAL TRACE REPLAY SESSION ID
-        # This includes NaN, empty strings, and None values
-        session_id_col = 'METAL TRACE REPLAY SESSION ID'
-        before_filter = len(df)
-        
-        # Filter out rows with empty/null session IDs
-        df = df[df[session_id_col].notna()]  # Remove NaN values
-        df = df[df[session_id_col] != '']    # Remove empty strings
-        df = df[df[session_id_col] != ' ']   # Remove whitespace-only strings
-        
-        empty_session_count = before_filter - len(df)
-        print(f"Removing {empty_session_count} rows with empty/null METAL TRACE REPLAY SESSION ID")
-        print(f"Rows after removing empty session IDs: {len(df)}")
-        
-        if len(df) == 0:
+        if df_filtered is None:
             print("Warning: No rows remaining after filtering!")
             return None
         
-        # Step 3: Find the highest METAL TRACE REPLAY SESSION ID and keep only those rows
-        try:
-            # Convert to numeric, handling any string values that might exist
-            df[session_id_col] = pd.to_numeric(df[session_id_col], errors='coerce')
-            
-            # Remove any rows where conversion failed (became NaN)
-            df = df[df[session_id_col].notna()]
-            
-            if len(df) == 0:
-                print("Warning: No valid numeric session IDs found!")
-                return None
-            
-            # Find the maximum session ID
-            max_session_id = df[session_id_col].max()
-            print(f"Highest METAL TRACE REPLAY SESSION ID found: {max_session_id}")
-            
-            # Keep only rows with the highest session ID
-            df_filtered = df[df[session_id_col] == max_session_id]
-            
-            other_session_count = len(df) - len(df_filtered)
-            print(f"Removing {other_session_count} rows with lower session IDs")
-            print(f"Final number of rows: {len(df_filtered)}")
-            
-        except Exception as e:
-            print(f"Error processing session IDs: {e}")
-            return None
+        # Print progress messages
+        print(f"Removing {stats['signpost_count']} rows with OP TYPE = 'signpost'")
+        print(f"Rows after removing signpost: {stats['original_rows'] - stats['signpost_count']}")
+        print(f"Removing {stats['empty_session_count']} rows with empty/null METAL TRACE REPLAY SESSION ID")
+        print(f"Rows after removing empty session IDs: {stats['original_rows'] - stats['signpost_count'] - stats['empty_session_count']}")
+        print(f"Highest METAL TRACE REPLAY SESSION ID found: {stats['max_session_id']}")
+        print(f"Removing {stats['other_session_count']} rows with lower session IDs")
+        print(f"Final number of rows: {stats['final_rows']}")
         
         # Generate output filename if not provided
         if output_file is None:
@@ -103,12 +144,12 @@ def cleanup_report(input_file, output_file=None):
         
         print("Cleanup completed successfully!")
         print(f"Summary:")
-        print(f"  - Original rows: {pd.read_csv(input_file).shape[0]}")
-        print(f"  - Signpost rows removed: {signpost_count}")
-        print(f"  - Empty session ID rows removed: {empty_session_count}")
-        print(f"  - Lower session ID rows removed: {other_session_count}")
-        print(f"  - Final rows: {len(df_filtered)}")
-        print(f"  - Highest session ID kept: {max_session_id}")
+        print(f"  - Original rows: {stats['original_rows']}")
+        print(f"  - Signpost rows removed: {stats['signpost_count']}")
+        print(f"  - Empty session ID rows removed: {stats['empty_session_count']}")
+        print(f"  - Lower session ID rows removed: {stats['other_session_count']}")
+        print(f"  - Final rows: {stats['final_rows']}")
+        print(f"  - Highest session ID kept: {stats['max_session_id']}")
         
         return str(output_file)
         
