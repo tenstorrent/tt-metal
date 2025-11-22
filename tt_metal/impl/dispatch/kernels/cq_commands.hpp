@@ -14,6 +14,14 @@
 
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;  // for L1 alignment
 
+// Maximum chunk size for packed large writes, limited by scratch_db_size/2 (64KB)
+// When this value is cast to uint16_t in CQDispatchWritePackedLargeSubCmd.length,
+// it overflows to 0, which is used as a special encoding since 0-byte writes are invalid.
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_CHUNK_SIZE = 65536;
+
+// Value stored in CQDispatchWritePackedLargeSubCmd.length when actual size is 65536
+constexpr uint16_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_OVERFLOW_ENCODING = 0;
+
 // Prefetcher CMD ID enums
 enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_ILLEGAL = 0,       // common error value
@@ -277,6 +285,8 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint32_t noc_xy_addr;
     uint32_t addr;
     uint16_t length;  // multiples of L1 cache line alignment
+                      // Special case: 0 encodes 65536 bytes (overflow from uint16_t cast)
+                      // Max transfer is limited by scratch_db_size/2 which is exactly 65536
     uint8_t num_mcast_dests;
     uint8_t flags;
 } __attribute__((packed));
