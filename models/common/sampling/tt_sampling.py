@@ -381,12 +381,42 @@ def format_sampling_params(sampling_params, max_batch_size):
         sampling_params = replace(sampling_params, **update_dict)
 
     # Must pad sampling_params to max_batch_size
-    default_params = {"temp": 0.0, "p": 1.0, "k": 1}
+    default_params = {
+        "temp": 0.0,
+        "p": 1.0,
+        "k": 1,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+    }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
     ):
+        current_len = len(tensor)
+        if current_len < target_len:
+            tensor.extend([default_params[name]] * (target_len - current_len))
+
+    penalties = {}
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+        value = getattr(sampling_params, name, None)
+        if value is None:
+            penalties[name] = [default_params[name]]
+        elif isinstance(value, List):
+            penalties[name] = list(value)
+        else:
+            penalties[name] = [value]
+
+    sampling_params = replace(
+        sampling_params,
+        presence_penalty=penalties["presence_penalty"],
+        frequency_penalty=penalties["frequency_penalty"],
+        repetition_penalty=penalties["repetition_penalty"],
+    )
+
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+        tensor = getattr(sampling_params, name)
         current_len = len(tensor)
         if current_len < target_len:
             tensor.extend([default_params[name]] * (target_len - current_len))
@@ -410,4 +440,6 @@ def format_sampling_params(sampling_params, max_batch_size):
             sampling_params.top_k[i] = 1
         else:
             sampling_params.temperature[i] = 1 / temp
+        if sampling_params.repetition_penalty[i] == 0:
+            sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
     return sampling_params
