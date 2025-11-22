@@ -71,7 +71,6 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto mesh_device = tensor_args.input_tensor.device();
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -95,45 +94,53 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
-    // Get core and subdevice related information
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto bbox = subdevice_core_range_set.bounding_box();
-    auto first_coord = bbox.start_coord;
-
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> no_fuse = std::nullopt;
 
-    auto builder = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                       ? build_ring_reduce_scatter_minimal_async_program_artifacts
-                       : build_line_reduce_scatter_minimal_async_program_artifacts;
-    auto reduce_scatter_program_artifacts = builder(
-        program,
-        tensor_args.input_tensor,
-        tensor_return_value.at(0),
-        mesh_coordinate,
-        forward_coordinate,
-        backward_coordinate,
-        tensor_return_value.at(1),
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        target_ring_size,
-        device_index,
-        operation_attributes.topology,
-        multidevice_semaphores,
-        barrier_semaphore,
-        false,  // since we don't have a persistent intermediate buffer option, this must be false
-        operation_attributes.subdevice_id,
-        no_fuse,       // never fusing with this
-        std::nullopt,  // use chunks per sync decision making tree
-        std::nullopt,  // use num workers per link decision making tree
-        std::nullopt,  // use num buffers per channel decision making tree
-        first_coord);  // first core in the subdevice is our offset as we don't use this version for fusions
+    // Convert operation_attributes to reduce_scatter_minimal_async format
+    // Note: Can't directly reuse due to different struct types with different fields
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::operation_attributes_t minimal_async_attrs{
+        .dim = operation_attributes.dim,
+        .num_links = operation_attributes.num_links,
+        .ring_size = target_ring_size,
+        .output_mem_config = operation_attributes.memory_config,
+        .optional_intermediate_mem_config = std::nullopt,
+        .topology = operation_attributes.topology,
+        .semaphore = multidevice_semaphores,
+        .barrier_semaphore = barrier_semaphore,
+        .using_persistent_buffers = false,  // since we don't have a persistent intermediate buffer option
+        .sub_device_id = operation_attributes.subdevice_id,
+        .cluster_axis = operation_attributes.cluster_axis,
+        .chunks_per_sync = std::nullopt,         // use decision making tree
+        .num_workers_per_link = std::nullopt,    // use decision making tree
+        .num_buffers_per_channel = std::nullopt  // use decision making tree
+    };
 
-    return {
-        std::move(program),
-        {.multidevice_semaphores = multidevice_semaphores,
-         .barrier_semaphore = barrier_semaphore,
-         .program_artifacts = reduce_scatter_program_artifacts}};
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::tensor_args_t minimal_async_tensor_args{
+        .input_tensor = tensor_args.input_tensor, .persistent_output_buffers = std::nullopt};
+
+    if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+        // Ring topology - use ring factory
+        using RingFactory = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::ring::
+            RingReduceScatterMinimalAsyncProgramFactory;
+        auto cached_program = RingFactory::create_at(
+            minimal_async_attrs, mesh_coordinate, minimal_async_tensor_args, tensor_return_value);
+        return {
+            std::move(cached_program.program),
+            {.multidevice_semaphores = multidevice_semaphores,
+             .barrier_semaphore = barrier_semaphore,
+             .program_artifacts = cached_program.shared_variables}};
+    } else {
+        // Line topology - use line factory
+        using LineFactory = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::line::
+            LineReduceScatterMinimalAsyncProgramFactory;
+        auto cached_program = LineFactory::create_at(
+            minimal_async_attrs, mesh_coordinate, minimal_async_tensor_args, tensor_return_value);
+        return {
+            std::move(cached_program.program),
+            {.multidevice_semaphores = multidevice_semaphores,
+             .barrier_semaphore = barrier_semaphore,
+             .program_artifacts = cached_program.shared_variables}};
+    }
 }
 
 void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(
@@ -141,9 +148,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto update_runtime_arguments = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                                        ? ring_reduce_scatter_minimal_async_helper_override_runtime_arguments
-                                        : line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+    using namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = range.start_coord();
         TT_FATAL(
@@ -152,21 +157,26 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             coord,
             range.end_coord());
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        update_runtime_arguments(
-            program,
-            shared_variables.program_artifacts.reader_kernel_id,
-            shared_variables.program_artifacts.writer_kernel_id,
-            shared_variables.program_artifacts.all_cores,
-            operation_attributes.num_links,
-            shared_variables.program_artifacts.num_directions_per_link,
-            shared_variables.program_artifacts.num_workers_per_direction,
-            shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
-            shared_variables.program_artifacts.num_cores_per_link,
-            shared_variables.barrier_semaphore,
-            shared_variables.multidevice_semaphores,
-            tensor_args.input_tensor,
-            tensor_return_value.at(0),
-            tensor_return_value.at(1));
+        if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+            using namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::ring;
+            override_runtime_args(
+                program,
+                shared_variables.program_artifacts,
+                shared_variables.barrier_semaphore,
+                shared_variables.multidevice_semaphores,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                tensor_return_value.at(1));
+        } else {
+            line::override_runtime_args(
+                program,
+                shared_variables.program_artifacts,
+                shared_variables.barrier_semaphore,
+                shared_variables.multidevice_semaphores,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                tensor_return_value.at(1));
+        }
     }
 }
 

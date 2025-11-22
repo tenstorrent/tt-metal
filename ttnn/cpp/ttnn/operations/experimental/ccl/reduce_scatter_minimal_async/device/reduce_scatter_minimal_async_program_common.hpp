@@ -15,6 +15,9 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 
@@ -28,6 +31,20 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
     uint32_t num_links;
 };
+
+namespace operations::experimental::ccl::reduce_scatter_minimal_async {
+
+struct mesh_runtime_params_t {
+    const MeshCoordinate sender_device_coord;
+    const std::optional<MeshCoordinate> forward_coord;
+    const std::optional<MeshCoordinate> backward_coord;
+    uint32_t ring_index;
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler;
+    std::optional<uint32_t> num_workers_per_direction_opt;
+    CoreCoord core_grid_offset;
+};
+
+}  // namespace operations::experimental::ccl::reduce_scatter_minimal_async
 namespace operations::experimental::ccl::detail {
 
 uint32_t reduce_scatter_minimal_async_core_count_per_link(
