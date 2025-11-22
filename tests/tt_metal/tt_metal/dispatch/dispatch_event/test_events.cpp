@@ -26,6 +26,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
 
@@ -278,6 +280,73 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
     log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+}
+
+// Simple multihost test with EnqueueWriteBuffer on sender and receiver hosts
+TEST_F(UnitMeshCQEventFixture, TestEventsMultihostEnqueueWriteBuffer) {
+    // Get distributed context
+    const auto& distributed_context = distributed::multihost::DistributedContext::get_current_world();
+
+    // Skip if not in a multihost environment
+    if (!distributed_context || *distributed_context->size() < 2) {
+        GTEST_SKIP() << "This test requires a multihost environment with at least 2 hosts";
+    }
+
+    auto rank = *distributed_context->rank();
+    auto size = *distributed_context->size();
+
+    log_info(tt::LogTest, "Running multihost test on rank {} of {}", rank, size);
+
+    auto mesh_device = this->devices_[0];
+    auto& cq = mesh_device->mesh_command_queue();
+
+    const uint32_t page_size = 2048;
+    const uint32_t buffer_size = page_size * 10;  // 10 pages
+    std::vector<uint32_t> src_data(buffer_size / sizeof(uint32_t));
+
+    // Initialize data differently for sender and receiver
+    for (size_t i = 0; i < src_data.size(); i++) {
+        src_data[i] = (rank == 0) ? i : (i + 1000);  // Sender uses i, receiver uses i + 1000
+    }
+
+    auto start = std::chrono::system_clock::now();
+
+    // Create a mesh buffer
+    distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+    auto mesh_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+
+    if (rank == 0) {
+        // Sender host
+        log_info(tt::LogTest, "Sender (rank 0) enqueueing write buffer");
+        distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data, false);
+
+        // Record an event after write
+        auto event = cq.enqueue_record_event_to_host();
+        distributed::EventSynchronize(event);
+
+        log_info(tt::LogTest, "Sender (rank 0) write completed");
+    } else if (rank == 1) {
+        // Receiver host
+        log_info(tt::LogTest, "Receiver (rank 1) enqueueing write buffer");
+        distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data, false);
+
+        // Record an event after write
+        auto event = cq.enqueue_record_event_to_host();
+        distributed::EventSynchronize(event);
+
+        log_info(tt::LogTest, "Receiver (rank 1) write completed");
+    }
+
+    // Finish all operations on the command queue
+    distributed::Finish(cq);
+
+    // Synchronize across all hosts
+    distributed_context->barrier();
+
+    std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
+    log_info(
+        tt::LogTest, "Multihost test finished on rank {} in {:.2f} us", rank, elapsed_seconds.count() * 1000 * 1000);
 }
 
 }  // namespace tt::tt_metal

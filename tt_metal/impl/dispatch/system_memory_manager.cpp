@@ -28,6 +28,7 @@
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/debug/inspector/inspector.hpp>
+#include "llrt/tlb_config.hpp"
 
 namespace tt::tt_metal {
 
