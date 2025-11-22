@@ -23,6 +23,7 @@ from tracy.common import (
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
     PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEFAULT_OP_SUPPORT_COUNT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -64,11 +65,21 @@ def set_env_vars(**kwargs):
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
         "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
         "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
+        "set_program_support_count": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
-        if argVal:
-            envVarsStr += envVarsDict[arg]
+        if arg == "set_program_support_count":
+            # Only set the program support count here if it's not equal to the default program support count and the environment variable isn't already set
+            if (
+                argVal
+                and argVal != PROFILER_DEFAULT_OP_SUPPORT_COUNT
+                and os.getenv("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") is None
+            ):
+                envVarsStr += f"{envVarsDict[arg]}{argVal} "
+        else:
+            if argVal:
+                envVarsStr += f"{envVarsDict[arg]}"
     return envVarsStr
 
 
@@ -109,6 +120,7 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
+    setOpSupportCount=PROFILER_DEFAULT_OP_SUPPORT_COUNT,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
@@ -120,6 +132,7 @@ def run_device_profiler_test(
         slowDispatch=slowDispatch,
         doSync=doSync,
         doDispatchCores=doDispatchCores,
+        set_program_support_count=setOpSupportCount,
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
@@ -143,7 +156,6 @@ def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
         "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
@@ -151,7 +163,7 @@ def test_multi_op():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True, setOpSupportCount=1200)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -264,7 +276,6 @@ def test_full_buffer():
     RISC_COUNT = 5
     ZONE_COUNT = 125
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [
             72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
@@ -603,7 +614,6 @@ def test_timestamped_events():
             BH_COMBO_COUNTS.append((T, E))
 
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
     }
