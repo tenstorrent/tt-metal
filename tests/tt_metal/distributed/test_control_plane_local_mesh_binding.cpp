@@ -16,6 +16,7 @@
 #include <fmt/format.h>
 #include "utils.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace {
