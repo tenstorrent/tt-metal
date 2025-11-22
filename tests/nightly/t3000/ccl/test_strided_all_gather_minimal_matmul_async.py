@@ -279,16 +279,18 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
+            concat_dims = [other_dim, 0]
             tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
             tt_ag_out = ttnn.to_torch(
                 tt_ag_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
                 ),
             )
 
-            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
+            for d in range(num_devices):
+                tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
+                eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
 
             logger.info(f"{output}, iteration {i}")
             assert eq, f"{i} AG FAILED ag: {output}"
@@ -300,12 +302,15 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_mm_out = ttnn.to_torch(
                 tt_mm_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims if shard_weights else concat_dims
                 ),
             )
             if not shard_weights:
-                tt_mm_out = tt_mm_out[:, :, :, 0 : torch_mm_out_tensor.shape[3]]
-            eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
+                for d in range(num_devices):
+                    tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
+                    eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
+            else:
+                eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
 
             logger.info(f"{output}, iteration {i}")
             assert eq, f"{i} MM FAILED ag: {output}"
