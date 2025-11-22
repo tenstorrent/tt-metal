@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -66,6 +67,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
 
+#ifdef FUSE_AG
+    // Receiver for ccl fusing
+    MinimalMatmulOpReceiver fused_op_receiver;
+    if constexpr (is_injector_core) {
+        fused_op_receiver = MinimalMatmulOpReceiver(false, argidx);
+    }
+#endif
+
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
     *(in1_valid_semaphore_addr_ptr) = VALID;
@@ -96,6 +105,12 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+#ifdef FUSE_AG
+        if constexpr (is_injector_core) {
+            fused_op_receiver.reset();
+        }
+#endif
+
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
@@ -129,6 +144,11 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
+#ifdef FUSE_AG
+                    if (is_injector_core && n_block_iter == 0) {
+                        k_block = fused_op_receiver.compute_actual_k_block_iter();
+                    }
+#endif
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
@@ -206,9 +226,11 @@ void kernel_main() {
                 }
             }
         }
+#ifndef FUSE_AG
         n_forward = !n_forward;
         // We get reuse on in1 when striding M block
         reuse_block = true;
+#endif
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

@@ -1,0 +1,316 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "dataflow_api.h"
+#include <tt-metalium/buffer_types.hpp>
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include <cstdint>
+#include <utility>
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+
+using namespace tt::tt_fabric::linear::experimental;
+
+FORCE_INLINE uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+FORCE_INLINE uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
+
+// Return the global tile index of the tile_iter tile that this worker is responsible for,
+// either in the input buffer or output buffer dependening on if read_from_output is set.
+// The returned tile index will be in the unpadded space.
+// chunk size is k_block_tiles * mm_core_grid.y
+// subchunk height is k_block height
+FORCE_INLINE int32_t get_next_chunk_tile(
+    uint32_t tile_iter,
+    uint32_t input_chunk_start_tile_index,
+    uint32_t chunk_width,      // This is the k_block width, unless the block is not full, then it's the partial width.
+    uint32_t subchunk_height,  // This is the full k_block height.
+    uint32_t subchunk_height_stride,
+    uint32_t worker_tile_offset,
+    uint32_t num_workers,
+    uint32_t input_tensor_Wt,   // this should be the unpadded width
+    uint32_t input_tensor_Ht,   // this should be the unpadded height
+    uint32_t output_tensor_Wt,  // this should be the unpadded width
+    uint32_t device_index,
+    bool read_from_output) {
+    uint32_t chunk_linear_index = worker_tile_offset + tile_iter * num_workers;
+    uint32_t chunk_row = chunk_linear_index / chunk_width;
+    uint32_t subchunk_index = chunk_row / subchunk_height;
+    uint32_t subchunk_row = chunk_row % subchunk_height;
+    chunk_row = subchunk_height_stride * subchunk_index + subchunk_row;
+    uint32_t chunk_col = chunk_linear_index % chunk_width;
+    uint32_t input_tile_index = input_chunk_start_tile_index + chunk_row * input_tensor_Wt + chunk_col;
+    uint32_t input_row = input_tile_index / input_tensor_Wt;
+    if (input_row >= input_tensor_Ht) {
+        return -1;
+    }
+    if (read_from_output) {
+        uint32_t input_col = input_tile_index % input_tensor_Wt;
+        return input_row * output_tensor_Wt + device_index * input_tensor_Wt +
+               input_col;  // TODO should pass device_index*input_tensor_Wt to prevent recalculating them
+    } else {
+        return input_tile_index;
+    }
+}
+
+FORCE_INLINE uint32_t
+get_sender_id(uint32_t direction, uint32_t my_chip_id, uint32_t slices_received, uint32_t ring_size) {
+    int32_t sender_chip_id;
+    if (direction == 1) {
+        sender_chip_id = my_chip_id + slices_received + 1;
+        return (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
+    } else {
+        sender_chip_id = my_chip_id - (slices_received + 1);
+        return (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
+    }
+}
+
+FORCE_INLINE uint32_t next_mm_aligned_chunk_width(
+    uint32_t input_chunk_start_tile, uint32_t chip_id, uint32_t input_tensor_Wt, uint32_t mm_block_w) {
+    // Figure out the next largest multiple of mm_block_w in the global space
+    // First, get the output x index of chunk_start_tile (real_chunk_start)
+    // Then, find the next largest multiple of mm_block_w  (real_chunk_end)
+    // The difference (real_chunk_end - real_chunk_start) + 1 is the actual chunk width
+    uint32_t input_col = input_chunk_start_tile % input_tensor_Wt;
+    uint32_t output_col = input_col + chip_id * input_tensor_Wt;
+    uint32_t next_aligned_output_col = round_up(output_col + 1, mm_block_w);
+    uint32_t next_aligned_input_col = next_aligned_output_col - (chip_id * input_tensor_Wt);
+    uint32_t clipped_next_aligned_input_col = std::min(next_aligned_input_col, input_tensor_Wt);
+    uint32_t actual_chunk_w = clipped_next_aligned_input_col - input_col;
+    return actual_chunk_w;
+}
+
+FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
+    uint32_t input_chunk_start_tile, uint32_t M_tiles_per_core, uint32_t input_tensor_Wt, uint32_t mm_block_h) {
+    uint32_t input_row = input_chunk_start_tile / input_tensor_Wt;
+    if ((input_row + mm_block_h) > M_tiles_per_core) {
+        return M_tiles_per_core - input_row;
+    } else {
+        return mm_block_h;
+    }
+}
+
+template <typename AddrGenType>
+FORCE_INLINE uint32_t read_chunk(
+    uint32_t& chunk_start_tile,
+    uint32_t worker_tile_offset,
+    uint32_t cb_output_id,
+    uint32_t tiles_in_chunk,
+    uint32_t chunk_width,
+    uint32_t subchunk_height,
+    uint32_t subchunk_height_stride,
+    uint32_t max_tiles_per_packet,
+    uint32_t ag_worker_core_id,
+    uint32_t ag_worker_cores,
+    AddrGenType input_tensor_addrgen,
+    uint32_t input_tensor_page_size,
+    AddrGenType output_tensor_addrgen,
+    uint32_t input_tensor_Wt,
+    uint32_t input_tensor_Ht,
+    uint32_t output_tensor_Wt,
+    uint32_t actual_sender_chip_id,
+    bool read_output) {
+    uint32_t worker_tiles_in_curr_chunk =
+        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
+    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
+    uint32_t chunk_tile_iter = 0;
+    for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
+        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
+        uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
+
+        cb_reserve_back(cb_output_id, max_tiles_per_packet);
+        size_t l1_write_addr = get_write_ptr(cb_output_id);
+        for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
+            int32_t tile_id = get_next_chunk_tile(
+                chunk_tile_iter,
+                chunk_start_tile,
+                chunk_width,
+                subchunk_height,
+                subchunk_height_stride,
+                worker_tile_offset,
+                ag_worker_cores,
+                input_tensor_Wt,
+                input_tensor_Ht,
+                output_tensor_Wt,
+                actual_sender_chip_id,
+                read_output);
+
+            if (tile_id >= 0) {
+                uint64_t noc_read_addr =
+                    get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+
+                l1_write_addr += input_tensor_page_size;
+            }
+            chunk_tile_iter++;
+        }
+
+        noc_async_read_barrier();
+        cb_push_back(cb_output_id, max_tiles_per_packet);
+    }
+
+    uint32_t old_chunk_row = chunk_start_tile / input_tensor_Wt;
+    uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
+    uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
+    if (new_chunk_row != old_chunk_row) {
+        chunk_start_tile = (old_chunk_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
+    }
+    return chunk_tile_iter;
+}
+
+template <typename AddrGenType, uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+FORCE_INLINE uint32_t write_chunk(
+    uint32_t& chunk_start_tile,
+    uint32_t worker_tile_offset,
+    uint32_t cb_output_id,
+    uint32_t tiles_in_chunk,
+    uint32_t chunk_width,
+    uint32_t subchunk_height,
+    uint32_t subchunk_height_stride,
+    uint32_t max_tiles_per_packet,
+    uint32_t ag_worker_core_id,
+    uint32_t ag_worker_cores,
+    AddrGenType output_addrgen,
+    uint32_t output_page_size,
+    uint32_t input_tensor_Wt,
+    uint32_t input_tensor_Ht,
+    uint32_t output_tensor_Wt,
+    uint32_t actual_sender_chip_id,
+    tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& mux_connection,
+    volatile PACKET_HEADER_TYPE* pkt_scatter_hdr,
+    volatile PACKET_HEADER_TYPE* pkt_unicast_hdr,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc,
+    uint64_t out_ready_sem_noc_addr_in_pkt,
+    const bool direction,
+    const uint32_t num_targets_forward_direction,
+    const uint32_t num_targets_backward_direction,
+    bool write_local) {
+    uint32_t worker_tiles_in_curr_chunk =
+        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
+    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
+    uint32_t chunk_tile_iter = 0;
+    for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
+        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
+        uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
+
+        cb_wait_front(cb_output_id, max_tiles_per_packet);
+        size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+        uint32_t padded_tiles = 0;
+        int32_t tile_one_id = get_next_chunk_tile(
+            chunk_tile_iter,
+            chunk_start_tile,
+            chunk_width,
+            subchunk_height,
+            subchunk_height_stride,
+            worker_tile_offset,
+            ag_worker_cores,
+            input_tensor_Wt,
+            input_tensor_Ht,
+            output_tensor_Wt,
+            actual_sender_chip_id,
+            true);
+        if (tile_one_id < 0) {
+            padded_tiles++;
+        }
+        chunk_tile_iter++;
+        int32_t tile_two_id = tile_one_id;
+        if (tiles_to_write_in_packet == 2) {
+            tile_two_id = get_next_chunk_tile(
+                chunk_tile_iter,
+                chunk_start_tile,
+                chunk_width,
+                subchunk_height,
+                subchunk_height_stride,
+                worker_tile_offset,
+                ag_worker_cores,
+                input_tensor_Wt,
+                input_tensor_Ht,
+                output_tensor_Wt,
+                actual_sender_chip_id,
+                true);
+            if (tile_two_id < 0) {
+                padded_tiles++;
+            }
+            chunk_tile_iter++;
+        }
+
+        tiles_to_write_in_packet = tiles_to_write_in_packet - padded_tiles;
+        // Will have more cases once scatter-write supports more than 2 distinct addresses
+        switch (tiles_to_write_in_packet) {
+            case 2: {
+                auto noc_address0 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+                auto noc_address1 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
+                if ((direction == 1 && num_targets_backward_direction) ||
+                    (direction == 0 && num_targets_forward_direction)) {
+                    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                        &mux_connection,
+                        pkt_scatter_hdr,
+                        l1_read_addr,
+                        NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                }
+                if (direction == 1 && write_local) {
+                    uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
+                    uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
+
+                    noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
+                    noc_async_write(
+                        l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
+                    noc_async_write_barrier();
+                }
+                break;
+            }
+            case 1: {
+                auto noc_address0 =
+                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+                if ((direction == 1 && num_targets_backward_direction) ||
+                    (direction == 0 && num_targets_forward_direction)) {
+                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                        &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
+                }
+                if (direction == 1 && write_local) {
+                    uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_one_id, output_addrgen);
+                    noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
+                    noc_async_write_barrier();
+                }
+                break;
+            }
+            case 0:
+            default: {
+                break;
+            }
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_output_id, max_tiles_per_packet);
+    }
+    // Write the semaphore packet
+    if ((direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection,
+            pkt_hdr_sem_inc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
+    }
+
+    uint32_t old_chunk_row = chunk_start_tile / input_tensor_Wt;
+    uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
+    uint32_t new_chunk_row = new_chunk_start_tile / input_tensor_Wt;
+    if (new_chunk_row != old_chunk_row) {
+        chunk_start_tile = (old_chunk_row + subchunk_height) * input_tensor_Wt;
+    } else {
+        chunk_start_tile = new_chunk_start_tile;
+    }
+    return chunk_tile_iter;
+}
