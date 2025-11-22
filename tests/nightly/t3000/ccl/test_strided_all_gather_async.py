@@ -68,25 +68,12 @@ def run_strided_all_gather_impl(
 
     ##### All gather setup #####
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
+    all_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-    sub_device_stall_group = [worker_sub_device_id]
-
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, num_devices, all_cores, 0) for _ in range(num_iters)]
 
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
@@ -124,7 +111,6 @@ def run_strided_all_gather_impl(
             num_links=num_links,
             memory_config=mem_config_ag,
             topology=all_gather_topology,
-            subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
             tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,
@@ -139,32 +125,32 @@ def run_strided_all_gather_impl(
     if enable_trace:
         # Compile the op
         run_op(0)
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_all_gather_out_tensor = run_op(0)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device)
         logger.info(f"Done capturing trace")
 
         # Execute trace
         signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
         logger.info(f"Done executing trace")
         signpost("stop")
     else:
         for i in range(num_iters):
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device)
             tt_all_gather_out_tensor = run_op(i)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
 
             logger.info(f"Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -187,9 +173,6 @@ def run_strided_all_gather_impl(
             eq, output = comp_pcc(tt_ag_out, expected_tensor, allowed_pcc)
             logger.info(f"{output}, iteration {i}")
             assert eq, f"{i} FAILED ag: {output}"
-
-    mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link

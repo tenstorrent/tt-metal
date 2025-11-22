@@ -47,16 +47,15 @@ uint32_t strided_all_gather_async_core_count_per_link(
 
 uint32_t strided_default_workers(
     const MeshDevice& mesh_device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     ttnn::ccl::Topology topology,
     uint32_t output_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link) {
-    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    auto d_id = mesh_device.get_sub_device_ids().at(0);
+    auto core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, d_id);
+    uint32_t num_cores = core_range_set.num_cores();
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
     // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
@@ -233,7 +232,6 @@ StridedAllGatherAsyncProgramFactory::cached_program_t StridedAllGatherAsyncProgr
             device_index,
             attributes.topology,
             attributes.semaphore,
-            attributes.sub_device_id,
             empty_fused_op_signaler,
             attributes.tiles_per_chunk,
             attributes.num_workers_per_link,
@@ -258,7 +256,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
@@ -282,7 +279,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t output_data_size_bytes = output_tensor.buffer()->size();
     uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::strided_default_workers(
         *mesh_device,
-        sub_device_id,
         topology,
         output_data_size_bytes,
         num_links,
@@ -316,7 +312,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
 
     const auto [all_core_range, all_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        ttnn::ccl::choose_worker_cores(num_links, num_cores_per_link, mesh_device, std::nullopt, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
