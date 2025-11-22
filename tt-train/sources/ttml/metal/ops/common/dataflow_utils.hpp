@@ -73,12 +73,29 @@ void generate_mask_tile(uint32_t cb_id, uint16_t fill_value, uint16_t mask_fill_
 // where each 32-bit word contains two identical bfloat16 values.
 // This improves performance by writing 512 uint32_t values instead of 1024 uint16_t values.
 // The packed data is written into the circular buffer `cb_id`.
+
 void generate_tile_with_packed_bfloat16_value(uint32_t cb_id, uint32_t packed_bf16_value) {
     cb_reserve_back(cb_id, onetile);
-    uint32_t* ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
+    uint32_t l1_addr = get_write_ptr(cb_id);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(l1_addr);
     // 512 = 32x16
-    for (uint32_t i = 0; i < 512U; ++i) {
+
+    constexpr uint32_t scratch_size = 16U;
+    constexpr uint32_t tile_size = 512U;
+
+    for (uint32_t i = 0; i < scratch_size; ++i) {
         *ptr++ = packed_bf16_value;
+    }
+
+    auto scratch_size_bytes = scratch_size * sizeof(uint32_t);
+    auto tile_size_bytes = tile_size * sizeof(uint32_t);
+
+    uint64_t l1_noc_add_start = get_noc_addr(l1_addr);
+    // use noc memcpy for the rest of the tile
+    for (uint32_t i = scratch_size_bytes; i < tile_size_bytes; i <<= 1) {
+        auto l1_noc_addr = l1_noc_add_start + i;
+        noc_async_write_one_packet(l1_addr, l1_noc_addr, i);
+        noc_async_write_barrier();
     }
     cb_push_back(cb_id, onetile);
 }
