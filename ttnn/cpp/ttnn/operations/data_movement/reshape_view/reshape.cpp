@@ -358,11 +358,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode) {
     return invoke(
-        tensor,
-        tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
-        memory_config,
-        pad_value,
-        reshape_map_mode);
+        tensor, detail::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value, reshape_map_mode);
 }
 
 }  // namespace ttnn::operations::data_movement
