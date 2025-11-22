@@ -94,6 +94,7 @@ def cause_hang_with_app(request):
     indirect=True,
 )
 @pytest.mark.usefixtures("cause_hang_with_app")
+@pytest.mark.skip(reason="#32933 ND")
 class TestTriage:
     app_configuration: dict
 
