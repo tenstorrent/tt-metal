@@ -131,9 +131,6 @@ SECTIONS {
    } :text
    IF_KERNEL(__tdata_lma = .;)
 
-#if !IS_TLS
-  /DISCARD/ : { *(.tdata.start .tdata.end .tbss.start .tbss.end) }
-#endif
   .tdata TLS_START
   : IF_KERNEL(AT(__tdata_lma))
   {
