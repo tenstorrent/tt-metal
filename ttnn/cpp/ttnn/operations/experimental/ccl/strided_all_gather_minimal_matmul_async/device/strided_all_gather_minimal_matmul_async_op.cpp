@@ -39,8 +39,7 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather shape
     ttnn::TensorSpec strided_all_gather_output_shape = attributes.ag_op.compute_output_specs(
-        attributes.strided_all_gather_async_struct,
-        ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+        attributes.strided_all_gather_async_struct, strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
 
     // Matmul shape
     ttnn::TensorSpec minimal_matmul_output_specs =
@@ -53,8 +52,7 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather output tensor
     ttnn::Tensor strided_all_gather_output_tensor = attributes.ag_op.create_output_tensors(
-        attributes.strided_all_gather_async_struct,
-        ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+        attributes.strided_all_gather_async_struct, strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
 
     // Matmul output tensor
     ttnn::Tensor minimal_matmul_output_tensor = attributes.matmul_struct.create_output_tensors(
@@ -115,33 +113,31 @@ std::
 
     /* AllGather setup */
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-    ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t
-        strided_all_gather_async_struct =
-            ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t(
-                devices,
-                dim,
-                num_links,
-                num_devices,
-                memory_config_ag.value_or(input_tensor.memory_config()),
-                topology,
-                multi_device_global_semaphore,
-                sub_device_id,
-                cluster_axis,
-                barrier_semaphore,
-                /*tiles_per_chunk=*/std::nullopt,
-                num_workers_per_link,
-                num_buffers_per_channel,
-                config->compute_with_storage_grid_size.y,
-                config->M_block_size,
-                config->K_block_size);
+    strided_all_gather_async::operation_attributes_t strided_all_gather_async_struct =
+        strided_all_gather_async::operation_attributes_t(
+            devices,
+            dim,
+            num_links,
+            num_devices,
+            memory_config_ag.value_or(input_tensor.memory_config()),
+            topology,
+            multi_device_global_semaphore,
+            sub_device_id,
+            cluster_axis,
+            barrier_semaphore,
+            /*tiles_per_chunk=*/std::nullopt,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            config->compute_with_storage_grid_size.y,
+            config->M_block_size,
+            config->K_block_size);
 
     /* Matmul setup */
-    ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp matmul_struct =
-        ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp{
-            .config = config,
-            .fused_activation = std::move(fused_activation),
-            .output_mem_config = memory_config_mm,
-            .compute_kernel_config = compute_kernel_config.value()};
+    minimal_matmul::MinimalMatmulOp matmul_struct = minimal_matmul::MinimalMatmulOp{
+        .config = config,
+        .fused_activation = std::move(fused_activation),
+        .output_mem_config = memory_config_mm,
+        .compute_kernel_config = compute_kernel_config.value()};
     strided_all_gather_async::StridedAllGatherAsync ag_op{};  // just need to call the static function on this
 
     return {
