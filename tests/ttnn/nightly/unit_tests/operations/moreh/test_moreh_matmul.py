@@ -17,7 +17,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 
 
 def create_tt_tensor(tensor: torch.Tensor, dtype, layout, device):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+    device.disable_program_cache()
+    result = ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+    device.enable_program_cache()
+    return result
 
 
 def get_tensors(

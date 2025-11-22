@@ -178,7 +178,9 @@ def test_sort_program_cache(shape, dim, descending, device):
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
 
+    device.disable_program_cache()
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    device.enable_program_cache()
     torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
 
     test_iterations = 3
