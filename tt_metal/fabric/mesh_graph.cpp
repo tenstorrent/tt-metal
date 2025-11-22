@@ -338,6 +338,14 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+
+            // 1D Ring is a special case where it can utilize torus links if present, else fallback
+            // to using folded connections on corner chips
+            if (*fabric_config == FabricConfig::FABRIC_1D_RING && mgd_fabric_type == FabricType::MESH) {
+                // override requested_fabric_type to MESH as fallback
+                requested_fabric_type = FabricType::MESH;
+            }
+
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
@@ -472,6 +480,14 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
         if (fabric_config.has_value()) {
             FabricType requested_fabric_type = get_fabric_type(*fabric_config);
+
+            // 1D Ring is a special case where it can utilize torus links if present, else fallback
+            // to using folded connections on corner chips
+            if (*fabric_config == FabricConfig::FABRIC_1D_RING && mgd_fabric_type == FabricType::MESH) {
+                // override requested_fabric_type to MESH as fallback
+                requested_fabric_type = FabricType::MESH;
+            }
+
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
                 TT_THROW(

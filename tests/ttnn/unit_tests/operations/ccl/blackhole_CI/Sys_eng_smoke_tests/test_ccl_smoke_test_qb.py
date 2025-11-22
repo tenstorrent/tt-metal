@@ -166,7 +166,7 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_other_smoke_test(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -182,8 +182,8 @@ def test_ccl_other_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
