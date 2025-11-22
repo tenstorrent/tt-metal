@@ -22,7 +22,7 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -30,7 +30,8 @@ namespace ttnn {
 
 struct MatmulReduceScatterAsync {
     /* All Gather Params */
-    const ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct;
+    const ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::operation_attributes_t
+        reduce_scatter_minimal_async_struct;
 
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
@@ -75,7 +76,8 @@ struct MatmulReduceScatterAsync {
 namespace ccl {
 namespace matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
-    const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
+    const ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::operation_attributes_t&
+        reduce_scatter_minimal_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
     CoreCoord reduce_scatter_core_grid_offset,
     const std::vector<IDevice*>& devices);
