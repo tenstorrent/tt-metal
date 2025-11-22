@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <random>
 #include <string>
 #include <string_view>
 
@@ -284,6 +285,11 @@ void JitBuildEnv::init(
     // if it's not already in MetalContext::firmware_built_keys_
     this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
+
+    std::random_device rd;
+    std::mt19937_64 eng{rd()};
+    std::uniform_int_distribution<uint64_t> distr;
+    unique_id_ = distr(eng);
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
@@ -439,9 +445,14 @@ void JitBuildState::compile_one(
     }
 
     // Append common args provided by the build state
+    fs::path full_obj_path = fs::path(out_dir) / obj;
+    fs::path temp_obj_path = full_obj_path;
+    temp_obj_path.replace_extension(fmt::format("{}.o", env_.unique_id_));
+    fs::path temp_d_path = temp_obj_path;
+    temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
-    cmd += fmt::format("-c -o {} {} ", obj, src);
+    cmd += fmt::format("-c -o {} {} -MF {} ", temp_obj_path.filename().string(), src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -452,12 +463,16 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    std::string log_file = out_dir + obj + ".log";
+    std::string log_file = temp_obj_path.string() + ".log";
     fs::remove(log_file);
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
-    jit_build::write_dependency_hashes(out_dir, obj);
+    jit_build::write_dependency_hashes(out_dir, temp_obj_path.filename().string());
+    fs::remove(temp_d_path);
+    fs::rename(temp_obj_path, full_obj_path);
+    fs::rename(log_file, full_obj_path.string() + ".log");
+    fs::rename(temp_obj_path.string() + ".dephash", full_obj_path.string() + ".dephash");
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
@@ -517,23 +532,28 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     cmd += lflags;
     cmd += this->link_objs_;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
-    cmd += "-o " + elf_name;
+    std::string temp_elf_name = fmt::format("{}.{}.elf", elf_name, env_.unique_id_);
+    cmd += "-o " + temp_elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
-    std::string log_file = elf_name + ".log";
+    std::string log_file = temp_elf_name + ".log";
     fs::remove(log_file);
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
     }
-    std::string hash_path = elf_name + ".dephash";
+    std::string hash_path = temp_elf_name + ".dephash";
     std::ofstream hash_file(hash_path);
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
         std::filesystem::remove(hash_path);
+    } else {
+        fs::rename(hash_path, elf_name + ".dephash");
     }
+    fs::rename(temp_elf_name, elf_name);
+    fs::rename(log_file, elf_name + ".log");
 }
 
 // Given this elf (A) and a later elf (B):
@@ -545,12 +565,14 @@ void JitBuildState::weaken(const string& out_dir) const {
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
+    std::string temp_out = fmt::format("{}{}_weakened.{}.elf", out_dir, target_name_, env_.unique_id_);
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
-    elf.WriteImage(pathname_out);
+    elf.WriteImage(temp_out);
+    fs::rename(temp_out, pathname_out);
 }
 
 std::string JitBuildState::weakened_firmeware_elf_name() const {

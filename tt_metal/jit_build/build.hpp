@@ -82,6 +82,7 @@ private:
     std::string lflags_;
 
     std::uint64_t build_key_{};
+    uint64_t unique_id_{};
 };
 
 // All the state used for a build in an abstract base class
