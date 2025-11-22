@@ -327,7 +327,6 @@ class CMakeBuild(build_ext):
             "ttnn/deprecated/**/kernels/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/kernel_helper_functions/*",
             "ttnn/operations/ccl/**/*",
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
