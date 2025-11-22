@@ -78,11 +78,10 @@ void kernel_main() {
     } else if (topology == Topology::Ring) {
         if (direction == 1) {
             slices_expected = num_targets_backward_direction;
-            writes_expected = num_targets_backward_direction - 1;
         } else {
             slices_expected = num_targets_forward_direction;
-            writes_expected = num_targets_forward_direction - 1;
         }
+        writes_expected = slices_expected - 1;
     }
 
     uint32_t batch_input_tile_offset = input_worker_tile_offset;
