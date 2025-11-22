@@ -29,7 +29,8 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
+    const Tensor input_tensor;
+    const std::optional<Tensor> persistent_output_buffer;
 };
 
 using tensor_return_value_t = Tensor;

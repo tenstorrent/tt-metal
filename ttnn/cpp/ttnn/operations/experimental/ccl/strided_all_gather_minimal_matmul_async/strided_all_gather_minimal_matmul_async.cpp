@@ -11,6 +11,7 @@ namespace operations::experimental::ccl {
 std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord strided_all_gather_core_grid_offset,
@@ -28,6 +29,7 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
+        persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
         strided_all_gather_core_grid_offset,
