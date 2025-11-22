@@ -421,21 +421,13 @@ def test_llama_TG_perf_device(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
 
-    breakpoint()
-    # Excluding compile run and capture trace entries
-    # len_without_second_sampling_compile_run = (
-    #     len(df) - NUM_OPS_IN_SAMPLING
-    # )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
-
+    num_runs = 2  # Compile and Trace Run
     first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
     adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
     first_run_end = first_run_start + adjusted_len
     last_run_start = len(df) - adjusted_len
     df_model_compilation = df[first_run_start:first_run_end]
     df_model_trace = df[last_run_start:]
-
-    # df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
-    # df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     # Find the head and tail of the repeating region in the model compilation/ trace region of ops
     head_tail_ops = find_repeated_block(df_model_compilation["OP CODE"].tolist(), num_layers)
@@ -456,8 +448,9 @@ def test_llama_TG_perf_device(
     df_mid_layers_compilation = df_layers_compilation[int(len(df_layers_compilation) / num_layers) :]
     df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
     # model tail ops (lm head + sampling)
-    df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
-    df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
+    df_model_tail_compilation = df_model_compilation[op_end_index:]
+    df_model_tail_trace = df_model_trace[op_end_index:]
+
     # Get first layer compilation and trace measurements
     avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
         df_first_layer_compilation, 1

@@ -46,7 +46,7 @@
     },
     "Matmul_0": {
       "op_name": "QKV_MM",
-      "kernel_duration": 7082.489583333333,
+      "kernel_duration": 8161.475694444444,
       "op_to_op": 758.6296296296297,
       "first_to_last_start": 1855.8074074074075,
       "non-overlapped-dispatch-time": 5367.539682539683,
@@ -57,7 +57,7 @@
     },
     "Matmul_1": {
       "op_name": "DO_MM",
-      "kernel_duration": 7701.098148148148,
+      "kernel_duration": 8721.927083333334,
       "op_to_op": 598.9481481481482,
       "first_to_last_start": 1994.0888888888887,
       "non-overlapped-dispatch-time": 5825.539682539683,
@@ -134,7 +134,7 @@
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
       "op_name": "RotaryEmbeddingLlamaFusedQK",
-      "kernel_duration": 2234.1837962962964,
+      "kernel_duration": 2600.9479166666665,
       "op_to_op": 1002.4444444444445,
       "first_to_last_start": 1551.888888888889,
       "non-overlapped-dispatch-time": 3411.5079365079364,
