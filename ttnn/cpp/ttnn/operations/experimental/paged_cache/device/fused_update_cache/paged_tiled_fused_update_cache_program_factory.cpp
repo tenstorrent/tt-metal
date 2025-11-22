@@ -9,6 +9,8 @@
 #include <tt-metalium/work_split.hpp>
 #include "paged_tiled_fused_update_cache_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/mesh_device_operation_utils.hpp"
+#include <unordered_map>
 
 using namespace tt::tt_metal;
 
@@ -518,6 +520,75 @@ void PagedTiledFusedUpdateCacheProgramFactory::override_runtime_arguments(
     }
     if (shared_vars.is_paged_cache and page_table.has_value() and page_table.value().is_sharded()) {
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_page_table_id, *page_table_buffer);
+    }
+}
+
+PagedTiledFusedUpdateCacheMeshWorkloadFactory::cached_mesh_workload_t
+PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    log_debug(tt::LogOp, "PagedTiledFusedUpdateCacheMeshWorkloadFactory::create_mesh_workload called");
+    log_debug(tt::LogOp, "tensor_coords has {} ranges", tensor_coords.ranges().size());
+
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    // Filter coordinates based on mesh_coords if provided
+    const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords_opt = operation_attributes.mesh_coords;
+
+    if (mesh_coords_opt.has_value()) {
+        log_debug(tt::LogOp, "mesh_coords provided with {} coordinates", mesh_coords_opt.value().size());
+    } else {
+        log_debug(tt::LogOp, "mesh_coords not provided, using all tensor_coords");
+    }
+
+    // Create programs for each coordinate in tensor_coords (filtered by mesh_coords if provided)
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
+            if (mesh_coords_opt.has_value()) {
+                const auto& mesh_coords_set = mesh_coords_opt.value();
+                if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
+                    log_debug(
+                        tt::LogOp, "Skipping coordinate ({}, {}) - not in mesh_coords", mesh_coord[0], mesh_coord[1]);
+                    continue;  // Skip this coordinate
+                }
+            }
+
+            // Create a program for this specific coordinate using the base factory
+            log_debug(tt::LogOp, "Creating program for coordinate ({}, {})", mesh_coord[0], mesh_coord[1]);
+            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+            auto cached_program = PagedTiledFusedUpdateCacheProgramFactory::create(
+                operation_attributes, tensor_args, tensor_return_value);
+            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+        }
+    }
+
+    log_debug(tt::LogOp, "Created mesh workload with {} programs", mesh_workload.get_programs().size());
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void PagedTiledFusedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    PagedTiledFusedUpdateCacheProgramFactory program_factory;
+
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+
+        ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
+            program_factory,
+            program,
+            shared_variables,
+            operation_attributes,
+            *(coordinate_range.begin()),
+            tensor_args,
+            tensor_return_value);
     }
 }
 

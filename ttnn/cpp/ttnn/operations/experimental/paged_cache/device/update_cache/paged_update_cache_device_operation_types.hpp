@@ -29,7 +29,7 @@ struct tensor_args_t {
     std::optional<Tensor> page_table;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = ttnn::TensorSpec;
 using tensor_return_value_t = Tensor;
 
 }  // namespace ttnn::operations::experimental::paged_cache::update
