@@ -64,6 +64,7 @@ void do_signaling(uint32_t& rt_args_idx) {
 
 void kernel_main() {
     // Compile time args
+
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
     constexpr const bool in1_is_dram_sharded = get_compile_time_arg_val(1);
     constexpr uint32_t in1_block_height_in_tiles = get_compile_time_arg_val(2);  // Padded block shape
@@ -75,6 +76,15 @@ void kernel_main() {
     constexpr uint32_t in1_block_page_size_last = get_compile_time_arg_val(8);
     constexpr uint32_t in1_block_width_num_pages = get_compile_time_arg_val(9);
     constexpr uint32_t in1_shard_width_in_dram = get_compile_time_arg_val(10);
+
+    DPRINT << "in1_is_dram_interleaved: " << static_cast<int>(in1_is_dram_interleaved) << ENDL();
+    DPRINT << "in1_is_dram_sharded: " << static_cast<int>(in1_is_dram_sharded) << ENDL();
+    DPRINT << "in1_block_height_in_tiles: " << in1_block_height_in_tiles << ENDL();
+    DPRINT << "in1_block_width_in_tiles: " << in1_block_width_in_tiles << ENDL();
+    DPRINT << "in1_tensor_width_in_tiles: " << in1_tensor_width_in_tiles << ENDL();
+    DPRINT << "num_blocks: " << num_blocks << ENDL();
+    DPRINT << "batch: " << batch << ENDL();
+    DPRINT << "in1_block_page_size: " << in1_block_page_size << ENDL();
 
     uint32_t rt_args_idx = 0;
     constexpr bool needs_signaler = get_compile_time_arg_val(15) == 1;
@@ -95,6 +105,10 @@ void kernel_main() {
         dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
         vc = get_arg_val<uint32_t>(rt_args_idx++);
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
+
+        DPRINT << "dram_bank_id: " << dram_bank_id << ENDL();
+        DPRINT << "vc: " << vc << ENDL();
+        DPRINT << "dram_read_offset: " << dram_read_offset << ENDL();
     }
 
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(11);
@@ -120,17 +134,28 @@ void kernel_main() {
         in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
         in1_dram_shard_block_size_bytes = in1_shard_width_offset_bytes * in1_block_height_in_tiles;
         dram_read_offset_bytes = dram_read_offset * in1_block_width_in_tiles * in1_single_tile_size_bytes;
+
+        DPRINT << "in1_shard_width_offset_bytes: " << in1_shard_width_offset_bytes << ENDL();
+        DPRINT << "in1_dram_shard_block_size_bytes: " << in1_dram_shard_block_size_bytes << ENDL();
+        DPRINT << "dram_read_offset_bytes: " << dram_read_offset_bytes << ENDL();
     }
 
+    DPRINT << "Reader in1: Starting batch loop" << ENDL();
+    DPRINT << "Reader in1: batch: " << batch << ENDL();
     for (uint32_t b = 0; b < batch; ++b) {
         cb_reserve_back(sync_cb2, 1);
+
+        DPRINT << "Waiting to push sync_cb2" << ENDL();  // 32
+        DPRINT << "Reader in1: num_blocks: " << num_blocks << ENDL();
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
+        DPRINT << "Reader in1: Received in1 block in reader in1" << ENDL();
 #endif
 
         cb_push_back(sync_cb2, 1);
-
+        DPRINT << "Pushed sync_cb2 in reader in1" << ENDL();
         if constexpr (in1_is_dram_interleaved) {
+            DPRINT << "Reading in1 blocks from DRAM interleaved" << ENDL();
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
 
@@ -147,7 +172,9 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
-                                                     // two cores on the same row share one bank.
+
+            DPRINT << "in1 is sharded in DRAM, num_blocks: " << num_blocks << ENDL();
+            // two cores on the same row share one bank.
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
@@ -155,13 +182,17 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
+                DPRINT << "Reading block from DRAM banks for in1" << ENDL();
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
                         uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
+
+                        DPRINT << "calling noc_async_read_one_packet_set_state" << ENDL();
                         noc_async_read_one_packet_set_state<true>(in1_base_addr, curr_page_size, vc);
+                        DPRINT << "calling noc_async_read_one_packet_with_state" << ENDL();
                         noc_async_read_one_packet_with_state<true, true>(
                             in1_base_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
                         curr_l1_read_addr_in1 += curr_page_size;
@@ -174,6 +205,8 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
         }
+
+        DPRINT << "Done with all blocks" << ENDL();
 
 #ifdef ENABLE_GLOBAL_CB
         cb_wait_front(sync_cb, 1);
@@ -188,6 +221,7 @@ void kernel_main() {
         }
     }
 
+    DPRINT << "Done with all batches" << ENDL();
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();

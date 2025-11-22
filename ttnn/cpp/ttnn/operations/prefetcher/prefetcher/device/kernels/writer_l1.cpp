@@ -36,6 +36,7 @@ void kernel_main() {
     const uint32_t* block_height_in_tiles =
         (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));  // Kt / num_blocks = in_block_h;
 
+    DPRINT << "prefetcher writer num_tensors: " << num_tensors << ENDL();
     uint32_t noc = noc_index;
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
@@ -47,43 +48,56 @@ void kernel_main() {
             uint32_t curr_block_size = curr_block_num_tiles * curr_single_tile_sizes;
             uint32_t curr_block_size_per_receiver = curr_block_size / num_receivers;
 
+            DPRINT << "prefetcher writer current tensor: " << t << ENDL();
+            DPRINT << "prefetcher writer curr_coalesced_page_size: " << curr_coalesced_page_size << ENDL();
+            DPRINT << "prefetcher writer curr_coalesced_num_pages: " << curr_coalesced_num_pages << ENDL();
+            DPRINT << "prefetcher writer curr_block_num_tiles: " << curr_block_num_tiles << ENDL();
+            DPRINT << "prefetcher writer curr_single_tile_sizes: " << curr_single_tile_sizes << ENDL();
+            DPRINT << "prefetcher writer curr_block_height_in_tiles: " << curr_block_height_in_tiles << ENDL();
+            DPRINT << "prefetcher writer curr_block_size: " << curr_block_size << ENDL();
+            DPRINT << "prefetcher writer curr_block_size_per_receiver: " << curr_block_size_per_receiver << ENDL();
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
+            DPRINT << "prefetcher writer called resize_remote_sender_cb_interface" << ENDL();
+            DPRINT << "prefetcher writer num_blocks: " << num_blocks << ENDL();
 
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
+                    DPRINT << "prefetcher writer called cb_wait_front" << ENDL();
                     experimental::remote_cb_reserve_back(remote_cb_id, 1);
-
+                    DPRINT << "prefetcher writer called remote_cb_reserve_back" << ENDL();
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                     experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
                         remote_cb_id,
                         local_cb_addr,
-                        1,  // wrt to the size of the packet (curr_block_size)
-                        curr_block_height_in_tiles,
-                        curr_coalesced_num_pages,
-                        curr_coalesced_page_size,
+                        1,                           // wrt to the size of the packet (curr_block_size)
+                        curr_block_height_in_tiles,  // 4
+                        curr_coalesced_num_pages,    // 1
+                        curr_coalesced_page_size,    // 7616
                         noc);
-
+                    DPRINT << "prefetcher writer called remote_cb_push_back_and_write_pages" << ENDL();
                     noc_async_posted_writes_flushed();
-
+                    DPRINT << "prefetcher writer called noc_async_posted_writes_flushed" << ENDL();
                     cb_pop_front(local_cb_id, max_block_num_tiles);
+                    DPRINT << "prefetcher writer called cb_pop_front" << ENDL();
                 }
             }
         }
     }
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-
+    DPRINT << "prefetcher writer called update_remote_cb_config_in_l1" << ENDL();
     noc_async_atomic_barrier();
-
+    DPRINT << "prefetcher writer called noc_async_atomic_barrier" << ENDL();
     // reset noc counters here because we didn't properly update ptrs for better perf.
     if (noc_mode == DM_DEDICATED_NOC) {
         ncrisc_noc_counters_init();
     } else {
         dynamic_noc_local_state_init();
     }
-
+    DPRINT << "prefetcher writer called ncrisc_noc_counters_init" << ENDL();
     // signal reader can exit, since reader cannot exit early due to the ongoing traffic on the same noc.
     cb_reserve_back(sync_cb_id, 1);
     cb_push_back(sync_cb_id, 1);
+    DPRINT << "prefetcher writer called cb_push_back" << ENDL();
 }

@@ -102,6 +102,7 @@ class TtLlamaMLP(LightweightModule):
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
+        breakpoint()
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
@@ -120,6 +121,7 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
+        breakpoint()
         w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
             self.w1,

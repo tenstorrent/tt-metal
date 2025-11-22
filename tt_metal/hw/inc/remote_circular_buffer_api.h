@@ -7,6 +7,7 @@
 #include "tt_metal/hw/inc/circular_buffer.h"
 #include "tt_metal/hw/inc/debug/assert.h"
 #include "utils/utils.h"
+#include "debug/dprint.h"
 #ifndef COMPILE_FOR_TRISC
 #include "dataflow_api.h"
 #endif
@@ -212,7 +213,14 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
         len_bytes += remote_cb.fifo_start_addr + fifo_size - fifo_limit_page_aligned;
     }
+    DPRINT << "Prefetcher cb wait front: Len bytes: " << len_bytes << ENDL();
+    DPRINT << "Prefetcher cb wait front: Fifo limit page aligned: " << fifo_limit_page_aligned << ENDL();
+    DPRINT << "Prefetcher cb wait front: Fifo page size: " << remote_cb.fifo_page_size << ENDL();
+
     uint32_t num_pages_wait = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    DPRINT << "Prefetcher cb wait front: Num pages wait: " << num_pages_wait << ENDL();
+    DPRINT << "Prefetcher cb wait front: REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE: "
+           << REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE << ENDL();
     uint32_t num_pages_recv = 0;
     uint32_t pages_acked = 0;
     uint32_t pages_sent = 0;
@@ -225,7 +233,10 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         invalidate_l1_cache();
         pages_acked = *pages_acked_ptr;
         pages_sent = *pages_sent_ptr;
+        // DPRINT << "Prefetcher cb wait front: Pages acked: " << pages_acked << ENDL();
+        // DPRINT << "Prefetcher cb wait front: Pages sent: " << pages_sent << ENDL();
         num_pages_recv = pages_sent - pages_acked;
+        // DPRINT << "Prefetcher cb wait front: Num pages recv: " << num_pages_recv << ENDL();
     } while (num_pages_recv < num_pages_wait);
     WAYPOINT("RCWD");
 }
@@ -326,10 +337,19 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         len_bytes += fifo_start_addr + fifo_size - fifo_limit_page_aligned;
     }
     uint32_t pages_sent = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+    DPRINT << "Prefetcher writer: FIFO Page Size: " << remote_cb.fifo_page_size << ENDL();
+    DPRINT << "Prefetcher writer: aligned page size: " << REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE << ENDL();
+    DPRINT << "Prefetcher writer: Num pages: " << num_pages << ENDL();
+    DPRINT << "Prefetcher writer: Len bytes: " << len_bytes << ENDL();
+    DPRINT << "Prefetcher writer: Pages sent: " << pages_sent << ENDL();
+
     uint32_t num_receivers = remote_cb.num_receivers;
 
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * num_receivers;
+
+    DPRINT << "Prefetcher writer: Next receiver start addr stride: " << next_receiver_start_addr_stride << ENDL();
+    DPRINT << "Prefetcher writer: Next block row stride: " << next_block_row_stride << ENDL();
 
     uint32_t dest_addr;
 
@@ -338,27 +358,52 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
+
+    // for (uint32_t i = 0; i < num_receivers; ++i) {
+    //         uint32_t remote_noc_xy_x = DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]);
+    //         uint32_t remote_noc_xy_y = DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1]);
+    //         uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(remote_noc_xy_x, remote_noc_xy_y));
+    //         DPRINT << "Remote NOC XY Pair [" << i << "]: X = " << remote_noc_xy_x << ", Y = " << remote_noc_xy_y <<
+    //         ", Encoded = " << remote_noc_xy << ENDL(); remote_noc_xy_ptr += 2;
+    //     }
+    remote_noc_xy_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
+
     for (uint32_t i = 0; i < num_receivers; ++i) {
         uint32_t src_addr = local_cb_addr + next_receiver_start_addr_offset;
         dest_addr = fifo_wr_ptr;
+
+        DPRINT << "Prefetcher writer: Dest addr: " << dest_addr << ENDL();
 
         uint32_t remote_noc_xy = uint32_t(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
+        DPRINT << "Prefetcher writer: Writing to remote noc xy " << remote_noc_xy << ENDL();
+        DPRINT << "Prefetcher writer: Remote NOC X: " << DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]) << ENDL();
+        DPRINT << "Prefetcher writer: Remote NOC Y: " << DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1]) << ENDL();
+
         noc_async_write_one_packet_set_state<posted>(dest_noc_addr, coalesced_page_size, noc);
 
+        DPRINT << "Prefetcher writer: Num rows: " << num_rows << ENDL();
+        DPRINT << "Prefetcher writer: Coalesced num pages per row: " << coalesced_num_pages_per_row << ENDL();
+        DPRINT << "Prefetcher writer: Coalesced page size: " << coalesced_page_size << ENDL();
+
         for (uint32_t h = 0; h < num_rows; ++h) {
+            DPRINT << "Prefetcher writer row:  " << h << ENDL();
             uint32_t prev_src_addr = src_addr;
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
+                DPRINT << "Prefetcher writer: w: " << w << ENDL();
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
                 noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc);
 
                 src_addr += coalesced_page_size;
                 dest_addr += coalesced_page_size;
+                DPRINT << "Prefetcher writer: Dest addr after increment: " << dest_addr << ENDL();
             }
+            DPRINT << "Prefetcher writer: Source addr after increment: " << src_addr << ENDL();
             src_addr = prev_src_addr + next_block_row_stride;
+            DPRINT << "Prefetcher writer: Source addr after block row stride: " << src_addr << ENDL();
         }
         next_receiver_start_addr_offset += next_receiver_start_addr_stride;
         *pages_sent_ptr += pages_sent;
@@ -372,6 +417,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     if (dest_addr == fifo_limit_page_aligned) {
         dest_addr = fifo_start_addr;
     }
+    DPRINT << "Prefetcher writer: Dest addr after loop: " << dest_addr << ENDL();
     remote_cb.fifo_wr_ptr = dest_addr;
 }
 

@@ -121,6 +121,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             else ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
+        breakpoint()
         logger.info("Run Llama_MLP")
         tt_output = tt_model(tt_input, mode)
 

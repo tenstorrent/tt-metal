@@ -55,6 +55,20 @@ void kernel_main() {
 
     uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
 
+    DPRINT << "shard_width_in_tiles: " << shard_width_in_tiles << ENDL();
+    DPRINT << "shard_height_in_tiles: " << shard_height_in_tiles << ENDL();
+    DPRINT << "batch: " << batch << ENDL();
+    DPRINT << "ring_size: " << ring_size << ENDL();
+    DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
+    DPRINT << "cb_id_in0: " << cb_id_in0 << ENDL();
+    DPRINT << "cb_id_in2: " << cb_id_in2 << ENDL();
+    DPRINT << "in0_single_tile_size_bytes: " << in0_single_tile_size_bytes << ENDL();
+    DPRINT << "hop_core_offset: " << hop_core_offset << ENDL();
+    DPRINT << "ring_idx: " << ring_idx << ENDL();
+    DPRINT << "next_core_noc_x: " << next_core_noc_x << ENDL();
+    DPRINT << "next_core_noc_y: " << next_core_noc_y << ENDL();
+    DPRINT << "noc: " << noc << ENDL();
+
     for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
         uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
         bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
@@ -66,23 +80,34 @@ void kernel_main() {
             shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + shard_size_bytes * (shard_cnt - 1);
 
         // Wait for signal from previous core that data has been added to this core's in0
+        DPRINT << "shard_cnt: " << shard_cnt << ENDL();
         noc_semaphore_wait_min(l1_signal_sem_addr, shard_cnt);
+
+        DPRINT << "curr_shard_read_addr: " << curr_shard_read_addr << ENDL();
 
         // Send data to next core
         if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
+
+            DPRINT << "Sending data to next core" << ENDL();
+
             if (!skip_send) {
                 noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
             }
 
+            DPRINT << "Signaling next core that data is ready" << ENDL();
             // Signal the next core that data is ready
             noc_semaphore_inc(remote_signal_semaphore_addr, 1, noc);
         }
 
         // Do stuff for matmul fusion here
+        DPRINT << "Doing stuff for matmul fusion here" << ENDL();
         if (shard_cnt > 0) {
+            DPRINT << "Pushing data to compute" << ENDL();
             cb_push_back(cb_id_in2, shard_size_in_tiles);
         }
     }
+
+    DPRINT << "Done with all shards" << ENDL();
 
     if (!is_hop_core) {
         for (uint32_t b = 0; b < batch - 1; ++b) {  // for rest batches, not need to gather in0 anymore
