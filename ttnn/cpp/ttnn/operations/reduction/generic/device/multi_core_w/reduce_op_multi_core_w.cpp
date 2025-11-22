@@ -22,7 +22,8 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    bool do_negate) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -78,7 +79,25 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    uint32_t acc_cb_index = tt::CBIndex::c_4;
+    uint32_t num_acc_tiles = 1;
+    tt_metal::CircularBufferConfig cb_acc_config =
+        tt_metal::CircularBufferConfig(num_acc_tiles * dst_single_tile_size, {{acc_cb_index, dst_cb_data_format}})
+            .set_page_size(acc_cb_index, dst_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_acc_config);
+
+    // Changing file size from dst_ to src0_ does not help ...
+    uint32_t inv_cb_index = tt::CBIndex::c_5;
+    uint32_t num_inv_tiles = 1;
+    tt_metal::CircularBufferConfig cb_inv_config =
+        tt_metal::CircularBufferConfig(num_inv_tiles * dst_single_tile_size, {{inv_cb_index, dst_cb_data_format}})
+            .set_page_size(inv_cb_index, dst_single_tile_size);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_inv_config);
+
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
+    if (do_negate) {
+        reduce_defines["DO_NEGATE"] = "1";
+    }
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -100,7 +119,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -117,7 +136,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
         tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w_neg.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

@@ -21,7 +21,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    bool do_negate) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -165,6 +166,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+    if (do_negate) {
+        reduce_defines["DO_NEGATE"] = "1";
+    }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
