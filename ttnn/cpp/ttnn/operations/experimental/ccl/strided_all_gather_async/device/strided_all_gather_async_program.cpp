@@ -200,7 +200,8 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments(
     }
 }
 
-StridedAllGatherAsyncProgramFactory::cached_program_t StridedAllGatherAsyncProgramFactory::create_at(
+ttnn::device_operation::CachedProgram<StridedAllGatherAsyncProgramFactory::shared_variables_t>
+StridedAllGatherAsyncProgramFactory::create_at(
     const operation_attributes_t& attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,

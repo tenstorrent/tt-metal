@@ -21,7 +21,6 @@ struct StridedAllGatherAsyncProgramFactory {
         uint32_t num_cores_per_link;
     };
 
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
@@ -30,7 +29,7 @@ struct StridedAllGatherAsyncProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static cached_program_t create_at(
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
         const operation_attributes_t& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const tensor_args_t& tensor_args,
