@@ -1,0 +1,22 @@
+{
+  "mode": "tt_run",
+  "device": "wormhole_n300",
+  "dtype": "bfloat16",
+  "latency_ms": 3660.8205380000527,
+  "latency_ms_repeats": [
+    3696.1517280001317,
+    3625.4893479999737
+  ],
+  "latency_ms_std": 35.331190000079005,
+  "fps": 0.2731628031529541,
+  "image_size_hw": [
+    640,
+    640
+  ],
+  "num_queries": 100,
+  "tt_submodules": [
+    "decoder",
+    "heads",
+    "mask_projection"
+  ]
+}
