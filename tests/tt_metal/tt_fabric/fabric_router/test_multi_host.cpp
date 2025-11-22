@@ -10,6 +10,7 @@
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
+#include <unistd.h>
 
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
