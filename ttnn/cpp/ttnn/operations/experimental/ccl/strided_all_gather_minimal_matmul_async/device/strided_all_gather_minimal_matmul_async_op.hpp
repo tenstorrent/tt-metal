@@ -53,6 +53,7 @@ struct StridedAllGatherMinimalMatmulAsync {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer,
         const uint32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         const CoreCoord strided_all_gather_core_grid_offset,

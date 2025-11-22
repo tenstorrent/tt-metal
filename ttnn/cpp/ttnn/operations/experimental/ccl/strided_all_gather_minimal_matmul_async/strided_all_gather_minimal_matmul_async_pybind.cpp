@@ -31,6 +31,7 @@ void bind_strided_all_gather_minimal_matmul_async(
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer,
                const uint32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const CoreCoord strided_all_gather_core_grid_offset,
@@ -48,6 +49,7 @@ void bind_strided_all_gather_minimal_matmul_async(
                 return self(
                     input_tensor,
                     weight_tensor,
+                    persistent_output_buffer,
                     dim,
                     multi_device_global_semaphore,
                     strided_all_gather_core_grid_offset,
@@ -65,6 +67,7 @@ void bind_strided_all_gather_minimal_matmul_async(
             },
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
+            py::arg("persistent_output_buffer"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::arg("strided_all_gather_core_grid_offset"),

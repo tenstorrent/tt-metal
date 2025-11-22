@@ -48,6 +48,7 @@ struct StridedAllGatherAsync {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer,
         const uint32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         const uint32_t num_links,

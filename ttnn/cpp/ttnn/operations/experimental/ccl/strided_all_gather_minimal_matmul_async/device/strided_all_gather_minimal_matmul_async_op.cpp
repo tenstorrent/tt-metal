@@ -52,7 +52,8 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // All Gather output tensor
     ttnn::Tensor strided_all_gather_output_tensor = attributes.ag_op.create_output_tensors(
-        attributes.strided_all_gather_async_struct, strided_all_gather_async::tensor_args_t{tensor_args.input_tensor});
+        attributes.strided_all_gather_async_struct,
+        strided_all_gather_async::tensor_args_t{tensor_args.input_tensor, tensor_args.persistent_output_buffer});
 
     // Matmul output tensor
     ttnn::Tensor minimal_matmul_output_tensor = attributes.matmul_struct.create_output_tensors(
@@ -85,6 +86,7 @@ std::
     StridedAllGatherMinimalMatmulAsync::invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
+        const std::optional<ttnn::Tensor>& persistent_output_buffer,
         const uint32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         const CoreCoord strided_all_gather_core_grid_offset,
@@ -137,6 +139,6 @@ std::
     return {
         operation_attributes_t{
             strided_all_gather_async_struct, matmul_struct, strided_all_gather_core_grid_offset, devices, ag_op},
-        tensor_args_t{input_tensor, weight_tensor, bias}};
+        tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias}};
 }
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async
