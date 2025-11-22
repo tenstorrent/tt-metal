@@ -41,12 +41,10 @@ INSTANTIATE_TEST_SUITE_P(
     BigMeshDualRankMeshShapeSweepFixture,
     ::testing::Values(
         MeshShape(2, 4),
-        /* Issue #25355: Cannot create a MeshDevice with only one rank active.
         MeshShape(1, 1),
         MeshShape(1, 2),
         MeshShape(2, 1),
         MeshShape(2, 2),
-        */
         MeshShape(1, 8),
         MeshShape(8, 1)));
 

@@ -211,7 +211,8 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         }
     };
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    // We only care about ranks that actively participate in the fabric routing.
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().active_distributed_context();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -642,6 +643,10 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // Target direction is the direction to the destination chip for all ethernet channesl
                 const auto& target_direction =
                     router_intra_mesh_routing_table[mesh_id_val][src_fabric_chip_id][dst_fabric_chip_id];
+                // TODO(pstankiewicz): Figure out why this is needed
+                if (!this->router_port_directions_to_physical_eth_chan_map_.contains(src_fabric_node_id)) {
+                    continue;
+                }
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
                 // destination chip as the ethernet channel on the same plane
@@ -694,6 +699,11 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                 // Target direction is the direction to the destination mesh for all ethernet channesl
                 const auto& target_direction =
                     router_inter_mesh_routing_table[src_mesh_id_val][src_fabric_chip_id][dst_mesh_id_val];
+
+                // TODO(pstankiewicz): Figure out why this is needed
+                if (!this->router_port_directions_to_physical_eth_chan_map_.contains(src_fabric_node_id)) {
+                    continue;
+                }
 
                 // We view ethernet channels on one side of the chip as parallel planes. So N[0] talks to S[0], E[0],
                 // W[0] and so on For all live ethernet channels on this chip, set the routing table entry to the
@@ -863,6 +873,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
+
+    ::std::cerr << "configure_routing_tables_for_fabric_ethernet_channels" << std::endl;
 
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
@@ -2123,7 +2135,10 @@ void ControlPlane::populate_fabric_connection_info(
 }
 
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    ::std::cerr << "collect_and_merge_router_port_directions_from_all_hosts" << std::endl;
+    // We only care about ranks that actively participate in the fabric routing.
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().active_distributed_context();
+    // const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process
         return;
