@@ -34,8 +34,9 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
+    // TODO: initilaize globals and bss
+    // extern uint32_t __kernel_data_lma[];
+    // do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         // noc_local_state_init(NOC_INDEX); //TODO revisit this
