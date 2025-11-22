@@ -68,15 +68,8 @@ tensor_return_value_t ConvertToHWCDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.logical_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    operation::Hash hash = operation::hash_operation<ConvertToHWCDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
-
-    return hash;
+    return tt::stl::hash::hash_objects_with_default_seed(
+        tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
 std::tuple<ConvertToHWCDeviceOperation::operation_attributes_t, ConvertToHWCDeviceOperation::tensor_args_t>
