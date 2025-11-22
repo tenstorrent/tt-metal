@@ -40,4 +40,19 @@ private:
     uint64_t hash_;
 };
 
+// An RAII wrapper that generates a temporary filename and renames the file on destruction.
+// This is to allow multiple processes to write to the same target file without clobbering each other.
+class FileRenamer {
+public:
+    FileRenamer(const std::string& target_path);
+    ~FileRenamer();
+
+    const std::string& path() const { return temp_path_; }
+
+private:
+    std::string temp_path_;
+    std::string target_path_;
+    static uint64_t unique_id_;
+};
+
 }  // namespace tt::jit_build::utils

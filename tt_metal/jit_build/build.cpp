@@ -451,13 +451,17 @@ void JitBuildState::compile_one(
     }
 
     // Append common args provided by the build state
+    std::string obj_path = out_dir + obj;
+    jit_build::utils::FileRenamer obj_file(obj_path);
+    fs::path temp_d_path = obj_file.path();
+    temp_d_path.replace_extension("d");
     cmd += this->cflags_;
     cmd += this->includes_;
     // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
-    cmd += fmt::format("-c -o {} {} ", obj, src);
+    cmd += fmt::format("-c -o {} {} -MF {} ", obj_file.path(), src, temp_d_path.string());
     cmd += defines;
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
@@ -468,12 +472,14 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    std::string log_file = out_dir + obj + ".log";
-    fs::remove(log_file);
-    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "compile", cmd, log_file);
+    jit_build::utils::FileRenamer log_file(obj_path + ".log");
+    fs::remove(log_file.path());
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+        build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::write_dependency_hashes(out_dir, obj);
+    jit_build::utils::FileRenamer dephash_file(obj_path + ".dephash");
+    jit_build::write_dependency_hashes(out_dir, obj_file.path(), dephash_file.path());
+    fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
@@ -545,22 +551,23 @@ void JitBuildState::link_impl(const string& out_dir, const JitBuildSettings* set
     cmd += lflags;
     cmd += link_objs;
     std::string elf_name = out_dir + this->target_name_ + ".elf";
-    cmd += "-o " + elf_name;
+    jit_build::utils::FileRenamer elf_file(elf_name);
+    cmd += "-o " + elf_file.path();
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
-    std::string log_file = elf_name + ".log";
-    fs::remove(log_file);
-    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "link", cmd, log_file);
+    jit_build::utils::FileRenamer log_file(elf_name + ".log");
+    fs::remove(log_file.path());
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+        build_failure(this->target_name_, "link", cmd, log_file.path());
     }
-    std::string hash_path = elf_name + ".dephash";
-    std::ofstream hash_file(hash_path);
+    jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
+    std::ofstream hash_file(dephash_file.path());
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
+        std::filesystem::remove(dephash_file.path());
     }
 }
 
@@ -576,7 +583,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = weakened_firmware_name();
+    jit_build::utils::FileRenamer out_file(weakened_firmware_name());
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
@@ -585,7 +592,7 @@ void JitBuildState::weaken(const string& out_dir) const {
     if (this->firmware_is_kernel_object_) {
         elf.ObjectifyExecutable();
     }
-    elf.WriteImage(pathname_out);
+    elf.WriteImage(out_file.path());
 }
 
 std::string JitBuildState::weakened_firmware_name() const {

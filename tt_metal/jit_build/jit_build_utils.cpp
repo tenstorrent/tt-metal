@@ -4,12 +4,15 @@
 
 #include "jit_build_utils.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <string>
+#include <system_error>
 
 #include "impl/context/metal_context.hpp"
 
@@ -45,6 +48,35 @@ void create_file(const std::string& file_path_str) {
 
     std::ofstream ofs(file_path);
     ofs.close();
+}
+
+uint64_t FileRenamer::unique_id_ = []() {
+    std::random_device rd;
+    std::uniform_int_distribution<uint64_t> distr;
+    return distr(rd);
+}();
+
+FileRenamer::FileRenamer(const std::string& target_path) : target_path_(target_path) {
+    std::filesystem::path path(target_path);
+    if (path.has_extension()) {
+        path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
+        temp_path_ = path.string();
+    } else {
+        temp_path_ = fmt::format("{}.{}", target_path, unique_id_);
+    }
+}
+
+FileRenamer::~FileRenamer() {
+    std::error_code ec;
+    std::filesystem::rename(temp_path_, target_path_, ec);
+    if (ec) {
+        log_error(
+            tt::LogBuildKernels,
+            "Failed to rename temporary file {} to target file {}: {}",
+            temp_path_,
+            target_path_,
+            ec.message());
+    }
 }
 
 }  // namespace tt::jit_build::utils
