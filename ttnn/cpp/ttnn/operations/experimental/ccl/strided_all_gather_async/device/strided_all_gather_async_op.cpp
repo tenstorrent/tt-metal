@@ -42,7 +42,7 @@ StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_outpu
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return operation::hash_operation<StridedAllGatherAsync>(
+    return tt::tt_metal::operation::hash_operation<StridedAllGatherAsync>(
         select_program_factory(attributes, tensor_args).index(),
         attributes.dim,
         attributes.num_links,
