@@ -84,6 +84,40 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
 
 // clang-format off
 /**
+ * Returns a reference to unique runtime arguments as a POD struct. The runtime arguments are reinterpreted
+ * as the given struct type.
+ *
+ * Return value: Reference to the runtime arguments as type T
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | T (template argument) | POD struct type to interpret the arguments as  | Any POD struct        | N/A         | True     |
+ */
+// clang-format on
+template <typename T>
+FORCE_INLINE T& get_runtime_arguments() {
+    return *((tt_l1_ptr T*)(rta_l1_base));
+}
+
+// clang-format off
+/**
+ * Returns a reference to common runtime arguments as a POD struct. The runtime arguments are reinterpreted
+ * as the given struct type.
+ *
+ * Return value: Reference to the common runtime arguments as type T
+ *
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | T (template argument) | POD struct type to interpret the arguments as  | Any POD struct        | N/A         | True     |
+ */
+// clang-format on
+template <typename T>
+FORCE_INLINE T& get_common_runtime_arguments() {
+    return *((tt_l1_ptr T*)(crta_l1_base));
+}
+
+// clang-format off
+/**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
  * is the one relative to the origin of the physical grid.
  *
