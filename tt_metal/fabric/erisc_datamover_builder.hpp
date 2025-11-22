@@ -204,10 +204,10 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_sender_channels> sender_channels_counters_address = {};
 
     // Packet header history buffer(s)
-    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 16;
     static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
         sizeof(tt::tt_fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
-    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 16;
     static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
         sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
     std::array<std::size_t, builder_config::num_receiver_channels> receivers_completed_packet_header_cb_address = {};
