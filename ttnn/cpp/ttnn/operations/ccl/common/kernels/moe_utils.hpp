@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tuple>
+#include <utility>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -13,6 +14,13 @@ enum class Polarity : uint8_t {
     NEGATIVE,
     POSITIVE,
 };
+
+enum class ReverseMode : uint8_t {
+    NEVER = 0,
+    PER_TOKEN = 1,
+    ON_TIE = 2,
+};
+
 namespace routing_state {
 
 struct PolarState {
@@ -20,28 +28,40 @@ struct PolarState {
 
     inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
 
-    inline uint32_t polar_compare_stateful(
+    template <ReverseMode ReverseMode>
+    inline std::pair<uint32_t, uint32_t> polar_compare_stateful(
         uint32_t positive_distance,
         uint32_t positive_direction,
         uint32_t negative_distance,
         uint32_t negative_direction,
         uint32_t axis) {
         auto polarity = polarity_table[axis];
-        uint32_t result = 0;
-        if (polarity == Polarity::POSITIVE) {
-            result = positive_distance <= negative_distance ? positive_direction : negative_direction;
-        } else {
-            result = positive_distance < negative_distance ? positive_direction : negative_direction;
-        }
-        if (positive_distance == negative_distance) {
+        std::pair<uint32_t, uint32_t> result;
+        if constexpr (ReverseMode == ReverseMode::PER_TOKEN) {
+            result = polarity == Polarity::POSITIVE ? std::make_pair(positive_direction, positive_distance)
+                                                    : std::make_pair(negative_direction, negative_distance);
             polarity_table[axis] = reverse(polarity);
+            return result;
+        } else {
+            if (polarity == Polarity::POSITIVE) {
+                result = positive_distance <= negative_distance ? std::make_pair(positive_direction, positive_distance)
+                                                                : std::make_pair(negative_direction, negative_distance);
+            } else {
+                result = positive_distance < negative_distance ? std::make_pair(positive_direction, positive_distance)
+                                                               : std::make_pair(negative_direction, negative_distance);
+            }
+            if constexpr (ReverseMode == ReverseMode::ON_TIE) {
+                if (positive_distance == negative_distance) {
+                    polarity_table[axis] = reverse(polarity);
+                }
+            }
         }
         return result;
     }
 };
 
 PolarState polar_state;
-}
+}  // namespace routing_state
 
 template <size_t Size>
 inline void open_direction_connections(
@@ -166,8 +186,9 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
            topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
-uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
+template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols, ReverseMode RevMode>
+std::pair<uint32_t, uint32_t> get_route_and_distance(
+    uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
     // default_polary is for ties in a ring
@@ -175,22 +196,32 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     // if default is negative, then for a E-W tie, we go West, and for a N-S tie, we go North
     if (src_row == dest_row) {
         if constexpr (!has_wrap_around<Topology>()) {
-            return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+            return src_col < dest_col ? std::make_pair(
+                                            eth_chan_directions::EAST,
+                                            directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE))
+                                      : std::make_pair(
+                                            eth_chan_directions::WEST,
+                                            directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE));
         } else {
             // with wrap around, we can go either East or West. Choose the shorter route
             uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
             uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE);
-            return routing_state::polar_state.polar_compare_stateful(
+            return routing_state::polar_state.polar_compare_stateful<RevMode>(
                 east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, 1);
         }
     } else {
         if constexpr (!has_wrap_around<Topology>()) {
-            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
+            return src_row < dest_row ? std::make_pair(
+                                            eth_chan_directions::SOUTH,
+                                            directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE))
+                                      : std::make_pair(
+                                            eth_chan_directions::NORTH,
+                                            directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE));
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
             uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
             uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
-            return routing_state::polar_state.polar_compare_stateful(
+            return routing_state::polar_state.polar_compare_stateful<RevMode>(
                 south_distance, eth_chan_directions::SOUTH, north_distance, eth_chan_directions::NORTH, 0);
         }
     }
@@ -440,7 +471,8 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_1d(
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
@@ -451,11 +483,10 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     int32_t size_bytes,
     const uint32_t alignment,
     uint32_t offset = 0) {
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -472,7 +503,8 @@ template <
     tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    int32_t FabricMaxPacketSzBytes>
+    int32_t FabricMaxPacketSzBytes,
+    ReverseMode RevMode>
 inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -485,11 +517,10 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint32_t increment_value,
     bool flush) {
     // This api is only for L1 as it can cause a DRAM hang in blackhole
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
@@ -508,7 +539,8 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
-    typename AddrGenType>
+    typename AddrGenType,
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
@@ -522,11 +554,10 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint32_t increment_value,
     bool flush,
     uint32_t offset = 0) {
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
-    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
         fabric_connections[route],
@@ -542,7 +573,12 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
 }
 
 // Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
-template <uint32_t LinearizedSrcMeshCoord, tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReverseMode RevMode>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -554,11 +590,9 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     packet_header->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
-    uint32_t distance =
-        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    auto [route, distance] = get_route_and_distance<Topology, MeshRows, MeshCols, RevMode>(
+        LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
-
-    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
@@ -593,7 +627,8 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     ReplicateGroup Axis,
-    uint32_t NumDevices>
+    uint32_t NumDevices,
+    ReverseMode RevMode = ReverseMode::NEVER>
 inline void send_init_semaphore_to_configured_targets(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -626,7 +661,8 @@ inline void send_init_semaphore_to_configured_targets(
                     LinearizedSrcMeshCoord,
                     Topology,
                     MeshRows,
-                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+                    MeshCols,
+                    RevMode>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
             } else {
                 const auto& dest_chip_id = dest_chip_ids[device_idx];
                 const auto& dest_mesh_id = dest_mesh_ids[device_idx];
@@ -634,6 +670,124 @@ inline void send_init_semaphore_to_configured_targets(
                     fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
             }
         }
+    }
+}
+
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t DispatchDevices,
+    ReverseMode RevMode>
+inline constexpr uint32_t get_excess_semaphore_increments() {
+    if constexpr (RevMode == ReverseMode::NEVER) {
+        return 0;
+    }
+    if constexpr (RevMode == ReverseMode::ON_TIE && DispatchDevices % 2 == 0) {
+        return 1;  // 1 extra from the device on the other side of the ring that has the same distance both ways
+    } else if constexpr (RevMode == ReverseMode::PER_TOKEN) {
+        return 2 * (DispatchDevices - 1);  // 2 from each device that is not the source
+    }
+    return 0;
+}
+
+// Send initialization semaphore to configured target devices for synchronization
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis,
+    uint32_t NumDevices,
+    ReverseMode RevMode>
+inline void send_final_semaphore_to_configured_targets(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint8_t dest_chip_ids[NumDevices],
+    const uint8_t dest_mesh_ids[NumDevices],
+    uint64_t final_noc_semaphore_addr) {
+    if constexpr (RevMode == ReverseMode::NEVER) {
+        return;
+    }
+    uint32_t device_begin_idx = 0;
+    uint32_t device_end_idx = NumDevices;
+    uint32_t device_stride = 1;
+
+    constexpr uint32_t row = LinearizedSrcMeshCoord / MeshCols;
+    constexpr uint32_t col = LinearizedSrcMeshCoord % MeshCols;
+
+    if constexpr (Axis == ReplicateGroup::COLS) {
+        device_begin_idx = col;
+        device_end_idx = col + MeshRows * MeshCols;
+        device_stride = MeshCols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        device_begin_idx = row * MeshCols;
+        device_end_idx = row * MeshCols + MeshCols;
+        device_stride = 1;
+    }
+
+    constexpr uint32_t dispatch_devices = Axis == ReplicateGroup::COLS ? MeshRows : MeshCols;
+    constexpr uint32_t dispatch_index = Axis == ReplicateGroup::COLS ? row : col;
+
+    if constexpr (RevMode == ReverseMode::ON_TIE && dispatch_devices % 2 == 0) {
+        // only need to send the semaphore if you have another device that has two equidistance routes to the same
+        // destination if positive distance is equal to negative distance, then you have a tie find device on the other
+        // side of the ring that has the same distance both ways
+        constexpr uint32_t other_device_idx = (dispatch_index + dispatch_devices / 2) % dispatch_devices;
+        if constexpr (is_1d_topology<Topology>()) {
+            // previous send already sent in one direction, so we need to send in the other direction
+            // TODO: Refactor to avoid using globals here.
+            fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                LinearizedSrcMeshCoord,
+                Topology,
+                MeshRows,
+                MeshCols,
+                RevMode>(fabric_connections, packet_header, other_device_idx, final_noc_semaphore_addr, 1, false);
+        } else {
+            uint32_t dest_chip_id = dest_chip_ids[other_device_idx];
+            uint32_t dest_mesh_id = dest_mesh_ids[other_device_idx];
+            fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                fabric_connections, packet_header, dest_chip_id, dest_mesh_id, final_noc_semaphore_addr, 1, false);
+        }
+
+    } else {
+        // PER_TOKEN: send the semaphore to all devices that are not the source, twice
+        for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
+            if (device_idx == LinearizedSrcMeshCoord) {
+                continue;
+            } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+                for (uint32_t i = 0; i < 2; i++) {
+                    if constexpr (is_1d_topology<Topology>()) {
+                        fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                            LinearizedSrcMeshCoord,
+                            Topology,
+                            MeshRows,
+                            MeshCols,
+                            RevMode>(fabric_connections, packet_header, device_idx, final_noc_semaphore_addr, 1, false);
+                    } else {
+                        const auto& dest_chip_id = dest_chip_ids[device_idx];
+                        const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                        fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                            fabric_connections,
+                            packet_header,
+                            dest_chip_id,
+                            dest_mesh_id,
+                            final_noc_semaphore_addr,
+                            1,
+                            false);
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <tt::tt_fabric::Topology Topology>
+inline constexpr ReverseMode get_supported_reverse_mode() {
+    if constexpr (has_wrap_around<Topology>() && is_1d_topology<Topology>()) {
+        return ReverseMode::ON_TIE;
+    } else {
+        return ReverseMode::NEVER;
     }
 }
 

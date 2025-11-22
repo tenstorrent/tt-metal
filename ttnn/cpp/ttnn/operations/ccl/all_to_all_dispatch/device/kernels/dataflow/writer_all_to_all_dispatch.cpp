@@ -91,6 +91,8 @@ void kernel_main() {
     constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
+    constexpr ReverseMode reverse_mode = get_supported_reverse_mode<topology>();
+
     constexpr auto input_args = TensorAccessorArgs<37>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -170,7 +172,9 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         axis,
-        num_devices>(fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        num_devices,
+        ReverseMode::NEVER>(
+        fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     // Wait for all devices to complete initialization synchronization
     bool needs_barrier = false;
@@ -218,7 +222,9 @@ void kernel_main() {
                                 topology,
                                 mesh_rows,
                                 mesh_cols,
-                                fabric_max_packet_size>(
+                                fabric_max_packet_size,
+                                decltype(output_addr_gen),
+                                reverse_mode>(
                                 output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
@@ -281,7 +287,9 @@ void kernel_main() {
                             topology,
                             mesh_rows,
                             mesh_cols,
-                            fabric_max_packet_size>(
+                            fabric_max_packet_size,
+                            decltype(metadata_addr_gen),
+                            reverse_mode>(
                             metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
@@ -315,6 +323,19 @@ void kernel_main() {
                 }
             }
         }
+
+        // As we alternate directions along the axis, we need to send another semaphore increment to the configured
+        // targets
+        send_final_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices,
+            reverse_mode>(
+            fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
     } else {
         uint32_t indices_size = aligned_indices_page_size * tokens_per_device;
         uint32_t indices_size_per_core = aligned_indices_page_size * (token_end_idx - token_start_idx);
@@ -335,7 +356,8 @@ void kernel_main() {
                         topology,
                         mesh_rows,
                         mesh_cols,
-                        fabric_max_packet_size>(
+                        fabric_max_packet_size,
+                        reverse_mode>(
                         fabric_connections,
                         metadata_packet_header,
                         d,
@@ -366,6 +388,17 @@ void kernel_main() {
                 }
             }
         }
+
+        send_final_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices,
+            reverse_mode>(
+            fabric_connections, metadata_packet_header, dest_chip_ids, dest_mesh_ids, global_noc_semaphore_address);
         // Need to wait for the local flushed metadata write.
         noc_async_write_barrier();
         noc_semaphore_inc(global_noc_semaphore_address, 1);
