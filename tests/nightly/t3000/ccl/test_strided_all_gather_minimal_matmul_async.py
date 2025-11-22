@@ -158,6 +158,21 @@ def run_strided_all_gather_minimal_matmul_impl(
             matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
         torch_matmul_output_list.append(matmul_output)
 
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros(ag_output_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ag_input_dtype,
+            memory_config=mem_config_ag,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+    logger.info("Done creating persistent buffers")
+
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=math_fidelity,
@@ -182,6 +197,7 @@ def run_strided_all_gather_minimal_matmul_impl(
         if use_non_fused:
             tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
                 input_tensor_mesh_list[i],
+                persistent_output_buffer=persistent_output_buffers[i],
                 dim=dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
@@ -208,6 +224,7 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.strided_all_gather_minimal_matmul_async(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
+                persistent_output_buffer=persistent_output_buffers[i],
                 dim=dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 strided_all_gather_core_grid_offset=ag_core_grid_offset,

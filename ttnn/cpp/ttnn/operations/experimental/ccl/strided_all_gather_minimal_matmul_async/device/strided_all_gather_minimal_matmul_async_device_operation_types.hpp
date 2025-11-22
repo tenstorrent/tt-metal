@@ -27,6 +27,7 @@ struct operation_attributes_t {
 struct tensor_args_t {
     const Tensor input_tensor;
     const Tensor weight_tensor;
+    const std::optional<Tensor> persistent_output_buffer;
     const std::optional<const Tensor> bias = std::nullopt;
 };
 

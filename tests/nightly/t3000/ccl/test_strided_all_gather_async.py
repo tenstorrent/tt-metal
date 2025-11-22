@@ -100,12 +100,28 @@ def run_strided_all_gather_impl(
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros(ag_output_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ag_input_dtype,
+            memory_config=mem_config_ag,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+    logger.info("Done creating persistent buffers")
+
     ##### Perform the TT ops #####
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):
         tt_all_gather_out_tensor = ttnn.experimental.strided_all_gather_async(
             input_tensor_mesh_list[i],
+            persistent_output_buffer=persistent_output_buffers[i],
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,

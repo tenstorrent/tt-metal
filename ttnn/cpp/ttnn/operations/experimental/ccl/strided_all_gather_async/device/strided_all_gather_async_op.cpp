@@ -37,7 +37,11 @@ StridedAllGatherAsync::spec_return_value_t StridedAllGatherAsync::compute_output
 
 StridedAllGatherAsync::tensor_return_value_t StridedAllGatherAsync::create_output_tensors(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        return {tensor_args.persistent_output_buffer.value()};
+    } else {
+        return {create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input_tensor.device())};
+    }
 }
 
 tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
@@ -65,6 +69,7 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
 std::tuple<StridedAllGatherAsync::operation_attributes_t, StridedAllGatherAsync::tensor_args_t>
 StridedAllGatherAsync::invoke(
     const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -107,6 +112,6 @@ StridedAllGatherAsync::invoke(
             mm_cores_y,
             mm_block_ht,
             mm_block_wt},
-        tensor_args_t{input_tensor}};
+        tensor_args_t{input_tensor, persistent_output_buffer}};
 }
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
