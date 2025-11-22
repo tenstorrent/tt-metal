@@ -66,7 +66,8 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
     }
 }
 
-StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t strided_all_gather_minimal_matmul_async_program(
+ttnn::device_operation::CachedProgram<StridedAllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
+strided_all_gather_minimal_matmul_async_program(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
@@ -149,7 +150,7 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t strided_all_g
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
 }
 
-StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t
+ttnn::device_operation::CachedProgram<StridedAllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
 StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
     const operation_attributes_t& attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
