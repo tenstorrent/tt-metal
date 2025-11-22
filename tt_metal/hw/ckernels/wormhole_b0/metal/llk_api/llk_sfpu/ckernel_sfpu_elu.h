@@ -30,5 +30,10 @@ inline void calculate_elu(uint slope) {
     }
 }
 
+template <bool APPROXIMATION_MODE>
+inline void elu_init() {
+    exp_init<false, false>();  // init _sfpu_exp_21f_
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
