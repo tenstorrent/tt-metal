@@ -103,6 +103,7 @@ void test_send_recv_async_(
                 *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
                 std::nullopt)
                 .to_device(mesh_device.get(), memory_config);
+        log_info(tt::LogMetal, "Sending tensor to forward socket");
         ttnn::experimental::send_async(input_tensor, forward_socket);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
@@ -118,6 +119,7 @@ void test_send_recv_async_(
             mesh_device.get());
         ttnn::experimental::recv_async(output_tensor, backward_socket);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
+        log_info(tt::LogMetal, "Received tensor from backward socket");
         auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<T>();
         std::vector<T> inc_output_data(output_data.size());
         distributed_context->recv(

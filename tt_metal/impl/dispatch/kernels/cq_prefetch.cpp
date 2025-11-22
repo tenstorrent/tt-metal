@@ -427,10 +427,12 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // Nothing to fetch, nothing pending, nothing available, stall on host
             WAYPOINT("HQW");
             uint32_t heartbeat = 0;
+            DPRINT << "fetch_q_get_cmds: waiting for prefetch_q_rd_ptr to be non-zero" << ENDL();
             while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
                 invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
             }
+            DPRINT << "fetch_q_get_cmds: prefetch_q_rd_ptr is non-zero" << ENDL();
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
             WAYPOINT("HQD");
         }
@@ -1459,7 +1461,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
-            // DPRINT << "relay inline" << ENDL();
+            DPRINT << "relay inline" << ENDL();
             if constexpr (exec_buf) {
                 if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
                     stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
@@ -1470,9 +1472,11 @@ bool process_cmd(
                 }
             } else {
                 if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
+                    DPRINT << "relay inline master" << ENDL();
                     stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchRelayInlineState>(
                         cmd_ptr, downstream_data_ptr);
                 } else {
+                    DPRINT << "relay inline subordinate" << ENDL();
                     stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchSRelayInlineState>(
                         cmd_ptr, downstream_data_ptr_s);
                 }

@@ -334,7 +334,9 @@ void write_socket_configs(
                     config_data[receiver_enc_offset + 3] = recv_virtual_core.x;    // downstream_noc_x
                 }
             }
+            log_info(tt::LogMetal, "Sender: Writing config data to shard");
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            log_info(tt::LogMetal, "Sender: Config data written to shard");
         }
     } else {
         std::vector<receiver_socket_md> config_data(
@@ -369,7 +371,9 @@ void write_socket_configs(
                                                sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
                 md.is_sender = is_sender;
             }
+            log_info(tt::LogMetal, "Receiver: Writing config data to shard");
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            log_info(tt::LogMetal, "Receiver: Config data written to shard");
         }
     }
 }

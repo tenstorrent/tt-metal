@@ -279,7 +279,7 @@ void process_write_host_h() {
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
     bool is_event = cmd->write_linear_host.is_event;
-    // DPRINT << "process_write_host_h: " << length << ENDL();
+    DPRINT << "process_write_host_h: wlength: " << wlength << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
@@ -1024,6 +1024,7 @@ static inline bool process_cmd_d(uint32_t& cmd_ptr, uint32_t* l1_cache) {
 re_run_command:
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
+    DPRINT << "process_cmd_d: cmd_id: " << (uint32_t)cmd->base.cmd_id << ENDL();
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
@@ -1175,6 +1176,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
+    DPRINT << "process_cmd_h: cmd_id: " << (uint32_t)cmd->base.cmd_id << ENDL();
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT << "dispatch_h write_linear_h\n";

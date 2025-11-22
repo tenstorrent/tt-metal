@@ -203,6 +203,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
+    DPRINT << "dispatch_s: processing go signal mcast cmd" << ENDL();
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -281,6 +282,7 @@ void process_go_signal_mcast_cmd() {
 
     update_worker_completion_count_on_dispatch_d();
     cmd_ptr += sizeof(CQDispatchCmd);
+    DPRINT << "dispatch_s: done processing go signal mcast cmd" << ENDL();
 }
 
 FORCE_INLINE
@@ -353,16 +355,32 @@ void kernel_main() {
     uint32_t total_pages_acquired = 0;
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
+        DPRINT << "dispatch_s: acquiring page" << ENDL();
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
         DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
         switch (cmd->base.cmd_id) {
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
-            case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
-            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
-            case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;
-            case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+                DPRINT << "dispatch_s: processing go signal mcast cmd" << ENDL();
+                process_go_signal_mcast_cmd();
+                break;
+            case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
+                DPRINT << "dispatch_s: setting number of worker sems" << ENDL();
+                set_num_worker_sems();
+                break;
+            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
+                DPRINT << "dispatch_s: setting go signal noc data" << ENDL();
+                set_go_signal_noc_data();
+                break;
+            case CQ_DISPATCH_CMD_WAIT:
+                DPRINT << "dispatch_s: processing wait cmd" << ENDL();
+                process_dispatch_s_wait_cmd();
+                break;
+            case CQ_DISPATCH_CMD_TERMINATE:
+                DPRINT << "dispatch_s: terminating" << ENDL();
+                done = true;
+                break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
