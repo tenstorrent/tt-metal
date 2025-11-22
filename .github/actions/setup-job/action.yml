@@ -26,7 +26,7 @@ inputs:
     default: 1
     type: integer
   auto-triage:
-    description: 'Enable detection of slow dispatch and automatically call tt-triage'
+    description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
     default: true
     type: boolean
   slow-dispatch-timeout:
