@@ -199,6 +199,11 @@ int __attribute__((noinline)) main(void) {
     disable_interrupts();
     update_next_link_status_check_timestamp();
 
+    //
+    // This is not needed here. Base firmware has already done this step when the chip boots up
+    // dynamic_noc_local_state_init()
+    //
+
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -212,10 +217,17 @@ int __attribute__((noinline)) main(void) {
 
     set_deassert_addresses();
 
+    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    ncrisc_noc_counters_init<1>();
+#endif
+
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
@@ -276,9 +288,29 @@ int __attribute__((noinline)) main(void) {
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
+            // Host side guarantees that if active_erisc is running on ERISC1 (single ERISC mode),
+            // the noc_index will be NOC_1 which ensures no conflict with base firmware running concurrently on ERISC0
+            //
+            // cmd_buf allocation is determined based on the physical ERISC index in tt_metal/hw/inc/dataflow_cmd_bufs.h
+            // ERISC0 is BRISC, ERISC1 is NCRISC.
+            //
+            noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+
+            if (noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != noc_mode) {
+                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                }
+                noc_local_state_init(noc_index);
+            } else {
+                if (prev_noc_mode != noc_mode) {
+                    dynamic_noc_init();
+                }
+                dynamic_noc_local_state_init();
+            }
+            prev_noc_mode = noc_mode;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);

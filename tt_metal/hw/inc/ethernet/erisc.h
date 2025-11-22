@@ -28,13 +28,31 @@ inline __attribute__((always_inline)) void risc_context_switch() {
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    // Only NoC0
-    ncrisc_noc_full_sync<1>();
+
+#if defined(KERNEL_BUILD)
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        ncrisc_noc_full_sync<1>();
+    }
+
+    service_eth_msg();
+    update_boot_results_eth_link_status_check();
+
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init<1>();
+    }
+#elif defined(FW_BUILD)
+    // Note, FW always runs with dedicated NOC
+    ncrisc_noc_full_sync();
     service_eth_msg();
     update_boot_results_eth_link_status_check();
     ncrisc_noc_counters_init<1>();
-#endif
-#endif
+#else
+#error "Unknown build type for risc_context_switch"
+#endif  // KERNEL_BUILD
+
+#endif  // (COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+
+#endif  // COMPILE_FOR_ERISC
 }
 
 inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync() {
