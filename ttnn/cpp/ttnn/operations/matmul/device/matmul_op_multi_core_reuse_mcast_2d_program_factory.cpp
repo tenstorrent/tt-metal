@@ -15,6 +15,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -1518,7 +1519,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = get_batch_size(ashape);
+    uint32_t B = ttnn::get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];

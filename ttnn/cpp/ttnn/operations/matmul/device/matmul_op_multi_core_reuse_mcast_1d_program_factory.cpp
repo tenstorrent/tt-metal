@@ -17,6 +17,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -2693,7 +2694,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = get_batch_size(ashape);
+    uint32_t B = ttnn::get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
@@ -3089,7 +3090,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto batchB = get_batch_size(bshape);
+    const auto batchB = ttnn::get_batch_size(bshape);
 
     // When input A and input B are sparse, the batch dims are same.
     // We pick batchB and set batchA to 1.
@@ -3100,9 +3101,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     if (is_input_a_sparse && is_input_b_sparse) {
         batchA = 1;
     } else if (is_input_a_sparse) {
-        batchA = get_batch_size(ashape) / batchB;
+        batchA = ttnn::get_batch_size(ashape) / batchB;
     } else {
-        batchA = get_batch_size(ashape);
+        batchA = ttnn::get_batch_size(ashape);
     }
 
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];

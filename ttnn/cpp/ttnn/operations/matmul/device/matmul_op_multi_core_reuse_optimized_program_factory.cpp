@@ -10,6 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -569,7 +570,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = get_batch_size(ashape);
+    uint32_t B = ttnn::get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];

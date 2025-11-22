@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 // using namespace tt;
 // using namespace tt_metal;
@@ -131,7 +132,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     auto height_b = input_shape_b[-2];
     auto width_b = input_shape_b[-1];
     if (!(input_tensor_a.is_sharded() && this->dim == BcastOpDim::H)) {
-        uint32_t batch_size_b = get_batch_size(input_shape_b);
+        uint32_t batch_size_b = ttnn::get_batch_size(input_shape_b);
         if (batch_size_b != 1) {
             TT_FATAL(
                 input_shape_a.rank() == input_shape_b.rank(),
