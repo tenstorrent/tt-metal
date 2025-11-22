@@ -268,7 +268,7 @@ void init_hyperbolic_trig() {
 template <bool APPROXIMATION_MODE>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
-    recip_init<false>();
+    sfpu_reciprocal_init<false>();
 }
 
 }  // namespace ckernel::sfpu
