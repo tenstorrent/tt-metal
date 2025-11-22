@@ -58,6 +58,11 @@ run_tg_tests() {
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k "4x" --timeout=300; fail+=$?
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
 
+  elif [[ "$1" == "motif" ]]; then
+    echo "LOG_METAL: running Motif run_tg_frequent_tests"
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_motif -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif -k "4x" --timeout=300; fail+=$?
+
   elif [[ "$1" == "wan22" ]]; then
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
