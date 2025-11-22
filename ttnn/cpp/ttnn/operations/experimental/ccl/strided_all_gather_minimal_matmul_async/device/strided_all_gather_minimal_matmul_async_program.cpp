@@ -43,63 +43,6 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t
-StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
-    const operation_attributes_t& attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    auto mesh_device = tensor_args.input_tensor.device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
-
-    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
-        tensor_args.input_tensor, mesh_coordinate, attributes.strided_all_gather_async_struct.cluster_axis);
-
-    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input_tensor,
-        mesh_coordinate,
-        1,
-        attributes.strided_all_gather_async_struct.topology,
-        attributes.strided_all_gather_async_struct.cluster_axis);
-
-    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input_tensor,
-        mesh_coordinate,
-        -1,
-        attributes.strided_all_gather_async_struct.topology,
-        attributes.strided_all_gather_async_struct.cluster_axis);
-
-    // Return the StridedAllGatherMinimalMatmulAsync program with callbacks
-    return strided_all_gather_minimal_matmul_async_program(
-        tensor_args.input_tensor,   // input_tensor
-        output_tensor[0],           // all_gather_output_tensor
-        tensor_args.weight_tensor,  // weight_tensor
-        output_tensor[1],           // matmul_output_tensor
-
-        /* All Gather Params */
-        target_device,
-        mesh_coordinate,
-        forward_coord,
-        backward_coord,
-        attributes.strided_all_gather_async_struct.dim,
-        attributes.strided_all_gather_async_struct.num_links,
-        attributes.strided_all_gather_async_struct.ring_size,
-        device_index,
-        attributes.strided_all_gather_async_struct.topology,
-        attributes.strided_all_gather_async_struct.semaphore,
-        attributes.strided_all_gather_async_struct.barrier_semaphore,
-        attributes.strided_all_gather_async_struct.sub_device_id,
-        attributes.strided_all_gather_async_struct.num_workers_per_link,
-        attributes.strided_all_gather_async_struct.num_buffers_per_channel,
-        attributes.all_gather_core_grid_offset,
-
-        /* Matmul Params */
-        tensor_args.bias,  // Bias
-        attributes.matmul_struct.fused_activation,
-        attributes.matmul_struct.config.value(),
-        attributes.matmul_struct.compute_kernel_config);
-}
-
 void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& attributes,
@@ -123,8 +66,7 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
     }
 }
 
-StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t
-StridedAllGatherMinimalMatmulAsyncProgramFactory::strided_all_gather_minimal_matmul_async_program(
+StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t strided_all_gather_minimal_matmul_async_program(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     const Tensor& weight_tensor,
@@ -208,6 +150,63 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::strided_all_gather_minimal_mat
                 core_grid_offset);
 
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
+}
+
+StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t
+StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
+    const operation_attributes_t& attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto mesh_device = tensor_args.input_tensor.device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
+
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, attributes.strided_all_gather_async_struct.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor,
+        mesh_coordinate,
+        1,
+        attributes.strided_all_gather_async_struct.topology,
+        attributes.strided_all_gather_async_struct.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor,
+        mesh_coordinate,
+        -1,
+        attributes.strided_all_gather_async_struct.topology,
+        attributes.strided_all_gather_async_struct.cluster_axis);
+
+    // Return the StridedAllGatherMinimalMatmulAsync program with callbacks
+    return strided_all_gather_minimal_matmul_async_program(
+        tensor_args.input_tensor,   // input_tensor
+        output_tensor[0],           // all_gather_output_tensor
+        tensor_args.weight_tensor,  // weight_tensor
+        output_tensor[1],           // matmul_output_tensor
+
+        /* All Gather Params */
+        target_device,
+        mesh_coordinate,
+        forward_coord,
+        backward_coord,
+        attributes.strided_all_gather_async_struct.dim,
+        attributes.strided_all_gather_async_struct.num_links,
+        attributes.strided_all_gather_async_struct.ring_size,
+        device_index,
+        attributes.strided_all_gather_async_struct.topology,
+        attributes.strided_all_gather_async_struct.semaphore,
+        attributes.strided_all_gather_async_struct.barrier_semaphore,
+        attributes.strided_all_gather_async_struct.sub_device_id,
+        attributes.strided_all_gather_async_struct.num_workers_per_link,
+        attributes.strided_all_gather_async_struct.num_buffers_per_channel,
+        attributes.all_gather_core_grid_offset,
+
+        /* Matmul Params */
+        tensor_args.bias,  // Bias
+        attributes.matmul_struct.fused_activation,
+        attributes.matmul_struct.config.value(),
+        attributes.matmul_struct.compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async::program
