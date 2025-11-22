@@ -347,6 +347,36 @@ FORCE_INLINE uint32_t read_from_pcie(
 //  -  cmd_ready, !prefetch_q_ready,  read_pending: exit (no barrier yet)
 //  -  cmd_ready,  prefetch_q_ready, !read_pending: issue and tag read
 //  -  cmd_ready,  prefetch_q_ready,  read_pending: issue and tag read
+
+// Helper function to poll for fetch_size - isolated for optnone
+#ifdef __clang__
+__attribute__((optnone))  // Disable optimizations for LLVM - polling loop
+#endif
+static uint32_t
+poll_for_fetch_size(volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr) {
+    WAYPOINT("HQW");
+    uint32_t heartbeat = 0;
+    uint32_t fetch_size;
+    // FIX: Use inline assembly to prevent LLVM LTO from breaking this volatile polling loop
+    // LLVM's LTO incorrectly optimizes volatile comparisons in loops
+    while (true) {
+        fetch_size = *prefetch_q_rd_ptr;
+        // Make the comparison opaque to LTO using inline assembly
+        bool is_zero;
+        asm volatile("seqz %0, %1\n"  // is_zero = (fetch_size == 0)
+                     : "=r"(is_zero)
+                     : "r"(fetch_size)
+                     : "memory");
+        if (!is_zero) {
+            break;
+        }
+        invalidate_l1_cache();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("HQD");
+    return fetch_size;
+}
+
 template <uint32_t preamble_size>
 void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_ptr) {
     static uint32_t pending_read_size = 0;
@@ -425,26 +455,8 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         } else {
             // By here, prefetch_q_ready must be false
             // Nothing to fetch, nothing pending, nothing available, stall on host
-            WAYPOINT("HQW");
-            uint32_t heartbeat = 0;
-            // FIX: Use inline assembly to prevent LLVM LTO from breaking this volatile polling loop
-            // LLVM's LTO incorrectly optimizes volatile comparisons in loops
-            while (true) {
-                fetch_size = *prefetch_q_rd_ptr;
-                // Make the comparison opaque to LTO using inline assembly
-                bool is_zero;
-                asm volatile("seqz %0, %1\n"  // is_zero = (fetch_size == 0)
-                             : "=r"(is_zero)
-                             : "r"(fetch_size)
-                             : "memory");
-                if (!is_zero) {
-                    break;
-                }
-                invalidate_l1_cache();
-                IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-            }
+            poll_for_fetch_size(prefetch_q_rd_ptr);
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
-            WAYPOINT("HQD");
         }
     }
 }
@@ -1039,7 +1051,11 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-uint32_t process_stall(uint32_t cmd_ptr) {
+#ifdef __clang__
+__attribute__((optnone))  // Disable optimizations for LLVM - contains polling loop
+#endif
+uint32_t
+process_stall(uint32_t cmd_ptr) {
     static uint32_t count = 0;
 
     count++;
@@ -1452,17 +1468,12 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
-    WAYPOINT("PCST");  // Process Cmd Start
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t cmd_id = cmd->base.cmd_id;
-    DPRINT << "PCMD: cmd_id=" << cmd_id << " cmd_ptr=" << HEX() << cmd_ptr << ENDL();
     bool done = false;
 
     switch (cmd_id) {
-        case CQ_PREFETCH_CMD_RELAY_LINEAR:
-            // DPRINT << "relay linear: " << cmd_ptr << ENDL();
-            stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
-            break;
+        case CQ_PREFETCH_CMD_RELAY_LINEAR: stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr); break;
 
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
@@ -1490,7 +1501,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
             WAYPOINT("RILS");  // Relay Inline Start
-            DPRINT << "RILS: relay inline case entered" << ENDL();
+            // DPRINT << "RILS: relay inline case entered" << ENDL();
             if constexpr (exec_buf) {
                 WAYPOINT("RIEB");
                 if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
@@ -2006,7 +2017,7 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
-    set_l1_data_cache<true>();
+    set_l1_data_cache<false>();  // TEMP: Disable L1 cache for LLVM debugging
 #if defined(FABRIC_RELAY)
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();

@@ -197,7 +197,7 @@ void JitBuildEnv::init(
         // Use LTO to reduce code size (needed to stay within firmware size limits with -mno-relax)
         // Firmware exports symbols to kernels, so both must use the same compiler/ABI
         // Use -Os (optimize for size) to compensate for -mno-relax bloat
-        string llvm_common_flags = "-std=c++17 -Os -flto -ffast-math -fno-exceptions ";
+        string llvm_common_flags = "-std=c++17 -Os -flto -ffast-math -fno-exceptions -g ";
         // Match GCC's -mcpu=tt-bh which uses rv32im (without 'c' compressed extension)
         // This avoids relocation alignment issues caused by 2-byte compressed instructions
         llvm_common_flags += "-target riscv32 -march=rv32im -mabi=ilp32 ";
@@ -211,6 +211,9 @@ void JitBuildEnv::init(
         llvm_common_flags += "-fno-strict-aliasing ";
         // Enable function/data sections so linker can garbage-collect unused/empty sections
         llvm_common_flags += "-ffunction-sections -fdata-sections ";
+        // Workaround for LLVM bug: jump table generation for switch statements is broken on RISC-V with LTO+Os
+        // Force LLVM to use if-else chains instead of jump tables to avoid dispatch kernel hangs
+        llvm_common_flags += "-fno-jump-tables ";
 
         // Add GCC's RISC-V toolchain headers so LLVM can find <cstdint>, <unistd.h>, etc.
         // Use the same SFPI path we found for GCC
@@ -225,6 +228,8 @@ void JitBuildEnv::init(
         if (rtoptions.get_riscv_debug_info_enabled()) {
             llvm_common_flags += "-g ";
         }
+        // FORCE debug symbols for LLVM (for tt-triage/gdb debugging)
+        llvm_common_flags += "-g ";
 
         this->cflags_llvm_ = llvm_common_flags;
         this->cflags_llvm_ +=
@@ -244,6 +249,12 @@ void JitBuildEnv::init(
 
         // Linker uses the same base flags (with LTO to resolve internal calls)
         this->lflags_llvm_ = llvm_common_flags;
+        // Explicitly add -g to linker to preserve debug info through LTO
+        if (rtoptions.get_riscv_debug_info_enabled()) {
+            this->lflags_llvm_ += "-g ";
+        }
+        // FORCE debug symbols in linker for LLVM (for tt-triage/gdb debugging)
+        this->lflags_llvm_ += "-g ";
         this->lflags_llvm_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
         // Use --gc-sections to reduce code size
         this->lflags_llvm_ += "-Wl,--gc-sections ";

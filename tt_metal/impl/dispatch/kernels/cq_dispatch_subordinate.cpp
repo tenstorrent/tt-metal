@@ -331,7 +331,7 @@ void set_go_signal_noc_data() {
 }
 
 void kernel_main() {
-    set_l1_data_cache<true>();
+    set_l1_data_cache<false>();  // TEMP: Disable L1 cache for LLVM debugging
     DPRINT << "dispatch_s : start" << ENDL();
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();

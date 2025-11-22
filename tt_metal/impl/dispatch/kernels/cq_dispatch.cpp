@@ -1213,7 +1213,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
 }
 
 void kernel_main() {
-    set_l1_data_cache<true>();
+    set_l1_data_cache<false>();  // TEMP: Disable L1 cache for LLVM debugging
 #if defined(FABRIC_RELAY)
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();

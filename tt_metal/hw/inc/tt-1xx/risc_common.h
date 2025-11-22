@@ -152,7 +152,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 //  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #if defined(ARCH_BLACKHOLE)
-    asm("fence");
+    asm volatile("fence" ::: "memory");
 #endif
 }
 
@@ -160,29 +160,29 @@ template <bool enable = true>
 inline __attribute__((always_inline)) void set_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
     if constexpr (enable) {
-        asm(R"ASM(
+        asm volatile(R"ASM(
             li t1, 0x8
             csrrc zero, 0x7c0, t1
              )ASM" ::
-                : "t1");
+                         : "t1", "memory");
 #if !defined(ENABLE_HW_CACHE_INVALIDATION)
         // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
         // This is default enabled
-        asm(R"ASM(
+        asm volatile(R"ASM(
             li   t1, 0x1
             slli t1, t1, 24
             fence
             csrrs zero, 0x7c0, t1
             )ASM" ::
-                : "t1");
+                         : "t1", "memory");
 #endif
     } else {
-        asm(R"ASM(
+        asm volatile(R"ASM(
             fence
             li t1, 0x8
             csrrs zero, 0x7c0, t1
              )ASM" ::
-                : "t1");
+                         : "t1", "memory");
     }
 #endif
 }
