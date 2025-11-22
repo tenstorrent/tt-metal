@@ -76,10 +76,10 @@ CoreRangeSet get_worker_grid(
     const Tensor* input_tensor_b,
     const Tensor* input_tensor_c,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    // If sub_core_grid is provided, use it directly
-    if (sub_core_grid.has_value()) {
-        return sub_core_grid.value();
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // If sub_core_grids is provided, use it directly
+    if (sub_core_grids.has_value()) {
+        return sub_core_grids.value();
     }
 
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
@@ -151,7 +151,13 @@ TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program
 
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        ternary_op_type, ternary_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
+        ternary_op_type,
+        ternary_variant,
+        broadcast_type,
+        memory_config,
+        get_dtype(),
+        compute_kernel_config,
+        sub_core_grids);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_hit(
@@ -384,7 +390,7 @@ TernaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Detect broadcast type for TTT variant
     TernaryBroadcastType broadcast_type =
         get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
@@ -395,10 +401,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grid),
+        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
-        .sub_core_grid = sub_core_grid,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
         .scalar_input_b = std::nullopt,
     };
@@ -422,7 +428,7 @@ TernaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // This invoke variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
         op_type == TernaryOpType::ADDCMUL,
@@ -438,10 +444,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grid),
+        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
-        .sub_core_grid = sub_core_grid,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
         .scalar_input_b = std::nullopt,
     };
@@ -464,7 +470,7 @@ TernaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Detect broadcast type for TTS variant
     TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape());
 
@@ -474,10 +480,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, &input_b, nullptr, optional_output_tensor, sub_core_grid),
+        .worker_grid = get_worker_grid(input_a, &input_b, nullptr, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
-        .sub_core_grid = sub_core_grid,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_b = scalar_c,
     };
 
@@ -499,7 +505,7 @@ TernaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_c.logical_shape());
 
     operation_attributes_t attributes{
@@ -508,10 +514,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_c.memory_config()),
         .input_dtype = input_a.dtype(),
-        .worker_grid = get_worker_grid(input_a, nullptr, &input_c, optional_output_tensor, sub_core_grid),
+        .worker_grid = get_worker_grid(input_a, nullptr, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_c.dtype()),
         .compute_kernel_config = std::nullopt,
-        .sub_core_grid = sub_core_grid,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar_b,
     };
 
