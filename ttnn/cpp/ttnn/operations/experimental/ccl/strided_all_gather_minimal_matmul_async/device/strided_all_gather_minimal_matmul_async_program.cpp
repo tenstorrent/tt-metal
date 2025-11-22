@@ -116,7 +116,8 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::cached_program_t strided_all_g
         matmul_fused_op_signaler);
 
     // Create the all gather fused op signaler
-    std::optional<StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler = StridedAllGatherFusedOpSignaler();
+    std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler =
+        ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler();
     all_gather_fused_op_signaler->init_fused_op(
         matmul_fused_op_signaler->fused_op_receiver_cores_noc,
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
