@@ -59,7 +59,8 @@ xt::xarray<float> swiglu_forward_reference(
     auto xw3 = xt::linalg::tensordot(x, w3_mat, {3}, {0});
 
     // SiLU activation: z * sigmoid(z)
-    auto silu = [](const xt::xarray<float>& t) {
+    // Note: Must return xt::xarray to force evaluation, not a lazy expression
+    auto silu = [](const xt::xarray<float>& t) -> xt::xarray<float> {
         auto sigmoid = 1.0f / (1.0f + xt::exp(-t));
         return t * sigmoid;
     };
