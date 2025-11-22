@@ -55,7 +55,6 @@ struct StridedAllGatherAsync {
         const ttnn::ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         const std::optional<uint32_t>& cluster_axis,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
         const std::optional<uint32_t>& tiles_per_chunk,
         const std::optional<uint32_t>& num_workers_per_link,
         const std::optional<uint32_t>& num_buffers_per_channel,

@@ -102,10 +102,6 @@ def run_strided_all_gather_minimal_matmul_impl(
         create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
-    barrier_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
-
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
     logger.info(f"All gather dim: {dim}")
@@ -206,7 +202,6 @@ def run_strided_all_gather_minimal_matmul_impl(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
-                barrier_semaphore=barrier_semaphore_handles[i],
                 tiles_per_chunk=mm_core_grid.y * (mm_block_m // 32) * (mm_block_k // 32),
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
@@ -233,7 +228,6 @@ def run_strided_all_gather_minimal_matmul_impl(
                 num_links=num_links,
                 memory_config_ag=mem_config_ag,
                 topology=all_gather_topology,
-                barrier_semaphore=barrier_semaphore_handles[i],
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
                 bias=bias_tensor_mesh_list[i] if use_bias else None,
