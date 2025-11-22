@@ -80,7 +80,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
 
-    uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
+    uint32_t packet_header_cb_num_pages = 4;  // One for data, one for sync
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto packet_header_cb_index = tt::CBIndex::c_1;
@@ -160,6 +160,8 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         receiver_fabric_node_id.chip_id);
     tt::tt_fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id, receiver_fabric_node_id, link_indices[0], program, sender_core_coord, writer_rt_args);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        sender_fabric_node_id, receiver_fabric_node_id, link_indices[1], program, sender_core_coord, writer_rt_args);
 
     tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord, writer_rt_args);
 

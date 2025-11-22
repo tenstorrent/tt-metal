@@ -375,7 +375,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     // auto sender_logical_coord = CoreCoord(0, 0);
     // auto recv_logical_coord = CoreCoord(0, 1);
 
-    uint32_t socket_fifo_size = 420 * 1024;
+    uint32_t socket_fifo_size = 56 * 1024;
     auto mesh_shape = mesh_device_->shape();
 
     auto physical_system_descriptor = create_physical_system_descriptor();

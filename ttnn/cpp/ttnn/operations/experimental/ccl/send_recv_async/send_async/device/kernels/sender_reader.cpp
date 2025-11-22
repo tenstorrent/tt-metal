@@ -71,7 +71,7 @@ void kernel_main() {
     else {
         // TODO #24995: Could read whole page into scratch, then copy locally
         // Read entire tensor in a single shot
-        for (int i = 0; i < 50000000; i++) {
+        for (int i = 0; i < 1000000; i++) {
             uint32_t page_index = 0;
             auto noc_read_addr = input_addr_gen.get_noc_addr(0);
             cb_reserve_back(cb0_id, 1);

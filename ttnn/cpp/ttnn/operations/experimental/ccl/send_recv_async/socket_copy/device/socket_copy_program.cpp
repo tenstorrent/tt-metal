@@ -112,6 +112,12 @@ tt::tt_metal::operation::ProgramWithCallbacks socket_copy_single_core(
         my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[0], program, my_core_coord, rt_args);
     tt::tt_fabric::append_fabric_connection_rt_args(
         my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[0], program, my_core_coord, rt_args);
+
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        my_fabric_node_id, upstream_fabric_node_id, bwd_link_indices[1], program, my_core_coord, rt_args);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        my_fabric_node_id, downstream_fabric_node_id, fwd_link_indices[1], program, my_core_coord, rt_args);
+
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, my_core_coord, rt_args);
 
     auto override_runtime_arguments_callback =
