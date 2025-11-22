@@ -15,6 +15,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
@@ -265,7 +266,7 @@ void py_module(py::module& module) {
         [](const ttnn::Tensor& host_tensor,
            ttnn::Tensor& device_tensor,
            const std::optional<QueueId>& cq_id = std::nullopt) {
-            tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
+            tt::tt_metal::tensor_impl::copy_to_device(host_tensor, device_tensor, cq_id);
         },
         py::arg("host_tensor"),
         py::arg("device_tensor"),
@@ -277,7 +278,7 @@ void py_module(py::module& module) {
            ttnn::Tensor& host_tensor,
            bool blocking = true,
            std::optional<ttnn::QueueId> cq_id = std::nullopt) {
-            tt::tt_metal::write_tensor(device_tensor, host_tensor, blocking, cq_id);
+            tt::tt_metal::tensor_impl::copy_to_host(device_tensor, host_tensor, blocking, cq_id);
         },
         py::arg("device_tensor"),
         py::arg("host_tensor"),
