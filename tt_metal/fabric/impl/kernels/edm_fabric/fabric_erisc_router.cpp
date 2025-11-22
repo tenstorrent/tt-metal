@@ -2177,6 +2177,7 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
+        init_ptr_val<to_receiver_packets_sent_streams[2]>(0);
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
         init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
         // init_ptr_val<sender_channel_free_slots_stream_ids[5]>(SENDER_NUM_BUFFERS_ARRAY[5]);
@@ -2226,7 +2227,10 @@ void kernel_main() {
             receiver_0_completed_packet_header_cb_size_headers),
         PacketHeaderRecorder<PACKET_HEADER_TYPE>(
             reinterpret_cast<volatile uint32_t*>(receiver_1_completed_packet_header_cb_address),
-            receiver_1_completed_packet_header_cb_size_headers)};
+            receiver_1_completed_packet_header_cb_size_headers),
+        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
+            reinterpret_cast<volatile uint32_t*>(receiver_2_completed_packet_header_cb_address),
+            receiver_2_completed_packet_header_cb_size_headers)};
 
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_0_channel_counters_ptr = nullptr;
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_1_channel_counters_ptr = nullptr;

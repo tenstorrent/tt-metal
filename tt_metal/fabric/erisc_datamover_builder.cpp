@@ -433,7 +433,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // If not a Ring/Torus, we need to discount for Dateline VC sender and receiver channels
     if (topology == Topology::Linear || topology == Topology::Mesh) {
         this->num_used_sender_channels -= 1;
-        this->num_used_receiver_channels -= 1;
+        this->num_used_receiver_channels -= is_2D_routing ? 2 : 1;  // discount both vc1 and vc2 channels
         this->num_fwd_paths -= 1;
     }
 
@@ -976,6 +976,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         FabricEriscDatamoverConfig::enable_fabric_counters,
         config.receiver_channels_counters_address[0],
         config.receiver_channels_counters_address[1],
+        config.receiver_channels_counters_address[2],
         config.sender_channels_counters_address[0],
         config.sender_channels_counters_address[1],
         config.sender_channels_counters_address[2],
@@ -988,6 +989,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.receivers_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
         config.receivers_completed_packet_header_cb_address[1],
+        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
+        config.receivers_completed_packet_header_cb_address[2],
         FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[0],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
@@ -1006,6 +1009,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(4),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
         config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(2),
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
