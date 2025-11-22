@@ -11,9 +11,8 @@ namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul
 
 struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
     struct shared_variables_t {
-        ttnn::operations::experimental::ccl::strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::
-            shared_variables_t ag_shared_variables;
-        ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t mm_shared_variables;
+        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::shared_variables_t ag_shared_variables;
+        minimal_matmul::minimal_matmul_override_variables_t mm_shared_variables;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -62,7 +61,7 @@ struct StridedAllGatherMinimalMatmulAsyncProgramFactory {
         /* Matmul Params */
         const std::optional<const Tensor>& bias,
         const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-        operations::experimental::minimal_matmul::MinimalMatmulConfig config,
+        minimal_matmul::MinimalMatmulConfig config,
         DeviceComputeKernelConfig compute_kernel_config);
 };
 
