@@ -25,9 +25,6 @@ from models.tt_transformers.demo.trace_region_config import get_supported_trace_
 from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_updated_device_params
 
-# Constants for device configurations
-SIX_U_NUM_PCIE_DEVICES = 32
-
 
 @pytest.fixture(scope="function")
 def reset_seeds():

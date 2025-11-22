@@ -82,12 +82,6 @@ public:
 
     ~ControlPlane();
 
-    // Printing functions
-    void print_routing_tables() const;
-    void print_ethernet_channels() const;
-    void print_active_ethernet_connections() const;
-    void print_all_ethernet_connections() const;
-
     // Converts chip level routing tables to per ethernet channel
     void configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
@@ -218,6 +212,10 @@ public:
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
 private:
+    // Printing functions
+    void print_routing_tables() const;
+    void print_ethernet_channels() const;
+
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
