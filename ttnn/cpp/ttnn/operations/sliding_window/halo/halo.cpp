@@ -16,7 +16,7 @@ Tensor HaloOperation::invoke(
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool config_tensors_in_dram) {
-    return halo_op(
+    return ttnn::prim::halo(
         input_tensor,
         config,
         pad_val,
