@@ -125,7 +125,7 @@ void stop_perf_counter() {
                     asm("nop");
                 }
                 PerfCounter counter(read_reg[1], read_reg[0], counters[i].first);
-                timeStampedData<12345>(counter.raw_data);
+                timeStampedData<9090>(counter.raw_data);
             }
         }
     }
