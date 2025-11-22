@@ -14,21 +14,20 @@ namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul
 
 struct operation_attributes_t {
     /* All Gather Params */
-    const ttnn::operations::experimental::ccl::strided_all_gather_async::operation_attributes_t
-        strided_all_gather_async_struct;
+    const strided_all_gather_async::operation_attributes_t strided_all_gather_async_struct;
 
     /* Matmul Params */
-    const ttnn::operations::experimental::minimal_matmul::MinimalMatmulOp matmul_struct;
+    const minimal_matmul::MinimalMatmulOp matmul_struct;
 
     const CoreCoord all_gather_core_grid_offset;
     const std::vector<IDevice*> devices;
-    const ttnn::operations::experimental::ccl::strided_all_gather_async::StridedAllGatherAsync ag_op;
+    const strided_all_gather_async::StridedAllGatherAsync ag_op;
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
-    const Tensor& weight_tensor;
-    const std::optional<const Tensor>& bias = std::nullopt;
+    const Tensor input_tensor;
+    const Tensor weight_tensor;
+    const std::optional<const Tensor> bias = std::nullopt;
 };
 
 using tensor_return_value_t = std::vector<Tensor>;

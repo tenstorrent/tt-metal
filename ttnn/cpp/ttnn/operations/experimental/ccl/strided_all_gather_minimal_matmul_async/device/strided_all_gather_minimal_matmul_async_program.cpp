@@ -107,14 +107,13 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
     tensor_return_value_t& output_tensor) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        ttnn::operations::experimental::ccl::strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::
-            override_runtime_arguments_per_program(
-                shared_variables.ag_shared_variables,
-                program,
-                attributes.strided_all_gather_async_struct,
-                ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
-                output_tensor.at(0));
-        ttnn::operations::experimental::minimal_matmul::helpers::override_program_parameters(
+        strided_all_gather_async::program::StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program(
+            shared_variables.ag_shared_variables,
+            program,
+            attributes.strided_all_gather_async_struct,
+            ttnn::operations::experimental::ccl::strided_all_gather_async::tensor_args_t(tensor_args.input_tensor),
+            output_tensor.at(0));
+        minimal_matmul::helpers::override_program_parameters(
             shared_variables.mm_shared_variables,
             &attributes.matmul_struct,
             program,
