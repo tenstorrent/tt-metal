@@ -397,7 +397,7 @@ Result conv2d_DRAM(
     bias_tensor_on_device = bias_tensor;
     auto slice_attr = Conv2dSliceAttr(
         batch_size,
-        {input_height, input_width},
+        std::array<uint32_t, 2>{input_height, input_width},
         in_channels,
         out_channels,
         kernel_size,
@@ -413,9 +413,9 @@ Result conv2d_DRAM(
         conv_config,
         compute_config,
         device);
-
+    std::vector<op_slicing::OpSliceAttr*> slice_attr_vector = {&slice_attr};
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config);
+        input_tensor_on_device, dram_output_tensor, slice_attr_vector, dram_slice_config);
 
     if (should_deallocate_act) {
         input_tensor_on_device.deallocate(true);
@@ -838,6 +838,43 @@ Conv2dSliceAttr::Conv2dSliceAttr(
 
     };
 
+Conv2dSliceAttr::Conv2dSliceAttr(
+    uint32_t batch_size,
+    std::array<uint32_t, 2> input_shape,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    Layout input_layout,
+    DataType input_dtype,
+    DataType output_dtype,
+    Tensor& weight_tensor,
+    OptionalRefTensor bias_tensor,
+    Conv2dConfig& conv_config,
+    DeviceComputeKernelConfig& compute_config,
+    MeshDevice* device) :
+    Conv2dSliceAttr(
+        batch_size,
+        IOShape{input_shape[0], input_shape[1]},
+        input_channels,
+        output_channels,
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation,
+        groups,
+        input_layout,
+        input_dtype,
+        output_dtype,
+        weight_tensor,
+        bias_tensor,
+        conv_config,
+        compute_config,
+        device) {};
+
 std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::get_input_slice(
     IOShape output_slice_start, IOShape output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
@@ -936,9 +973,12 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 }
 
 std::string Conv2dSliceAttr::name() { return "Conv2D"; }
-
+std::string Conv2dSliceAttr::str() { return fmt::format("Conv2D Slice Attr {}", *this); }
 ttnn::Tensor Conv2dSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+    const ttnn::Tensor& sliced_input_tensor,
+    IOShape output_slice_start,
+    IOShape output_slice_end,
+    bool pad_output_width) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
     auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
     int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
@@ -988,7 +1028,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     uint32_t width_rounding_value =
         (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
-    if (output_slice_width % width_rounding_value != 0) {
+    if (pad_output_width && (output_slice_width % width_rounding_value != 0)) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
         log_trace(
             LogOp, "Conv2d DRAM Slicing: Additional padding of {} added to the right side.", additional_padded_width);
