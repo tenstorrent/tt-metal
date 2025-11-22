@@ -100,6 +100,8 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 #endif
 OUTPUT_ARCH(riscv)
 
+LD_FEATURE(SANE_EXPR)
+
 ENTRY(_start)
 
 PHDRS {
@@ -161,7 +163,7 @@ SECTIONS {
     *object.o(.data .bss)
   } :firmdata
 #endif
-   IF_KERNEL(__data_lma = __tdata_lma + SIZEOF(.tdata) - (__ldm_tdata_init - ADDR(.tdata));)
+   IF_KERNEL(__data_lma_offset = SIZEOF(.tdata) - ABSOLUTE(__ldm_tdata_init - ADDR(.tdata));)
   .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
   : IF_KERNEL(LOAD_AFTER(.tdata))
   {
