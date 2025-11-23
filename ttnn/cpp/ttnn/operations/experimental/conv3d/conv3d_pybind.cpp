@@ -13,8 +13,6 @@
 #include "conv3d.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::experimental::conv3d::detail {
 
 void py_bind_conv3d(py::module& module) {

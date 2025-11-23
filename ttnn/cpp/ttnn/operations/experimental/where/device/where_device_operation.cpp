@@ -9,7 +9,6 @@
 #include "ttnn/operation_concepts.hpp"
 
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 

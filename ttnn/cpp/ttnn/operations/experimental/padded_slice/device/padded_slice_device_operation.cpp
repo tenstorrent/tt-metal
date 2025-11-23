@@ -4,7 +4,6 @@
 
 #include "padded_slice_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;

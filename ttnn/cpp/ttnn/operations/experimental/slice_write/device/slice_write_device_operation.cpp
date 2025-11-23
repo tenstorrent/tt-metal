@@ -4,7 +4,6 @@
 
 #include "slice_write_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 

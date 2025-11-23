@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"

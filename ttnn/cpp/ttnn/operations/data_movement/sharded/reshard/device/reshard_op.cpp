@@ -7,7 +7,6 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
