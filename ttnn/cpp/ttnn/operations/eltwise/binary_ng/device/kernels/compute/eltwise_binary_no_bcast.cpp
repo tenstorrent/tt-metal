@@ -8,9 +8,11 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "ELTWISE_SFPU_NO_BCAST.cpp" << ENDL();
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
