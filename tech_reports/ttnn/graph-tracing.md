@@ -230,7 +230,6 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     input_path,
 ):
-    disable_persistent_kernel_cache()
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)

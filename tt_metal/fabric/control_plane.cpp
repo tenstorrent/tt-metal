@@ -2764,12 +2764,10 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
         "get_galaxy_cabling_descriptor_path is only supported on Galaxy systems, but cluster type is {}",
         enchantum::to_string(cluster_type));
 
-    static constexpr std::string_view X_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
-    static constexpr std::string_view Y_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static constexpr std::string_view X_TORUS_PATH = "tt_metal/fabric/cabling_descriptors/wh_galaxy_x_torus.textproto";
+    static constexpr std::string_view Y_TORUS_PATH = "tt_metal/fabric/cabling_descriptors/wh_galaxy_y_torus.textproto";
     static constexpr std::string_view XY_TORUS_PATH =
-        "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+        "tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto";
 
     // Get fabric type from config and map to cabling descriptor paths
     FabricType fabric_type = get_fabric_type(fabric_config);

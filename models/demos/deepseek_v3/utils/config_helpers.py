@@ -845,11 +845,36 @@ def _get_remove_dim_slices(
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
-    state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
-    weight_cache_path: Path,
-    mesh_device: ttnn.Device,
-    force_recalculate: bool,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None = None,
+    weight_cache_path: Path | None = None,
+    mesh_device: ttnn.Device | None = None,
+    force_recalculate: bool = False,
+    random_weights: bool = False,
+    model_path: str | None = None,
+    single_layer: str | None = None,
 ):
+    """
+    Get weight configuration, either from cache or by converting weights.
+
+    Args:
+        ModuleClass: The module class to convert weights for
+        hf_config: HuggingFace model configuration
+        state_dicts: Optional pre-loaded state dicts. If None, will be loaded based on random_weights/model_path.
+        weight_cache_path: Path to cache weights
+        mesh_device: TTNN mesh device
+        force_recalculate: Force recalculation even if cached weights exist
+        random_weights: If True, generate random weights from reference model
+        model_path: Path to HuggingFace model directory (required if random_weights=False and state_dicts=None)
+        single_layer: Optional single layer name (used for validation with random weights)
+
+    Returns:
+        Weight configuration dictionary
+    """
+    if weight_cache_path is None:
+        raise ValueError("weight_cache_path must be provided")
+    if mesh_device is None:
+        raise ValueError("mesh_device must be provided")
+
     weight_cache_path = (
         weight_cache_path
         / f"{hf_config.num_hidden_layers}_layers"
@@ -868,10 +893,25 @@ def get_weight_config(
         logger.info(f"Using weights cached at {weight_cache_path}")
         return weight_config
 
+    # Only prepare state dicts if we need to convert weights
     logger.info(f"Caching weights at {weight_cache_path}")
+    if state_dicts is None:
+        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+        model_state = prepare_model_state_dict(
+            hf_config=hf_config,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
+        )
+        state_dicts = (model_state,)
+
+    # Convert weights to TT tensors-on-disk and build weight_config
+    logger.info("Converting weights to TTNN SavedWeight format...")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
+    logger.info("Converting weights to TTNN SavedWeight format...done")
     return weight_config
 
 
