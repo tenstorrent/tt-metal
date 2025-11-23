@@ -94,7 +94,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    constexpr uint32_t TILES_NUM = 48;
+    const uint32_t TILES_NUM = (dst_cb_data_format == DataFormat::Float32) ? 32 : 48;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
     create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, TILES_NUM);
     create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, TILES_NUM);
