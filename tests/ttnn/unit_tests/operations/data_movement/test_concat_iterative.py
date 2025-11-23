@@ -104,7 +104,7 @@ def test_concat_mid_tensor_1(device, input_mem_config, tensor_layout, dim, num_i
 
     # Special case: do not test if output_tensor.page >= Core L1 memory
     if tensor_layout == ttnn.ROW_MAJOR_LAYOUT and num_inputs >= 500 and dim == -1:
-        return
+        pytest.skip("Skipping test: output tensor page size exceeds Core L1 memory for ROW_MAJOR_LAYOUT, num_inputs >= 500, dim = -1")
 
     shape_align = None
     if input_mem_config == "interleaved_l1" or input_mem_config == "interleaved_dram":
