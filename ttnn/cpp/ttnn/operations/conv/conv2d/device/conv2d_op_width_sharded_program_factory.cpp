@@ -693,6 +693,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
             .full_core_grid = full_core_grid,
             .weights_kernel_id = weights_kernel_id,
             .total_num_active_cores = total_num_active_cores,
+            .conv_reader_indices_storage = conv_reader_indices_storage,
         }};
 }
 

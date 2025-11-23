@@ -17,6 +17,7 @@ struct Conv2dShardedProgramFactory {
         tt::tt_metal::CBHandle cb_partials;
         bool partials_cb_uses_output;
         bool has_bias;
+        tt::tt_metal::DeviceStorage conv_reader_indices_storage;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

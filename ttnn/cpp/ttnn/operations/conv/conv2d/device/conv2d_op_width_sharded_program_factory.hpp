@@ -18,6 +18,7 @@ struct Conv2dWidthShardedProgramFactory {
         CoreCoord full_core_grid;
         tt::tt_metal::KernelHandle weights_kernel_id;
         uint32_t total_num_active_cores;
+        tt::tt_metal::DeviceStorage conv_reader_indices_storage;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

@@ -1462,6 +1462,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             .cb_partials = cb_partials,
             .partials_cb_uses_output = partials_cb_uses_output,
             .has_bias = has_bias,
+            .conv_reader_indices_storage = conv_reader_indices_storage,
         }};
 }
 
