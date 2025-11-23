@@ -69,7 +69,7 @@ def test_attention_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    prefetcher = Prefetcher(mesh_device, num_tensors=2, num_receiver_cores=4, num_layers=1) if use_prefetcher else None
+    prefetcher = Prefetcher(mesh_device, num_tensors=2, num_receiver_cores=1, num_layers=1) if use_prefetcher else None
 
     model_args = ModelArgs(
         mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
@@ -171,6 +171,7 @@ def test_attention_inference(
     )
 
     if prefetcher is not None:
+        breakpoint()
         prefetcher.run()
 
     for i in range(generation_length):

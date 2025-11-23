@@ -509,7 +509,7 @@ class RotarySetup(LightweightModule):
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
         # Send the idxs to device
-
+        breakpoint()
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -530,6 +530,7 @@ class RotarySetup(LightweightModule):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        breakpoint()
 
         cos = ttnn.embedding(
             rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
@@ -541,14 +542,16 @@ class RotarySetup(LightweightModule):
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
-
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size_per_device_group, :, :]
-            sin = sin[:, : self.batch_size_per_device_group, :, :]
+        breakpoint()
 
         if prefetcher is None:
+            cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
+            sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
+
+            if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+                cos = cos[:, : self.batch_size_per_device_group, :, :]
+                sin = sin[:, : self.batch_size_per_device_group, :, :]
+
             cos = ttnn.interleaved_to_sharded(
                 cos, mem_config
             )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]

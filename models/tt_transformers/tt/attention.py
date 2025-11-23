@@ -299,10 +299,15 @@ class Attention(LightweightModule):
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
-        wo_mem_config = configuration.create_dram_sharded_mem_config(
-            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+        wo_mem_config = (
+            configuration.create_dram_sharded_mem_config(
+                (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
+            )
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"]
         )
-
+        self.use_fused_all_gather_matmul = self.use_fused_all_gather_matmul and self.prefetcher is None
+        breakpoint()
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
@@ -329,6 +334,7 @@ class Attention(LightweightModule):
 
         # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
+            breakpoint()
             self.prefetcher.insert_tensor(self.wqkv)
             self.prefetcher.insert_tensor(self.wo)
 
@@ -434,6 +440,7 @@ class Attention(LightweightModule):
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
+            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
 
         if self.TG:

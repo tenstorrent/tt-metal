@@ -1048,6 +1048,12 @@ class ModelArgs:
             )
 
             # ====== Prefetcher + Attention program configs ======
+            wo_shape_ring = (self.dim // self.cluster_shape[1], self.dim // self.cluster_shape[0])  # Use padded K and N
+            self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+                k=wo_shape_ring[0],
+                n=wo_shape_ring[1],
+            )
+
             self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
                 core_grid=self.prefetcher.to_core_range_set(
