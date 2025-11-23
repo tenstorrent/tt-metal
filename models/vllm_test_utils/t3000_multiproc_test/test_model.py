@@ -74,3 +74,9 @@ class DummyT3000MultiProcessModel:
 
     def allocate_kv_cache(self, *args, **kwargs):
         return None
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params):
+        local_kwargs = {
+            "tokens": torch.ones(1, 128, dtype=torch.int32),
+        }
+        self.prefill_forward(**local_kwargs)
