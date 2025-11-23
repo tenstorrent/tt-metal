@@ -7,12 +7,10 @@ Script to generate test_op_{operation_id}.py files from table.yaml entries.
 Usage: python generate_tests.py table.yaml
 """
 
-import json
 import yaml
 import re
 import sys
 import os
-from pathlib import Path
 
 
 def parse_arguments(arguments_str):

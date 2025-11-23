@@ -29,8 +29,6 @@ from ttexalens.context import Context
 from ttexalens.device import Device
 
 import re, textwrap, subprocess, shutil, linecache
-import os
-from pathlib import Path
 
 
 # ============================================================================
@@ -767,8 +765,6 @@ def dump_ops(
             # Parse and format callstack frames - each frame on its own line
             # Expected format: "#0 file.py:42 #1 file.py:81" or "#0 func [binary(+0x123)] #1 ..."
             # Also handle old format: "func1 <- func2 <- func3"
-            import re
-
             frame_pattern = r"#\d+\s+[^#]+"
             frames = re.findall(frame_pattern, resolved_callstack)
 
@@ -899,8 +895,6 @@ def dump_ops(
         if args:
             if summary:
                 # Summary mode: extract and show each argument on its own line
-                import re
-
                 # Split arguments by top-level commas (but not commas inside parentheses/brackets)
                 # Simple approach: find commas that are not inside any brackets
                 bracket_depth = 0
