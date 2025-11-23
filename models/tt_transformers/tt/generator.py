@@ -86,6 +86,7 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
+        self.already_warmed_up_prefill = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
 
@@ -100,27 +101,41 @@ class Generator:
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-    def warmup_prefill_traces(
+    def warmup_prefill(
         self,
-        page_table,
         kv_cache,
         enable_trace,
     ):
-        if self.prefill_traces_warmup or not enable_trace:
+        if self.already_warmed_up_prefill:
             return
+        self.already_warmed_up_prefill = True
 
-        self.prefill_traces_warmup = True
+        sequence_lengths_to_warmup = [128, 256, 512, 1024, 2048, 4096, 8192]
+        for traced_seq_len in self.model_args[0].trace_prefill_supported_seq_lens:
+            if traced_seq_len not in sequence_lengths_to_warmup:
+                sequence_lengths_to_warmup.append(traced_seq_len)
+        sequence_lengths_to_warmup.sort()
+        for seq_len in sequence_lengths_to_warmup:
+            if seq_len > self.model_args[0].max_seq_len:
+                sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(seq_len)]
+                break
+
         for model_id in range(self.data_parallel):
-            for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
+            for supported_length in sequence_lengths_to_warmup:
+                # When model_id = 0, we compile all operators for the first time
+                # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
+                if model_id != 0 and (
+                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
+                ):
+                    continue
+
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
 
-                # TODO: Currently working on enabling trace for all models that use tt_transformers
-                if not self.model_args[0].can_enable_trace(supported_length):
-                    continue
-
-                logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
+                logger.info(f"Warming up prefill for sequence length: {supported_length}")
+                # The page table will get padded properly in the prefill_forward method later
+                page_table = torch.zeros(1, 1, dtype=torch.int32)
                 self.prefill_forward_text(
                     warmup_tokens,
                     page_table,
@@ -247,11 +262,8 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        self.warmup_prefill_traces(
-            page_table,
-            kv_cache,
-            enable_trace,
-        )
+        # we need this here becuase of tt-metal tests
+        self.warmup_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -265,7 +277,7 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            # if model_id is not None, it means that prefill is called from warmup_prefill_traces
+            # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
@@ -1697,6 +1709,9 @@ class Generator:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
+
+    def warmup_model_prefill(self, **kwargs):
+        self.warmup_prefill(kwargs["kv_cache"], kwargs["enable_trace"])
 
     ## Destructor
 
