@@ -256,8 +256,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         bool use_width_sharding =
             input_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&

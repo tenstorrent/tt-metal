@@ -13,7 +13,7 @@
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 void bind_reduction_sampling_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
           Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 

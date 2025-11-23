@@ -40,7 +40,7 @@ void validate_core_read_write_bounds(
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
 
@@ -54,7 +54,7 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         address += soc_desc.get_address_offset(dram_channel);
     }

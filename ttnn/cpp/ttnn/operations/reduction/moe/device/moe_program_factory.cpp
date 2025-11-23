@@ -38,10 +38,10 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     uint32_t index_tile_size = tile_size(index_cb_data_format);
     uint32_t value_tile_size = tile_size(value_cb_data_format);
 
-    auto input_buffer = input_tensor.buffer();
-    auto topk_mask_buffer = topk_mask_tensor.buffer();
-    auto expert_mask_buffer = expert_mask_tensor.buffer();
-    auto out_buffer = out_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* topk_mask_buffer = topk_mask_tensor.buffer();
+    auto* expert_mask_buffer = expert_mask_tensor.buffer();
+    auto* out_buffer = out_tensor.buffer();
 
     uint32_t num_out_tiles = out_tensor.physical_volume() / tt::constants::TILE_HW;
     uint32_t scale_tiles = 1;
@@ -210,10 +210,10 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input_buffer = input_tensors.at(0).buffer();
-        auto topk_mask_buffer = input_tensors.at(2).buffer();
-        auto expert_mask_buffer = input_tensors.at(1).buffer();
-        auto output_buffer = output_tensors.at(0).buffer();
+        auto* input_buffer = input_tensors.at(0).buffer();
+        auto* topk_mask_buffer = input_tensors.at(2).buffer();
+        auto* expert_mask_buffer = input_tensors.at(1).buffer();
+        auto* output_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

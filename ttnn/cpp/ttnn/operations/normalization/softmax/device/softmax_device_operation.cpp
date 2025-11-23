@@ -178,7 +178,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
     if (tensors_args.mask.has_value()) {
-        auto& mask = tensors_args.mask.value();
+        const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
         TT_FATAL(
             tensors_args.input_tensor.device() == mask.device(), "Input tensor and mask must be on the same device");

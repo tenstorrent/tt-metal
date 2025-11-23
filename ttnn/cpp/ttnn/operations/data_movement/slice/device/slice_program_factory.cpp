@@ -28,7 +28,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto output_buffer = output_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -604,8 +604,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer_a = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer_a = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
@@ -629,8 +629,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const tt::tt_metal::KernelHandle& unary_reader_kernel_id,
     const tt::tt_metal::KernelHandle& unary_writer_kernel_id,
     std::vector<uint32_t>& accumulated_total_per_dim) {
-    const auto input_buffer = input_tensor.buffer();
-    const auto output_buffer = output_tensor.buffer();
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const output_buffer = output_tensor.buffer();
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 
@@ -1085,8 +1085,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
     const tt::tt_metal::KernelHandle& unary_reader_kernel_id,
     const tt::tt_metal::KernelHandle& unary_writer_kernel_id,
     std::vector<uint32_t>& accumulated_total_per_dim) {
-    const auto input_buffer = input_tensor.buffer();
-    const auto output_buffer = output_tensor.buffer();
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const output_buffer = output_tensor.buffer();
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 

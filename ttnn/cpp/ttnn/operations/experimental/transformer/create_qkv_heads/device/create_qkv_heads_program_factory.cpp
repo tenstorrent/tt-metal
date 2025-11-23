@@ -197,10 +197,10 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto in0_buffer = input_tensors.at(0).buffer();
-        auto out0_buffer = output_tensors.at(0).buffer();
-        auto out1_buffer = output_tensors.at(1).buffer();
-        auto out2_buffer = output_tensors.at(2).buffer();
+        auto* in0_buffer = input_tensors.at(0).buffer();
+        auto* out0_buffer = output_tensors.at(0).buffer();
+        auto* out1_buffer = output_tensors.at(1).buffer();
+        auto* out2_buffer = output_tensors.at(2).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_out0_id, *out0_buffer);

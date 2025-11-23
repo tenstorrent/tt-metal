@@ -149,7 +149,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
         return;
     }
 
-    for (auto& cb : program->circular_buffers()) {
+    for (const auto& cb : program->circular_buffers()) {
         track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
     }
 }
@@ -206,7 +206,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     }
 
     for (auto& any : input_parameters) {
-        const auto it = std::ranges::find(
+        const auto* const it = std::ranges::find(
             begin_function_any_map, any.type(), [](const auto& pair) -> const auto& { return pair.first; });
 
         if (it != begin_function_any_map.end()) {
@@ -248,7 +248,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
 
-    const auto it = std::ranges::find(
+    const auto* const it = std::ranges::find(
         end_function_any_map, output_tensors.type(), [](const auto& pair) -> const auto& { return pair.first; });
 
     if (it != end_function_any_map.end()) {
@@ -261,7 +261,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 int GraphProcessor::add_tensor(const Tensor& t) {
-    auto& storage = t.storage();
+    const auto& storage = t.storage();
     tt::tt_metal::Buffer* buffer = std::visit(
         [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
             if constexpr (std::is_same_v<T, DeviceStorage>) {

@@ -144,8 +144,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(
             .set_page_size(output_cb_index, cache_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = cache_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
 
     const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range / granularity;
@@ -281,9 +281,9 @@ operation::ProgramWithCallbacks update_cache_multi_core(
             uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
             uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
 
-            auto src_buffer = input_tensors.at(1).buffer();
+            auto* src_buffer = input_tensors.at(1).buffer();
 
-            auto dst_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = input_tensors.at(0).buffer();
 
             if (input_tensors.at(1).is_sharded()) {
                 UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
@@ -380,8 +380,8 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
 
     uint32_t output_cb_index = src0_cb_index;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = cache_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -469,9 +469,9 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
         uint32_t update_idxt = update_idx / TILE_HEIGHT;
         uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
 
-        auto src_buffer = input_tensors.at(1).buffer();
+        auto* src_buffer = input_tensors.at(1).buffer();
 
-        auto dst_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = input_tensors.at(0).buffer();
 
         if (input_tensors.at(1).is_sharded()) {
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);

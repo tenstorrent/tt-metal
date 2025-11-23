@@ -91,7 +91,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+    auto* const shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
 
     // Check that the stored cores in local device buffer matches expected cores to be used
     auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
@@ -213,8 +213,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = shard_view->device();
+    auto* const shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+    auto* const local_device = shard_view->device();
     const auto host_size_in_bytes = mesh_buffer->device_local_size();
     const auto bank_base_address = mesh_buffer->address();
     const auto page_size = mesh_buffer->page_size();

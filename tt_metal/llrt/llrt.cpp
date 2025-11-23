@@ -29,7 +29,7 @@
 
 namespace {
 void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual_core) {
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }

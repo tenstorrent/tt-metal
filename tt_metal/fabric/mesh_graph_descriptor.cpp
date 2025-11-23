@@ -1236,8 +1236,8 @@ GlobalNodeId MeshGraphDescriptor::find_instance_by_ref(
 }
 
 void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id) {
-    auto& graph_instance = get_instance(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
+    const auto& graph_instance = get_instance(graph_id);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(graph_instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1251,7 +1251,7 @@ void MeshGraphDescriptor::populate_inter_mesh_connections(GlobalNodeId graph_id)
 void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId graph_id) {
     auto & instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1313,11 +1313,11 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
 
 void MeshGraphDescriptor::populate_inter_mesh_topology_connections(GlobalNodeId graph_id) {
     auto& instance = instances_.at(graph_id);
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
-    auto& graph_topology = graph_desc->graph_topology();
+    const auto& graph_topology = graph_desc->graph_topology();
 
     switch (graph_topology.layout_type()) {
         case proto::GraphTopology::ALL_TO_ALL: populate_inter_mesh_topology_connections_all_to_all(graph_id); break;
@@ -1335,7 +1335,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 
@@ -1365,7 +1365,7 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
     // Iterate over all instances in graph
     auto& instance = instances_.at(graph_id);
 
-    const auto graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
+    const auto* const graph_desc = std::get<const proto::GraphDescriptor*>(instance.desc);
 
     TT_FATAL(graph_desc, "Graph descriptor not found for graph instance {}", graph_id);
 

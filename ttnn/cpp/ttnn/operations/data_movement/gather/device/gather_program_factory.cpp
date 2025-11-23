@@ -26,9 +26,9 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
     const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);
 
-    auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
+    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    auto* output_tensor_buffer = output_tensor.buffer();
 
     const bool input_tensor_is_dram = input_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool input_index_tensor_is_dram = input_index_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -44,7 +44,7 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -214,9 +214,9 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
+    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    auto* output_tensor_buffer = output_tensor.buffer();
 
     const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
     const uint32_t Ht =
@@ -269,9 +269,9 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
     const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);
 
-    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    const auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    const auto output_tensor_buffer = output_tensor.buffer();
+    auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* const input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    auto* const output_tensor_buffer = output_tensor.buffer();
 
     const bool input_tensor_is_dram = input_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool input_index_tensor_is_dram = input_index_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -287,7 +287,7 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
 
     // Calculate the number of cores available for computation
-    auto device = tensor_args.input_tensor.device();
+    auto* device = tensor_args.input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
 
@@ -456,9 +456,9 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
+    auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    auto* output_tensor_buffer = output_tensor.buffer();
 
     const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();

@@ -332,8 +332,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
         auto halo_in = HaloTensorCreation(input_tensors.at(0));
-        auto src_buffer = halo_in.buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = halo_in.buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);

@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

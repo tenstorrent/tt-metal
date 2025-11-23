@@ -106,8 +106,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         output_cb_index = src0_cb_index;
     }
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
@@ -247,8 +247,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        const auto src_buffer = input_tensors.at(0).buffer();
-        const auto dst_buffer = output_tensors.at(0).buffer();
+        auto* const src_buffer = input_tensors.at(0).buffer();
+        auto* const dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};

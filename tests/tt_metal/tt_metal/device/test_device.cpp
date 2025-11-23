@@ -55,7 +55,7 @@ bool l1_ping(
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
@@ -90,7 +90,7 @@ bool dram_ping(
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
@@ -207,7 +207,7 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
@@ -283,7 +283,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -339,7 +339,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
-    const auto device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->get_devices()[0];
 
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
@@ -388,7 +388,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

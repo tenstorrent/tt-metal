@@ -63,7 +63,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        auto& config = dev->allocator()->get_config();
+        const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
@@ -78,7 +78,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        auto& config = dev->allocator()->get_config();
+        const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
@@ -136,7 +136,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     CloseDevicesInPool();
     device_ids = {0};
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-    auto dev = DevicePool::instance().get_active_device(0);
+    auto* dev = DevicePool::instance().get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
     ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);

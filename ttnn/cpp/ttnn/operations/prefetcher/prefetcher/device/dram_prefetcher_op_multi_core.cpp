@@ -287,7 +287,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             TT_ASSERT(output_tensors.size() == 1);
 
             const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-            auto tensor_addrs_buffer = tensor_addrs.buffer();
+            auto* tensor_addrs_buffer = tensor_addrs.buffer();
             UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
         };
 

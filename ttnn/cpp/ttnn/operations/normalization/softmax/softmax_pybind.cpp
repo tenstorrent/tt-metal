@@ -76,7 +76,7 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
 
 // Softmax operation base
 void bind_normalization_softmax_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Computes the softmax function over the specified dimension of the input tensor.
 
@@ -142,7 +142,7 @@ void bind_normalization_softmax_operation(py::module& module) {
 
 // Softmax with scale and mask
 void bind_normalization_softmax_scale_mask_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Computes a fused scale-mask-softmax operation along the last dimension of the input tensor.
 
@@ -221,7 +221,7 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
 
 // Softmax in-place operation
 void bind_normalization_softmax_inplace_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Computes the softmax function along the last dimension of the input tensor in-place.
 
@@ -284,7 +284,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
 
 // Softmax with scale and mask in-place operation
 void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Computes a fused scale-mask-softmax operation along the last dimension in-place.
 
@@ -370,7 +370,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
 
 // Softmax with scale and causal mask in-place operation
 void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Specialized in-place operation for causal masked softmax with height-width dimension constraints.
 

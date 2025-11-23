@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     uint32_t num_cores_x = bbox.end_coord.x + 1;
     uint32_t num_cores_y = bbox.end_coord.y + 1;
 
-    auto in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
+    auto* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         create_cb(cb_pagetable_id, program, all_cores, page_table_stick_size, 1, page_table_data_format);
     }
 
-    auto dst_buffer = cache_tensor.buffer();
+    auto* dst_buffer = cache_tensor.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
@@ -315,9 +315,9 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
             const std::vector<uint32_t> update_idxs =
                 static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
-            auto src_buffer = input_tensors.at(1).buffer();
+            auto* src_buffer = input_tensors.at(1).buffer();
 
-            auto dst_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = input_tensors.at(0).buffer();
 
             auto index_tensor_addr = use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             auto page_table_tensor_addr = is_paged_cache ? optional_input_tensors.at(1).value().buffer()->address() : 0;

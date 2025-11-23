@@ -25,17 +25,17 @@ namespace tt::tt_metal::operation {
 namespace detail {
 
 distributed::MeshDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device_storage().get_device();
         }
     }
-    for (auto& optional_input_tensor : optional_input_tensors) {
+    for (const auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and optional_input_tensor->storage_type() == StorageType::DEVICE) {
             return optional_input_tensor->device_storage().get_device();
         }
     }
-    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+    auto* device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
@@ -104,7 +104,7 @@ OutputTensors run_without_autoformat(
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             input_tensors_on_dev.push_back(AutoFormat::move_tensor_to_device(input_tensor, device));
         } else {
@@ -113,7 +113,7 @@ OutputTensors run_without_autoformat(
     }
     OptionalConstTensors optional_input_tensors_on_dev;
     optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
-    for (auto& optional_input_tensor : optional_input_tensors) {
+    for (const auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
             optional_input_tensors_on_dev.push_back(
                 AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
@@ -165,7 +165,7 @@ Tensors run_with_autoformat(
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
         auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
         if (pad_input) {
@@ -178,9 +178,9 @@ Tensors run_with_autoformat(
 
     OptionalConstTensors formatted_optional_input_tensors;
     formatted_optional_input_tensors.reserve(optional_input_tensors.size());
-    for (auto& optional_input_tensor : optional_input_tensors) {
+    for (const auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
-            auto& input_tensor = optional_input_tensor.value();
+            const auto& input_tensor = optional_input_tensor.value();
             auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
@@ -247,9 +247,9 @@ Tensors run_with_autoformat(
     formatted_optional_input_tensors.reserve(optional_input_tensors.size());
     for (uint32_t i = 0; i < optional_input_tensors.size(); ++i) {
         if (optional_input_tensors[i].has_value()) {
-            auto& input_tensor = optional_input_tensors[i].value();
+            const auto& input_tensor = optional_input_tensors[i].value();
             TT_ASSERT(optional_input_formatting[i].has_value());
-            auto& input_formatting = optional_input_formatting[i].value();
+            const auto& input_formatting = optional_input_formatting[i].value();
             formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(
                 input_tensor,
                 device,

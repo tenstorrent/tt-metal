@@ -39,14 +39,14 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto input_values_buffer = input_values_tensor.buffer();
-    auto input_indices_buffer = input_indices_tensor.buffer();
-    auto k_buffer = k.buffer();
-    auto p_buffer = p.buffer();
-    auto temp_buffer = temp.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_values_buffer = input_values_tensor.buffer();
+    auto* input_indices_buffer = input_indices_tensor.buffer();
+    auto* k_buffer = k.buffer();
+    auto* p_buffer = p.buffer();
+    auto* temp_buffer = temp.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
-    auto device = input_values_tensor.device();
+    auto* device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -317,13 +317,13 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input_values_buffer = input_tensors.at(0).buffer();
-        auto input_indices_buffer = input_tensors.at(1).buffer();
-        auto k_buffer = input_tensors.at(2).buffer();
-        auto p_buffer = input_tensors.at(3).buffer();
-        auto temp_buffer = input_tensors.at(4).buffer();
+        auto* input_values_buffer = input_tensors.at(0).buffer();
+        auto* input_indices_buffer = input_tensors.at(1).buffer();
+        auto* k_buffer = input_tensors.at(2).buffer();
+        auto* p_buffer = input_tensors.at(3).buffer();
+        auto* temp_buffer = input_tensors.at(4).buffer();
 
-        auto output_buffer = output_tensors.at(0).buffer();
+        auto* output_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < cores.size(); ++i) {
             const auto& core = cores[i];

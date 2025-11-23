@@ -18,7 +18,7 @@ namespace ttnn::operations::embedding {
 
 void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
-    auto &a = input_tensors.at(0);
+    const auto& a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
     TT_FATAL(weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");

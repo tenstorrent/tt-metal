@@ -104,7 +104,7 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_device_ring(
     std::vector<std::vector<int>> adj(mesh_devices.size(), std::vector<int>(mesh_devices.size(), 0));
     for (uint32_t i = 0; i < mesh_devices.size(); ++i) {
         const auto& mesh_device = mesh_devices[i];
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         auto ethernet_connected_device_ids =
             tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(device->id());
         for (const auto& connected_device_id : ethernet_connected_device_ids) {
@@ -140,9 +140,9 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
     // Special case for 2 devices to ensure core pairs are not the same for send and receive
     if (device_ring.size() - 1 == 2) {
         const auto& first_mesh_device = device_ring[0];
-        auto first_device = first_mesh_device->get_devices()[0];
+        auto* first_device = first_mesh_device->get_devices()[0];
         const auto& second_mesh_device = device_ring[1];
-        auto second_device = second_mesh_device->get_devices()[0];
+        auto* second_device = second_mesh_device->get_devices()[0];
         uint32_t i = 0;
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
             if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
@@ -160,8 +160,8 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
                     sender_mesh_device = second_mesh_device, receiver_mesh_device = first_mesh_device;
                     sender_eth_core = second_eth_core, receiver_eth_core = first_eth_core;
                 }
-                auto sender_device = sender_mesh_device->get_devices()[0];
-                auto receiver_device = receiver_mesh_device->get_devices()[0];
+                auto* sender_device = sender_mesh_device->get_devices()[0];
+                auto* receiver_device = receiver_mesh_device->get_devices()[0];
                 sender_receivers.push_back(
                     {sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core});
                 log_info(
@@ -180,9 +180,9 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
     } else {
         for (uint32_t i = 0; i < device_ring.size() - 1; ++i) {
             const auto& sender_mesh_device = device_ring[i];
-            auto sender_device = sender_mesh_device->get_devices()[0];
+            auto* sender_device = sender_mesh_device->get_devices()[0];
             const auto& receiver_mesh_device = device_ring[i + 1];
-            auto receiver_device = receiver_mesh_device->get_devices()[0];
+            auto* receiver_device = receiver_mesh_device->get_devices()[0];
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                         sender_device->id(), sender_eth_core)) {
@@ -250,8 +250,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         ////////////////////////////////////////////////////////////////////////////
         const auto& [sender_mesh_device, receiver_mesh_device, eth_sender_core, eth_receiver_core] =
             sender_receivers[i];
-        auto sender_device = sender_mesh_device->get_devices()[0];
-        auto receiver_device = receiver_mesh_device->get_devices()[0];
+        auto* sender_device = sender_mesh_device->get_devices()[0];
+        auto* receiver_device = receiver_mesh_device->get_devices()[0];
         auto& sender_program = programs[sender_device->id()];
         auto& receiver_program = programs[receiver_device->id()];
         CoreCoord sender_receiver_core;

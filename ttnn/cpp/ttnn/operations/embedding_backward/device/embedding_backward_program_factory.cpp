@@ -157,9 +157,9 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto index_dram_buffer = input_tensors.at(0).buffer();
-        auto grad_dram_buffer = input_tensors.at(1).buffer();
-        auto output_dram_buffer = output_tensors.at(0).buffer();
+        auto* index_dram_buffer = input_tensors.at(0).buffer();
+        auto* grad_dram_buffer = input_tensors.at(1).buffer();
+        auto* output_dram_buffer = output_tensors.at(0).buffer();
 
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : cores) {

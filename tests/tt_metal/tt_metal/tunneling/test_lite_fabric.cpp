@@ -129,7 +129,7 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST(FabricLiteBuild, BuildAllTargets) {
-    auto home_dir_string = std::getenv("TT_METAL_HOME");
+    auto* home_dir_string = std::getenv("TT_METAL_HOME");
     if (home_dir_string == nullptr) {
         GTEST_FAIL() << "TT_METAL_HOME not set";
     }

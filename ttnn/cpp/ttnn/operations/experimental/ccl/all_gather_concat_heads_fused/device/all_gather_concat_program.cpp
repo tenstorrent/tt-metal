@@ -573,7 +573,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             const auto& input = input_tensors[0];
             const auto& temp_tensor = input_tensors[1];
             const auto& output = output_tensors[0];
-            auto dst_buffer_query = output.buffer();
+            auto* dst_buffer_query = output.buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
 

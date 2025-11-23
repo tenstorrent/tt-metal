@@ -891,10 +891,10 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
     {
-        auto a_buffer = tensor_args.input_tensor_a.buffer();
-        auto b_buffer = tensor_args.input_tensor_b ? tensor_args.input_tensor_b->buffer() : a_buffer;
-        auto c_buffer = c.buffer();
-        auto args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
+        auto* a_buffer = tensor_args.input_tensor_a.buffer();
+        auto* b_buffer = tensor_args.input_tensor_b ? tensor_args.input_tensor_b->buffer() : a_buffer;
+        auto* c_buffer = c.buffer();
+        auto* args = GetCommonRuntimeArgs(program, reader_kernel_id).data();
         args = CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*a_buffer, args);
         CMAKE_UNIQUE_NAMESPACE::copy_common_runtime_args(*b_buffer, args);
         args = GetCommonRuntimeArgs(program, writer_kernel_id).data();

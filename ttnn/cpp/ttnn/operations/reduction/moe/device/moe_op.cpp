@@ -51,7 +51,7 @@ std::vector<TensorSpec> MoeDeviceOperation::compute_output_specs(
         }
     }
 
-    auto& input_tensor = input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.logical_shape();
     output_shape[-1] = 1;
     return {TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config))};

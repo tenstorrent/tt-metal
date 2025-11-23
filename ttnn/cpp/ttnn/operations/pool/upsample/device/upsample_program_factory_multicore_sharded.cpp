@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     const auto& config_storage = config_tensor_device.device_storage();
-    auto config_buffer = config_storage.get_buffer();
+    auto* config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
 
     auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
@@ -338,8 +338,8 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);

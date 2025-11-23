@@ -435,7 +435,7 @@ int main(int argc, char** argv) {
     std::srand(seed_g);  // Seed the RNG
     log_info(LogTest, "Random seed: {}", seed_g);
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     uint32_t dispatch_buffer_pages = dispatch_buffer_size_g / dispatch_buffer_page_size_g;
@@ -465,7 +465,7 @@ int main(int argc, char** argv) {
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
-        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         if (prefetcher_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
             log_fatal(
                 LogTest,

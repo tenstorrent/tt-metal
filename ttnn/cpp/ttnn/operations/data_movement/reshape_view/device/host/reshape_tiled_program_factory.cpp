@@ -249,7 +249,7 @@ Tensor compute_reshape_mapping_host_tensor(
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
     auto it = flat_mapping_vector.begin();
     for (const auto& v : mapping_vector) {
-        auto map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
+        auto* map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
         std::copy(v.begin(), v.end(), map_ptr);
 
         it += max_input_segments * SegmentMapData::size;

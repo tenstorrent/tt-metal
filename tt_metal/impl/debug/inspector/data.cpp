@@ -107,7 +107,7 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
             devices.set(j++, device->id());
         }
 
-        auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
+        const auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
         auto shape = mesh_device.initShape(shape_view.dims());
         for (size_t k = 0; k < shape_view.dims(); ++k) {
             shape.set(k, shape_view.get_stride(k));
@@ -126,7 +126,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
 
-        auto& programs = mesh_workload_data.mesh_workload->get_programs();
+        const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
         uint32_t j = 0;
         for (const auto& [device_range, program] : programs) {
@@ -134,7 +134,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             program_data.setProgramId(program.impl().get_id());
             auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
             uint32_t k = 0;
-            for (auto& device_coordinate : device_range) {
+            for (const auto& device_coordinate : device_range) {
                 auto mesh_coordinate = coordinates_list[k++];
                 auto coords = device_coordinate.coords();
                 auto coordinates = mesh_coordinate.initCoordinates(coords.size());

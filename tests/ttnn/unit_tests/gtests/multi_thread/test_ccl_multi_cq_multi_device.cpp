@@ -202,7 +202,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
-            auto device = devices[i];
+            auto* device = devices[i];
             auto device_tensor = gathered_tensors[i];
             boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
@@ -407,7 +407,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
-            auto device = devices[i];
+            auto* device = devices[i];
             auto device_tensor = gathered_tensors[i];
             boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.physical_volume()]);
@@ -610,7 +610,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
         log_info(LogTest, "read_buffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
-            auto device = devices[i];
+            auto* device = devices[i];
             auto device_tensor = gathered_tensors[i];
 
             boost::asio::post(pool, [&, device, num_elems, device_tensor]() mutable {

@@ -61,7 +61,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();

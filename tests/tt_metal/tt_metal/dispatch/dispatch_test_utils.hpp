@@ -128,7 +128,7 @@ inline void verify_kernel_coordinates(
             for (const auto& device : mesh_device->get_devices()) {
                 auto read_coords_raw = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
-                auto read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
+                auto* read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
 
                 EXPECT_EQ(read_coords->my_logical_x, logical_coord.x) << "Logical X";
                 EXPECT_EQ(read_coords->my_logical_y, logical_coord.y) << "Logical Y";

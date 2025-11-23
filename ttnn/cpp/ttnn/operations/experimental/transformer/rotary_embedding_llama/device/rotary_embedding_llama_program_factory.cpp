@@ -149,11 +149,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
-    auto src_buffer = input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto trans_mat_buffer = trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -292,12 +292,12 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto cos_buffer = input_tensors.at(1).buffer();
-            auto sin_buffer = input_tensors.at(2).buffer();
-            auto trans_mat_buffer = input_tensors.at(3).buffer();
+            auto* src_buffer = input_tensors.at(0).buffer();
+            auto* cos_buffer = input_tensors.at(1).buffer();
+            auto* sin_buffer = input_tensors.at(2).buffer();
+            auto* trans_mat_buffer = input_tensors.at(3).buffer();
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             auto& cached_reader_args = GetRuntimeArgs(program, unary_reader_kernel_id);
             auto& cached_writer_args = GetRuntimeArgs(program, unary_writer_kernel_id);
@@ -375,11 +375,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;
 
     // Set up the CBs
-    auto src_buffer = input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto trans_mat_buffer = trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     uint32_t input_cb_index = CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -471,11 +471,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto cos_buffer = input_tensors.at(1).buffer();
-        auto sin_buffer = input_tensors.at(2).buffer();
-        auto trans_mat_buffer = input_tensors.at(3).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* cos_buffer = input_tensors.at(1).buffer();
+        auto* sin_buffer = input_tensors.at(2).buffer();
+        auto* trans_mat_buffer = input_tensors.at(3).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         // Update the CB globally allocated addresses here
         UpdateDynamicCircularBufferAddress(program, cb_input, *src_buffer);

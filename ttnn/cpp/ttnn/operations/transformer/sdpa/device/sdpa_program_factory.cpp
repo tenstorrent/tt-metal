@@ -155,13 +155,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
-    auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    auto attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
+    auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
-    auto out0_buffer = output_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     bool use_attention_sink = attention_sink.has_value();
 
@@ -705,16 +705,17 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
-            auto mask_buffer =
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
+            auto* mask_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            auto attention_sink_buffer = (optional_input_tensors.size() > 2 && optional_input_tensors.at(2).has_value())
-                                             ? optional_input_tensors.at(2).value().buffer()
-                                             : nullptr;
+            auto* attention_sink_buffer =
+                (optional_input_tensors.size() > 2 && optional_input_tensors.at(2).has_value())
+                    ? optional_input_tensors.at(2).value().buffer()
+                    : nullptr;
 
-            auto out0_buffer = output_tensors.at(0).buffer();
+            auto* out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();

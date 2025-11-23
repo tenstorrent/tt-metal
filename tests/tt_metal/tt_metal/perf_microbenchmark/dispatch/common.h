@@ -483,7 +483,7 @@ inline bool DeviceData::validate(IDevice* device) {
     std::unordered_set<CoreCoord> validated_cores;
 
     for (const auto& [core, bank_device_data] : this->all_data) {
-        for (auto& [bank, one_core_data] : bank_device_data) {
+        for (const auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.data.empty()) {
                 continue;
             }
@@ -507,7 +507,7 @@ inline bool DeviceData::validate(IDevice* device) {
 
 inline void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
-        for (auto& [bank, one_core_data] : bank_device_data) {
+        for (const auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == tt::CoreType::WORKER) {
                 TT_FATAL(
                     one_core_data.data.size() * sizeof(uint32_t) +

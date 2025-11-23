@@ -238,8 +238,8 @@ void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

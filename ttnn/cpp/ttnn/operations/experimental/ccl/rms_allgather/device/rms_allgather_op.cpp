@@ -45,7 +45,7 @@ void RMSAllGather::validate(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(
         input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
-    auto& a = input_tensors.at(0);
+    const auto& a = input_tensors.at(0);
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
@@ -287,7 +287,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     ttnn::MeshDevice* mesh_device = input_tensors.at(0).device();
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");

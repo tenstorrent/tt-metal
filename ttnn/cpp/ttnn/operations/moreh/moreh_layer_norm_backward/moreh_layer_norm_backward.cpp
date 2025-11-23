@@ -20,7 +20,7 @@ std::vector<std::optional<Tensor>> moreh_layer_norm_backward_gamma_beta_grad(
     const std::optional<const Tensor>& beta_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto device = input.device();
+    auto* device = input.device();
     auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 

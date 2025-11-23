@@ -19,7 +19,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     const auto& trans_mat = input_tensors.at(3);
     TT_FATAL(input_tensors.size() == 4, "Expected 4 input tensors but got {}", input_tensors.size());
 
-    auto ref_device = input_tensor.device();
+    auto* ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
