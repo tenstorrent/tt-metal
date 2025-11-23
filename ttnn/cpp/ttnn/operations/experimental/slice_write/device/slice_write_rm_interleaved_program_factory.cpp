@@ -15,7 +15,6 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::slice_write::program {

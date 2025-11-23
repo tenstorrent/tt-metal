@@ -18,7 +18,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt;
-using namespace tt::constants;
+
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 

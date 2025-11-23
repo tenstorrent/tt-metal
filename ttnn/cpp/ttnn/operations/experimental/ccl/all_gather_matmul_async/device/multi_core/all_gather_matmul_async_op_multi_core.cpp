@@ -21,8 +21,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-using namespace tt::constants;
-
 namespace ttnn {
 
 using namespace experimental::ccl;

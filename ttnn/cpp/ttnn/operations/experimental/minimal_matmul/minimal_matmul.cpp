@@ -9,7 +9,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::minimal_matmul {

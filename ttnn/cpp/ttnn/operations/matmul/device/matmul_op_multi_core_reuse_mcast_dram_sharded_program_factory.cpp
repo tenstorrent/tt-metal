@@ -14,7 +14,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt;
-using namespace tt::constants;
 
 namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;

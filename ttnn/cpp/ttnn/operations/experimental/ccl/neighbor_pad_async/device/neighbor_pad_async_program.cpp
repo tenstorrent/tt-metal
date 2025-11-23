@@ -29,7 +29,6 @@
 #include <optional>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn {

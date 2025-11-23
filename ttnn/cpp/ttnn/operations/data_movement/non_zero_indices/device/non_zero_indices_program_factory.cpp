@@ -11,7 +11,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn {

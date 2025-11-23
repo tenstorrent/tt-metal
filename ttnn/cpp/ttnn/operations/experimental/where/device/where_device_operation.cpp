@@ -62,7 +62,6 @@ static void validate_memory_config(
 
 void WhereDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    using namespace tt::constants;
 
     validate_memory_config(attributes, args);
     WhereDeviceOperation::validate_on_program_cache_hit(attributes, args);

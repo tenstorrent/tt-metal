@@ -10,7 +10,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-using namespace tt::constants;
 using namespace tt;
 
 namespace reuse_optimized_helpers {

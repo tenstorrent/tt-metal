@@ -6,7 +6,7 @@
 
 #include "split_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {

@@ -9,7 +9,6 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::conv3d {

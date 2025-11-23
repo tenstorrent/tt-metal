@@ -32,7 +32,6 @@ uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     using namespace tt::tt_metal;
-    using namespace tt::constants;
 
     Program program{};
 

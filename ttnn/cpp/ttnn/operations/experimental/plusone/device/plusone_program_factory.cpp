@@ -14,8 +14,6 @@
 
 namespace ttnn::operations::experimental::plusone::program {
 
-using namespace tt::constants;
-
 PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

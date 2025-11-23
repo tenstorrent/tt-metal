@@ -9,7 +9,6 @@
 #include <optional>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
 namespace ttnn::operations::dram_prefetcher {
 

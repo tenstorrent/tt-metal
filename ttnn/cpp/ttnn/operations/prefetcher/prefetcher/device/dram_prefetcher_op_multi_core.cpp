@@ -15,7 +15,7 @@
 namespace ttnn::operations::dram_prefetcher {
 
 using std::vector;
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(

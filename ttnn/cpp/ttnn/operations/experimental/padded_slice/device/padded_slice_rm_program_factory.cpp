@@ -24,7 +24,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::padded_slice::program {

@@ -28,8 +28,6 @@
 #include <ranges>
 #include <optional>
 
-using namespace tt::constants;
-
 namespace ttnn {
 
 using namespace ccl;

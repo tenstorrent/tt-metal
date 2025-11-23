@@ -30,8 +30,6 @@
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-using namespace tt::constants;
-
 namespace ttnn {
 
 using namespace ccl;
