@@ -123,6 +123,7 @@ def test_multi_conv(
         output_layout=input_layout,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
     )
+    last_op_slice_attr = None
     for output_channels, kernel, stride, padding, dilation in parameters:
         torch_weights_tensors.append(
             randomize_torch_tensor(
@@ -150,8 +151,8 @@ def test_multi_conv(
                 dilation=dilation,
             )
         )
-        op_slicing_attrs.append(
-            ttnn.Conv2dSliceAttr(
+        if last_op_slice_attr is None:
+            last_op_slice_attr = ttnn.Conv2dSliceAttr(
                 batch_size=batch_size,
                 input_shape=[input_height, input_width],
                 input_channels=current_input_channels,
@@ -170,7 +171,22 @@ def test_multi_conv(
                 conv_config=conv_config,
                 compute_config=compute_config,
             )
-        )
+        else:
+            last_op_slice_attr = ttnn.Conv2dSliceAttr(
+                previous_op=last_op_slice_attr,
+                output_channels=output_channels,
+                kernel_size=tuple(kernel),
+                stride=tuple(stride),
+                padding_n4=tuple(padding_n4),
+                dilation=tuple(dilation),
+                groups=1,
+                weight_tensor=ttnn_weights_tensors[-1],
+                bias_tensor=ttnn_bias_tensors[-1],
+                conv_config=conv_config,
+                compute_config=compute_config,
+                output_dtype=dtype,
+            )
+        op_slicing_attrs.append(last_op_slice_attr)
         current_input_channels = output_channels
     print(current_torch_output.shape)
     ref = current_torch_output

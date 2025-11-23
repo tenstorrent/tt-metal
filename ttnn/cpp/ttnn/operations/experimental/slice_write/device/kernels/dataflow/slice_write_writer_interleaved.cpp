@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "dataflow_api.h"
-
+#define DEBUG
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_stick_size = get_arg_val<uint32_t>(1);

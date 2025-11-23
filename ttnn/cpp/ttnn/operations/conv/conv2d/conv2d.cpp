@@ -16,6 +16,7 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -875,6 +876,39 @@ Conv2dSliceAttr::Conv2dSliceAttr(
         compute_config,
         device) {};
 
+Conv2dSliceAttr::Conv2dSliceAttr(
+    op_slicing::OpSliceAttr* previous_op,
+    uint32_t output_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    DataType output_dtype,
+    Tensor& weight_tensor,
+    OptionalRefTensor bias_tensor,
+    Conv2dConfig& conv_config,
+    DeviceComputeKernelConfig& compute_config) :
+    output_channels(output_channels),
+    kernel_size(kernel_size),
+    stride(stride),
+    padding_n4(padding_n4),
+    dilation(dilation),
+    groups(groups),
+    output_dtype(output_dtype),
+    weight_tensor(weight_tensor),
+    bias_tensor(bias_tensor),
+    conv_config(conv_config),
+    compute_config(compute_config) {
+    auto [output_spec, device] = previous_op->get_output_tensor_spec_and_device();
+    this->device = device;
+    auto output_shape = output_spec.logical_shape();
+    this->batch_size = output_shape[0];
+    this->input_shape = IOShape{output_shape[1], output_shape[2]};
+    this->input_channels = output_shape[3];
+    this->input_layout = output_spec.layout();
+    this->input_dtype = output_spec.data_type();
+}
 std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::get_input_slice(
     IOShape output_slice_start, IOShape output_slice_end) {
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
@@ -974,6 +1008,26 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
 
 std::string Conv2dSliceAttr::name() { return "Conv2D"; }
 std::string Conv2dSliceAttr::str() { return fmt::format("Conv2D Slice Attr {}", *this); }
+std::tuple<TensorSpec, tt::tt_metal::distributed::MeshDevice*> Conv2dSliceAttr::get_output_tensor_spec_and_device() {
+    auto [output_height, output_width] = calculate_output_image_size(
+        std::array<uint32_t, 2>{std::get<0>(input_shape), std::get<1>(input_shape)},
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation);
+    return {
+        TensorSpec(
+            ttnn::Shape({batch_size, output_height, output_width, output_channels}),
+            tt_metal::TensorLayout(
+                output_dtype,
+                tt_metal::PageConfig(conv_config.output_layout),
+                MemoryConfig{
+                    TensorMemoryLayout::INTERLEAVED,
+                    BufferType::DRAM,
+                })),
+        device};
+}
+
 ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor,
     IOShape output_slice_start,

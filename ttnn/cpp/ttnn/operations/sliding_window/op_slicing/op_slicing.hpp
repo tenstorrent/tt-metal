@@ -43,6 +43,7 @@ public:
         bool pad_output_width) = 0;
     virtual std::string name() = 0;
     virtual std::string str() = 0;
+    virtual std::tuple<TensorSpec, tt::tt_metal::distributed::MeshDevice*> get_output_tensor_spec_and_device() = 0;
 };
 
 void run_sliced_op(

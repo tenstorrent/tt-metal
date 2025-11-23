@@ -165,6 +165,21 @@ public:
         Conv2dConfig& conv_config,
         DeviceComputeKernelConfig& compute_config,
         MeshDevice* device);
+
+    Conv2dSliceAttr(
+        op_slicing::OpSliceAttr* previous_op,
+        uint32_t output_channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        DataType output_dtype,
+        Tensor& weight_tensor,
+        OptionalRefTensor bias_tensor,
+        Conv2dConfig& conv_config,
+        DeviceComputeKernelConfig& compute_config);
+
     Conv2dSliceAttr(
         uint32_t batch_size,
         std::array<uint32_t, 2> input_shape,
@@ -193,6 +208,8 @@ public:
         bool pad_output_width = true) override;
     std::string name() override;
     std::string str() override;
+    std::tuple<TensorSpec, tt::tt_metal::distributed::MeshDevice*> get_output_tensor_spec_and_device() override;
+
     static constexpr auto attribute_names = std::make_tuple(
         "batch_size",
         "input_shape",
