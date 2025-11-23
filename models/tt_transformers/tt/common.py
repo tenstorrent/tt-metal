@@ -554,6 +554,24 @@ def get_padded_prefill_len(seq_len: int) -> int:
     return min_extended_pad
 
 
+def get_all_padded_prefill_lengths(max_len: int = 8192):
+    padded_lengths = set()
+
+    padded_lengths.add(128)
+
+    power = 128
+    while power <= max_len:
+        padded_lengths.add(power)
+        power *= 2
+
+    multiple = 2048
+    while multiple <= max_len:
+        padded_lengths.add(multiple)
+        multiple += 2048
+
+    return sorted(list(padded_lengths))
+
+
 def get_block_size(kv_cache):
     return kv_cache[0][0].shape[2]
 
