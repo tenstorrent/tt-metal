@@ -70,9 +70,16 @@ class TrainingConfig:
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
         self.model_config = tc.get("model_config", None)
-        self.use_bpe = tc.get("use_bpe", True)
+        tokenizer_type = tc.get("tokenizer_type", "bpe")
 
-        self.lr = float(tc.get("lr", 3e-4))
+        if tokenizer_type == "bpe":
+            self.use_bpe = True
+        elif tokenizer_type == "char":
+            self.use_bpe = False
+        else:
+            raise ValueError(f"Unknown tokenizer_type: {use_bpe}")
+
+        self.lr = float(tc.get("learning_rate", 3e-4))
         self.beta1 = float(tc.get("beta1", 0.9))
         self.beta2 = float(tc.get("beta2", 0.999))
         self.eps = float(tc.get("eps", 1e-8))
