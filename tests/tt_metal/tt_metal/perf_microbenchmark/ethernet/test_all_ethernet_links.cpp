@@ -29,7 +29,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
 #include "impl/context/metal_context.hpp"
 #include "common/tt_backend_api_types.hpp"

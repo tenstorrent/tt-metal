@@ -222,6 +222,7 @@ Result conv2d_DRAM(
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
         input_tensor,
         device,
+        batch_size,
         input_height,
         input_width,
         in_channels,
@@ -458,6 +459,7 @@ Result conv2d_L1(
     auto input_tensor = fold_input_tensor_if_required(
         input_tensor_,
         device,
+        batch_size,
         input_height,
         input_width,
         in_channels,

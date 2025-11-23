@@ -97,10 +97,6 @@ struct SenderConfig {
     uint32_t link_id = 0;  // Link ID for multi-link tests
 };
 
-enum class RoutingType {
-    LowLatency,
-};
-
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
@@ -117,7 +113,6 @@ enum class HighLevelTrafficPattern {
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
-    std::optional<RoutingType> routing_type;
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
