@@ -1,0 +1,3 @@
+tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
+tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+tests/ttnn/unit_tests/operations/eltwise/test_complex.py

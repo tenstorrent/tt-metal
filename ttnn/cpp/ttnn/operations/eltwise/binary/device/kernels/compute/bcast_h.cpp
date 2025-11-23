@@ -4,9 +4,11 @@
 
 #include <cstdint>
 #include "compute_kernel_api/bcast.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "BCAST_H.CPP" << ENDL();
     constexpr uint32_t onetile = 1;
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
