@@ -519,11 +519,18 @@ def prepare_image_latents(
     cpu_device = torch.device("cpu")
     image = image.to(device=cpu_device, dtype=dtype)
 
+    logger.debug(f"batch_size: {batch_size}")
+    torch.manual_seed(0)
     if image.shape[1] == 4:
         image_latents = image
     else:
+        image_latents = []
         if tt_pipeline.pipeline_config.vae_on_device:
-            image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+            # image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+            for latent in tt_pipeline.tt_vae.encode(image).latent_dist:
+                torch.manual_seed(0)
+                generator = torch.Generator(device=cpu_device).manual_seed(0)
+                image_latents.append(latent.sample(generator=generator))
             image_latents = torch.cat(image_latents, dim=0)
         else:
             image_latents = [
@@ -535,6 +542,8 @@ def prepare_image_latents(
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     if add_noise:
+        torch.manual_seed(0)
+        generator = torch.Generator(device=cpu_device).manual_seed(0)
         torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
         torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
         if is_strength_max:
@@ -602,10 +611,14 @@ def prepare_mask_latents_inpainting(
                 masked_image_latents = tt_inpainting_pipeline.torch_pipeline._encode_vae_image(
                     masked_image, generator=None
                 )
-            else:
-                masked_image_latents = [
-                    mask.sample() for mask in tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist
-                ]
+            else:  # vae_on_device is True
+                masked_image_latents = []
+                for mask_latent_dist in tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist:
+                    torch.manual_seed(0)
+                    masked_image_latents.append(mask_latent_dist.sample())
+                # masked_image_latents = [
+                #     mask.sample() for mask in tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist
+                # ]
                 masked_image_latents = torch.cat(masked_image_latents, dim=0)
                 masked_image_latents = (
                     tt_inpainting_pipeline.torch_pipeline.vae.config.scaling_factor * masked_image_latents

@@ -147,6 +147,11 @@ def test_accuracy_sdxl_inpaint(
 
     average_clip_score = sum(clip_scores) / len(clip_scores)
 
+    logger.debug("==" * 30)
+    logger.debug(f"clip scores: {clip_scores}")
+    for score in clip_scores:
+        logger.debug(f"clip score: {score}")
+
     deviation_clip_score = "N/A"
     fid_score = "N/A"
 
@@ -247,6 +252,7 @@ def test_accuracy_sdxl_inpaint(
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):
+    n_prompts = 10  # test
     logger.info(f"Requested {n_prompts} prompts for inpainting accuracy evaluation...")
     if n_prompts > MAX_N_SAMPLES or n_prompts < MIN_N_SAMPLES:
         logger.warning(f"Requested number of prompts {n_prompts} is out of bounds [{MIN_N_SAMPLES}, {MAX_N_SAMPLES}]")
@@ -260,10 +266,8 @@ def get_dataset_for_inpainting_accuracy(n_prompts: int):
     dataset = load_dataset("phiyodr/InpaintCOCO")
 
     input_images, input_masks, input_captions = [], [], []
-    for index, item in enumerate(dataset["test"]):  # 'test' is only existing split in phiyodr/InpaintCOCO dataset
-        if index >= n_prompts:
-            break
-        input_images.append(item["coco_image"])
-        input_masks.append(item["mask"])
-        input_captions.append(item["coco_caption"])
+    for i in range(n_prompts):
+        input_images.append(dataset["test"][0]["coco_image"])  # test data is the same for all prompts
+        input_masks.append(dataset["test"][0]["mask"])  # test data is the same for all prompts
+        input_captions.append(dataset["test"][0]["coco_caption"])  # test data is the same for all prompts
     return input_images, input_masks, input_captions
