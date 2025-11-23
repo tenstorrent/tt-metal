@@ -13,6 +13,10 @@ struct UntilizeWithHaloProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::CBHandle src_cb;
         tt::tt_metal::CBHandle out_cb;
+        tt::tt_metal::CBHandle padding_config_cb0;
+        tt::tt_metal::CBHandle padding_config_cb1;
+        tt::tt_metal::CBHandle gather_config_cb0;
+        tt::tt_metal::CBHandle gather_config_cb1;
         tt::tt_metal::DeviceStorage padding_config_storage0;
         tt::tt_metal::DeviceStorage padding_config_storage1;
         tt::tt_metal::DeviceStorage gather_config_storage0;

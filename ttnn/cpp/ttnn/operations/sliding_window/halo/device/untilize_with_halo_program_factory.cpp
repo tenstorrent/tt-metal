@@ -258,7 +258,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const auto& padding_config_storage0 = pad_config_device_tensor0.device_storage();
     auto padding_config_buffer0 = padding_config_storage0.get_buffer();
     cb_indices.padding_config0 = cb_indices.get_next_cb_id();
-    create_circular_buffer(
+    auto padding_config_cb0 = create_circular_buffer(
         program,
         all_cores,
         cb_indices.padding_config0,
@@ -270,7 +270,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const auto& padding_config_storage1 = pad_config_device_tensor1.device_storage();
     auto padding_config_buffer1 = padding_config_storage1.get_buffer();
     cb_indices.padding_config1 = cb_indices.get_next_cb_id();
-    create_circular_buffer(
+    auto padding_config_cb1 = create_circular_buffer(
         program,
         all_cores,
         cb_indices.padding_config1,
@@ -282,7 +282,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const auto& gather_config_storage0 = gather_config_device_tensor0.device_storage();
     auto gather_config_buffer0 = gather_config_storage0.get_buffer();
     cb_indices.gather_config0 = cb_indices.get_next_cb_id();
-    create_circular_buffer(
+    auto gather_config_cb0 = create_circular_buffer(
         program,
         all_cores,
         cb_indices.gather_config0,
@@ -294,7 +294,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const auto& gather_config_storage1 = gather_config_device_tensor1.device_storage();
     auto gather_config_buffer1 = gather_config_storage1.get_buffer();
     cb_indices.gather_config1 = cb_indices.get_next_cb_id();
-    create_circular_buffer(
+    auto gather_config_cb1 = create_circular_buffer(
         program,
         all_cores,
         cb_indices.gather_config1,
@@ -411,6 +411,10 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         shared_variables_t{
             .src_cb = src_cb,
             .out_cb = out_cb,
+            .padding_config_cb0 = padding_config_cb0,
+            .padding_config_cb1 = padding_config_cb1,
+            .gather_config_cb0 = gather_config_cb0,
+            .gather_config_cb1 = gather_config_cb1,
             .padding_config_storage0 = padding_config_storage0,
             .padding_config_storage1 = padding_config_storage1,
             .gather_config_storage0 = gather_config_storage0,
