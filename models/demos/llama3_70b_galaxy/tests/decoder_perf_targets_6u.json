@@ -81,7 +81,7 @@
       "op_name": "LlamaReduceScatterCreateHeads",
       "kernel_duration": 8010.601157407407,
       "op_to_op": 867.8740740740741,
-      "first_to_last_start": 1734.2666666666667,
+      "first_to_last_start": 2131.8888888888887,
       "non-overlapped-dispatch-time": 8437.777777777777,
       "kernel_duration_relative_margin": 0.1,
       "op_to_op_duration_relative_margin": 0.4,
@@ -123,7 +123,7 @@
     },
     "LlamaReduceScatterDeviceOperation_0": {
       "op_name": "ReduceScatter_FF3",
-      "kernel_duration": 7218.590972222222,
+      "kernel_duration": 6747.479166666667,
       "op_to_op": 698.4148148148148,
       "first_to_last_start": 1688.2222222222222,
       "non-overlapped-dispatch-time": 7398.333333333333,
