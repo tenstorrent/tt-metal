@@ -190,7 +190,7 @@ def test_concat_lg_tensor_1(device, tensor_layout, num_inputs, dim, input_shapes
     memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     if dim == -1 and num_inputs >= 256:
-        return
+        pytest.skip("Skipping test: dim == -1 and num_inputs >= 256 is not supported.")
 
     torch_input_tensor1 = torch.full(input_shapes[0], -1.0, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.full(input_shapes[1], 1.0, dtype=torch.bfloat16)
