@@ -9,7 +9,7 @@
 #include "dataflow_api.h"
 #include "cq_helpers.hpp"
 
-#include "debug/sanitize.h"
+#include "debug/sanitize_noc.h"
 #include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
