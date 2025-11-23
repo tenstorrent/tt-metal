@@ -9,7 +9,9 @@
 #include <variant>
 
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+// #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "device/conv2d_device_operation.hpp"
+#include "device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"

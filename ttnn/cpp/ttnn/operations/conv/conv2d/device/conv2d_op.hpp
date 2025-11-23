@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
+#if 0
 #pragma once
 
 #include <optional>
@@ -402,3 +402,4 @@ conv_op_l1_usage calculate_L1_usage(
 }  // namespace operations::conv
 
 }  // namespace ttnn
+#endif
