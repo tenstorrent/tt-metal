@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
+#include "debug/sanitize.h"
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
  * other RISCs Any two RISC processors cannot use the same CMD_BUF non_blocking APIs shouldn't be mixed with slow noc.h
@@ -25,6 +26,7 @@ void kernel_main() {
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));
+    std::uint32_t l1_overflow_addr = get_arg_val<uint32_t>(10);
 
 #if defined(SIGNAL_COMPLETION_TO_DISPATCHER)
     // We will assert later. This kernel will hang.
@@ -52,6 +54,10 @@ void kernel_main() {
         true    // posted
     );
 #endif
+
+    if (l1_overflow_addr) {
+        debug_sanitize_l1_access(l1_overflow_addr, 1);
+    }
 
     // NOC src address
     std::uint64_t buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
