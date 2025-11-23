@@ -1611,7 +1611,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
-    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table,
+    const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -1781,7 +1781,7 @@ FORCE_INLINE bool run_receiver_channel_step(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
-    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table,
+    const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         invalidate_l1_cache();
@@ -1841,9 +1841,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
-    const auto* routing_table_l1 =
-        reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    tt::tt_fabric::tensix_routing_l1_info_t routing_table = *routing_table_l1;
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR

@@ -18,19 +18,17 @@
 
 #include "tt_fabric_test_context.hpp"
 
-const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
-    TestFixture::topology_to_fabric_config_map = {
-        {{Topology::Linear, RoutingType::LowLatency}, FabricConfig::FABRIC_1D},
-        {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
-        {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
+const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
+    {Topology::Linear, FabricConfig::FABRIC_1D},
+    {Topology::Ring, FabricConfig::FABRIC_1D_RING},
+    {Topology::Mesh, FabricConfig::FABRIC_2D},
 };
 
-const std::
-    unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
-        TestFixture::torus_topology_to_fabric_config_map = {
-            {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
-            {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
-            {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
+const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
+    TestFixture::torus_topology_to_fabric_config_map = {
+        {{Topology::Torus, "X"}, FabricConfig::FABRIC_2D_TORUS_X},
+        {{Topology::Torus, "Y"}, FabricConfig::FABRIC_2D_TORUS_Y},
+        {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
 };
 
 int main(int argc, char** argv) {
@@ -151,7 +149,6 @@ int main(int argc, char** argv) {
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         const auto& topology = test_config.fabric_setup.topology;
-        const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
         if (test_config.benchmark_mode) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
@@ -159,9 +156,8 @@ int main(int argc, char** argv) {
 
         log_info(
             tt::LogTest,
-            "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
+            "Opening devices with topology: {} and fabric_tensix_config: {}",
             topology,
-            routing_type,
             fabric_tensix_config);
 
         bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
