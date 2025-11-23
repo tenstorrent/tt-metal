@@ -88,7 +88,7 @@ def test_concat_small_tensors_2(device, tensor_layout, dim, num_inputs, input_sh
 
 # ============================================================
 # 2. Mid Tensor
-#  - input : 1 input tensor can be loaded in one core's L1)
+#  - input : Each input tensor can be loaded in one core's L1)
 # ============================================================
 
 ## (1) runtime error: 512, dim=-1, ROW_MAJOR_LAYOUT,
