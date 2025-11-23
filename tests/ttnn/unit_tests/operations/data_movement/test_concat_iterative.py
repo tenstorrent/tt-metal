@@ -102,7 +102,7 @@ def test_concat_small_tensors_2(device, tensor_layout, dim, num_inputs, input_sh
 def test_concat_mid_tensor_1(device, input_mem_config, tensor_layout, dim, num_inputs, input_shape):
     core_grid = ttnn.CoreGrid(y=2, x=2)
 
-    # 	special case, do not test iff output_tensor.page >= Core L1 memory
+    # Special case: do not test if output_tensor.page >= Core L1 memory
     if tensor_layout == ttnn.ROW_MAJOR_LAYOUT and num_inputs >= 500 and dim == -1:
         return
 
