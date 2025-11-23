@@ -78,27 +78,21 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
-        self.prefill_traces_warmup = False
 
     def warmup_prefill_traces(
         self,
         page_table,
         kv_cache,
-        enable_trace,
+        enable_trace=True,
     ):
-        if self.prefill_traces_warmup or not enable_trace:
+        if not enable_trace:
             return
 
-        self.prefill_traces_warmup = True
         for model_id in range(self.data_parallel):
             for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
-
-                # TODO: Currently working on enabling trace for all models that use tt_transformers
-                if not self.model_args[0].can_enable_trace(supported_length):
-                    continue
 
                 logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
                 self.prefill_forward_text(
@@ -226,12 +220,6 @@ class Generator:
         else:
             # Only paged attention is supported for prefill
             enable_trace = False
-
-        self.warmup_prefill_traces(
-            page_table,
-            kv_cache,
-            enable_trace,
-        )
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size

@@ -408,6 +408,10 @@ class LlamaForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def warmup_model(self, page_table, kv_cache, enable_trace=True):
+        logger.info("LlamaForCausalLM warmup_model called")
+        self.warmup_prefill_traces(page_table, kv_cache, enable_trace)
+
 
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
