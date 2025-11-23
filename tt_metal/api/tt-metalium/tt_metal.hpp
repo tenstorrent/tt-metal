@@ -151,7 +151,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
- * `<tt-metal-cache directory>/<build_key>/<firmware hash>/kernels/<kernel name>/<kernel hash>`
+ * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
  *
  *  The build key component accounts for device architecture as binaries are not compatible across architectures.
  *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
