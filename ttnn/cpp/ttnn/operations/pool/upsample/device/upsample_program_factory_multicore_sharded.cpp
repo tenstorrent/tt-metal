@@ -328,7 +328,8 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     };
     std::string writer_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
-    CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+    auto writer_kernel =
+        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> reader_compile_time_args = writer_compile_time_args;
     reader_compile_time_args[2] = true;  // reader
@@ -340,8 +341,12 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     return cached_program_t{
         std::move(program),
         shared_variables_t{
+            .writer_kernel = writer_kernel,
             .cb_src0 = cb_src0,
             .out_cb = out_cb,
+            .config_cb = config_cb,
+            .config_storage = config_storage,
+            .config_buffer = config_buffer,
         }};
 }
 

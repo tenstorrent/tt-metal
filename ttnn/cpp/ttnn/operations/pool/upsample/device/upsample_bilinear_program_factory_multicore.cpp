@@ -331,6 +331,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     return cached_program_t{
         std::move(program),
         shared_variables_t{
+            .reader_kernel = reader_kernel,
+            .writer_kernel = writer_kernel,
             .cb_src0 = cb_src0,
             .out_cb = out_cb,
         }};

@@ -251,8 +251,8 @@ UpsampleMultiCoreInterleavedProgramFactory::cached_program_t UpsampleMultiCoreIn
     return cached_program_t{
         std::move(program),
         shared_variables_t{
-            .reader_kernel_id = unary_reader_kernel_id,
-            .writer_kernel_id = unary_writer_kernel_id,
+            .unary_reader_kernel_id = unary_reader_kernel_id,
+            .unary_writer_kernel_id = unary_writer_kernel_id,
             .num_cores = num_cores,
             .num_cores_y = num_cores_y,
         }};
@@ -264,8 +264,8 @@ void UpsampleMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
-    const auto& unary_reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& unary_writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    const auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const auto& num_cores = cached_program.shared_variables.num_cores;
     const auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
