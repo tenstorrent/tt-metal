@@ -129,6 +129,36 @@ class TelemetryClient:
                 print(f"RPC failed: {e.code()}: {e.details()}")
             return False, []
 
+    def list_metrics(self, metric_query: str = "", timeout: float = 5.0) -> tuple[bool, dict]:
+        """
+        List all known metric paths grouped by type.
+
+        Args:
+            metric_query: Optional query string to filter metrics (empty = all metrics)
+            timeout: RPC timeout in seconds
+
+        Returns:
+            Tuple of (success, metrics_dict) where metrics_dict has keys:
+            'bool_metrics', 'uint_metrics', 'double_metrics', 'string_metrics'
+        """
+        request = telemetry_service_pb2.ListMetricsRequest(metric_query=metric_query)
+
+        try:
+            response = self.stub.ListMetrics(request, timeout=timeout)
+
+            metrics = {
+                "bool_metrics": list(response.bool_metrics),
+                "uint_metrics": list(response.uint_metrics),
+                "double_metrics": list(response.double_metrics),
+                "string_metrics": list(response.string_metrics),
+            }
+
+            return True, metrics
+
+        except grpc.RpcError as e:
+            print(f"RPC failed: {e.code()}: {e.details()}")
+            return False, {}
+
     def stream_metrics(self, metric_query: str = "", timeout: float = None):
         """
         Stream telemetry updates matching a query.
@@ -189,7 +219,7 @@ def ping(client: TelemetryClient, params: Dict[str, Any] | None):
         print("Ping failed")
 
 
-def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
+def get_metric(client: TelemetryClient, params: Dict[str, Any] | None):
     metric_query = params["metric_query"]
     success, results = client.query_metric(metric_query)
     if success:
@@ -202,6 +232,39 @@ def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
             print(f"    Timestamp: {result['timestamp']}")
     else:
         print(f"Query failed for metric: {metric_query}")
+
+
+def list_metrics(client: TelemetryClient, params: Dict[str, Any] | None):
+    metric_query = params.get("metric_query", "") if params else ""
+    success, metrics = client.list_metrics(metric_query)
+    if success:
+        total = sum(len(v) for v in metrics.values())
+        if metric_query:
+            print(f"Found {total} total metrics matching '{metric_query}':")
+        else:
+            print(f"Found {total} total metrics:")
+
+        if metrics["bool_metrics"]:
+            print(f"\nBool metrics ({len(metrics['bool_metrics'])}):")
+            for path in sorted(metrics["bool_metrics"]):
+                print(f"  {path}")
+
+        if metrics["uint_metrics"]:
+            print(f"\nUint metrics ({len(metrics['uint_metrics'])}):")
+            for path in sorted(metrics["uint_metrics"]):
+                print(f"  {path}")
+
+        if metrics["double_metrics"]:
+            print(f"\nDouble metrics ({len(metrics['double_metrics'])}):")
+            for path in sorted(metrics["double_metrics"]):
+                print(f"  {path}")
+
+        if metrics["string_metrics"]:
+            print(f"\nString metrics ({len(metrics['string_metrics'])}):")
+            for path in sorted(metrics["string_metrics"]):
+                print(f"  {path}")
+    else:
+        print("Failed to list metrics")
 
 
 def stream_metrics(client: TelemetryClient, params: Dict[str, Any] | None):
@@ -250,16 +313,22 @@ if __name__ == "__main__":
             description="Measure round-trip time to telemetry service",
         ),
         Command(
-            handler=lambda params: query_metric(client, params),
-            command="query",
-            params=[Param(name="metric_query", type=str)],
-            description="Query a metric by name",
+            handler=lambda params: list_metrics(client, params),
+            command="list",
+            params=[Param(name="metric_query", type=str, default="")],
+            description="List all known metric paths grouped by type",
+        ),
+        Command(
+            handler=lambda params: get_metric(client, params),
+            command="get",
+            params=[Param(name="metric_query", type=str, default="")],
+            description="Get metric(s) by query string",
         ),
         Command(
             handler=lambda params: stream_metrics(client, params),
             command="stream",
             params=[Param(name="metric_query", type=str, default="")],
-            description="Stream telemetry updates (optional: filter by query)",
+            description="Stream metric updates",
         ),
     ]
     CommandConsole(commands=commands).run()

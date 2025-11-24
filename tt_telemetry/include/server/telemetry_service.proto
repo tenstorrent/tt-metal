@@ -16,6 +16,9 @@ service TelemetryService {
 
   // Stream telemetry updates matching a query (server-side streaming)
   rpc StreamMetrics(QueryMetricRequest) returns (stream QueryMetricResponse) {}
+
+  // List all known metric paths grouped by type
+  rpc ListMetrics(ListMetricsRequest) returns (ListMetricsResponse) {}
 }
 
 // Ping request carrying a timestamp
@@ -64,4 +67,17 @@ message QueryMetricResponse {
   repeated UintMetricResult uint_results = 2;
   repeated DoubleMetricResult double_results = 3;
   repeated StringMetricResult string_results = 4;
+}
+
+// List metrics request
+message ListMetricsRequest {
+  string metric_query = 1;  // Optional query string to filter metrics (empty = all metrics)
+}
+
+// List metrics response with metric paths grouped by type
+message ListMetricsResponse {
+  repeated string bool_metrics = 1;    // Paths of all bool metrics
+  repeated string uint_metrics = 2;    // Paths of all uint metrics
+  repeated string double_metrics = 3;  // Paths of all double metrics
+  repeated string string_metrics = 4;  // Paths of all string metrics
 }
