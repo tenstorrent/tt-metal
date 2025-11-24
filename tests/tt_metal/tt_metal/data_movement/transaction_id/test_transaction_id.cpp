@@ -338,7 +338,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) {
     // Test ID
-    uint32_t test_id = 603;
+    uint32_t test_id = 610;
 
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
