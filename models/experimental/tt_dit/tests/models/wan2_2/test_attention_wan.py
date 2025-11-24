@@ -15,7 +15,7 @@ from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ....utils.test import ring_params, line_params
+from ....utils.test import line_params
 from diffusers import WanTransformer3DModel
 
 
@@ -25,8 +25,8 @@ from diffusers import WanTransformer3DModel
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
         # [(1, 8), 1, 0, 1],
-        [(4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), 0, 1, 4, line_params, ttnn.Topology.Linear],
+        [(4, 8), 1, 0, 4, line_params, ttnn.Topology.Linear],
         [(4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
         [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
