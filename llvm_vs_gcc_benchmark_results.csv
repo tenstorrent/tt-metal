@@ -1,0 +1,20 @@
+Test Name,Test Configuration,Metric,Unit,GCC Result,LLVM Result,Difference,% Change,Notes
+benchmark_rw_buffer,Write/32/67108864/0/0,Bandwidth,bytes_per_second,788.244 Mi/s,788.347 Mi/s,0.103 Mi/s,0.01%,Device 0, Page Size 32
+benchmark_rw_buffer,Write/64/67108864/0/0,Bandwidth,bytes_per_second,1.539 Gi/s,1.53824 Gi/s,-0.00076 Gi/s,-0.05%,Device 0, Page Size 64
+benchmark_rw_buffer,Write/128/67108864/0/0,Bandwidth,bytes_per_second,3.06105 Gi/s,3.06398 Gi/s,0.00293 Gi/s,0.10%,Device 0, Page Size 128
+benchmark_rw_buffer,Write/256/67108864/0/0,Bandwidth,bytes_per_second,6.06681 Gi/s,6.07217 Gi/s,0.00536 Gi/s,0.09%,Device 0, Page Size 256
+benchmark_rw_buffer,Write/512/67108864/0/0,Bandwidth,bytes_per_second,11.843 Gi/s,11.8978 Gi/s,0.0548 Gi/s,0.46%,Device 0, Page Size 512
+benchmark_rw_buffer,Write/1024/67108864/0/0,Bandwidth,bytes_per_second,13.7939 Gi/s,13.7203 Gi/s,-0.0736 Gi/s,-0.53%,Device 0, Page Size 1024
+benchmark_rw_buffer,Write/2048/67108864/0/0,Bandwidth,bytes_per_second,13.7434 Gi/s,13.8493 Gi/s,0.1059 Gi/s,0.77%,Device 0, Page Size 2048
+benchmark_rw_buffer,Read/32/67108864/0/0,Bandwidth,bytes_per_second,903.426 Mi/s,903.661 Mi/s,0.235 Mi/s,0.03%,Device 0, Page Size 32
+benchmark_rw_buffer,Read/64/67108864/0/0,Bandwidth,bytes_per_second,1.77425 Gi/s,1.77379 Gi/s,-0.00046 Gi/s,-0.03%,Device 0, Page Size 64
+benchmark_rw_buffer,Read/128/67108864/0/0,Bandwidth,bytes_per_second,3.44194 Gi/s,3.4411 Gi/s,-0.00084 Gi/s,-0.02%,Device 0, Page Size 128
+benchmark_rw_buffer,Read/256/67108864/0/0,Bandwidth,bytes_per_second,6.52 Gi/s,6.50225 Gi/s,-0.01775 Gi/s,-0.27%,Device 0, Page Size 256
+benchmark_rw_buffer,Read/512/67108864/0/0,Bandwidth,bytes_per_second,11.7209 Gi/s,11.7174 Gi/s,-0.0035 Gi/s,-0.03%,Device 0, Page Size 512
+benchmark_rw_buffer,Read/1024/67108864/0/0,Bandwidth,bytes_per_second,13.2402 Gi/s,13.1294 Gi/s,-0.1108 Gi/s,-0.84%,Device 0, Page Size 1024
+benchmark_rw_buffer,Read/2048/67108864/0/0,Bandwidth,bytes_per_second,13.5016 Gi/s,13.1202 Gi/s,-0.3814 Gi/s,-2.82%,Device 0, Page Size 2048
+test_pgm_dispatch,TBD,TBD,TBD,TBD,TBD,TBD,TBD,To be filled
+NOC_BW_sweep,TBD,TBD,TBD,TBD,TBD,TBD,TBD,To be filled
+ResNet,TBD,TBD,TBD,TBD,TBD,TBD,TBD,To be filled - needs profiler command
+GEMM_Matmul,TBD,TBD,TBD,TBD,TBD,TBD,TBD,To be filled - small subset
+
