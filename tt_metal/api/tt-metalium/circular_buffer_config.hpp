@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
+
+#include <tt-metalium/circular_buffer_constants.h>
 
 // Forward Declaration
 namespace tt {
@@ -45,6 +48,10 @@ public:
     CircularBufferConfig& set_globally_allocated_address(const Buffer& buffer);
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
+
+    uint32_t total_size() const;
+
+    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes() const;
 
     class Builder {
     public:
