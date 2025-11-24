@@ -38,7 +38,7 @@ def ttnn_integral_image_channel_last(features_nhwc):
 def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     torch.manual_seed(0)
 
-    if dtype != ttnn.bfloat16 or dtype != ttnn.float32:
+    if dtype != ttnn.bfloat16 and dtype != ttnn.float32:
         pytest.skip("Unsupported dtype")
 
     torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
