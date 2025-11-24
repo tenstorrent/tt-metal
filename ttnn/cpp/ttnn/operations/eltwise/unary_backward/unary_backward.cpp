@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -1685,8 +1686,8 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
         auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
         if (need_format) {
-            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
-                temp, temp.device(), a_pad_shape, PadValue(1.0f), Layout::TILE);
+            formatted_input_tensor =
+                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
         }
     }
     return formatted_input_tensor;

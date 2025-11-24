@@ -20,6 +20,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using namespace tt::constants;
 
+    using tt::tt_metal::PadValue;
     TT_FATAL(
         input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be divisible by {} for tiling.",
@@ -71,10 +72,15 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
-    using namespace ttnn::operations::experimental::auto_format;
-    Tensor formatted_input = AutoFormat::format_tensor(input_tensor, PadValue(0.0f), Layout::TILE);
-    Tensor formatted_cos = AutoFormat::format_tensor(cos_cache, PadValue(0.0f), Layout::TILE);
-    Tensor formatted_sin = AutoFormat::format_tensor(sin_cache, PadValue(0.0f), Layout::TILE);
+    auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
+    auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
+    Tensor formatted_input =
+        ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
+    Tensor formatted_cos =
+        ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
+    Tensor formatted_sin =
+        ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
 
     return tt::tt_metal::operation::run(
                tt::tt_metal::RotaryEmbedding{

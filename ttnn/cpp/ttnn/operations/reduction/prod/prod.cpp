@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -26,7 +27,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
         auto need_format = input_a.layout() != Layout::TILE || input_a.padded_shape() != a_pad_shape;
         if (need_format) {
             formatted_input_tensor =
-                AutoFormat::format_tensor(input_a, input_a.device(), a_pad_shape, PadValue(1.0f), Layout::TILE);
+                ttnn::tilize_with_val_padding(input_a, a_pad_shape, PadValue(1.0f), input_a.memory_config());
         }
     }
 
@@ -44,7 +45,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
         if (need_format) {
             formatted_input_tensor =
-                AutoFormat::format_tensor(temp, temp.device(), a_pad_shape, PadValue(1.0f), Layout::TILE);
+                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
         }
     }
     // Apply prod

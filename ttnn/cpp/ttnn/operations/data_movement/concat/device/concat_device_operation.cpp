@@ -205,7 +205,9 @@ Tensor concat_impl(
                 formatted_tensors.reserve(input_tensors.size());
                 for (const auto& input_tensor : input_tensors) {
                     auto pad_value = is_floating_point(input_tensor.dtype()) ? PadValue(0.0f) : PadValue(0u);
-                    formatted_tensors.push_back(AutoFormat::format_tensor(input_tensor, pad_value, Layout::TILE));
+                    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+                    formatted_tensors.push_back(ttnn::tilize_with_val_padding(
+                        input_tensor, padded_shape, pad_value, input_tensor.memory_config()));
                 }
                 return formatted_tensors;
             }

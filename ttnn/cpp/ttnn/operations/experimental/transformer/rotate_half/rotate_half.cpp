@@ -13,6 +13,7 @@ namespace ttnn::operations::experimental::transformer {
 
 Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     using namespace tt::constants;
+    using tt::tt_metal::PadValue;
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -25,8 +26,9 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         input_tensor.padded_shape()[-1],
         TILE_WIDTH * 2);
 
-    using namespace ttnn::operations::experimental::auto_format;
-    Tensor formatted_input = AutoFormat::format_tensor(input_tensor, PadValue(0.0f), Layout::TILE);
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    Tensor formatted_input =
+        ttnn::tilize_with_val_padding(input_tensor, padded_shape, PadValue(0.0f), input_tensor.memory_config());
     return tt::tt_metal::operation::run(
                RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {formatted_input})
         .at(0);
