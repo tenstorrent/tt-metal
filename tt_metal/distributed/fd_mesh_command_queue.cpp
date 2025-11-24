@@ -1201,7 +1201,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
             config_buffer_mgr_,
             expected_num_workers_completed_,
             mesh_device_->num_sub_devices(),
-            mesh_device_->allocator()->get_config().l1_unreserved_base);
+            mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
         if (reset_launch_msg_state) {
             std::for_each(
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
