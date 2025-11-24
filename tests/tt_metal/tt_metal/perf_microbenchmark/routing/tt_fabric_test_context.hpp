@@ -604,11 +604,12 @@ public:
             return;
         }
 
-        // Write detailed header with net latency first, then responder, then raw, then tolerance
+        // Write detailed header with net latency first, then responder, then raw, then per-hop, then tolerance
         csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
                       "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
                       "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
-                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,tolerance_percent\n";
+                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
+                      "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
         csv_stream.close();
 
         log_info(tt::LogTest, "Initialized latency CSV file: {}", latency_csv_file_path_.string());
@@ -1517,7 +1518,8 @@ private:
                        << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
                        << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns
                        << "," << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
-                       << result.raw_avg_ns << "," << result.raw_p99_ns << ",";
+                       << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.per_hop_min_ns << ","
+                       << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << ",";
 
             // Find the corresponding golden entry for tolerance (like bandwidth does)
             auto golden_it = fetch_corresponding_golden_latency_entry(result);
@@ -1790,8 +1792,9 @@ private:
             // Expected format: test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,
             //                  net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,
             //                  responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,
-            //                  raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns[,tolerance_percent]
-            // Note: tolerance_percent is optional for backward compatibility
+            //                  raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,
+            //                  per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns[,tolerance_percent]
+            // Note: per_hop fields and tolerance_percent are optional for backward compatibility
             if (tokens.size() < 20) {
                 log_error(tt::LogTest, "Invalid CSV format in golden latency file. Expected at least 20 fields, got {}", tokens.size());
                 continue;
@@ -1822,8 +1825,25 @@ private:
             entry.raw_avg_ns = std::stod(tokens[18]);
             entry.raw_p99_ns = std::stod(tokens[19]);
 
+            // Per-hop fields are optional for backward compatibility
+            if (tokens.size() >= 24) {
+                entry.per_hop_min_ns = std::stod(tokens[20]);
+                entry.per_hop_max_ns = std::stod(tokens[21]);
+                entry.per_hop_avg_ns = std::stod(tokens[22]);
+                entry.per_hop_p99_ns = std::stod(tokens[23]);
+            } else {
+                // If per-hop fields are missing, set to 0
+                entry.per_hop_min_ns = 0.0;
+                entry.per_hop_max_ns = 0.0;
+                entry.per_hop_avg_ns = 0.0;
+                entry.per_hop_p99_ns = 0.0;
+            }
+
             // Tolerance is optional for backward compatibility
-            if (tokens.size() >= 21) {
+            if (tokens.size() >= 25) {
+                entry.tolerance_percent = std::stod(tokens[24]);
+            } else if (tokens.size() >= 21 && tokens.size() < 24) {
+                // Old format: tolerance is at position 20
                 entry.tolerance_percent = std::stod(tokens[20]);
             } else {
                 entry.tolerance_percent = 10.0;  // Default tolerance if not specified
@@ -1862,13 +1882,13 @@ private:
             comp_result.num_links = test_result.num_links;
             comp_result.num_samples = test_result.num_samples;
             comp_result.payload_size = test_result.payload_size;
-            comp_result.current_net_avg_ns = test_result.net_avg_ns;
+            comp_result.current_per_hop_avg_ns = test_result.per_hop_avg_ns;
 
             // Populate golden value and tolerance/status using common helper
             if (golden_it != golden_latency_entries_.end()) {
-                comp_result.golden_net_avg_ns = golden_it->net_avg_ns;
+                comp_result.golden_per_hop_avg_ns = golden_it->per_hop_avg_ns;
             } else {
-                comp_result.golden_net_avg_ns = 0.0;
+                comp_result.golden_per_hop_avg_ns = 0.0;
             }
             populate_comparison_tolerance_and_status(comp_result, golden_it, golden_latency_entries_.end());
 
@@ -1887,16 +1907,17 @@ private:
         auto diff_csv_stream = init_diff_csv_file(
             latency_diff_csv_file_path_,
             "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
-            "current_net_avg_ns,golden_net_avg_ns,difference_percent,status",
+            "current_per_hop_avg_ns,golden_per_hop_avg_ns,difference_percent,status",
             "latency");
 
         if (diff_csv_stream.is_open()) {
             for (const auto& result : latency_comparison_results_) {
-                diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                                << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
-                                << result.payload_size << "," << std::fixed << std::setprecision(2)
-                                << result.current_net_avg_ns << "," << result.golden_net_avg_ns << ","
-                                << result.difference_percent() << "," << result.status << "\n";
+                diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
+                                << result.topology << "," << result.num_devices << "," << result.num_links << ","
+                                << result.num_samples << "," << result.payload_size << "," << std::fixed
+                                << std::setprecision(2) << result.current_per_hop_avg_ns << ","
+                                << result.golden_per_hop_avg_ns << "," << result.difference_percent() << ","
+                                << result.status << "\n";
             }
             diff_csv_stream.close();
             log_info(tt::LogTest, "Latency comparison diff CSV results written to: {}", latency_diff_csv_file_path_.string());
@@ -2118,8 +2139,8 @@ private:
                             result.num_devices,
                             result.num_links,
                             result.payload_size);
-                        log_error(tt::LogTest, "      Expected: {:.2f} ns", result.golden_net_avg_ns);
-                        log_error(tt::LogTest, "      Actual:   {:.2f} ns", result.current_net_avg_ns);
+                        log_error(tt::LogTest, "      Expected per-hop: {:.2f} ns", result.golden_per_hop_avg_ns);
+                        log_error(tt::LogTest, "      Actual per-hop:   {:.2f} ns", result.current_per_hop_avg_ns);
                         log_error(
                             tt::LogTest,
                             "      Diff:     {:.2f}% (tolerance: {:.2f}%)",

@@ -262,6 +262,8 @@ public:
 };
 
 struct TestDevice {
+    static constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
+
     // Friend declarations for tight coupling with worker structs
     friend struct TestSender;
     friend struct TestReceiver;
@@ -374,6 +376,8 @@ private:
     void validate_receiver_results() const;
     void create_sync_kernel();
     void create_mux_kernels();
+
+    size_t get_latency_scratch_buffer_address() const;
 
     // Helper: Common connection registration logic for senders and receivers
     // Registers a fabric connection for the specified direction and link

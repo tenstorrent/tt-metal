@@ -20,10 +20,9 @@ constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
+    set_l1_data_cache<false>();
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
-
-    DPRINT << "SENDER: Starting latency sender kernel\n";
 
     // Common runtime args
     const size_t result_buffer_address = get_arg_val<uint32_t>(arg_idx++);
@@ -33,8 +32,11 @@ void kernel_main() {
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // Sender's scratch (for receiving echo)
-    const size_t responder_scratch_buffer_address =
-        get_arg_val<uint32_t>(arg_idx++);  // Responder's scratch (for sending TO)
+    const uint8_t responder_noc_x =
+        static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Responder's virtual NOC X
+    const uint8_t responder_noc_y =
+        static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Responder's virtual NOC Y
+    const size_t responder_scratch_buffer_address = scratch_buffer_address;
 
     // Topology-specific routing args
     uint32_t num_hops_to_responder = 0;
@@ -69,11 +71,11 @@ void kernel_main() {
     }
 
     // Setup NOC addresses for destination (responder device)
+    // Use responder's virtual core coordinates (not sender's coordinates)
     // Send payload to responder's scratch buffer (not its timestamp buffer)
-    auto dest_semaphore_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
-    auto dest_payload_noc_addr = safe_get_noc_addr(
-        static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), responder_scratch_buffer_address, 0);
+    auto dest_semaphore_noc_addr = safe_get_noc_addr(responder_noc_x, responder_noc_y, semaphore_address, 0);
+    auto dest_payload_noc_addr =
+        safe_get_noc_addr(responder_noc_x, responder_noc_y, responder_scratch_buffer_address, 0);
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -104,7 +106,7 @@ void kernel_main() {
         };
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
+        noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
         *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
     };
 
@@ -114,6 +116,14 @@ void kernel_main() {
         wait_for_semaphore_then_reset(1);
     }
 
+    // Store elapsed time (cycles) as uint32_t in result buffer
+    volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
+
+    // Clear result buffer before writing elapsed times to avoid reading stale data
+    uint32_t result_buffer_size = num_bursts * sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_bursts; i++) {
+        result_ptr[i] = 0;
+    }
     // Validate burst size
     if (burst_size > 1) {
         DPRINT << "ERROR: burst_size > 1 not supported for accurate latency measurement\n";
@@ -121,61 +131,55 @@ void kernel_main() {
     }
 
     // Main latency measurement loop
-    // Store results as pairs of (start_timestamp, end_timestamp) in result buffer
-    volatile uint64_t* result_ptr = reinterpret_cast<volatile uint64_t*>(result_buffer_address);
-
     // Use separate scratch buffer for payload echo to avoid corrupting timestamp data
-    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(scratch_buffer_address);
+    volatile uint32_t* payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(scratch_buffer_address);
+    *payload_l1_ptr = 1;
+    if (burst_size > 1) {
+        // DPRINT << "STUCK\n";
+        while (1);  // invalid config -- hang instead of reporting garbage numbers
+    }
     for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
         // Record start timestamp
 
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-            if (burst_size > 1) {
-                DPRINT << "STUCK\n";
-                while (1);  // invalid config -- hang instead of reporting garbage numbers
-            }
             // Initialize to i + 1 so we can safely reset to 0 and not invalidate the first
             // packet wait (without +1, we'd finish the loop before the first packet arrives
             // since we reset to 0)
             *payload_l1_ptr = burst_idx + 1;
         }
 
-        uint64_t start_timestamp = 0;  // get_timestamp();
-        uint64_t end_timestamp = 0;    // get_timestamp();
-        {
-            for (size_t j = 0; j < burst_size; j++) {
-                if constexpr (enable_fused_payload_with_sync) {
-                    send_payload_packet();
-                } else {
-                    if constexpr (sem_inc_only) {
-                        send_seminc_packet();
-                    } else {
-                        send_payload_packet();
-                    }
-                }
-            }
-            // Don't want to include noc command buffer response time in the total latency measurement
-            noc_async_writes_flushed();
-            start_timestamp = get_timestamp();
-            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                *payload_l1_ptr = 0;
-            }
-
-            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                noc_semaphore_wait_min(payload_l1_ptr, burst_idx + 1);
+        for (size_t j = 0; j < burst_size; j++) {
+            if constexpr (enable_fused_payload_with_sync) {
+                send_payload_packet();
             } else {
-                for (size_t j = 0; j < burst_size; j++) {
-                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
+                if constexpr (sem_inc_only) {
+                    send_seminc_packet();
+                } else {
+                    send_payload_packet();
                 }
             }
+        }
+        // Don't want to include noc command buffer response time in the total latency measurement
+        noc_async_writes_flushed();
+        auto start_timestamp = get_timestamp_32b();
+        if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+            *payload_l1_ptr = 0;
+        }
 
-            end_timestamp = get_timestamp();
+        if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+            noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+        } else {
+            for (size_t j = 0; j < burst_size; j++) {
+                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
+            }
             *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }
 
-        // Store timestamp pair in result buffer
-        result_ptr[burst_idx * 2] = start_timestamp;
-        result_ptr[burst_idx * 2 + 1] = end_timestamp;
+        auto end_timestamp = get_timestamp();
+
+        // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+        auto elapsed_cycles = end_timestamp - start_timestamp;
+        result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
     }
 
     fabric_connection.close();

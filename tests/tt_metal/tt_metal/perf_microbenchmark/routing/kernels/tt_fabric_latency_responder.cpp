@@ -19,10 +19,10 @@ constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
+    set_l1_data_cache<false>();
+    DPRINT << "kernel_main responder\n";
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
-
-    DPRINT << "RESPONDER: Starting latency responder kernel\n";
 
     // Common runtime args
     const size_t timestamp_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // For storing response timestamps
@@ -32,7 +32,9 @@ void kernel_main() {
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t sender_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);     // For echoing back to sender
-    const size_t responder_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // For receiving payload
+    const uint8_t sender_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Sender's virtual NOC X
+    const uint8_t sender_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));  // Sender's virtual NOC Y
+    const size_t responder_scratch_buffer_address = sender_scratch_buffer_address;        // For receiving payload
 
     // Topology-specific routing args (for sending back to sender)
     uint32_t num_hops_back_to_sender = 0;
@@ -67,10 +69,9 @@ void kernel_main() {
     }
 
     // Setup NOC addresses for destination (sender device)
-    auto dest_semaphore_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
-    auto dest_payload_noc_addr = safe_get_noc_addr(
-        static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), sender_scratch_buffer_address, 0);
+    // Use sender's virtual core coordinates (not responder's coordinates)
+    auto dest_semaphore_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, semaphore_address, 0);
+    auto dest_payload_noc_addr = safe_get_noc_addr(sender_noc_x, sender_noc_y, sender_scratch_buffer_address, 0);
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
@@ -101,10 +102,16 @@ void kernel_main() {
         };
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
+        noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
         *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
     };
 
+    // Store response elapsed times in timestamp buffer
+    volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(timestamp_buffer_address);
+    // Clear result buffer before writing elapsed times to avoid reading stale data
+    for (uint32_t i = 0; i < num_bursts; i++) {
+        result_ptr[i] = 0;
+    }
     // Warmup: respond to flush packet
     {
         wait_for_semaphore_then_reset(1);
@@ -121,9 +128,6 @@ void kernel_main() {
     // Wait for incoming packets and immediately send ack back
     // Use scratch buffer for receiving payloads to avoid overwriting timestamps
     auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(responder_scratch_buffer_address);
-
-    // Store response timestamps in timestamp buffer
-    volatile uint64_t* result_ptr = reinterpret_cast<volatile uint64_t*>(timestamp_buffer_address);
 
     if (burst_size == 1) {
         // for burst size one, we can safely assume we don't need to wait for space because
@@ -164,14 +168,13 @@ void kernel_main() {
             // Capture end timestamp after sending response
             uint64_t end_timestamp = get_timestamp();
 
-            // Store timestamp pair in result buffer
-            result_ptr[burst_idx * 2] = start_timestamp;
-            result_ptr[burst_idx * 2 + 1] = end_timestamp;
+            // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+            uint64_t elapsed_cycles = end_timestamp - start_timestamp;
+            result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
         }
     } else {
         for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
             // Wait for incoming packet from sender
-            // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
             } else {
@@ -216,9 +219,9 @@ void kernel_main() {
             // Capture end timestamp after sending response
             uint64_t end_timestamp = get_timestamp();
 
-            // Store timestamp pair in result buffer
-            result_ptr[burst_idx * 2] = start_timestamp;
-            result_ptr[burst_idx * 2 + 1] = end_timestamp;
+            // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+            uint64_t elapsed_cycles = end_timestamp - start_timestamp;
+            result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
         }
     }
 
