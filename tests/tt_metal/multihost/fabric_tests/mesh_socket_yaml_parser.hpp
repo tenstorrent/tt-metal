@@ -23,11 +23,6 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
 
-enum class RoutingType : uint32_t {
-    LowLatency = 0,
-    Dynamic = 1,
-};
-
 /*  TODO: Add support for other patterns.
     Patterns need to split into three layers:
     1. host patterns (number of host pairs)
@@ -49,7 +44,6 @@ struct PhysicalMeshConfig {
 
 struct FabricConfig {
     tt::tt_fabric::Topology topology;
-    RoutingType routing_type;
 };
 
 struct MemoryConfig {

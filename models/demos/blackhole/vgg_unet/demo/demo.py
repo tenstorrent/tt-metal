@@ -9,7 +9,6 @@ import kagglehub
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.blackhole.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
@@ -26,7 +25,6 @@ def run_demo(
 ):
     # The below line is commented due to the issue https://github.com/tenstorrent/tt-metal/issues/23270
     # device.disable_and_clear_program_cache()
-    disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
     batch_size = device_batch_size * device.get_num_devices()

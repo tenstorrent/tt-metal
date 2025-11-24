@@ -36,12 +36,11 @@ export TT_DIT_CACHE_DIR=/your/cache/path
 pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "4x8"
 
 # Generate a video with the pipeline test. Same comment here, use 2x4 on 8-chip systems and 4x8 on 32-chip systems.
-TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8"
+pytest models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8"
 ```
 
 ## Limitations
 
-We currently need to set `TT_MM_THROTTLE_PERF=5` when running inference in order to avoid a certain set of hangs.
 While output videos look good, we have many items of work in progress to improve correctness.
 As of now, running on systems smaller than a 2x4 Wormhole mesh is not well supported. The model is large and requires 8-chips worth of memory to run.
 Performance optimization is in progress.
