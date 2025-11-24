@@ -59,9 +59,16 @@ void parallel_generate(
 
 }  // namespace legacy
 
+static inline bool use_simd_rng() {
+    constexpr auto DISABLE_SIMD_RNG = "DISABLE_SIMD_RNG";
+    static bool simd_disabled = (std::getenv(DISABLE_SIMD_RNG) != nullptr);
+
+    return !simd_disabled;
+}
+
 template <typename T, typename DistGenFunc>
 void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
-    if (static const auto new_rng = std::getenv("TT_RNG"); new_rng != nullptr) {
+    if (use_simd_rng()) {
         return sse::sequential_generate(seq, dist_factory, seed);
     }
     return legacy::sequential_generate(seq, dist_factory, seed);
@@ -73,8 +80,7 @@ void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) {
-    static const bool new_rng = (std::getenv("TT_RNG") != nullptr);
-    if (new_rng) {
+    if (use_simd_rng()) {
         return sse::parallel_generate(seq, dist_factory, seed, max_threads);
     }
     return legacy::parallel_generate(seq, dist_factory, seed, max_threads);
