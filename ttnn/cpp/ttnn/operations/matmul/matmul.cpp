@@ -93,7 +93,8 @@ static bool get_post_process_bias(
     const std::optional<const CoreCoord>& user_core_coord,
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b) {
+    const ttnn::Tensor& input_tensor_b,
+    const bool transpose_a) {
     // Determine if we should post-process bias based on the program config
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
@@ -102,8 +103,8 @@ static bool get_post_process_bias(
         // Bias fusion requires bias_shape_aligned[-2] == tile_height
         const auto& bias_tensor = bias.value();
         const auto& bias_padded_shape = bias_tensor.padded_shape();
-        const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
-        uint32_t tile_height = tile_shape[0];
+        const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+        uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
 
         // If bias second-to-last dimension doesn't match tile height, must post-process
         if (bias_padded_shape[-2] != tile_height) {
@@ -181,7 +182,8 @@ ttnn::Tensor bound_matmul(
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a,
-        input_tensor_b_adjusted);
+        input_tensor_b_adjusted,
+        parameters.transpose_a);
 
     auto output_tensor = matmul(
         input_tensor_a,
