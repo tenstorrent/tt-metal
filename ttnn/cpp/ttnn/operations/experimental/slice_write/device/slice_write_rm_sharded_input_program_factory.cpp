@@ -159,7 +159,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         int max_num_sticks_this_core = 0;
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_sticks_per_dim[j];
-            if (j == num_dims - 1 && unpadded_written == num_input_sticks_per_dim[j]) {
+            if (j == num_dims - 1 && unpadded_written >= num_input_sticks_per_dim[j]) {
                 // Handle edge case where last dimension is completely written
                 id_per_dim[j] = num_input_sticks_per_dim[j];
             }
