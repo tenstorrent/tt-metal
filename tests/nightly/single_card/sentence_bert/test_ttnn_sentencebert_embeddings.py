@@ -1,1 +1,1 @@
-../../../../models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_embeddings.py
+../../../../models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_embeddings.py

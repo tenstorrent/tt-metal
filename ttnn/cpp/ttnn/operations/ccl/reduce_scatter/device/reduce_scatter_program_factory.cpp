@@ -5,8 +5,6 @@
 #include "reduce_scatter_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -153,8 +151,8 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         update_runtime_arguments(
             program,
-            shared_variables.program_artifacts.reader_kernel_ids,
-            shared_variables.program_artifacts.writer_kernel_ids,
+            shared_variables.program_artifacts.reader_kernel_id,
+            shared_variables.program_artifacts.writer_kernel_id,
             shared_variables.program_artifacts.all_cores,
             operation_attributes.num_links,
             shared_variables.program_artifacts.num_directions_per_link,

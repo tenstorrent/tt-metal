@@ -64,7 +64,7 @@ std::vector<std::vector<HalJitBuildConfig>> configure_for_2erisc() {
     };
 }
 
-HalCoreInfoType create_active_eth_mem_map() {
+HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
@@ -93,13 +93,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
@@ -126,13 +120,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
-        MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
@@ -156,8 +144,7 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
-    // rtoptions not included in here due to circular dependency
-    if (is_2_erisc_mode()) {
+    if (enable_2_erisc_mode) {
         processor_classes = configure_for_2erisc();
         processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
     } else {

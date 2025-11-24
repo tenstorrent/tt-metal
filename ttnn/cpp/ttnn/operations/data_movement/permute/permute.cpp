@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -54,7 +53,13 @@ ttnn::Tensor permute_impl(
     };
 
     auto transpose_hc = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::transpose(input, 1, -2, output_mem_config, pad_value);
+        // some permute tests assume transpose hc uses the input shard spec
+        // avoid the intermediate memory configuration mismatch
+        auto mem_config = output_mem_config;
+        if (input.memory_config().is_sharded() && output_mem_config.is_sharded()) {
+            mem_config = input.memory_config();
+        }
+        return ttnn::transpose(input, 1, -2, mem_config, pad_value);
     };
 
     auto transpose_cn = [&](const ttnn::Tensor& input) -> ttnn::Tensor {

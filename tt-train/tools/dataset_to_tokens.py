@@ -12,12 +12,9 @@ Tokenizing is done in 128 splits to avoid memory issues.
 import os
 import argparse
 import numpy as np
-import msgpack
 import msgpack_numpy as m
 import csv
-
-# Enable numpy serialization for msgpack
-m.patch()
+from transformers import AutoTokenizer
 
 
 def load_text_data(text_file):
@@ -39,16 +36,6 @@ def tokenize_text_data(tokenizer_file, text_data):
     return tokenized_data
 
 
-def save_to_msgpack(data, output_file):
-    """
-    Saves the tokenized data as a flat NumPy array in MessagePack format.
-    """
-    np_data = np.array(data, dtype=np.int32)
-    with open(output_file, "wb") as file:
-        msgpack.pack(np_data, file, default=m.encode)
-    print(f"Saved tokenized data as MessagePack to {output_file}")
-
-
 def save_to_csv(data, output_file):
     """
     Saves the tokenized data as a single space-separated line in a CSV file.
@@ -64,46 +51,43 @@ def main():
         description="Preprocess a text dataset using a tokenizer and save all tokens as a single flat list in MessagePack or CSV format."
     )
     parser.add_argument(
-        "--text_file", type=str, required=True, help="Path to the input text dataset (e.g., merged.txt)."
+        "--text_file",
+        type=str,
+        required=True,
+        help="Path to the input text dataset (e.g., merged.txt).",
     )
     parser.add_argument(
-        "--tokenizer_file", type=str, required=True, help="Path to the pre-trained tokenizer.json file."
+        "--hf_tokenizer",
+        type=str,
+        required=True,
+        help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2).",
     )
     parser.add_argument(
         "--output_file",
         type=str,
-        default="tokenized_data",
+        default=f"{os.environ.get('TT_METAL_HOME', '~/tt-metal')}/tt-train/data/tokenized_data",
         help="Base path to save the tokenized data (extension will be added based on format).",
     )
-    parser.add_argument(
-        "--format",
-        type=str,
-        choices=["msgpack", "csv"],
-        default="csv",
-        help="Output format for tokenized data (default: msgpack).",
-    )
+
     args = parser.parse_args()
 
     # Load text data
     print(f"Loading text data from {args.text_file}...")
     text_data = load_text_data(args.text_file)
 
-    # Tokenize the text data
-    print(f"Tokenizing data using tokenizer {args.tokenizer_file}...")
+    tokenizer = AutoTokenizer.from_pretrained(args.hf_tokenizer)
+    print(f"Tokenizing data using Hugging Face tokenizer {args.hf_tokenizer}...")
     splits_num = 128
     tokenized_data = []
     for i in range(splits_num):
-        text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
-        tokenized_data_split = tokenize_text_data(args.tokenizer_file, text_data_split)
+        text_data_split = text_data[
+            i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num
+        ]
+        tokenized_data_split = tokenizer.encode(text_data_split)
         tokenized_data.extend(tokenized_data_split)
 
-    # Save tokenized data in the specified format
-    if args.format == "msgpack":
-        output_file = f"{args.output_file}.msgpack"
-        save_to_msgpack(tokenized_data, output_file)
-    elif args.format == "csv":
-        output_file = f"{args.output_file}"
-        save_to_csv(tokenized_data, output_file)
+    # Save tokenized data
+    save_to_csv(tokenized_data, f"{args.output_file}.csv")
 
 
 if __name__ == "__main__":
