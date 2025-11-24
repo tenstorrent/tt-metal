@@ -719,11 +719,13 @@ void TestContext::setup_latency_test_workers(TestConfig& config) {
     }
 }
 
-// Configures latency test mode - validates config and sets latency_test_mode flag
+// Configures latency test mode - validates config and sets performance_test_mode flag
 void TestContext::setup_latency_test_mode(const TestConfig& config) {
-    TT_FATAL(config.latency_test_mode, "setup_latency_test_mode called when latency test mode is not enabled");
+    TT_FATAL(
+        config.performance_test_mode == PerformanceTestMode::LATENCY,
+        "setup_latency_test_mode called when latency test mode is not enabled");
 
-    this->set_latency_test_mode(true);
+    this->set_performance_test_mode(PerformanceTestMode::LATENCY);
 
     // Validate that latency tests don't use multiple iterations
     TT_FATAL(

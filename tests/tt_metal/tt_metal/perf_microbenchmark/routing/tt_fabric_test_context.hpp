@@ -43,6 +43,7 @@ using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
+using PerformanceTestMode = tt::tt_fabric::fabric_tests::PerformanceTestMode;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
@@ -140,7 +141,7 @@ public:
 
     void prepare_for_test(const TestConfig& config) {
         // Skip reconstruction entirely for explicit YAML policies (but latency mode still needs setup below)
-        if (!use_dynamic_policies_ && !config.latency_test_mode) {
+        if (!use_dynamic_policies_) {
             return;  // Early return - allocator and maps already correct, reset() will clean up state
         }
 
@@ -188,7 +189,7 @@ public:
     void process_traffic_config(TestConfig& config) {
         // Latency test mode: manually populate senders_ and receivers_ maps
         // with latency-specific kernels and configurations
-        if (config.latency_test_mode) {
+        if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
             setup_latency_test_workers(config);
             return;  // Skip normal resource allocation and traffic config setup
         }
@@ -219,10 +220,15 @@ public:
             // patterns.
             this->set_global_sync(config.global_sync);
             this->set_global_sync_val(config.global_sync_val);
-            this->set_benchmark_mode(config.benchmark_mode);
+            this->set_performance_test_mode(config.performance_test_mode);
 
             log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
-            log_debug(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
+            log_debug(
+                tt::LogTest,
+                "Performance test mode: {}",
+                performance_test_mode_ == PerformanceTestMode::BANDWIDTH ? "BANDWIDTH"
+                : performance_test_mode_ == PerformanceTestMode::LATENCY ? "LATENCY"
+                                                                         : "NONE");
 
             for (const auto& sync_sender : config.global_sync_configs) {
                 // currently initializing our sync configs to be on senders local to the current hos
@@ -367,7 +373,7 @@ public:
         fixture_->setup_workload();
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
-            test_device.set_benchmark_mode(benchmark_mode_);
+            test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
             test_device.set_global_sync(global_sync_);
             test_device.set_global_sync_val(global_sync_val_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
@@ -376,7 +382,7 @@ public:
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
 
             // Create kernels (latency or normal)
-            if (latency_test_mode_) {
+            if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
                 // For latency tests, check if this device has any senders or receivers
                 const auto& senders = test_device.get_senders();
                 const auto& receivers = test_device.get_receivers();
@@ -503,7 +509,7 @@ public:
     void process_telemetry_data(TestConfig& built_test_config) {
         // Skip telemetry readback in latency test mode because we don't actually care about the values of the telemetry.
         // We only enable it so that latency tests take into account the overheads of having telemetry enabled
-        if (this->get_telemetry_enabled() && !latency_test_mode_) {
+        if (this->get_telemetry_enabled() && performance_test_mode_ != PerformanceTestMode::LATENCY) {
             this->read_telemetry();
             this->process_telemetry_for_golden();
             this->dump_raw_telemetry_csv(built_test_config);
@@ -512,8 +518,11 @@ public:
 
     void validate_results() {
         // Skip validation in benchmark or latency mode (neither validates packet contents)
-        if (benchmark_mode_ || latency_test_mode_) {
-            log_info(tt::LogTest, "Skipping validation ({})", benchmark_mode_ ? "benchmark_mode" : "latency_test_mode");
+        if (performance_test_mode_ != PerformanceTestMode::NONE) {
+            log_info(
+                tt::LogTest,
+                "Skipping validation (performance_test_mode: {})",
+                performance_test_mode_ == PerformanceTestMode::BANDWIDTH ? "BANDWIDTH" : "LATENCY");
             return;
         }
 
@@ -649,17 +658,13 @@ public:
 
     void close_devices() { fixture_->close_devices(); }
 
-    void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_performance_test_mode(PerformanceTestMode mode) { performance_test_mode_ = mode; }
 
     void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
 
-    void set_latency_test_mode(bool latency_test_mode) { latency_test_mode_ = latency_test_mode; }
-
-    bool get_benchmark_mode() { return benchmark_mode_; }
+    PerformanceTestMode get_performance_test_mode() { return performance_test_mode_; }
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
-
-    bool get_latency_test_mode() { return latency_test_mode_; }
 
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
@@ -766,8 +771,7 @@ public:
 
 private:
     void reset_local_variables() {
-        benchmark_mode_ = false;
-        latency_test_mode_ = false;
+        performance_test_mode_ = PerformanceTestMode::NONE;
         global_sync_ = false;
         global_sync_val_ = 0;
         outgoing_traffic_.clear();
@@ -1911,9 +1915,8 @@ private:
     // Dynamic allocation policy control
     bool use_dynamic_policies_ = true;  // Whether to compute dynamic policies per test
 
-    bool benchmark_mode_ = false;     // Benchmark mode for current test
-    bool telemetry_enabled_ = false;  // Telemetry enabled for current test
-    bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
+    PerformanceTestMode performance_test_mode_ = PerformanceTestMode::NONE;  // Performance test mode for current test
+    bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 

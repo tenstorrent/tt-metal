@@ -22,6 +22,13 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
+enum class PerformanceTestMode {
+    NONE,       // No performance testing (functional test only)
+    BANDWIDTH,  // Bandwidth/throughput test mode (formerly benchmark_mode)
+    LATENCY     // Latency measurement test mode (formerly latency_test_mode)
+};
+
 // Device identifier that can be resolved later (used during parsing)
 using DeviceIdentifier = std::variant<
     FabricNodeId,                      // Already resolved
@@ -138,9 +145,8 @@ struct ParsedTestConfig {
     std::vector<SenderConfig> global_sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
-    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
-    bool latency_test_mode =
-        false;  // Enable latency test mode for latency measurement (mutually exclusive with benchmark_mode)
+    PerformanceTestMode performance_test_mode =
+        PerformanceTestMode::NONE;   // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;  // Enable telemetry for performance testing
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
@@ -164,9 +170,8 @@ struct TestConfig {
     std::vector<SenderConfig> global_sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
-    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
-    bool latency_test_mode =
-        false;  // Enable latency test mode for latency measurement (mutually exclusive with benchmark_mode)
+    PerformanceTestMode performance_test_mode =
+        PerformanceTestMode::NONE;  // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects

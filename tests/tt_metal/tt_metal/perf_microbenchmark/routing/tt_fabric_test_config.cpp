@@ -241,22 +241,27 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
+    // Parse performance test mode (replaces benchmark_mode and latency_test_mode)
     if (test_yaml["benchmark_mode"]) {
-        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        bool benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        if (benchmark_mode) {
+            test_config.performance_test_mode = PerformanceTestMode::BANDWIDTH;
+        }
     }
 
     if (test_yaml["latency_test_mode"]) {
-        test_config.latency_test_mode = parse_scalar<bool>(test_yaml["latency_test_mode"]);
+        bool latency_test_mode = parse_scalar<bool>(test_yaml["latency_test_mode"]);
+        if (latency_test_mode) {
+            TT_FATAL(
+                test_config.performance_test_mode == PerformanceTestMode::NONE,
+                "Test '{}': benchmark_mode and latency_test_mode are mutually exclusive",
+                test_config.name);
+            test_config.performance_test_mode = PerformanceTestMode::LATENCY;
+        }
     }
 
-    // Validate mutual exclusivity of benchmark_mode and latency_test_mode
-    TT_FATAL(
-        !(test_config.benchmark_mode && test_config.latency_test_mode),
-        "Test '{}': benchmark_mode and latency_test_mode are mutually exclusive",
-        test_config.name);
-
     // Validate latency test mode requirements
-    if (test_config.latency_test_mode) {
+    if (test_config.performance_test_mode == PerformanceTestMode::LATENCY) {
         validate_latency_test_config(test_config);
     }
 
@@ -419,9 +424,9 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
             return test_config.fabric_setup.topology == topo;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
-                return test_config.benchmark_mode;
+                return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
             } else if (filter_value == "false") {
-                return !test_config.benchmark_mode;
+                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
             } else {
                 log_info(
                     tt::LogTest,
