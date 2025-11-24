@@ -52,20 +52,12 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, dummy_weights, rese
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
-    # Verify weights are random for dummy_weights=True, consistent for dummy_weights=False
+    # Verify weights exist
     weight_key = "model.multi_modal_projector.mm_soft_emb_norm.weight"
     assert weight_key in state_dict, f"Weight {weight_key} not found in state_dict"
 
-    if dummy_weights:
-        # For dummy weights, verify they change on each load (truly random)
-        state_dict_2 = tt_model_args.load_state_dict()
-        assert weight_key in state_dict_2, f"Weight {weight_key} not found in state_dict_2"
-
-        weight_diff = (state_dict[weight_key] - state_dict_2[weight_key]).abs().max().item()
-        logger.info(f"✓ Dummy weights verification: Max diff between two loads = {weight_diff}")
-        assert weight_diff > 0.01, f"Dummy weights should be random but got diff={weight_diff}"
-        logger.info(f"✓ Verified: Weights are truly random (different on each load)")
-    else:
+    # Skip verification for dummy weights to avoid slow double load_state_dict call
+    if not dummy_weights:
         # For real weights, verify they're identical on each load
         state_dict_2 = tt_model_args.load_state_dict()
         assert weight_key in state_dict_2, f"Weight {weight_key} not found in state_dict_2"
@@ -73,7 +65,7 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, dummy_weights, rese
         weight_diff = (state_dict[weight_key] - state_dict_2[weight_key]).abs().max().item()
         logger.info(f"✓ Real weights verification: Max diff between two loads = {weight_diff}")
         assert weight_diff < 1e-6, f"Real weights should be identical but got diff={weight_diff}"
-        logger.info(f"✓ Verified: Weights are from checkpoint (identical on each load)")
+        logger.info(f"✓ Verified: Real weights are from checkpoint (identical on each load)")
 
     logger.info(f"Running test with dummy_weights={dummy_weights}")
 

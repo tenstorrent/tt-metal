@@ -25,6 +25,8 @@ from models.demos.gemma3.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+
+# from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
@@ -1816,23 +1818,10 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
-
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-
-                # For dummy weights, use from_config to avoid loading checkpoint
-                model = AutoModelForCausalLM.from_config(config)
-
-                # Randomize weights for dummy mode
-                state_dict = {k: torch.randn_like(v) for k, v in model.state_dict().items()}
-            else:
-                reference_model = Transformer(self)
-                state_dict = reference_model.state_dict()
-                state_dict_prefix = self.get_state_dict_prefix("", None)
-                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            reference_model = Transformer(self)
+            state_dict = reference_model.state_dict()
+            state_dict_prefix = self.get_state_dict_prefix("", None)
+            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
