@@ -41,4 +41,5 @@ jobs:
           model: ${{ inputs.model }}
         env:
           OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_FREE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
