@@ -5,6 +5,15 @@ Mission
 -------
 Diagnose the current failing GitHub Actions subjob on `main`. Depending on the evidence, you must choose **exactly one** of the three cases below and produce the required outputs.
 
+Workspace Layout
+----------------
+- You are running inside `.auto_triage/` and all helper scripts are already staged here.
+- The full `tt-metal` repository has been mirrored into `./workspace/`. Read any source files from there.
+- Stay in this directory. Run helper scripts as `./get_logs.sh`, `./download_data_between_commits.sh`, etc.
+- Data files live in `./auto_triage/data/` (also available via the `./data/` symlink), logs in `./auto_triage/logs/` (also exposed via `./logs/`), and outputs must go into `./auto_triage/output/` (`./output/`).
+- Never reference parent directories (e.g., `../`). Doing so will trigger permission denials.
+- Always read `./data/subjob_runs.json` (symlinked to `./auto_triage/data/subjob_runs.json`) for the list of recent runs (success vs failure). `boundaries_summary.json` is metadata only; do not rely on it for determinism checks.
+
 -Case Matrix
 ------------
 - **Case 1 – Failure attributable to a specific commit**
@@ -14,11 +23,11 @@ Diagnose the current failing GitHub Actions subjob on `main`. Depending on the e
 - **Case 3 – Failure unrelated to tt-metal changes**
   - Evidence shows the issue is probably external (infrastructure, flaky machines, mismatched dependencies, or commits that clearly cannot affect the failing test). Use this only when you have exhausted reasonable tt-metal hypotheses.
 
-You must justify the selected case explicitly in `auto_triage/output/explanation.md`.
+You must justify the selected case explicitly in `./output/explanation.md`.
 
 Shared Workflow (All Cases)
 ---------------------------
-1. Inspect `auto_triage/data/boundaries_summary.json` (or `subjob_runs.json`) to understand the ordered history and identify the last successful run and subsequent failures.
+1. Inspect `./data/boundaries_summary.json` (or `./data/subjob_runs.json`) to understand the ordered history and identify the last successful run and subsequent failures. The higher the run_number the newer the run.
 2. **Log downloads:**
    - Start by downloading:
      - The **oldest failing run** (first failure after the last success) and
@@ -30,6 +39,8 @@ Shared Workflow (All Cases)
 3. Determine whether the failure is likely caused by tt-metal changes. Matching errors across runs help establish determinism, but a single run can still justify Case 1 if the commit evidence is strong. **Never** assume determinism just because a run is the latest; always explain your rationale.
 4. If you can map the failure to code changes (even from a single run), proceed toward Case 1. If you believe the failure is deterministic but cannot identify a culprit commit, you are heading toward Case 2. If tt-metal seems unrelated, that’s Case 3.
 5. Contact planning: while you work, note commit authors, file owners (`git log`, `git blame`, `.github/CODEOWNERS`), and capture GitHub profile URLs for everyone you may need to ping.
+6. Run `./download_data_between_commits.sh` before analyzing commits. If it prints `BATCH_COUNT=<n>`, call `./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index>` for each batch index `0..n-1` (using the same output JSON so results append) before continuing.
+7. In your final report, include links to the last successful job run, the first failing job run, and every commit between them (use the compare URL and `commit_info.json`).
 
 Failure Evidence Rules
 ----------------------
@@ -42,20 +53,25 @@ Toolbox Reference
 -----------------
 1. **Download logs**
    ```
-   auto_triage/get_logs.sh <job_url> [output_dir]
+   ./get_logs.sh <job_url> [output_dir]
    ```
 2. **List commits between the last success and first deterministic failure**
    ```
-   auto_triage/download_data_between_commits.sh <good_commit> <bad_commit> [output_json]
+   ./download_data_between_commits.sh <good_commit> <bad_commit> [output_json]
    ```
-   Outputs `auto_triage/data/commit_info.json`. The script now errors if >100 commits are requested.
-3. **Changed files for a commit**
+   Creates/updates `./data/commit_info.json`. If more than 30 commits are detected it will report `BATCH_COUNT` and expect the batch script below to be called.
+3. **Download commit metadata in batches (when requested)**
    ```
-   auto_triage/get_changed_files.sh <commit> [output_json]
+   ./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index> [output_json]
    ```
-4. **Full diff for a commit**
+   Processes up to 30 commits per batch and appends to the specified JSON (run for indices `0..BATCH_COUNT-1`).
+4. **Changed files for a commit**
    ```
-   auto_triage/get_commit_diff.sh <commit> [output_patch]
+   ./get_changed_files.sh <commit> [output_json]
+   ```
+5. **Full diff for a commit**
+   ```
+   ./get_commit_diff.sh <commit> [output_patch]
    ```
 
 Case 1 – Deterministic Failure With Identified Commit
@@ -66,9 +82,9 @@ Trigger this case when:
 - A specific commit (or very small set) clearly explains the failure via Copilot overview, file diffs, etc.
 
 Actions:
-1. Run `download_data_between_commits.sh <good> <bad>` to gather metadata.
+1. Run `./download_data_between_commits.sh <good> <bad>` to gather metadata.
 2. Use Copilot summaries, changed files, and diffs to pick the most likely culprit. Record alternatives if the evidence is close.
-3. Prepare outputs under `auto_triage/output/`:
+3. Prepare outputs under `./output/`:
    - `chosen_commit.json`
    - `alternatives.json`
    - `explanation.md` covering:
@@ -76,6 +92,7 @@ Actions:
      - The commit window, Copilot summaries referenced, and supporting diffs.
      - Detailed fix-forward suggestions (not just “revert”).
      - A “Who to contact” section listing names + GitHub handles + profile URLs, prioritizing the culprit commit author and relevant file owners (per `git log`, `git blame`, `.github/CODEOWNERS`).
+     - Direct links to the last successful job, the first failing job, each commit in the window, and the suspected culprit commit.
 
 Case 2 – Deterministic Failure But Commit Unknown
 -------------------------------------------------
@@ -87,7 +104,7 @@ Use this case when a deterministic failure exists but you cannot determine the c
 Actions:
 1. Explain clearly why the commit cannot be identified (expired logs, excessive commit span, missing data, etc.).
 2. Describe the failure signature, affected files/tests, and best-effort hypotheses on where the bug likely lives in the codebase.
-3. Produce **only** `auto_triage/output/explanation.md` (no JSON outputs). Include:
+3. Produce **only** `./output/explanation.md` (no JSON outputs). Include:
    - Determinism evidence.
    - Guidance for engineers on how to debug/fix the issue (files to inspect, test commands, configs to tweak).
    - A contact list (names + handles + GitHub URLs) derived from `git log`, `git blame`, `.github/CODEOWNERS`, prioritizing likely owners of the failing areas.
@@ -105,7 +122,7 @@ Actions:
    - Summaries of the failures you inspected.
    - Commit analysis showing no plausible offending changes.
    - Any external/environmental clues from the logs.
-2. Produce `auto_triage/output/explanation.md` with:
+2. Produce `./output/explanation.md` with:
    - A clear statement that this is Case 3.
    - Suggestions for next steps (check runners, dependencies, hardware, upstream repos, etc.).
    - A contact list (names + handles + GitHub URLs) for people who can help investigate the suspected area (e.g., infra owners, CODEOWNERS of the test, commit authors touching tooling).
@@ -126,4 +143,4 @@ Final Reminders
 - When log downloads fail, document the attempt and reason before moving on.
 - Keep reasoning concise but explicit, and always tie conclusions back to logs or commit data.
 - Accuracy matters—engineers will act on your findings. Choose the correct case and justify it thoroughly.
-- If there are **no failing runs** after reading `boundaries_summary.json`, write `auto_triage/output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.
+- If there are **no failing runs** after reading `boundaries_summary.json`, write `./output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.
