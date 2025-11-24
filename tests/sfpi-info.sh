@@ -132,7 +132,7 @@ cd $src
 # duplicate to stderr if it's different to stdout
 dupstderr () {
     if [[ $(readlink /dev/fd/1) != $(readlink /dev/fd/2) ]]; then
-	tee -a /dev/fd/2
+	tee /dev/fd/2
     else
 	cat
     fi
@@ -155,11 +155,13 @@ any additional packages or issues you encounter by filing an issue at
 https://github.com/tenstorrent/tt-metal/issues
 EOF
 
-if ! [[ -d .git ]] && [[ -t 0 ]]; then
-    echo >&2
-    read -p "Confirm you have read and understood the above:" yes
-    if ! [[ $yes =~ ^[Yy] ]]; then
-	echo "Assuming you have anyway" >&2
+if ! [[ -d .git ]]; then
+    if [[ -t 0 ]]; then
+	echo >&2
+	read -p "Confirm you have read and understood the above:" yes
+	if ! [[ $yes =~ ^[Yy] ]]; then
+	    echo "Assuming you have anyway" >&2
+	fi
     fi
     echo | dupstderr
     echo "Cloning the repository ..." | dupstderr
