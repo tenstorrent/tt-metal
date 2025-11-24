@@ -140,30 +140,28 @@ public:
     }
 
     void prepare_for_test(const TestConfig& config) {
-        // Skip reconstruction entirely for explicit YAML policies (but latency mode still needs setup below)
+        // Skip reconstruction entirely for explicit YAML policies
         if (!use_dynamic_policies_) {
             return;  // Early return - allocator and maps already correct, reset() will clean up state
         }
 
-        if (use_dynamic_policies_) {
-            // Ask policy manager if a new policy is needed
-            // Returns nullopt if cached policy should be reused, otherwise returns new policy
-            auto new_policy = policy_manager_->get_new_policy_for_test(config);
+        // Ask policy manager if a new policy is needed
+        // Returns nullopt if cached policy should be reused, otherwise returns new policy
+        auto new_policy = policy_manager_->get_new_policy_for_test(config);
 
-            if (new_policy.has_value()) {
-                // New policy computed - need to reconstruct allocator and memory maps
-                update_memory_maps(new_policy.value());
+        if (new_policy.has_value()) {
+            // New policy computed - need to reconstruct allocator and memory maps
+            update_memory_maps(new_policy.value());
 
-                allocator_.reset();
-                allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-                    *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
-            }
-
-            // Validate packet size (uses either new policy or cached policy)
-            const auto& policy_to_validate =
-                new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
-            validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
+            allocator_.reset();
+            allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+                *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
         }
+
+        // Validate packet size (uses either new policy or cached policy)
+        const auto& policy_to_validate =
+            new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
+        validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
     }
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
@@ -223,12 +221,7 @@ public:
             this->set_performance_test_mode(config.performance_test_mode);
 
             log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
-            log_debug(
-                tt::LogTest,
-                "Performance test mode: {}",
-                performance_test_mode_ == PerformanceTestMode::BANDWIDTH ? "BANDWIDTH"
-                : performance_test_mode_ == PerformanceTestMode::LATENCY ? "LATENCY"
-                                                                         : "NONE");
+            log_debug(tt::LogTest, "Performance test mode: {}", enchantum::to_string(performance_test_mode_));
 
             for (const auto& sync_sender : config.global_sync_configs) {
                 // currently initializing our sync configs to be on senders local to the current hos
@@ -383,96 +376,7 @@ public:
 
             // Create kernels (latency or normal)
             if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
-                // For latency tests, check if this device has any senders or receivers
-                const auto& senders = test_device.get_senders();
-                const auto& receivers = test_device.get_receivers();
-
-                bool has_sender = !senders.empty();
-                bool has_receiver = !receivers.empty();
-
-                if (has_sender) {
-                    // This is the latency sender device
-                    // Get the sender core and config (there should be exactly one)
-                    TT_FATAL(senders.size() == 1, "Latency test should have exactly one sender per device");
-                    const auto& [sender_core, sender_worker] = *senders.begin();
-                    const auto& sender_configs = sender_worker.get_configs();
-                    TT_FATAL(!sender_configs.empty(), "Latency sender should have at least one config");
-
-                    // Extract parameters from the stored config
-                    const auto& sender_config = sender_configs[0].first;
-                    FabricNodeId responder_device_id = sender_config.dst_node_ids[0];
-
-                    // Find the responder device to get its virtual core coordinates
-                    TestDevice* responder_device = nullptr;
-                    for (auto& [responder_coord, responder_test_device] : test_devices_) {
-                        if (responder_test_device.get_node_id() == responder_device_id) {
-                            responder_device = &responder_test_device;
-                            break;
-                        }
-                    }
-                    TT_FATAL(
-                        responder_device != nullptr,
-                        "Could not find responder device with node_id {}",
-                        responder_device_id.chip_id);
-
-                    // Get responder's virtual core coordinates for correct NOC addressing
-                    CoreCoord responder_virtual_core =
-                        responder_device->get_device_info_provider()->get_virtual_core_from_logical_core(
-                            sender_config.dst_logical_core);
-
-                    // Create sender kernel - pass responder's actual coordinates
-                    test_device.create_latency_sender_kernel(
-                        sender_core,
-                        responder_device_id,
-                        sender_config.parameters.payload_size_bytes,
-                        sender_config.parameters.num_packets,
-                        sender_config.parameters.noc_send_type,
-                        responder_virtual_core);
-                } else if (has_receiver) {
-                    // This is the latency responder device
-                    // Get the receiver core (there should be exactly one)
-                    TT_FATAL(receivers.size() == 1, "Latency test should have exactly one receiver per device");
-                    const auto& [receiver_core, receiver_worker] = *receivers.begin();
-
-                    // Find the sender device to query its parameters and buffer addresses
-                    auto sender_location = get_latency_sender_location();
-                    TestDevice* sender_device = sender_location.device;
-                    CoreCoord sender_core = sender_location.core;
-
-                    // Get sender's config to extract parameters
-                    const auto& sender_senders = sender_device->get_senders();
-                    const auto& sender_worker = sender_senders.at(sender_core);
-                    const auto& sender_configs = sender_worker.get_configs();
-                    const auto& sender_config = sender_configs[0].first;
-
-                    uint32_t payload_size = sender_config.parameters.payload_size_bytes;
-                    uint32_t num_samples = sender_config.parameters.num_packets;
-                    NocSendType noc_send_type = sender_config.parameters.noc_send_type;
-                    FabricNodeId sender_device_id = sender_config.src_node_id;
-
-                    // Get sender's actual buffer addresses (passing payload_size as parameter)
-                    uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
-                    uint32_t sender_receive_buffer_address =
-                        sender_device->get_latency_receive_buffer_address(payload_size);
-
-                    // Get sender's virtual core coordinates for correct NOC addressing
-                    CoreCoord sender_virtual_core =
-                        sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(sender_core);
-
-                    // Create responder kernel - pass sender's actual addresses and coordinates
-                    test_device.create_latency_responder_kernel(
-                        receiver_core,
-                        sender_device_id,
-                        payload_size,
-                        num_samples,
-                        noc_send_type,
-                        sender_send_buffer_address,
-                        sender_receive_buffer_address,
-                        sender_virtual_core);
-                } else {
-                    // For non-latency devices in a latency test, create normal kernels
-                    test_device.create_kernels();
-                }
+                create_latency_kernels_for_device(test_device);
             } else {
                 // Normal mode: create standard kernels for all devices
                 test_device.create_kernels();
@@ -522,7 +426,7 @@ public:
             log_info(
                 tt::LogTest,
                 "Skipping validation (performance_test_mode: {})",
-                performance_test_mode_ == PerformanceTestMode::BANDWIDTH ? "BANDWIDTH" : "LATENCY");
+                enchantum::to_string(performance_test_mode_));
             return;
         }
 
@@ -831,6 +735,14 @@ private:
         TT_FATAL(info.device != nullptr, "Could not find latency {} device", worker_type);
         return info;
     }
+
+    /**
+     * Create latency kernels for a device based on its role (sender, responder, or neither).
+     * For sender devices: creates latency sender kernel with responder coordinates.
+     * For responder devices: creates latency responder kernel with sender buffer addresses.
+     * For other devices: creates normal kernels.
+     */
+    void create_latency_kernels_for_device(TestDevice& test_device);
 
     /**
      * Get the location of the latency sender device/core.

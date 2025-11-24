@@ -50,117 +50,75 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
 
     auto results_num_elements = tt::align(buffer_size, sizeof(uint32_t)) / sizeof(uint32_t);
 
-    // Build metadata and temporary buffer map for batch reading
     std::vector<EthCoreBufferResult> flat_results;
     std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>> temp_buffer_map;
 
-    // First pass: collect metadata and initialize temp buffer storage
+    // Lambda that processes a core and adds it to results (idempotent - won't duplicate)
+    auto process_core = [&](const MeshCoordinate& coord,
+                            FabricNodeId fabric_node_id,
+                            CoreCoord eth_core,
+                            tt::tt_fabric::chan_id_t eth_channel,
+                            RoutingDirection direction,
+                            uint32_t link_index,
+                            uint32_t physical_chip_id) {
+        // Skip if link is down or already in temp_buffer_map
+        if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core) ||
+            temp_buffer_map[fabric_node_id].count(eth_core)) {
+            return;
+        }
+
+        flat_results.push_back(
+            {.coord = coord,
+             .fabric_node_id = fabric_node_id,
+             .eth_core = eth_core,
+             .eth_channel = eth_channel,
+             .direction = direction,
+             .link_index = link_index,
+             .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
+
+        temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
+    };
+
+    // Collect all cores to read
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
 
-        if (read_all_active) {
-            // Read from all active ethernet cores (includes intermediate forwarding hops)
-            auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-            for (const auto& eth_core_xy : active_eth_cores) {
-                CoreCoord eth_core(eth_core_xy.x, eth_core_xy.y);
-                if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
-                    continue;
-                }
+        // Process registered fabric connections
+        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
+            const auto& eth_cores =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+            for (const auto& link_index : link_indices) {
+                const auto eth_channel = eth_cores.at(link_index);
+                const auto& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
+                process_core(coord, fabric_node_id, eth_core, eth_channel, direction, link_index, physical_chip_id);
+            }
+        }
 
-                // Get the channel ID for this core (need UMD CoreCoord)
+        // Process remaining active cores if requested
+        if (read_all_active) {
+            for (const auto& eth_core_xy : control_plane.get_active_ethernet_cores(physical_chip_id)) {
+                CoreCoord eth_core(eth_core_xy.x, eth_core_xy.y);
                 tt::umd::CoreCoord umd_eth_core(eth_core_xy, tt::CoreType::ETH, tt::CoordSystem::LOGICAL);
                 auto eth_channel = soc_desc.get_eth_channel_for_core(umd_eth_core, tt::CoordSystem::LOGICAL);
-
-                // For all-active mode, direction and link_index are not well-defined
-                // Set to default values (will be ignored in processing)
-                flat_results.push_back(
-                    {.coord = coord,
-                     .fabric_node_id = fabric_node_id,
-                     .eth_core = eth_core,
-                     .eth_channel = eth_channel,
-                     .direction = RoutingDirection::N,  // Placeholder
-                     .link_index = 0,  // Placeholder
-                     .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
-
-                // Initialize temp buffer for reading
-                temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
-            }
-        } else {
-            // Read only from registered fabric connections (original behavior)
-            for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-                const auto& eth_cores =
-                    control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-                for (const auto& link_index : link_indices) {
-                    const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                    const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
-
-                    // Create result entry with metadata using aggregate initialization
-                    flat_results.push_back(
-                        {.coord = coord,
-                         .fabric_node_id = fabric_node_id,
-                         .eth_core = eth_core,
-                         .eth_channel = eth_channel,
-                         .direction = direction,
-                         .link_index = link_index,
-                         .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
-
-                    // Initialize temp buffer for reading
-                    temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
-                }
+                process_core(coord, fabric_node_id, eth_core, eth_channel, RoutingDirection::N, 0, physical_chip_id);
             }
         }
     }
 
-    // Second pass: perform buffer reads
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
-        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-
-        if (read_all_active) {
-            // Read from all active ethernet cores
-            auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-            for (const auto& eth_core_xy : active_eth_cores) {
-                CoreCoord eth_core(eth_core_xy.x, eth_core_xy.y);
-                if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
-                    continue;
-                }
-
-                std::vector<CoreCoord> cores = {eth_core};
-                fixture_.read_buffer_from_ethernet_cores(
-                    coord, cores, address, buffer_size, false, temp_buffer_map[fabric_node_id]);
-            }
-        } else {
-            // Read only from registered fabric connections
-            for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-                const auto& eth_cores =
-                    control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-                for (const auto& link_index : link_indices) {
-                    const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                    const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
-
-                    TT_FATAL(
-                        cluster.is_ethernet_link_up(physical_chip_id, eth_core),
-                        "Ethernet link is not up for {}",
-                        eth_core);
-
-                    std::vector<CoreCoord> cores = {eth_core};
-                    fixture_.read_buffer_from_ethernet_cores(
-                        coord, cores, address, buffer_size, false, temp_buffer_map[fabric_node_id]);
-                }
-            }
-        }
+    // Read all buffers
+    for (const auto& result : flat_results) {
+        fixture_.read_buffer_from_ethernet_cores(
+            result.coord, {result.eth_core}, address, buffer_size, false, temp_buffer_map[result.fabric_node_id]);
     }
 
     fixture_.barrier_reads();
 
-    // Third pass: copy buffer data from temp map to flat results
+    // Copy buffer data to results
     for (auto& result : flat_results) {
-        result.buffer_data = temp_buffer_map[result.fabric_node_id][result.eth_core];
+        result.buffer_data = std::move(temp_buffer_map[result.fabric_node_id][result.eth_core]);
     }
 
     return flat_results;
