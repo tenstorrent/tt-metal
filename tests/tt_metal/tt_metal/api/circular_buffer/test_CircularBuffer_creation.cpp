@@ -28,7 +28,6 @@
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"
-#include "impl/buffers/circular_buffer_constants.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
