@@ -104,7 +104,12 @@ inline void mul_int32_init() {
     //   https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOADMACRO.md
     //
     // For each of simple, MAD, round, store, a macro can use up to one
-    // instruction template.  Specify 8 bits per unit (high to low):
+    // instruction template.  This is packed into a 32-bit value per macro,
+    // with 8 bits per unit:
+    //
+    //   (store << 24) | (round << 16) | (mad << 8) | simple.
+    //
+    // The 8 bits per unit (high to low) are:
     //
     // - bit 7: set means VB=VD instead of the default, VC=VD.
     // - bit 6: set means VD=16 (only readable by scheduled SFPSTORE).
