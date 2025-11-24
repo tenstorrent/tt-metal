@@ -8,9 +8,19 @@ from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, is_e75
-from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.common.utility_functions import (
+    comp_allclose,
+    comp_pcc,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
+)
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    skip_unsupported_config,
+)
 
 
 def run_bert_question_and_answering_inference(
@@ -41,6 +51,8 @@ def run_bert_question_and_answering_inference(
         model_config,
         tt_cache_path,
     )
+
+    profiler.start("processing_of_input")
 
     if real_input:
         tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
@@ -91,19 +103,60 @@ def run_bert_question_and_answering_inference(
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
+    profiler.end("processing_of_input")
+
+    profiler.start("attention_mask_preprocessing")
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+    profiler.end("attention_mask_preprocessing")
 
+    profiler.start("embedding_input_preprocessing")
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    profiler.end("embedding_input_preprocessing")
 
+    profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
+    profiler.end("hugging_face_reference_model")
 
+    print(f"Running BERT model once to fill caches -> disable profiler")
+    profiler.disable()
+
+    # Use force enable to only record this profiler call while others are disabled
+    profiler.start("first_model_run_with_compile", force_enable=True)
     tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     tt_embedding_inputs = {
         key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
     }
-
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
     tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
+    profiler.end("first_model_run_with_compile", force_enable=True)
+    del tt_out
+    del tt_embedding
+    del tt_attention_mask
+    del tt_embedding_inputs
+
+    # Recreate inputs since activations were deallocated
+    tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+    tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    ttnn.synchronize_device(device)
+    print(f"Enable profiler and enable binary and compile cache")
+    profiler.enable()
+    enable_persistent_kernel_cache()
+
+    # NOTE: Passing in pytorch tensor here instead of ll buda tensor
+    # since we don't yet have embedding support on device
+    print(f"Running BERT model for perf measurement")
+
+    profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
+    tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
+    profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
+
+    # output postprocessing
+    profiler.start("processing_output_to_string")
 
     tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
 
@@ -133,7 +186,46 @@ def run_bert_question_and_answering_inference(
 
     passing = passing_start and passing_end
 
+    if real_input:
+        if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
+            logger.warning("Skipping post processing due to garbage output in BFP8!")
+        else:
+            for i in range(batch):
+                tt_res = {
+                    "start": tt_start_logits[i],
+                    "end": tt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
+
+                tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+                logger.info(f"TT: {tt_answer}")
+
+                pt_res = {
+                    "start": pt_start_logits[i],
+                    "end": pt_end_logits[i],
+                    "example": single_inputs[i]["example"],
+                    **single_inputs[i]["inputs"],
+                }
+
+                pt_answer = nlp.postprocess([pt_res], **postprocess_params)
+                logger.info(f"PT: {pt_answer}")
+                logger.info(f"PL: {pl_answer[i]}")
+
+    profiler.end("processing_output_to_string")
+
     del tt_out
+    del tt_embedding
+    del tt_attention_mask
+    del tt_embedding_inputs
+    del bert_input
+    del pytorch_out
+    if "single_inputs" in locals():
+        del single_inputs
+
+    profiler.print()
+
+    # assert profiler.get("whole_model") < 60.0
 
     if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
@@ -150,7 +242,6 @@ def run_bert_question_and_answering_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
-        (8, "BFLOAT8_B-SHARDED"),
         (7, "BFLOAT8_B-SHARDED"),
         (12, "BFLOAT8_B-SHARDED"),
     ),
@@ -161,7 +252,6 @@ def run_bert_question_and_answering_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
-        "batch_8-BFLOAT8_B-SHARDED",
         "batch_7-BFLOAT8_B-SHARDED",
         "batch_12-BFLOAT8_B-SHARDED",
     ],
@@ -180,8 +270,7 @@ def run_bert_question_and_answering_inference(
     ),
     ids=["BERT_LARGE"],
 )
-def test_bert(
-    device,
+def test_bert_batch_dram(
     model_version,
     batch,
     seq_len,
@@ -191,12 +280,10 @@ def test_bert(
     pcc,
     model_config_str,
     model_location_generator,
+    request,
+    device,
 ):
-    if is_e75(device):
-        pytest.skip(f"Bert large 11 is not supported on E75")
-
-    # https://github.com/tenstorrent/tt-metal/issues/23275
-    device.disable_and_clear_program_cache()
+    skip_unsupported_config(device, model_config_str, batch)
 
     model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
@@ -205,6 +292,8 @@ def test_bert(
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
+    assert PERF_CNT == 1, "Bert does not support internal perf count no more."
+    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -220,3 +309,92 @@ def test_bert(
         PERF_CNT,
         device,
     )
+
+
+@pytest.mark.parametrize(
+    "batch, model_config_str",
+    (
+        (9, "BFLOAT8_B-DRAM"),
+        (9, "BFLOAT16-DRAM"),
+        (9, "BFLOAT8_B-L1"),
+        (9, "BFLOAT16-L1"),
+        (9, "MIXED_PRECISION_BATCH9"),
+        (8, "MIXED_PRECISION_BATCH8"),
+        (7, "BFLOAT8_B-SHARDED"),
+        (8, "BFLOAT8_B-SHARDED"),
+        (12, "BFLOAT8_B-SHARDED"),
+    ),
+    ids=[
+        "batch_9-BFLOAT8_B-DRAM",
+        "batch_9-BFLOAT16-DRAM",
+        "batch_9-BFLOAT8_B-L1",
+        "batch_9-BFLOAT16-L1",
+        "batch_9-MIXED_PRECISION_BATCH9",
+        "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_7-BFLOAT8_B-SHARDED",
+        "batch_8-BFLOAT8_B-SHARDED",
+        "batch_12-BFLOAT8_B-SHARDED",
+    ],
+)
+@pytest.mark.parametrize(
+    "model_version, seq_len, real_input, attention_mask, token_type_ids, pcc",
+    (
+        (
+            "phiyodr/bert-large-finetuned-squad2",
+            384,
+            True,
+            True,
+            True,
+            0.97,
+        ),
+    ),
+    ids=["BERT_LARGE"],
+)
+def test_bert_batch_dram_with_program_cache(
+    device,
+    model_version,
+    batch,
+    seq_len,
+    real_input,
+    attention_mask,
+    token_type_ids,
+    pcc,
+    model_config_str,
+    model_location_generator,
+    request,
+):
+    skip_unsupported_config(device, model_config_str, batch)
+
+    model_config = get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
+
+    # This test will run BERT-Large once with cache disabled.
+    # Then it will enable cache and run BERT-Large PERF_CNT number of times.
+    # Performance is reported only for PERF_CNT number of runs.
+    PERF_CNT = 1
+
+    disable_persistent_kernel_cache()
+
+    run_bert_question_and_answering_inference(
+        model_version,
+        batch,
+        seq_len,
+        real_input,
+        attention_mask,
+        token_type_ids,
+        pcc,
+        model_config,
+        tt_cache_path,
+        model_location_generator,
+        PERF_CNT,
+        device,
+    )
+
+    if model_config_str == "BFLOAT8_B-SHARDED":
+        assert device.num_program_cache_entries() == 19
+    elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
+        assert device.num_program_cache_entries() == 17
+    elif batch == 9 and model_config_str in {"BFLOAT8_B-L1", "BFLOAT8_B-DRAM"}:
+        assert device.num_program_cache_entries() == 17
+    else:
+        assert device.num_program_cache_entries() == 16

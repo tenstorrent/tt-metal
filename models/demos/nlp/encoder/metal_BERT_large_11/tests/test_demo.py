@@ -6,14 +6,14 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole, is_e75, is_wormhole_b0
-from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
-from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
+from models.demos.nlp.encoder.metal_BERT_large_11.demo.demo import test_demo as demo_json
+from models.demos.nlp.encoder.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 
 
 @pytest.mark.parametrize("batch", (7,), ids=["batch_7"])
 @pytest.mark.parametrize(
     "input_path",
-    (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
+    (("models/demos/nlp/encoder/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
 @pytest.mark.skipif(is_blackhole(), reason="Not functional on BH yet")
@@ -48,7 +48,7 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device):
 @pytest.mark.parametrize("batch", (12,), ids=["batch_12"])
 @pytest.mark.parametrize(
     "input_path",
-    (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
+    (("models/demos/nlp/encoder/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7525: only runs GS")

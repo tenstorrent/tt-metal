@@ -160,8 +160,8 @@ run_bert_tiny_func() {
 run_bert_func() {
   fail=0
 
-  pytest models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
-  pytest models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
+  pytest models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
+  pytest models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1

@@ -16,8 +16,8 @@ from models.common.utility_functions import (
     run_for_grayskull,
     run_for_wormhole_b0,
 )
-from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_11.tt.model_config import (
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
+from models.demos.nlp.encoder.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
     skip_unsupported_config,

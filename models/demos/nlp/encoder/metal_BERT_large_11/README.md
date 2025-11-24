@@ -21,18 +21,18 @@ Replace `BATCH_SIZE` with the appropriate size for your device according to this
 
 ### Run the Demo
 ```
-pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo -k BATCH_SIZE
+pytest --disable-warnings models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py::test_demo -k BATCH_SIZE
 ```
 
 - If you wish to run the demo with a different input use:
 ```
-pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo[address_to_your_json_file.json-1-BATCH_SIZE]
+pytest --disable-warnings models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py::test_demo[address_to_your_json_file.json-1-BATCH_SIZE]
 ```
 This file is expected to have exactly `BATCH_SIZE` inputs.
 
 - Our second demo is designed to run SQuADV2 dataset, run this with:
 ```
-pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo_squadv2 -k BATCH_SIZE
+pytest --disable-warnings models/demos/nlp/encoder/metal_BERT_large_11/demo/demo.py::test_demo_squadv2 -k BATCH_SIZE
 ```
 
 ## Details
