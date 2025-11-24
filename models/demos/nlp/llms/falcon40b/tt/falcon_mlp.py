@@ -7,7 +7,7 @@ from typing import List
 import torch
 
 import ttnn
-from models.demos.llms.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from models.demos.nlp.llms.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 

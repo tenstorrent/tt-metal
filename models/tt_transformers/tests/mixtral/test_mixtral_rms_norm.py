@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
+from models.demos.nlp.llms.mixtral8x7b.reference.model import RMSNorm as RefRMSNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 

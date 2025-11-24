@@ -10,17 +10,17 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.composite_ops import mesh_scatter
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.composite_ops import mesh_scatter
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
     OpConfigBase,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     SEQ_LEN_CHUNK_SIZE,
     USERS_PER_ROW,
@@ -31,7 +31,7 @@ from models.demos.llms.deepseek_v3.utils.config_helpers import (
     get_dram_sharded_matmul_config,
     shard_and_save,
 )
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,

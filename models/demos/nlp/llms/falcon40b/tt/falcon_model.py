@@ -10,11 +10,11 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.llms.falcon40b.tt.falcon_attention import generate_cos_sin_cache
-from models.demos.llms.falcon40b.tt.falcon_ccl import TT_CCL
-from models.demos.llms.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.llms.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
-from models.demos.llms.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors, partial_layernorm
+from models.demos.nlp.llms.falcon40b.tt.falcon_attention import generate_cos_sin_cache
+from models.demos.nlp.llms.falcon40b.tt.falcon_ccl import TT_CCL
+from models.demos.nlp.llms.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.nlp.llms.falcon40b.tt.falcon_embeddings import TtFalconEmbeddings
+from models.demos.nlp.llms.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors, partial_layernorm
 from ttnn import ReplicateTensorToMesh
 
 

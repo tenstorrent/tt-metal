@@ -7,9 +7,9 @@ import vllm.envs as envs
 from tqdm import tqdm
 
 import ttnn
-from models.demos.llms.llama3_70b.galaxy.tt.generator import Generator
-from models.demos.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.generator import Generator
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 
 

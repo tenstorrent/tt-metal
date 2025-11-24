@@ -11,11 +11,11 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.llms.mamba.reference.args import ModelMode
-from models.demos.llms.mamba.reference.decode_model import MambaPretrainedModelName
-from models.demos.llms.mamba.reference.prefill_decode_model import Mamba
-from models.demos.llms.mamba.tt import model_config
-from models.demos.llms.mamba.tt.mamba_model import MambaTT
+from models.demos.nlp.llms.mamba.reference.args import ModelMode
+from models.demos.nlp.llms.mamba.reference.decode_model import MambaPretrainedModelName
+from models.demos.nlp.llms.mamba.reference.prefill_decode_model import Mamba
+from models.demos.nlp.llms.mamba.tt import model_config
+from models.demos.nlp.llms.mamba.tt.mamba_model import MambaTT
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 

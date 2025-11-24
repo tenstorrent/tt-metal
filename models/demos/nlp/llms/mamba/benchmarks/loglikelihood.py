@@ -4,7 +4,7 @@
 
 import torch
 
-from models.demos.llms.mamba.reference.decode_model import MambaDecode
+from models.demos.nlp.llms.mamba.reference.decode_model import MambaDecode
 
 
 def compute_loglikelihood(logits, labels) -> float:

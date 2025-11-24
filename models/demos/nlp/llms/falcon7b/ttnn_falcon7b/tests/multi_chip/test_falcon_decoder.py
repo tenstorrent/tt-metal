@@ -9,7 +9,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import (
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.common import (
     create_attention_input,
     create_attention_mask,
     create_custom_preprocessor,
@@ -17,8 +17,8 @@ from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import (
     create_position_ids,
     strip_state_dict_prefix,
 )
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 

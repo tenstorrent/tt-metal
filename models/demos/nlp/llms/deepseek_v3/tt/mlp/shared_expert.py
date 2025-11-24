@@ -4,7 +4,7 @@
 
 from transformers.configuration_utils import PretrainedConfig
 
-from models.demos.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 
 
 class SharedExpert(MLPDequant):  # The only difference with the regular Dequantized MLP is the intermediate layer size

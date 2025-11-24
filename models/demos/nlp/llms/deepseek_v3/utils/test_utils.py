@@ -18,10 +18,10 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llms.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
-from models.demos.llms.deepseek_v3.tt.rope import RotarySetup
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
+from models.demos.nlp.llms.deepseek_v3.tt.rope import RotarySetup
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     dequantize,
     even_int_div,

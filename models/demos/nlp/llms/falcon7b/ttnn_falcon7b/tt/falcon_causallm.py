@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_model import TtFalconModelShared
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.falcon_model import TtFalconModelShared
 
 
 class TtFalconCausalLM(TtFalconModelShared):

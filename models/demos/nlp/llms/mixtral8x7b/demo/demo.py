@@ -8,8 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llms.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.llms.mixtral8x7b.tt.mixtral_common import (
+from models.demos.nlp.llms.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_common import (
     cache_attention,
     get_single_rot_mat,
     load_inputs,
@@ -17,9 +17,9 @@ from models.demos.llms.mixtral8x7b.tt.mixtral_common import (
     preprocess_inputs,
     sample,
 )
-from models.demos.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 from ttnn import ConcatMeshToTensor
 
 
@@ -239,7 +239,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
     #     # When running in CI, check the output against the expected output to avoid accuracy regressions
-    #     expected_output = "models/demos/llms/mixtral8x7b/demo/expected_outputs.json"
+    #     expected_output = "models/demos/nlp/llmsmixtral8x7b/demo/expected_outputs.json"
     #     with open(expected_output, "r") as f:
     #         expected_out = json.load(f)
     #     assert (
@@ -260,8 +260,8 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/llms/mixtral8x7b/demo/input_data.json", False),
-        ("models/demos/llms/mixtral8x7b/demo/input_data_questions.json", True),
+        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data.json", False),
+        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data_questions.json", True),
     ],
     ids=["general", "instruct"],
 )

@@ -9,21 +9,21 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     MeshDeviceStub,
     MulConfig,
     SparseMatmulConfig,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     SPARSITY_BLOCK_SIZE,
     dequantize,
     even_int_div,
     shard_and_save,
 )
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     RunDecodeConfig,

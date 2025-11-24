@@ -10,8 +10,8 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.utils.test_utils import load_state_dict
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import load_state_dict
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
@@ -79,7 +79,7 @@ def mesh_device(request, device_params):
 
 @pytest.fixture(scope="session")
 def model_path():
-    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/llms/deepseek_v3/reference"))
+    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/nlp/llmsdeepseek_v3/reference"))
 
 
 @pytest.fixture(scope="session")

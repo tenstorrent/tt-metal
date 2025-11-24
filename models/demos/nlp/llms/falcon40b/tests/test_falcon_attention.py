@@ -11,10 +11,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
-from models.demos.llms.falcon40b.tt.falcon_attention import TtFalconAttention
-from models.demos.llms.falcon40b.tt.falcon_ccl import TT_CCL
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_attention import TtFalconAttention
+from models.demos.nlp.llms.falcon40b.tt.falcon_ccl import TT_CCL
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh

@@ -10,11 +10,11 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.embedding.embedding1d import Embedding1D
-from models.demos.llms.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.llms.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.tt.embedding.embedding1d import Embedding1D
+from models.demos.nlp.llms.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,

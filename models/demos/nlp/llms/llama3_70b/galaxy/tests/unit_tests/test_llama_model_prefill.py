@@ -10,16 +10,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import (
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
     encode_prompt_llama_instruct,
     get_prefill_rot_mat,
 )
-from models.demos.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 
 
 @torch.no_grad()

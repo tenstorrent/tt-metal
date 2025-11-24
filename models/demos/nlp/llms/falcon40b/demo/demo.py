@@ -17,10 +17,10 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import enable_persistent_kernel_cache, nearest_32
 from models.common.utils import top_k_top_p_filtering
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
-from models.demos.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.llms.falcon40b.tt.falcon_common import PytorchFalconCausalLM
-from models.demos.llms.falcon40b.tt.model_config import get_model_config, model_config_entries
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 

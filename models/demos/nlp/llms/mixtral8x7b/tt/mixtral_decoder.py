@@ -4,9 +4,9 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llms.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
-from models.demos.llms.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
-from models.demos.llms.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
 
 
 class TtTransformerBlock(LightweightModule):

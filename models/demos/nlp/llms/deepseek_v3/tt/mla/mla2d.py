@@ -9,16 +9,16 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     MeshDeviceStub,
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,

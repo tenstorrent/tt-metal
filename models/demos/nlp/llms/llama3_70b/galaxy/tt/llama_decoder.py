@@ -4,9 +4,9 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llms.llama3_70b.galaxy.tt.distributed_norm import DistributedNorm
-from models.demos.llms.llama3_70b.galaxy.tt.llama_attention import TtLlamaAttention
-from models.demos.llms.llama3_70b.galaxy.tt.llama_mlp import TtLlamaMLP
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.distributed_norm import DistributedNorm
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_attention import TtLlamaAttention
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_mlp import TtLlamaMLP
 
 
 class TtTransformerBlock(LightweightModule):

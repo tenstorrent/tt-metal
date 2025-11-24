@@ -14,10 +14,10 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.llms.mamba.reference.args import ModelMode
-from models.demos.llms.mamba.reference.decode_model import MambaPretrainedModelName
-from models.demos.llms.mamba.tt import model_config
-from models.demos.llms.mamba.tt.preprocessing import (
+from models.demos.nlp.llms.mamba.reference.args import ModelMode
+from models.demos.nlp.llms.mamba.reference.decode_model import MambaPretrainedModelName
+from models.demos.nlp.llms.mamba.tt import model_config
+from models.demos.nlp.llms.mamba.tt.preprocessing import (
     select_chunk_size,
     split_input_into_prefill_and_decode_segments,
     split_sequence_length,
@@ -49,7 +49,7 @@ class TokenDisplay:
 
 
 def get_cpu_reference_model(version: MambaPretrainedModelName, batch_size: int):
-    from models.demos.llms.mamba.reference.decode_model import MambaDecode
+    from models.demos.nlp.llms.mamba.reference.decode_model import MambaDecode
 
     return MambaDecode.from_pretrained(version, batch_size=batch_size)
 
@@ -63,8 +63,8 @@ def get_tt_metal_model(
     seq_len: int = 1,
     num_layers: int = 64,
 ):
-    from models.demos.llms.mamba.tt import model_config
-    from models.demos.llms.mamba.tt.mamba_model import MambaTT
+    from models.demos.nlp.llms.mamba.tt import model_config
+    from models.demos.nlp.llms.mamba.tt.mamba_model import MambaTT
 
     reference_model = get_cpu_reference_model(version, batch_size=batch_size)
     config = model_config.create_model_config(batch_size, reference_model.args.d_model, mode=mode, seq_len=seq_len)

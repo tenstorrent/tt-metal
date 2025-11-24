@@ -48,6 +48,6 @@ ignore:  # You can also select ignoring files here
     - env/
     - eevenv/
     - built/
-    - models/demos/llms/llama2_70b/reference/
+    - models/demos/nlp/llmsllama2_70b/reference/
     - infra/
-    - models/demos/llms/deepseek_v3/reference/deepseek/
+    - models/demos/nlp/llmsdeepseek_v3/reference/deepseek/

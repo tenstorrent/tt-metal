@@ -6,12 +6,12 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
-from models.demos.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.llms.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,

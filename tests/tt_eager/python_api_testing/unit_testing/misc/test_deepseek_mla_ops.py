@@ -23,11 +23,11 @@ from loguru import logger
 import pytest
 from models.common.utility_functions import skip_for_blackhole
 
-from models.demos.llms.deepseek_v3.tt.rope import RotarySetup
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
-from models.demos.llms.deepseek_v3.reference.deepseek.rope_helpers import (
+from models.demos.nlp.llms.deepseek_v3.tt.rope import RotarySetup
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
+from models.demos.nlp.llms.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
@@ -35,7 +35,7 @@ from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
 
 TP = 8
 DP = 4

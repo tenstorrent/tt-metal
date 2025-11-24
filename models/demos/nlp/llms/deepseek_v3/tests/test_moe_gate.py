@@ -11,11 +11,11 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-from models.demos.llms.deepseek_v3.tt.moe_gate import MoEGate
-from models.demos.llms.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import get_model_config, run_module_forward
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.nlp.llms.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import get_model_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
 
 

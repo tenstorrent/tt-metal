@@ -18,7 +18,7 @@ This demo targets the [deepseek-ai/DeepSeek-R1-0528](https://huggingface.co/deep
 Quick start (replace the placeholder paths with your environment):
 
 ```bash
-python models/demos/llms/deepseek_v3/demo/demo.py \
+python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
   --model-path /abs/path/to/load/hf/deepseek-v3 \
   --cache-dir /abs/path/to/save/ttnn/cache \
   --early_print_first_user \
@@ -31,7 +31,7 @@ python models/demos/llms/deepseek_v3/demo/demo.py \
 - `--prompts-file FILE`: Load prompts from a JSON file (see below). CLI prompts are ignored when this flag is present.
 - `--num-prompts N`: Limit the number of prompts loaded from `--prompts-file`.
 - `--output-path FILE`: Save generations/statistics to JSON when using `--prompts-file`. Defaults to `<prompts-file-stem>_output.json`.
-- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/llms/deepseek_v3/reference`.
+- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/nlp/llmsdeepseek_v3/reference`.
 - `--cache-dir PATH`: Directory for converted TTNN weights/cache. Defaults to `$DEEPSEEK_V3_CACHE` or `generated/deepseek_v3`.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32).
 - `--early_print_first_user`: Stream tokens for the first prompt as they are produced.
@@ -65,18 +65,18 @@ The CLI accepts JSON files in either of the following layouts:
 }
 ```
 
-Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/llms/deepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
+Use `--num-prompts` to truncate large prompt sets. For example, there are 256 total prompts in `models/demos/nlp/llmsdeepseek_v3/demo/test_prompts.json`, but you can limit it to a subset.
 
 ### Sample usage with JSON file:
 
 ```bash
-python models/demos/llms/deepseek_v3/demo/demo.py --prompts-file models/demos/llms/deepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
+python models/demos/nlp/llmsdeepseek_v3/demo/demo.py --prompts-file models/demos/nlp/llmsdeepseek_v3/demo/test_prompts.json --num-prompts 256 --output-path deepseek_tt_out.json --max-new-tokens 128
 ```
 
 ### Programmatic usage
 
 ```python
-from models.demos.llms.deepseek_v3.demo.demo import run_demo
+from models.demos.nlp.llms.deepseek_v3.demo.demo import run_demo
 
 # Full-model generation (prompt required)
 run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3")
@@ -105,7 +105,7 @@ Generate a compatible reference file with the tt_transformers helper (use the sa
 
 Run the DeepSeek-V3 demo with teacher forcing:
 
-- `python models/demos/llms/deepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
+- `python models/demos/nlp/llmsdeepseek_v3/demo/demo.py --model-path /path/to/deepseek-v3 --token-accuracy --reference-file models/tt_transformers/tests/reference_outputs/DeepSeek-V3.refpt --max-new-tokens 256`
   - Optionally control prompt length independently with `--tf-prompt-len`, e.g.:
   - `... --tf-prompt-len 1024 --max-new-tokens 256`
 
@@ -119,7 +119,7 @@ Notes:
 
 If you are not running on Tenstorrent internal infrastructure, you need to set the following environment variables:
 
-- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/llms/deepseek_v3/reference`. Download the model from Hugging Face set this to the model directory.
+- `DEEPSEEK_V3_HF_MODEL`: Path to a directory containing the DeepSeek-V3 Hugging Face model weights. Defaults to `models/demos/nlp/llmsdeepseek_v3/reference`. Download the model from Hugging Face set this to the model directory.
 - `DEEPSEEK_V3_CACHE`: Path to a directory where cached data such as converted weights and test inputs/outputs will be stored.
 
 These variables are used in scripts for generating test data and running tests.

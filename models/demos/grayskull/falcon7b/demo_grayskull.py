@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.llms.falcon7b.common.demo.demo import run_falcon_demo_kv
+from models.demos.nlp.llms.falcon7b.common.demo.demo import run_falcon_demo_kv
 
 
 @pytest.mark.parametrize(

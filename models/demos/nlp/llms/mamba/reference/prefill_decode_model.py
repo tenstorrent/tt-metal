@@ -49,7 +49,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum, rearrange, repeat
 
-from models.demos.llms.mamba.reference.args import ModelArgs, ModelMode
+from models.demos.nlp.llms.mamba.reference.args import ModelArgs, ModelMode
 
 MambaPretrainedModelName = Literal[
     "state-spaces/mamba-2.8b-slimpj",

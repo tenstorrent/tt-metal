@@ -10,11 +10,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
-from models.demos.llms.falcon40b.tt.falcon_ccl import TT_CCL
-from models.demos.llms.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
-from models.demos.llms.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_ccl import TT_CCL
+from models.demos.nlp.llms.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ShardTensorToMesh

@@ -14,15 +14,15 @@ Read more about Falcon40b at the Huggingface for [tiiuae/falcon-40b-instruct](ht
 - Run the model for a single prompt using the command line input:
 
 ```sh
-pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/llms/falcon40b/demo/demo.py
+pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/nlp/llmsfalcon40b/demo/demo.py
 ```
 
 ### Inputs
-- A sample of input prompts for 32 users is provided in `models/demos/llms/falcon40b/demo/input_data.json`.
+- A sample of input prompts for 32 users is provided in `models/demos/nlp/llmsfalcon40b/demo/input_data.json`.
 - If you wish to run the model using a different set of input prompts you can provide a different path `--input-path`.
 
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/llms/falcon40b/demo/input_data.json' models/demos/llms/falcon40b/demo/demo.py
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsfalcon40b/demo/input_data.json' models/demos/nlp/llmsfalcon40b/demo/demo.py
 ```
 
 ## Details

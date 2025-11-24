@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 
 from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.llms.falcon7b.common.tests.run_falcon_end_to_end import (
+from models.demos.nlp.llms.falcon7b.common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon7b.common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
@@ -103,7 +103,7 @@ def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, s
         test_id = f"{llm_mode}_seq{seq_len}_{model_config}"
     else:
         test_id = f"{llm_mode}_seq{kv_cache_len}_{model_config}"
-    command = f"pytest models/demos/llms/falcon7b/common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k {test_id}"
+    command = f"pytest models/demos/nlp/llmsfalcon7b/common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k {test_id}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 

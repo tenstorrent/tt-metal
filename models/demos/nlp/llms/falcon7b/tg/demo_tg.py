@@ -5,7 +5,7 @@
 import pytest
 
 from models.common.utility_functions import is_wormhole_b0
-from models.demos.llms.falcon7b.common.demo.demo import run_falcon_demo_kv
+from models.demos.nlp.llms.falcon7b.common.demo.demo import run_falcon_demo_kv
 
 
 @pytest.mark.parametrize(
@@ -17,7 +17,7 @@ from models.demos.llms.falcon7b.common.demo.demo import run_falcon_demo_kv
         (True, 128, False, False, None),
         (True, 1024, False, False, None),
         (True, 2048, False, False, None),
-        (False, 1024, False, True, "models/demos/llms/falcon7b/tg/expected_greedy_output.json"),
+        (False, 1024, False, True, "models/demos/nlp/llmsfalcon7b/tg/expected_greedy_output.json"),
         (False, 1024, False, True, None),
         (False, 1024, False, False, None),
     ),

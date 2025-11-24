@@ -11,7 +11,7 @@ seq_lens=(128 2048)
 for seq_len in ${seq_lens[@]}; do
     echo "Running seq length: $seq_len"
     output_folder="generated/profiler/reports"
-    python3 -m tracy -r -m "pytest models/demos/llms/falcon40b/tests/test_perf_falcon.py::test_device_perf_bare_metal[wormhole_b0-True-falcon_40b-prefill_seq${seq_len}_bfp8_layers1-8chips]"
+    python3 -m tracy -r -m "pytest models/demos/nlp/llmsfalcon40b/tests/test_perf_falcon.py::test_device_perf_bare_metal[wormhole_b0-True-falcon_40b-prefill_seq${seq_len}_bfp8_layers1-8chips]"
     # get latest folder in output folder
     latest_created_folder=$(ls -td $output_folder/* | head -n 1)
     # find csv file that starts with "ops_perf_results"
@@ -30,5 +30,5 @@ for seq_len in ${seq_lens[@]}; do
         echo "No skip_num_ops_end known for given sequence length!"
         return -1
     fi
-    python models/demos/llms/mixtral8x7b/scripts/op_perf_results.py --signpost PERF_RUN --skip-last ${skip_num_ops_end} --skip-first 3 --prefill --seqlen ${seq_len} --estimate-full-model 60 --write-ops-to-csv $output_perf_filename $csv_file
+    python models/demos/nlp/llmsmixtral8x7b/scripts/op_perf_results.py --signpost PERF_RUN --skip-last ${skip_num_ops_end} --skip-first 3 --prefill --seqlen ${seq_len} --estimate-full-model 60 --write-ops-to-csv $output_perf_filename $csv_file
 done

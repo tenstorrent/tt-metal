@@ -11,15 +11,15 @@ from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
 from models.common.utility_functions import profiler, tt_tensors_to_torch_tensors
-from models.demos.llms.falcon7b.common.tests.test_utils import (
+from models.demos.nlp.llms.falcon7b.common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
     get_rand_falcon_inputs,
     load_hf_model,
     read_device_profiler,
 )
-from models.demos.llms.falcon7b.common.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.llms.falcon7b.common.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_common import PytorchFalconCausalLM
 from models.perf.perf_utils import prep_perf_report
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
 

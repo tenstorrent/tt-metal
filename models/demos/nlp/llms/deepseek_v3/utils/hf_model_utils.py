@@ -13,7 +13,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.modeling_utils import no_init_weights
 
-from models.demos.llms.deepseek_v3.utils.config_helpers import dequantize
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import dequantize
 
 
 def load_tokenizer(model_path: str):

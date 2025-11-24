@@ -8,8 +8,8 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.llms.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 

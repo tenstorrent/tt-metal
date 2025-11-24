@@ -8,14 +8,14 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
-from models.demos.llms.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     get_state_dicts,
     shard_and_save,
 )
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     RunDecodeConfig,

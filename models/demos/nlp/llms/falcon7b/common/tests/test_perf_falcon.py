@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 
 from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_e75, is_wormhole_b0
-from models.demos.llms.falcon7b.common.tests.run_falcon_end_to_end import (
+from models.demos.nlp.llms.falcon7b.common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
     DeviceSetup,
     run_test_FalconCausalLM_end_to_end,
 )
-from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon7b.common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 

@@ -7,9 +7,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.demos.llms.mixtral8x7b.tt.mixtral_ccl import TT_CCL
-from models.demos.llms.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
-from models.demos.llms.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_ccl import TT_CCL
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 
 
 class TtTransformer(LightweightModule):

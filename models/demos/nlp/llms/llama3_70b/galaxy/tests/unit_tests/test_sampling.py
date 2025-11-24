@@ -13,9 +13,9 @@ from scipy.stats import entropy
 import ttnn
 from models.common.tt_sampling import TTSampling
 from models.common.utility_functions import comp_allclose
-from models.demos.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
-from models.demos.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 def counts_to_vector(*samples, return_prob=True, dtype=float):
@@ -228,7 +228,7 @@ def test_llama_sampling_inference(
     if load_cached_outputs:
         # Cached model outputs
         tt_model_output_cache_path = (
-            f"models/demos/llms/llama3_70b/galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.tensorbin"
+            f"models/demos/nlp/llmsllama3_70b/galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.tensorbin"
         )
         tt_input_loaded = ttnn.load_tensor(file_name=tt_model_output_cache_path, device=mesh_device)
         tt_input_loaded = tt_input_loaded.reshape(1, 1, 32, -1)

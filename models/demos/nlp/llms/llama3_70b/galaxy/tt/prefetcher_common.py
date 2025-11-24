@@ -6,7 +6,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import get_core_ranges
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import get_core_ranges
 
 global_tt_tensor_address = None
 

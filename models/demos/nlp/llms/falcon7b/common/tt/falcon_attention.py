@@ -10,8 +10,8 @@ from torch import nn
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, nearest_32
-from models.demos.llms.falcon7b.common.tests.test_utils import tt_from_torch
-from models.demos.llms.falcon7b.common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.nlp.llms.falcon7b.common.tests.test_utils import tt_from_torch
+from models.demos.nlp.llms.falcon7b.common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
 from ttnn import ReplicateTensorToMesh
 
 

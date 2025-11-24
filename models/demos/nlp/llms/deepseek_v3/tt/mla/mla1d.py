@@ -12,10 +12,10 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import nearest_y
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllAsyncGenericConfig,
     FromWeightConfig,
@@ -25,7 +25,7 @@ from models.demos.llms.deepseek_v3.utils.config_dataclass import (
     ReshardConfig,
     SavedWeight,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     dequantize,
     even_int_div,
@@ -34,7 +34,7 @@ from models.demos.llms.deepseek_v3.utils.config_helpers import (
     shard_and_save,
     sub_state_dicts,
 )
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,

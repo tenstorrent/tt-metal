@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 
-from models.demos.llms.mixtral8x7b.reference.model import Transformer
-from models.demos.llms.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.reference.model import Transformer
+from models.demos.nlp.llms.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 class Emb(torch.nn.Module):

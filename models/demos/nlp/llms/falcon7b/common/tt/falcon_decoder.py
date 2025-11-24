@@ -8,9 +8,9 @@ import torch
 from torch import nn
 
 import ttnn
-from models.demos.llms.falcon7b.common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
-from models.demos.llms.falcon7b.common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
-from models.demos.llms.falcon7b.common.tt.model_utils import get_weights_cached, layernorm
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
+from models.demos.nlp.llms.falcon7b.common.tt.model_utils import get_weights_cached, layernorm
 
 
 class TtFalconDecoderLayer(nn.Module):

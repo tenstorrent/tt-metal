@@ -8,14 +8,14 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.llms.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
-from models.demos.llms.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
-from models.demos.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.nlp.llms.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.nlp.llms.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     dequantize_state_dict,

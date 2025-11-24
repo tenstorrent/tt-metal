@@ -11,12 +11,12 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     dequantize_state_dict,
     get_model_config,

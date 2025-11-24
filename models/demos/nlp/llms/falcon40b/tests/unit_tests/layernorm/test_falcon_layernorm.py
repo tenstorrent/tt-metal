@@ -8,9 +8,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
-from models.demos.llms.falcon40b.tt.model_utils import convert_to_layout
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.tt.model_utils import convert_to_layout
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 

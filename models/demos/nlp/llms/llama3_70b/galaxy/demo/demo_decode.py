@@ -16,11 +16,11 @@ from loguru import logger
 
 import ttnn
 from models.common.tt_sampling import TTSampling
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig
-from models.demos.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
@@ -644,7 +644,7 @@ def run_llama3_demo(
         (  # full demo, batch 32
             "instruct",
             80,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -661,7 +661,7 @@ def run_llama3_demo(
         (  # quick 1L demo
             "random",
             1,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -678,7 +678,7 @@ def run_llama3_demo(
         (  # Stress test: 4*128k generation length
             "instruct",
             80,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -695,7 +695,7 @@ def run_llama3_demo(
         (  # mini stress test
             "instruct",
             80,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -712,7 +712,7 @@ def run_llama3_demo(
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -729,7 +729,7 @@ def run_llama3_demo(
         (  # ND hang test
             "instruct",
             80,
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len

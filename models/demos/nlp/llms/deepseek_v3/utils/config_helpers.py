@@ -14,8 +14,8 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.llms.deepseek_v3.utils.run_config import WeightConfig
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import WeightConfig
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -843,7 +843,7 @@ def _get_remove_dim_slices(
 
 
 def get_weight_config(
-    ModuleClass: type["models.demos.llms.deepseek_v3.utils.abstract_module.AbstractModule"],
+    ModuleClass: type["models.demos.nlp.llms.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
     state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
     weight_cache_path: Path,

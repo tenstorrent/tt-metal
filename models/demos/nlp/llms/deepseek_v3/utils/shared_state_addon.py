@@ -6,7 +6,7 @@ from typing import final
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY, ModelState
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY, ModelState
 
 
 class SharedStateAddOn:

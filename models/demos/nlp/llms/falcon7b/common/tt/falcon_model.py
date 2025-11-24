@@ -10,14 +10,14 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.llms.falcon7b.common.tests.test_utils import (
+from models.demos.nlp.llms.falcon7b.common.tests.test_utils import (
     create_prefill_attn_mask_for_sharded_softmax,
     get_num_devices,
     read_device_profiler,
     tt_from_torch,
 )
-from models.demos.llms.falcon7b.common.tt.falcon_decoder import TtFalconDecoderLayer
-from models.demos.llms.falcon7b.common.tt.model_utils import get_weights_cached, layernorm
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.nlp.llms.falcon7b.common.tt.model_utils import get_weights_cached, layernorm
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 

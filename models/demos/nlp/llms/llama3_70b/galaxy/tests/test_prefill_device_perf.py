@@ -157,7 +157,7 @@ def is_collective_op(op_code):
 
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run pytest models/demos/llms/llama3_70b/galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
+# Run pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -179,7 +179,7 @@ def test_llama_TG_perf_device(
     num_layers = 1
 
     # Load perf targets
-    with open(f"models/demos/llms/llama3_70b/galaxy/tests/perf_targets/prefill_{seqlen}.json", "r") as f:
+    with open(f"models/demos/nlp/llmsllama3_70b/galaxy/tests/perf_targets/prefill_{seqlen}.json", "r") as f:
         perf_targets = json.load(f)
 
     # Grab the correct input prompts file name based on the seqlen
@@ -187,7 +187,7 @@ def test_llama_TG_perf_device(
         seqlen_file = f"input_data_questions_prefill_{seqlen}.json"
     else:
         seqlen_file = f"input_data_long_{seqlen // 1024}k.json"
-    command = f"pytest models/demos/llms/llama3_70b/galaxy/demo/text_demo.py -k prefill-profile --input_prompts models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/{seqlen_file}"
+    command = f"pytest models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo.py -k prefill-profile --input_prompts models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/{seqlen_file}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)

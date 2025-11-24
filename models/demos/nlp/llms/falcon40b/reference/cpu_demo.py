@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer
 
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 
 falcon1b = "tiiuae/falcon-rw-1b"
 MODEL_VERSION = "tiiuae/falcon-40b-instruct"

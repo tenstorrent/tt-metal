@@ -12,11 +12,11 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.lm_head import LMHead
-from models.demos.llms.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert, sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.lm_head import LMHead
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert, sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     pad_or_trim_seq_len,

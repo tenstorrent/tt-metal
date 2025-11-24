@@ -7,16 +7,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
-from models.demos.llms.llama3_70b.galaxy.tt.llama_attention import TtLlamaAttention
-from models.demos.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import (
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_attention import TtLlamaAttention
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import (
     PagedAttentionConfig,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
 )
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
-from models.demos.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()

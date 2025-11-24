@@ -9,12 +9,12 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.llms.deepseek_v3.utils.config_helpers import sub_state_dicts
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import sub_state_dicts
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,

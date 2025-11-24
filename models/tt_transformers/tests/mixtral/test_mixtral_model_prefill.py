@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llms.mixtral8x7b.reference.model import Transformer
-from models.demos.llms.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn_prefill
+from models.demos.nlp.llms.mixtral8x7b.reference.model import Transformer
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn_prefill
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision

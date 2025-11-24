@@ -9,14 +9,14 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.tt_sampling import TTSampling
-from models.demos.llms.llama3_70b.galaxy.tt.distributed_norm import DistributedNorm
-from models.demos.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
-from models.demos.llms.llama3_70b.galaxy.tt.llama_decoder import TtTransformerBlock
-from models.demos.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llms.llama3_70b.galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llms.llama3_70b.galaxy.tt.lm_head import LMHead
-from models.demos.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.distributed_norm import DistributedNorm
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_decoder import TtTransformerBlock
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.lm_head import LMHead
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 class TtTransformer(LightweightModule):

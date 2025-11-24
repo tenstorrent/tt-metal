@@ -12,15 +12,15 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.llms.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
-from models.demos.llms.deepseek_v3.tt.rope import RotarySetup
-from models.demos.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
-from models.demos.llms.deepseek_v3.utils.hf_model_utils import load_model_weights
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.mla.mla1d import MLA1D
+from models.demos.nlp.llms.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
+from models.demos.nlp.llms.deepseek_v3.tt.rope import RotarySetup
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
+from models.demos.nlp.llms.deepseek_v3.utils.hf_model_utils import load_model_weights
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 

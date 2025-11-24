@@ -7,11 +7,11 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.experts import Experts as MoEExperts
-from models.demos.llms.deepseek_v3.tt.moe_gate import MoEGate
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.experts import Experts as MoEExperts
+from models.demos.nlp.llms.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
@@ -20,8 +20,8 @@ from models.demos.llms.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -29,7 +29,7 @@ from models.demos.llms.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.demos.llms.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.nlp.llms.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 
 
 class MoE(SharedStateAddOn, AbstractModule):

@@ -5,10 +5,10 @@
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.embedding.embedding1d import Embedding1D
-from models.demos.llms.deepseek_v3.utils.config_dataclass import OpConfigBase, ReduceScatterAsyncMinimalConfig
-from models.demos.llms.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.embedding.embedding1d import Embedding1D
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import OpConfigBase, ReduceScatterAsyncMinimalConfig
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import MESH_DEVICE_STATE_DICT_KEY
 
 
 class Embedding2D(Embedding1D):

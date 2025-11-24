@@ -7,7 +7,7 @@ from typing import List
 
 import pytest
 
-from models.demos.llms.mamba.demo.demo import run_mamba_demo
+from models.demos.nlp.llms.mamba.demo.demo import run_mamba_demo
 
 
 @pytest.mark.timeout(1500)

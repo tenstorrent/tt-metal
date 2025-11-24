@@ -19,10 +19,10 @@ from models.datasets.llm_dataset_utils import (
     prepare_textgen_dataset,
     verify_acc_metrics,
 )
-from models.demos.llms.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
-from models.demos.llms.mamba.tt import model_config
-from models.demos.llms.mamba.tt.mamba_model import MambaTT
-from models.demos.llms.mamba.tt.model_config import ModelMode
+from models.demos.nlp.llms.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
+from models.demos.nlp.llms.mamba.tt import model_config
+from models.demos.nlp.llms.mamba.tt.mamba_model import MambaTT
+from models.demos.nlp.llms.mamba.tt.model_config import ModelMode
 
 
 def calculate_perplexity(

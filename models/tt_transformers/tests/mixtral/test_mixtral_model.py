@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.mixtral8x7b.reference.model import Transformer as refTransformer
+from models.demos.nlp.llms.mixtral8x7b.reference.model import Transformer as refTransformer
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model import Transformer

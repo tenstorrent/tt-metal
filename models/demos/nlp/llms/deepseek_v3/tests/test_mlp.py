@@ -8,14 +8,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
-from models.demos.llms.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
-from models.demos.llms.deepseek_v3.tt.mlp.non_expert import NonExpert
-from models.demos.llms.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.llms.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config, load_weight
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.mlp import MLP
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.non_expert import NonExpert
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.shared_expert import SharedExpert
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config, load_weight
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,

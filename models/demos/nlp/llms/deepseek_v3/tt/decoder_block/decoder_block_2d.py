@@ -7,10 +7,10 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
-from models.demos.llms.deepseek_v3.tt.mlp.non_expert import NonExpert
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.non_expert import NonExpert
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,

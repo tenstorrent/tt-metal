@@ -7,10 +7,10 @@ from typing import Callable
 import torch
 
 import ttnn
-from models.demos.llms.mamba.reference.args import ModelArgs, ModelMode
-from models.demos.llms.mamba.tt.cache import TensorCache
-from models.demos.llms.mamba.tt.mamba_conv import MambaConv, MambaConvConfig
-from models.demos.llms.mamba.tt.mamba_ssm import TtMambaSSM
+from models.demos.nlp.llms.mamba.reference.args import ModelArgs, ModelMode
+from models.demos.nlp.llms.mamba.tt.cache import TensorCache
+from models.demos.nlp.llms.mamba.tt.mamba_conv import MambaConv, MambaConvConfig
+from models.demos.nlp.llms.mamba.tt.mamba_ssm import TtMambaSSM
 
 
 class TtMambaBlock(torch.nn.Module):

@@ -12,11 +12,11 @@ import torch.nn as nn
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
-from models.demos.llms.deepseek_v3.tt.experts import Experts as TTExperts
-from models.demos.llms.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
-from models.demos.llms.deepseek_v3.utils.run_config import create_run_config
-from models.demos.llms.deepseek_v3.utils.test_utils import (
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
+from models.demos.nlp.llms.deepseek_v3.tt.experts import Experts as TTExperts
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, even_int_div, sub_state_dict
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import create_run_config
+from models.demos.nlp.llms.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     dequantize_state_dict,

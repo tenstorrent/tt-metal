@@ -9,13 +9,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.demos.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig, precompute_freqs
-from models.demos.llms.llama3_70b.galaxy.tt.llama_decoder import TtTransformerBlock
-from models.demos.llms.llama3_70b.galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
-from models.demos.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig, precompute_freqs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_decoder import TtTransformerBlock
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()

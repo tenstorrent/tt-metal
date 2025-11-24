@@ -6,9 +6,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 class Emb(torch.nn.Module):

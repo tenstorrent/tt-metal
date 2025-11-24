@@ -8,10 +8,10 @@ from loguru import logger
 from tracy.process_model_log import get_samples_per_s
 
 from models.common.utility_functions import disable_persistent_kernel_cache, profiler
-from models.demos.llms.mamba.reference.prefill_decode_model import Mamba
-from models.demos.llms.mamba.tt import model_config
-from models.demos.llms.mamba.tt.mamba_model import MambaTT
-from models.demos.llms.mamba.tt.model_config import ModelMode
+from models.demos.nlp.llms.mamba.reference.prefill_decode_model import Mamba
+from models.demos.nlp.llms.mamba.tt import model_config
+from models.demos.nlp.llms.mamba.tt.mamba_model import MambaTT
+from models.demos.nlp.llms.mamba.tt.model_config import ModelMode
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
@@ -141,7 +141,7 @@ def test_mamba_perf_e2e(
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
     margin = 0.020
-    command = f"pytest models/demos/llms/mamba/tests/test_mamba_model.py::test_device_perf[1]"
+    command = f"pytest models/demos/nlp/llmsmamba/tests/test_mamba_model.py::test_device_perf[1]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # Convert expected perf (ms) to samples/s

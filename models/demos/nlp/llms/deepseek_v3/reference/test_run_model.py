@@ -5,7 +5,7 @@ import argparse
 
 import torch
 
-from models.demos.llms.deepseek_v3.reference.deepseek_reference_outputs_gen import *
+from models.demos.nlp.llms.deepseek_v3.reference.deepseek_reference_outputs_gen import *
 
 
 def create_parser() -> argparse.ArgumentParser:

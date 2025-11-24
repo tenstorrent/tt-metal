@@ -8,17 +8,17 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.ccl import CCL
-from models.demos.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_dataclass import ReshardConfig
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.tt.ccl import CCL
+from models.demos.nlp.llms.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import ReshardConfig
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
 )
-from models.demos.llms.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
+from models.demos.nlp.llms.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 

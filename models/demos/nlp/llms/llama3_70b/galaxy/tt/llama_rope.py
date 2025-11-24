@@ -7,7 +7,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import (
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import (
     gather_cos_sin,
     get_rot_transformation_mat,
     precompute_freqs,

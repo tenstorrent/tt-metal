@@ -27,14 +27,14 @@ def test_ci_dispatch(model_weights):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/demos/llms/qwen25_vl/tests/test_rms_norm.py",
-            "models/demos/llms/qwen25_vl/tests/test_mlp.py",
-            "models/demos/llms/qwen25_vl/tests/test_patch_merger.py",
-            "models/demos/llms/qwen25_vl/tests/test_vision_attention.py",
-            "models/demos/llms/qwen25_vl/tests/test_vision_block.py",
-            "models/demos/llms/qwen25_vl/tests/test_model.py",
-            "models/demos/llms/qwen25_vl/tests/test_wrapped_model.py",
-            "models/demos/llms/qwen25_vl/tests/test_windowed_sdpa.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_rms_norm.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_mlp.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_patch_merger.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_vision_attention.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_vision_block.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_model.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_wrapped_model.py",
+            "models/demos/nlp/llmsqwen25_vl/tests/test_windowed_sdpa.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )

@@ -11,10 +11,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
-from models.demos.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.llms.falcon40b.tt.falcon_common import PytorchFalconCausalLM
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.nlp.llms.falcon40b.tt.falcon_common import PytorchFalconCausalLM
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_and_get_pcc, comp_pcc
 from ttnn import ConcatMeshToTensor

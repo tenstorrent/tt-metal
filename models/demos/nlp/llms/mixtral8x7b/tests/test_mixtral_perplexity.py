@@ -14,12 +14,12 @@ from models.datasets.llm_dataset_utils import (
     prepare_textgen_dataset,
     verify_acc_metrics,
 )
-from models.demos.llms.mixtral8x7b.reference.model import Transformer
-from models.demos.llms.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.llms.mixtral8x7b.tt.mixtral_common import cache_attention, get_single_rot_mat, prepare_inputs_ttnn
-from models.demos.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
-from models.demos.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.reference.model import Transformer
+from models.demos.nlp.llms.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_common import cache_attention, get_single_rot_mat, prepare_inputs_ttnn
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 from ttnn import ConcatMeshToTensor
 
 

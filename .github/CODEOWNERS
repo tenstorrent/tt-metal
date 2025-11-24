@@ -260,33 +260,33 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 models/common @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
-models/demos/llms/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsdeepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @handrewsTT @tenstorrent/codeowner-bypass
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/codeowner-bypass
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/codeowner-bypass
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/codeowner-bypass
 models/*/mnist/ @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/*/squeezebert/ @cfjchu @uaydonat @tenstorrent/codeowner-bypass
-models/demos/llms/falcon7b/ttnn_falcon7b @cfjchu @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon7b/ttnn_falcon7b @cfjchu @uaydonat @tenstorrent/codeowner-bypass
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT @tenstorrent/codeowner-bypass
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
-models/demos/llms/llama3_70b/galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsllama3_70b/galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
-models/demos/llms/qwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
-models/demos/llms/falcon7b/common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
-models/demos/llms/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
-models/demos/llms/falcon7b/wormhole @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsqwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon7b/common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsmamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon7b/wormhole @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/diffusion/stable_diffusion/wormhole @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 models/demos/blackhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-models/demos/llms/falcon40b @uaydonat @djordje-tt @johanna-rock-tt @tenstorrent/codeowner-bypass
-models/demos/llms/falcon7b/t3000 @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
-models/demos/llms/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
-models/demos/llms/llama3_70b/t3000 @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
-models/demos/llms/mixtral8x7b @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon40b @uaydonat @djordje-tt @johanna-rock-tt @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon7b/t3000 @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsllama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsllama3_70b/t3000 @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsmixtral8x7b @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/llms/falcon7b/tg @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
+models/demos/nlp/llmsfalcon7b/tg @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/speech_to_text/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT @tenstorrent/codeowner-bypass

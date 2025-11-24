@@ -13,16 +13,16 @@ This demo is designed to run Mamba-2.8b and generate outputs for a set of prompt
 ## How to Run
 To run the demo using pre-written prompts for a batch of 32 users run:
 ```
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/llms/mamba/demo/prompts.json' models/demos/llms/mamba/demo/demo.py
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsmamba/demo/prompts.json' models/demos/nlp/llmsmamba/demo/demo.py
 ```
 
 To run the demo using custom input prompts, you can provide a different path to the input prompts file for e.g.:
 
 ```
-pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/llms/mamba/demo/demo.py
+pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/nlp/llmsmamba/demo/demo.py
 ```
 
-Any sequence length is supported. We currently only support JSON file with strictly 1 user prompt or 32 user prompts with same token length. Check the `models/demos/llms/mamba/demo/prompts.json` file for reference.
+Any sequence length is supported. We currently only support JSON file with strictly 1 user prompt or 32 user prompts with same token length. Check the `models/demos/nlp/llmsmamba/demo/prompts.json` file for reference.
 
 The prefill graph is not currently integrated into the demo. Therefore we currently process the prompt a single token at a time using the decode graph.
 
@@ -37,24 +37,24 @@ cd tt-metal
 
 #### SSM Block
 ```
-pytest -svv models/demos/llms/mamba/tests/test_mamba_ssm.py
+pytest -svv models/demos/nlp/llmsmamba/tests/test_mamba_ssm.py
 ```
 
 #### Mamba Block
 ```
-pytest -svv models/demos/llms/mamba/tests/test_mamba_block.py
+pytest -svv models/demos/nlp/llmsmamba/tests/test_mamba_block.py
 ```
 
 #### Residual Block
 ```
-pytest -svv models/demos/llms/mamba/tests/test_residual_block.py
+pytest -svv models/demos/nlp/llmsmamba/tests/test_residual_block.py
 ```
 
 #### Full Model
 Note : input embedding layer and TopK are on CPU
 
 ```
-pytest -svv models/demos/llms/mamba/tests/test_mamba_model.py::test_inference
+pytest -svv models/demos/nlp/llmsmamba/tests/test_mamba_model.py::test_inference
 ```
 
 ### Performance Tests
@@ -63,13 +63,13 @@ These tests are designed to evaluate device-side and host performance of Mamba m
 
 #### End-to-End Model Performance
 ```bash
-pytest -svv models/demos/llms/mamba/tests/test_mamba_perf.py -m models_performance_bare_metal
+pytest -svv models/demos/nlp/llmsmamba/tests/test_mamba_perf.py -m models_performance_bare_metal
 ```
 
 #### Device-Side Performance
 Build and run the following command to test device-side performance:
 ```
-pytest -svv models/demos/llms/mamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal
+pytest -svv models/demos/nlp/llmsmamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal
 ```
 
 This will also generate device and host profiling logs in directory `generated/profiler/reports/ttnn_mamba`

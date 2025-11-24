@@ -5,7 +5,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup

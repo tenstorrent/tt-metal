@@ -8,11 +8,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-from models.demos.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llms.llama3_70b.galaxy.tt.llama_mlp import TtLlamaMLP
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
-from models.demos.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import FeedForward
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_ccl import TT_CCL
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_mlp import TtLlamaMLP
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()

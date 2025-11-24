@@ -7,7 +7,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.llms.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
+from models.demos.nlp.llms.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
 from ttnn import ShardTensorToMesh
 
 

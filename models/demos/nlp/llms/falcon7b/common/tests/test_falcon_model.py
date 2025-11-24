@@ -7,14 +7,14 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import tt_tensors_to_torch_tensors
-from models.demos.llms.falcon7b.common.tests.test_utils import (
+from models.demos.nlp.llms.falcon7b.common.tests.test_utils import (
     concat_device_out_layer_present,
     get_num_devices,
     get_rand_falcon_inputs,
     load_hf_model,
 )
-from models.demos.llms.falcon7b.common.tt.falcon_model import TtFalconModel
-from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_model import TtFalconModel
+from models.demos.nlp.llms.falcon7b.common.tt.model_config import get_model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 

@@ -215,7 +215,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
 
 
 def cache_attention(mesh_device, tt_ccl, state_dict, model_args, current_rot_mat, rot_matrix, dtype):
-    from models.demos.llms.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+    from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 
     logger.info(f"Caching attention...")
 

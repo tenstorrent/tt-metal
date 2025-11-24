@@ -8,10 +8,10 @@ from loguru import logger
 import ttnn
 from models.common.tt_sampling import TTSampling
 from models.common.utility_functions import skip_for_blackhole
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import HostEmbedding, PagedAttentionConfig
-from models.demos.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import HostEmbedding, PagedAttentionConfig
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 
 
 @torch.no_grad()

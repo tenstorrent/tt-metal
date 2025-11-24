@@ -8,14 +8,14 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.llms.falcon7b.common.tests.test_utils import (
+from models.demos.nlp.llms.falcon7b.common.tests.test_utils import (
     concat_device_outputs,
     get_num_devices,
     get_rand_falcon_inputs,
     load_hf_model,
 )
-from models.demos.llms.falcon7b.common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
-from models.demos.llms.falcon7b.common.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon7b.common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
+from models.demos.nlp.llms.falcon7b.common.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 

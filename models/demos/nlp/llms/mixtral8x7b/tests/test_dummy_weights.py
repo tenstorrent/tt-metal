@@ -4,8 +4,8 @@
 from loguru import logger
 
 import ttnn
-from models.demos.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_model import TtTransformer
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 def test_load_dummy_weights(t3k_mesh_device):

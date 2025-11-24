@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.demos.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
+from models.demos.nlp.llms.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 
 
 class NonExpert(MLPDequant):

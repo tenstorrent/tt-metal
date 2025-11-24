@@ -38,7 +38,9 @@ def test_llama_tg_ops_perf_device(
     benchmark_data = BenchmarkData()
     step_name = f"Llama_TG_{op_name}"
 
-    command = f"pytest models/demos/llms/llama3_70b/galaxy/tests/unit_tests/test_llama_ops.py::test_llama_tg_{op_name}"
+    command = (
+        f"pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/unit_tests/test_llama_ops.py::test_llama_tg_{op_name}"
+    )
     cols = ["DEVICE KERNEL"]
     inference_time_key = "DEVICE KERNEL DURATION [ns]"
     expected_perf_cols = {f"AVG {inference_time_key}": expected_kernel_duration_us * 1e3}

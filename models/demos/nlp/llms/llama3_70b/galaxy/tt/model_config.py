@@ -15,8 +15,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.llms.llama3_70b.galaxy.tt.load_checkpoints import (
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.load_checkpoints import (
     convert_hf_to_meta,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -439,8 +439,8 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_70B_PARAMS": "models/demos/llms/llama3_70b/galaxy/model_params/Llama-3.1-70B-Instruct",
-        "LLAMA3_3_70B_PARAMS": "models/demos/llms/llama3_70b/galaxy/model_params/Llama-3.3-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/nlp/llmsllama3_70b/galaxy/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/nlp/llmsllama3_70b/galaxy/model_params/Llama-3.3-70B-Instruct",
     }
 
     def __init__(
@@ -2631,7 +2631,7 @@ class TtModelArgs:
         """Create and return a Tokenizer instance based on the checkpoint type."""
         if self.checkpoint_type == CheckpointType.Meta:
             # Use the Meta Tokenizer
-            from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+            from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
             return Tokenizer(self.tokenizer_path)
         else:

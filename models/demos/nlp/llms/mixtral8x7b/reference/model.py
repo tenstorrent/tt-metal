@@ -28,7 +28,7 @@ import torch
 from torch import nn
 from torch.nn.utils import skip_init
 
-from models.demos.llms.mixtral8x7b.reference.moe import MoeLayer
+from models.demos.nlp.llms.mixtral8x7b.reference.moe import MoeLayer
 
 
 def repeat_kv(keys: torch.Tensor, values: torch.Tensor, repeats: int):

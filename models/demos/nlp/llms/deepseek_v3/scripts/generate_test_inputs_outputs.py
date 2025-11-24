@@ -10,7 +10,7 @@ from typing import Any, Iterable, cast
 import torch
 from transformers.cache_utils import DynamicCache
 
-from models.demos.llms.deepseek_v3.utils.hf_model_utils import (
+from models.demos.nlp.llms.deepseek_v3.utils.hf_model_utils import (
     add_dynamic_weight_loading_hooks,
     add_gc_hooks,
     add_model_io_logging_hooks,

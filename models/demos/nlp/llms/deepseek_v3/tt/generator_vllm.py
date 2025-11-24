@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 
-from models.demos.llms.deepseek_v3.tt.generator import DeepseekGenerator
-from models.demos.llms.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.demos.nlp.llms.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.nlp.llms.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
 def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = 32) -> torch.Tensor:
@@ -40,7 +40,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
-        model_path = os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/llms/deepseek_v3/reference")
+        model_path = os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/nlp/llmsdeepseek_v3/reference")
         cache_dir = os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3")
         tokenizer = load_tokenizer(model_path)
 

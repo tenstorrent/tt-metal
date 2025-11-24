@@ -12,11 +12,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig
-from models.demos.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
-from models.demos.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.nlp.llms.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_common import PagedAttentionConfig
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.llama_model import TtTransformer
+from models.demos.nlp.llms.llama3_70b.galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from .demo_decode import load_inputs
@@ -372,7 +372,7 @@ def run_llama3_decode_performance(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, benchmark_token_range, warmup_iters, inner_iters, paged_attention, page_params",
     [
         (
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,
@@ -384,7 +384,7 @@ def run_llama3_decode_performance(
             None,
         ),
         (
-            "models/demos/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
+            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,

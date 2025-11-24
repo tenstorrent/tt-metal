@@ -8,9 +8,9 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.llms.deepseek_v3.reference.reference_utils import topk_bitonic
-from models.demos.llms.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.reference.reference_utils import topk_bitonic
+from models.demos.nlp.llms.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
     FromWeightConfig,
     LinearConfig,
@@ -22,13 +22,13 @@ from models.demos.llms.deepseek_v3.utils.config_dataclass import (
     TopKConfig,
     TopKFallbackConfig,
 )
-from models.demos.llms.deepseek_v3.utils.config_helpers import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TOPK_MIN_WIDTH,
     even_int_div,
     shard_and_save,
 )
-from models.demos.llms.deepseek_v3.utils.run_config import (
+from models.demos.nlp.llms.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
     RunDecodeConfig,

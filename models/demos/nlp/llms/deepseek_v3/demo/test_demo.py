@@ -3,7 +3,7 @@
 
 import pytest
 
-from models.demos.llms.deepseek_v3.demo.demo import run_demo
+from models.demos.nlp.llms.deepseek_v3.demo.demo import run_demo
 
 
 @pytest.mark.timeout(180)
@@ -14,7 +14,7 @@ def test_random_single_layer_generates_16_tokens(tmp_path):
     - Writes cache to a temp directory to avoid polluting the workspace
     """
 
-    model_path = "models/demos/llms/deepseek_v3/reference"
+    model_path = "models/demos/nlp/llmsdeepseek_v3/reference"
     cache_dir = tmp_path / "cache"
 
     result = run_demo(

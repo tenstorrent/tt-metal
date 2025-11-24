@@ -12,9 +12,9 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.llms.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.llms.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
-from models.demos.llms.deepseek_v3.utils.hf_model_utils import load_tokenizer
+from models.demos.nlp.llms.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.nlp.llms.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
+from models.demos.nlp.llms.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
 def _default_mesh_shape() -> ttnn.MeshShape:
@@ -73,7 +73,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model-path",
         type=str,
-        default=os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/llms/deepseek_v3/reference"),
+        default=os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/nlp/llmsdeepseek_v3/reference"),
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
@@ -240,7 +240,7 @@ def run_demo(
         - tokens: List[int] of generated token IDs
         - text: Optional[str] decoded text (only when a tokenizer is present)
     """
-    model_path = str(model_path or os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/llms/deepseek_v3/reference"))
+    model_path = str(model_path or os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/nlp/llmsdeepseek_v3/reference"))
     cache_dir = str(cache_dir or os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
 
     # Validate model directory per mode
@@ -291,7 +291,7 @@ def run_demo(
                 raise SystemExit("--token-accuracy requires --reference-file pointing to a .pt/.refpt file")
 
             # Lazy import to avoid overhead when not used
-            from models.demos.llms.deepseek_v3.demo.token_accuracy import TokenAccuracy
+            from models.demos.nlp.llms.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":

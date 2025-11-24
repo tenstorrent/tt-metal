@@ -8,9 +8,9 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
-from models.demos.llms.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.demos.llms.mamba.reference.model import Mamba
-from models.demos.llms.mamba.reference.prefill_decode_model import Mamba as MambaPrefillDecode
+from models.demos.nlp.llms.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
+from models.demos.nlp.llms.mamba.reference.model import Mamba
+from models.demos.nlp.llms.mamba.reference.prefill_decode_model import Mamba as MambaPrefillDecode
 
 
 def generate_through_selective_scan(

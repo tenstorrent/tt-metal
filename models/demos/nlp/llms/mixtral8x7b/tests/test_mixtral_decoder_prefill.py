@@ -7,16 +7,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.llms.mixtral8x7b.reference.model import RMSNorm, TransformerBlock, precompute_freqs_cis
-from models.demos.llms.mixtral8x7b.tt.mixtral_ccl import TT_CCL
-from models.demos.llms.mixtral8x7b.tt.mixtral_common import (
+from models.demos.nlp.llms.mixtral8x7b.reference.model import RMSNorm, TransformerBlock, precompute_freqs_cis
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_ccl import TT_CCL
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
     prepare_inputs_ttnn_prefill,
     set_model_args,
 )
-from models.demos.llms.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
-from models.demos.llms.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.nlp.llms.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
+from models.demos.nlp.llms.mixtral8x7b.tt.model_config import TtModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 

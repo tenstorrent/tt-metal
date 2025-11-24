@@ -4,7 +4,7 @@
 
 import os
 
-from models.demos.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.nlp.llms.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 
 
 def load_hf_model(model_version):

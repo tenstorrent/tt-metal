@@ -5,8 +5,8 @@
 import torch
 
 import ttnn
-from models.demos.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.demos.llms.deepseek_v3.utils.config_helpers import find_largest_divisor
+from models.demos.nlp.llms.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
+from models.demos.nlp.llms.deepseek_v3.utils.config_helpers import find_largest_divisor
 
 
 def get_rot_transformation_mat():

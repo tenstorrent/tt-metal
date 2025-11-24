@@ -9,13 +9,13 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.common import (
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.common import (
     create_custom_preprocessor,
     create_kv_cache,
     strip_state_dict_prefix,
 )
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.falcon_model import TtFalconModel
-from models.demos.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.falcon_model import TtFalconModel
+from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 

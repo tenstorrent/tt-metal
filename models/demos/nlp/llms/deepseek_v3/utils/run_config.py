@@ -9,7 +9,7 @@ from types import NoneType
 from typing import Any, overload
 
 import ttnn
-from models.demos.llms.deepseek_v3.utils.config_dataclass import (
+from models.demos.nlp.llms.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     MeshDeviceStub,
     OpConfigBase,

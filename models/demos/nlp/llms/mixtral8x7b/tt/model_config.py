@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llms.mixtral8x7b.reference.model import Transformer
+from models.demos.nlp.llms.mixtral8x7b.reference.model import Transformer
 
 
 class TtModelArgs:

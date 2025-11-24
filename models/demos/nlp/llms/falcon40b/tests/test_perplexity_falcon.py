@@ -21,9 +21,9 @@ from models.datasets.llm_dataset_utils import (
     prepare_textgen_dataset,
     verify_acc_metrics,
 )
-from models.demos.llms.falcon40b.tests.test_utils import load_hf_model
-from models.demos.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.llms.falcon40b.tt.model_config import get_model_config
+from models.demos.nlp.llms.falcon40b.tests.test_utils import load_hf_model
+from models.demos.nlp.llms.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.nlp.llms.falcon40b.tt.model_config import get_model_config
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from ttnn import ConcatMeshToTensor
 

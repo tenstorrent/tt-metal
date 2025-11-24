@@ -7,9 +7,9 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
-from models.demos.llms.falcon40b.tt.falcon_attention import TtFalconAttention
-from models.demos.llms.falcon40b.tt.falcon_mlp import TtFalconMLP
-from models.demos.llms.falcon40b.tt.model_utils import fused_partial_layernorm
+from models.demos.nlp.llms.falcon40b.tt.falcon_attention import TtFalconAttention
+from models.demos.nlp.llms.falcon40b.tt.falcon_mlp import TtFalconMLP
+from models.demos.nlp.llms.falcon40b.tt.model_utils import fused_partial_layernorm
 from ttnn import ReplicateTensorToMesh
 
 
