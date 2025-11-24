@@ -22,7 +22,7 @@ public:
 
     void wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) override;
 
-    tt::umd::tt_version get_binary_version() override;
+    tt::umd::semver_t get_binary_version() override;
 
     std::vector<std::filesystem::path> build_includes(const std::filesystem::path& root_dir) override;
 
