@@ -16,10 +16,10 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 
 Find sentence_bert instructions for the following device implementations:
 
-- Wormhole: [demos/wormhole/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/wormhole/README.md)
+- Wormhole: [sentence_bert/wormhole/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/wormhole/README.md)
 
-- Blackhole:[demos/blackhole/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/blackhole/README.md)
+- Blackhole:[sentence_bert/blackhole/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/blackhole/README.md)
 
-- QuietBox / LoudBox: [demos/t3000/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/t3000/README.md)
+- QuietBox / LoudBox: [sentence_bert/t3000/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/t3000/README.md)
 
-- Galaxy: [demos/tg/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/tg/README.md)
+- Galaxy: [sentence_bert/tg/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/tg/README.md)
