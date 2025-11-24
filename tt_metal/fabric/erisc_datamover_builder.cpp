@@ -316,25 +316,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     uint32_t buffer_address = edm_status_address + field_size;
 
-    for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
-        this->receiver_channels_counters_address[i] = buffer_address;
-        buffer_address += receiver_channel_counters_size_bytes;
-    }
-    for (uint32_t i = 0; i < num_sender_channels; i++) {
-        this->sender_channels_counters_address[i] = buffer_address;
-        buffer_address += sender_channel_counters_size_bytes;
-    }
-
-    // Packet header history buffer(s)
-    for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
-        this->receivers_completed_packet_header_cb_address[i] = buffer_address;
-        buffer_address += receiver_completed_packet_header_cb_size_bytes;
-    }
-    for (uint32_t i = 0; i < num_sender_channels; i++) {
-        this->senders_completed_packet_header_cb_address[i] = buffer_address;
-        buffer_address += sender_completed_packet_header_cb_size_bytes;
-    }
-
     // ----------- Sender Channels
     for (uint32_t i = 0; i < num_sender_channels; i++) {
         this->sender_channels_buffer_index_address[i] = buffer_address;
@@ -443,21 +424,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_fwd_paths -= 1;
     }
 
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-        TT_FATAL(
-            (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
-            "receivers_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
-            i,
-            receivers_completed_packet_header_cb_address[i],
-            eth_word_l1_alignment);
-    }
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        TT_FATAL(
-            (senders_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
-            "senders_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
-            i,
-            senders_completed_packet_header_cb_address[i],
-            eth_word_l1_alignment);
         TT_FATAL(
             (sender_channels_buffer_index_address[i] % eth_word_l1_alignment == 0),
             "sender_channels_buffer_index_address[{}] {} must be aligned to {} bytes",
@@ -976,33 +943,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.notify_worker_of_read_counter_update_src_address,
         0x7a9b3c4d,  // special tag marker to catch incorrect ct args
 
-        // fabric counters
-        FabricEriscDatamoverConfig::enable_fabric_counters,
-        config.receiver_channels_counters_address[0],
-        config.receiver_channels_counters_address[1],
-        config.sender_channels_counters_address[0],
-        config.sender_channels_counters_address[1],
-        config.sender_channels_counters_address[2],
-        config.sender_channels_counters_address[3],
-        config.sender_channels_counters_address[4],
-
-        // fabric pkt header recording
-        FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
-
-        config.receivers_completed_packet_header_cb_address[0],
-        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
-        config.receivers_completed_packet_header_cb_address[1],
-        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[0],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[1],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[2],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[3],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[4],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.risc_configs[risc_id].is_sender_channel_serviced(0),
         config.risc_configs[risc_id].is_sender_channel_serviced(1),
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
