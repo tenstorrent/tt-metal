@@ -1349,6 +1349,10 @@ void TestDevice::create_latency_sender_kernel(
 
     tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
 
+    // Zero out semaphore from host before test (same as bandwidth tests)
+    device_info_provider_->zero_out_buffer_on_cores(
+        coord_, {core}, semaphore_address, sender_memory_map_->get_local_sync_region_size());
+
     log_debug(
         tt::LogTest,
         "Created latency sender kernel on core {} with shared semaphore address 0x{:x}",
@@ -1466,6 +1470,10 @@ void TestDevice::create_latency_responder_kernel(
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
+
+    // Zero out semaphore from host before test (same as bandwidth tests)
+    device_info_provider_->zero_out_buffer_on_cores(
+        coord_, {core}, semaphore_address, sender_memory_map_->get_local_sync_region_size());
 
     log_debug(
         tt::LogTest,
