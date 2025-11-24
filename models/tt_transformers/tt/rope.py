@@ -513,7 +513,7 @@ class RotarySetup(LightweightModule):
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        embedding_layout = ttnn.ROW_MAJOR_LAYOUT if prefetcher is not None else ttnn.TILE_LAYOUT
+        embedding_layout = ttnn.TILE_LAYOUT
 
         core_grid = (
             ttnn.num_cores_to_corerangeset_in_subcoregrids(

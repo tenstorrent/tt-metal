@@ -1048,6 +1048,19 @@ class ModelArgs:
             )
 
             # ====== Prefetcher + Attention program configs ======
+            self.start_core = ttnn.CoreCoord(1, 0)
+            sdpa_grid_size = (8, 8) if is_blackhole() else (8, 4)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, num_sdpa_cores, self.prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            )
+
             wo_shape_ring = (self.dim // self.cluster_shape[1], self.dim // self.cluster_shape[0])  # Use padded K and N
             self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
@@ -1086,6 +1099,19 @@ class ModelArgs:
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    self.prefetcher.all_worker_cores_range_set,
+                    [
+                        32,
+                        self.head_dim,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
             )
 
             # ====== Prefetcher + MLP program configs ======

@@ -428,6 +428,8 @@ class Attention(LightweightModule):
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
+        breakpoint()
+
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
@@ -436,13 +438,16 @@ class Attention(LightweightModule):
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
-            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
+            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1])
+            if self.prefetcher is None
+            else xqkv_fused_sharded.memory_config(),
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
 
+        breakpoint()
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
             xqkv_fused = ttnn.matmul(
@@ -453,10 +458,12 @@ class Attention(LightweightModule):
             )
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-
-        ttnn.deallocate(xqkv_fused_sharded)
-
+            if self.prefetcher is None:
+                xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+                ttnn.deallocate(xqkv_fused_sharded)
+            else:
+                xqkv_fused = xqkv_fused_sharded
+        breakpoint()
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
@@ -474,12 +481,14 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
+            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"]
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"],
         )
-
+        breakpoint()
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
-
+        breakpoint()
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
@@ -528,7 +537,9 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -540,13 +551,15 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
         ttnn.deallocate(q_heads_1BQD)
-
+        # Prefetcher + Attn working until here, still WIP
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
             memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
