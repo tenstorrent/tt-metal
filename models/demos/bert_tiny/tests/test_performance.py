@@ -16,7 +16,7 @@ from models.common.utility_functions import (
     enable_persistent_kernel_cache,
     is_wormhole_b0,
 )
-from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering
+from models.demos.nlp.encoder.bert_tiny.tt.bert_tiny import bert_for_question_answering
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
