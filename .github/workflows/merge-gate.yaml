@@ -269,7 +269,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       merge-gate-call: true
-  
+
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build, find-changes]
