@@ -54,9 +54,9 @@ private:
     }
 
     // Called after telemetry has been merged into the state
-    void on_telemetry_updated(const TelemetrySnapshot& delta) override {
+    void on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) override {
         // Send the delta snapshot directly to clients
-        json j = delta;
+        json j = *delta;
         std::string message = j.dump();
         send_message_to_clients(message);
     }

@@ -38,10 +38,11 @@ void TelemetrySubscriber::process_telemetry_loop() {
             telemetry_state_.merge_from(**snapshot);
         }
 
-        // Call the derived class handler
+        // Call the derived class handler with the shared_ptr
         // Note: We call this with the mutex unlocked to avoid holding it during
         // potentially long operations. Derived classes can lock state_mutex_ if they
-        // need to access telemetry_state_ safely.
-        on_telemetry_updated(**snapshot);
+        // need to access telemetry_state_ safely. The shared_ptr allows them to
+        // keep the snapshot alive if needed.
+        on_telemetry_updated(*snapshot);
     }
 }

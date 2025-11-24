@@ -37,10 +37,11 @@ public:
 protected:
     // Called after telemetry has been merged into the state.
     // Derived classes should implement this to handle the updated telemetry.
-    // @param delta The delta snapshot that was just merged
+    // @param delta Shared pointer to the delta snapshot that was just merged
     //
     // Note: Derived classes can access telemetry_state_ if needed, but must lock state_mutex_ appropriately.
-    virtual void on_telemetry_updated(const TelemetrySnapshot& delta) = 0;
+    //       The shared_ptr allows handlers to keep the snapshot alive if needed (e.g., for enqueueing).
+    virtual void on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) = 0;
 
     // Accumulated telemetry data (merged from all snapshots)
     TelemetrySnapshot telemetry_state_;
