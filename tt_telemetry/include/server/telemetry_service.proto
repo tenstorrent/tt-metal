@@ -13,6 +13,9 @@ service TelemetryService {
 
   // Query a metric by name
   rpc QueryMetric(QueryMetricRequest) returns (QueryMetricResponse) {}
+
+  // Stream telemetry updates matching a query (server-side streaming)
+  rpc StreamMetrics(QueryMetricRequest) returns (stream QueryMetricResponse) {}
 }
 
 // Ping request carrying a timestamp

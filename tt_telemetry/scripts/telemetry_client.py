@@ -129,6 +129,53 @@ class TelemetryClient:
                 print(f"RPC failed: {e.code()}: {e.details()}")
             return False, []
 
+    def stream_metrics(self, metric_query: str = "", timeout: float = None):
+        """
+        Stream telemetry updates matching a query.
+
+        Args:
+            metric_query: Query string for metrics to stream (empty = all metrics)
+            timeout: RPC timeout in seconds (None = no timeout)
+
+        Yields:
+            List of dicts with keys: 'path', 'timestamp', 'value', 'type'
+        """
+        request = telemetry_service_pb2.QueryMetricRequest(metric_query=metric_query)
+
+        try:
+            for update in self.stub.StreamMetrics(request, timeout=timeout):
+                results = []
+
+                # Process bool results
+                for result in update.bool_results:
+                    results.append(
+                        {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "bool"}
+                    )
+
+                # Process uint results
+                for result in update.uint_results:
+                    results.append(
+                        {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "uint64"}
+                    )
+
+                # Process double results
+                for result in update.double_results:
+                    results.append(
+                        {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "double"}
+                    )
+
+                # Process string results
+                for result in update.string_results:
+                    results.append(
+                        {"path": result.path, "timestamp": result.timestamp, "value": result.value, "type": "string"}
+                    )
+
+                yield results
+
+        except grpc.RpcError as e:
+            print(f"Stream failed: {e.code()}: {e.details()}")
+            return
+
     def close(self):
         """Close the gRPC channel."""
         self.channel.close()
@@ -155,6 +202,26 @@ def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
             print(f"    Timestamp: {result['timestamp']}")
     else:
         print(f"Query failed for metric: {metric_query}")
+
+
+def stream_metrics(client: TelemetryClient, params: Dict[str, Any] | None):
+    metric_query = params.get("metric_query", "") if params else ""
+    print(f"Streaming metrics matching '{metric_query if metric_query else 'all'}'...")
+    print("Press Ctrl+C to stop streaming\n")
+
+    try:
+        update_count = 0
+        for results in client.stream_metrics(metric_query):
+            if results:
+                update_count += 1
+                print(f"--- Update {update_count} ---")
+                for result in results:
+                    print(f"  {result['path']}: {result['value']} ({result['type']})")
+                print()
+    except KeyboardInterrupt:
+        print("\nStream stopped by user")
+    except Exception as e:
+        print(f"Stream error: {e}")
 
 
 if __name__ == "__main__":
@@ -187,6 +254,12 @@ if __name__ == "__main__":
             command="query",
             params=[Param(name="metric_query", type=str)],
             description="Query a metric by name",
+        ),
+        Command(
+            handler=lambda params: stream_metrics(client, params),
+            command="stream",
+            params=[Param(name="metric_query", type=str, default="")],
+            description="Stream telemetry updates (optional: filter by query)",
         ),
     ]
     CommandConsole(commands=commands).run()

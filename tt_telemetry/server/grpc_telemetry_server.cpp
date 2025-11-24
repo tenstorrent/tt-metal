@@ -11,22 +11,135 @@
 #include <unistd.h>
 #include <grpcpp/grpcpp.h>
 #include <tt-logger/tt-logger.hpp>
+#include <atomic>
+#include <map>
 
 #include "telemetry_service.grpc.pb.h"
+#include <utils/simple_concurrent_queue.hpp>
 
 using grpc::Server;
 using grpc::ServerBuilder;
 using grpc::ServerContext;
+using grpc::ServerWriter;
 using grpc::Status;
+
+template <bool UseFilter, typename OutputType>
+static size_t populate_metrics(
+    OutputType* output, const TelemetrySnapshot& telemetry, const std::string& metric_query = "") {
+    size_t count = 0;
+
+    // Iterate through all bool metrics
+    for (const auto& [path, value] : telemetry.bool_metrics) {
+        // If filtering is enabled, check if metric_query is a substring of the path
+        if constexpr (UseFilter) {
+            if (path.find(metric_query) == std::string::npos) {
+                continue;  // Skip this metric
+            }
+        }
+
+        auto* result = output->add_bool_results();
+        result->set_path(path);
+        result->set_value(value);
+
+        // Get timestamp if available
+        auto ts_it = telemetry.bool_metric_timestamps.find(path);
+        if (ts_it != telemetry.bool_metric_timestamps.end()) {
+            result->set_timestamp(ts_it->second);
+        } else {
+            result->set_timestamp(0);
+        }
+
+        ++count;
+    }
+
+    // Iterate through all uint metrics
+    for (const auto& [path, value] : telemetry.uint_metrics) {
+        if constexpr (UseFilter) {
+            if (path.find(metric_query) == std::string::npos) {
+                continue;
+            }
+        }
+
+        auto* result = output->add_uint_results();
+        result->set_path(path);
+        result->set_value(value);
+
+        // Get timestamp if available
+        auto ts_it = telemetry.uint_metric_timestamps.find(path);
+        if (ts_it != telemetry.uint_metric_timestamps.end()) {
+            result->set_timestamp(ts_it->second);
+        } else {
+            result->set_timestamp(0);
+        }
+
+        ++count;
+    }
+
+    // Iterate through all double metrics
+    for (const auto& [path, value] : telemetry.double_metrics) {
+        if constexpr (UseFilter) {
+            if (path.find(metric_query) == std::string::npos) {
+                continue;
+            }
+        }
+
+        auto* result = output->add_double_results();
+        result->set_path(path);
+        result->set_value(value);
+
+        // Get timestamp if available
+        auto ts_it = telemetry.double_metric_timestamps.find(path);
+        if (ts_it != telemetry.double_metric_timestamps.end()) {
+            result->set_timestamp(ts_it->second);
+        } else {
+            result->set_timestamp(0);
+        }
+
+        ++count;
+    }
+
+    // Iterate through all string metrics
+    for (const auto& [path, value] : telemetry.string_metrics) {
+        if constexpr (UseFilter) {
+            if (path.find(metric_query) == std::string::npos) {
+                continue;
+            }
+        }
+
+        auto* result = output->add_string_results();
+        result->set_path(path);
+        result->set_value(value);
+
+        // Get timestamp if available
+        auto ts_it = telemetry.string_metric_timestamps.find(path);
+        if (ts_it != telemetry.string_metric_timestamps.end()) {
+            result->set_timestamp(ts_it->second);
+        } else {
+            result->set_timestamp(0);
+        }
+
+        ++count;
+    }
+
+    return count;
+}
 
 namespace tt {
 namespace telemetry {
+
+// Per-client streaming state
+struct StreamingClient {
+    uint64_t client_id;
+    std::string metric_query;
+    SimpleConcurrentQueue<std::shared_ptr<TelemetrySnapshot>> update_queue;
+    std::atomic<bool> active{true};
+};
 
 // Service implementation
 class TelemetryServiceImpl final : public TelemetryService::Service {
 public:
     TelemetryServiceImpl(const TelemetrySnapshot& telemetry_state, std::mutex& state_mutex) :
-        telemetry_state_(telemetry_state), state_mutex_(state_mutex) {}
+        telemetry_state_(telemetry_state), state_mutex_(state_mutex), next_client_id_(0) {}
     ~TelemetryServiceImpl() override = default;
 
     // Ping RPC implementation
@@ -34,7 +147,7 @@ public:
         // Echo the timestamp back to the client
         response->set_timestamp(request->timestamp());
 
-        log_debug(tt::LogAlways, "gRPC Ping received with timestamp: {}", request->timestamp());
+        log_debug(tt::LogAlways, "[gRPC] Ping received with timestamp: {}", request->timestamp());
 
         return Status::OK;
     }
@@ -44,106 +157,105 @@ public:
         ServerContext* context, const QueryMetricRequest* request, QueryMetricResponse* response) override {
         const std::string& metric_query = request->metric_query();
 
-        log_debug(tt::LogAlways, "gRPC QueryMetric received for query: {}", metric_query);
-
-        bool found_any = false;
+        log_debug(tt::LogAlways, "[gRPC] QueryMetric received for query: {}", metric_query);
 
         // Lock the mutex to safely access telemetry_state_
         std::lock_guard<std::mutex> lock(state_mutex_);
 
-        // Iterate through all bool metrics and check if metric_query is a substring of the path
-        for (const auto& [path, value] : telemetry_state_.bool_metrics) {
-            if (path.find(metric_query) != std::string::npos) {
-                auto* result = response->add_bool_results();
-                result->set_path(path);
-                result->set_value(value);
+        // Populate response with filtered metrics and get count
+        size_t num_metrics = populate_metrics<true>(response, telemetry_state_, metric_query);
 
-                // Get timestamp if available
-                auto ts_it = telemetry_state_.bool_metric_timestamps.find(path);
-                if (ts_it != telemetry_state_.bool_metric_timestamps.end()) {
-                    result->set_timestamp(ts_it->second);
-                } else {
-                    result->set_timestamp(0);
-                }
-
-                log_debug(tt::LogAlways, "Found bool metric '{}' with value: {}", path, value);
-                found_any = true;
-            }
-        }
-
-        // Iterate through all uint metrics
-        for (const auto& [path, value] : telemetry_state_.uint_metrics) {
-            if (path.find(metric_query) != std::string::npos) {
-                auto* result = response->add_uint_results();
-                result->set_path(path);
-                result->set_value(value);
-
-                // Get timestamp if available
-                auto ts_it = telemetry_state_.uint_metric_timestamps.find(path);
-                if (ts_it != telemetry_state_.uint_metric_timestamps.end()) {
-                    result->set_timestamp(ts_it->second);
-                } else {
-                    result->set_timestamp(0);
-                }
-
-                log_debug(tt::LogAlways, "Found uint metric '{}' with value: {}", path, value);
-                found_any = true;
-            }
-        }
-
-        // Iterate through all double metrics
-        for (const auto& [path, value] : telemetry_state_.double_metrics) {
-            if (path.find(metric_query) != std::string::npos) {
-                auto* result = response->add_double_results();
-                result->set_path(path);
-                result->set_value(value);
-
-                // Get timestamp if available
-                auto ts_it = telemetry_state_.double_metric_timestamps.find(path);
-                if (ts_it != telemetry_state_.double_metric_timestamps.end()) {
-                    result->set_timestamp(ts_it->second);
-                } else {
-                    result->set_timestamp(0);
-                }
-
-                log_debug(tt::LogAlways, "Found double metric '{}' with value: {}", path, value);
-                found_any = true;
-            }
-        }
-
-        // Iterate through all string metrics
-        for (const auto& [path, value] : telemetry_state_.string_metrics) {
-            if (path.find(metric_query) != std::string::npos) {
-                auto* result = response->add_string_results();
-                result->set_path(path);
-                result->set_value(value);
-
-                // Get timestamp if available
-                auto ts_it = telemetry_state_.string_metric_timestamps.find(path);
-                if (ts_it != telemetry_state_.string_metric_timestamps.end()) {
-                    result->set_timestamp(ts_it->second);
-                } else {
-                    result->set_timestamp(0);
-                }
-
-                log_debug(tt::LogAlways, "Found string metric '{}' with value: {}", path, value);
-                found_any = true;
-            }
-        }
-
-        // No matching metrics found
-        if (!found_any) {
-            log_debug(tt::LogAlways, "No metrics found matching query: '{}'", metric_query);
+        if (num_metrics == 0) {
+            log_debug(tt::LogAlways, "[gRPC] No metrics found matching query: '{}'", metric_query);
             return Status(grpc::StatusCode::NOT_FOUND, "No metrics found matching query: '" + metric_query + "'");
         }
 
+        log_debug(tt::LogAlways, "[gRPC] Found {} metric(s) matching query: '{}'", num_metrics, metric_query);
         return Status::OK;
+    }
+
+    // StreamMetrics RPC implementation (server-side streaming)
+    Status StreamMetrics(
+        ServerContext* context, const QueryMetricRequest* request, ServerWriter<QueryMetricResponse>* writer) override {
+        const std::string& metric_query = request->metric_query();
+
+        // Create a new streaming client with a unique ID
+        uint64_t client_id = next_client_id_.fetch_add(1);
+        auto client = std::make_shared<StreamingClient>();
+        client->client_id = client_id;
+        client->metric_query = metric_query;
+
+        log_info(tt::LogAlways, "[gRPC] StreamMetrics: Client {} connected with query: '{}'", client_id, metric_query);
+
+        // Register the client
+        {
+            std::lock_guard<std::mutex> lock(clients_mutex_);
+            streaming_clients_[client_id] = client;
+        }
+
+        // Send initial snapshot of matching metrics to the client
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            QueryMetricResponse output;
+            if (populate_metrics<true>(&output, telemetry_state_, metric_query) > 0) {
+                if (!writer->Write(output)) {
+                    log_warning(tt::LogAlways, "[gRPC] StreamMetrics: Client {} write failed!", client_id);
+                }
+            }
+        }
+
+        // Main streaming loop - use blocking pop_wait with timeout to efficiently wait for updates
+        while (context->IsCancelled() == false) {
+            // Wait up to 1 second for an update (allows checking for cancellation periodically)
+            auto snapshot = client->update_queue.pop_wait(std::chrono::seconds(1));
+            if (!snapshot) {
+                // Timeout or queue shutdown - check if context was cancelled and continue
+                continue;
+            }
+
+            QueryMetricResponse output;
+            if (populate_metrics<true>(&output, **snapshot, metric_query) > 0) {
+                if (!writer->Write(output)) {
+                    log_warning(tt::LogAlways, "[gRPC] StreamMetrics: Client {} write failed!", client_id);
+                    break;
+                }
+            }
+        }
+
+        // Client disconnected - clean up
+        log_info(tt::LogAlways, "[gRPC] StreamMetrics: Client {} disconnected", client_id);
+        client->active = false;
+        client->update_queue.shutdown();  // Wake any blocked threads
+
+        {
+            std::lock_guard<std::mutex> lock(clients_mutex_);
+            streaming_clients_.erase(client_id);
+        }
+
+        return Status::OK;
+    }
+
+    // Called by GrpcTelemetryServer when telemetry is updated
+    // Pushes updates to all active streaming clients
+    void enqueue_update_for_all_clients(const std::shared_ptr<TelemetrySnapshot>& snapshot) {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        for (const auto& [client_id, client] : streaming_clients_) {
+            if (client->active) {
+                client->update_queue.push(snapshot);
+                log_debug(tt::LogAlways, "[gRPC] Enqueued update for streaming client {}", client_id);
+            }
+        }
     }
 
 private:
     // References to the telemetry state (from GrpcTelemetryServer/TelemetrySubscriber)
     const TelemetrySnapshot& telemetry_state_;
     std::mutex& state_mutex_;
+
+    // Streaming client management
+    std::atomic<uint64_t> next_client_id_;
+    std::map<uint64_t, std::shared_ptr<StreamingClient>> streaming_clients_;
+    std::mutex clients_mutex_;
 };
 
 }  // namespace telemetry
@@ -175,22 +287,22 @@ void GrpcTelemetryServer::start() {
     server_ = builder.BuildAndStart();
 
     if (!server_) {
-        log_error(tt::LogAlways, "Failed to start gRPC server on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+        log_error(tt::LogAlways, "[gRPC] Failed to start gRPC server on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
         return;
     }
 
-    log_info(tt::LogAlways, "gRPC telemetry server listening on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+    log_info(tt::LogAlways, "[gRPC] Server listening on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
 
     // Set permissions so other processes can access it
     // 0666 = read/write for owner, group, and others
     if (chmod(GRPC_TELEMETRY_SOCKET_PATH, 0666) != 0) {
-        log_warning(tt::LogAlways, "Failed to set permissions on socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+        log_warning(tt::LogAlways, "[gRPC] Failed to set permissions on socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
     }
 }
 
 void GrpcTelemetryServer::stop() {
     if (server_) {
-        log_info(tt::LogAlways, "Shutting down gRPC telemetry server");
+        log_info(tt::LogAlways, "[gRPC] Shutting down gRPC telemetry server");
 
         // Shutdown the server with a deadline
         server_->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(5));
@@ -206,5 +318,9 @@ void GrpcTelemetryServer::stop() {
 }
 
 void GrpcTelemetryServer::on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) {
-    // Nothing to do here - QueryMetric will iterate through telemetry_state_ directly
+    // Enqueue the update for all streaming clients
+    auto* service = dynamic_cast<tt::telemetry::TelemetryServiceImpl*>(service_impl_.get());
+    if (service) {
+        service->enqueue_update_for_all_clients(delta);
+    }
 }
