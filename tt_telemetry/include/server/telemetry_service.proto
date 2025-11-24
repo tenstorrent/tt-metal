@@ -27,7 +27,7 @@ message PingResponse {
 
 // Query request for a specific metric
 message QueryMetricRequest {
-  string metric_name = 1;  // Name of the metric to query
+  string metric_query = 1;  // Query string for the metric (e.g., metric name)
 }
 
 // Individual metric result with path, timestamp, and value
