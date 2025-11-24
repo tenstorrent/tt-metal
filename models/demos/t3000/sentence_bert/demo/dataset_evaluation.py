@@ -17,9 +17,9 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
-from models.demos.sentence_bert.common import load_torch_model
-from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
+from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.runner.performant_runner import SentenceBERTPerformantRunner
 
 
 def load_sts_tr(split="test"):

@@ -9,9 +9,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
-from models.demos.sentence_bert.common import load_torch_model
-from models.demos.sentence_bert.reference.sentence_bert import BertSelfAttention
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_self_attention import TtnnSentenceBertSelfAttention
+from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertSelfAttention
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_self_attention import (
+    TtnnSentenceBertSelfAttention,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

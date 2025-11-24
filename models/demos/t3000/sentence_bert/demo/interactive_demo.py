@@ -14,8 +14,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 import ttnn
-from models.demos.sentence_bert.reference.sentence_bert import custom_extended_mask
-from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.runner.performant_runner import SentenceBERTPerformantRunner
 
 
 def compute_ttnn_embeddings(sentences, model_name, device, batch_size=64, model_location_generator=None):

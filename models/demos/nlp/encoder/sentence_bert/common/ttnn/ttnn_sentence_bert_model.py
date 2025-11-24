@@ -5,9 +5,9 @@
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_embeddings import TtnnSentenceBertEmbeddings
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_embeddings import TtnnSentenceBertEmbeddings
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
 
 if is_blackhole():
     from models.demos.blackhole.sentence_bert.ttnn.common import ttnn_mean_pooling

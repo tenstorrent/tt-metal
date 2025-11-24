@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.sentence_bert.runner.performant_runner_infra import SentenceBERTPerformanceRunnerInfra
+from models.demos.nlp.encoder.sentence_bert.common.runner.performant_runner_infra import (
+    SentenceBERTPerformanceRunnerInfra,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

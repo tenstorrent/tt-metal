@@ -8,9 +8,9 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.sentence_bert.common import load_torch_model
-from models.demos.sentence_bert.reference.sentence_bert import BertEncoder
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
+from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertEncoder
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
 from models.demos.wormhole.sentence_bert.ttnn.common import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

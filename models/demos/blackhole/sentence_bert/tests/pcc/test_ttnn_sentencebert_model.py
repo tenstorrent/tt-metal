@@ -9,9 +9,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
-from models.demos.sentence_bert.common import load_torch_model
-from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
+from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

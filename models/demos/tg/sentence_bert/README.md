@@ -17,7 +17,7 @@ This TG variant is a scaled version tailored for Tenstorrent Galaxy hardware.
 ## How to Run
 - Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/common/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
 ### Performant Model with Trace+2CQ
@@ -58,6 +58,6 @@ pytest --disable-warnings models/demos/tg/sentence_bert/demo/dataset_evaluation.
 ```
 
 ## Details
-- The entry point to the SentenceBERT model is located at: `models/demos/sentence_bert/ttnn/ttnn_sentence_bert_model.py`
+- The entry point to the SentenceBERT model is located at: `models/demos/nlp/encoder/sentence_bert/common/ttnn/ttnn_sentence_bert_model.py`
 - Batch size: 8 (Single Device)
 - Sequence Length: 384

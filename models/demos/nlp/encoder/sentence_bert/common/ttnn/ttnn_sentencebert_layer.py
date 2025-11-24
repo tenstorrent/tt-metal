@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_attention import TtnnSentenceBertAttention
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_intermediate import TtnnSentenceBertIntermediate
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_output import TtnnSentenceBertOutput
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_attention import TtnnSentenceBertAttention
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_intermediate import (
+    TtnnSentenceBertIntermediate,
+)
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_output import TtnnSentenceBertOutput
 
 
 class TtnnSentenceBertLayer:

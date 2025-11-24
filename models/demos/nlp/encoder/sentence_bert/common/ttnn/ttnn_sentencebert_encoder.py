@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.sentence_bert.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
 
 
 class TtnnSentenceBertEncoder:
