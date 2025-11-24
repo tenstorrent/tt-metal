@@ -71,8 +71,8 @@ target_sources(
         llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
         llama_all_gather_matmul_async/device/llama_1d_mm_fusion_program_factory.cpp
         all_to_all_async/all_to_all_async.cpp
-        all_to_all_async/device/all_to_all_program_factory.cpp
-        all_to_all_async/device/all_to_all_async_op.cpp
+        all_to_all_async/device/all_to_all_async_device_operation.cpp
+        all_to_all_async/device/all_to_all_async_program_factory.cpp
         all_to_all_async_generic/all_to_all_async_generic.cpp
         all_to_all_async_generic/device/all_to_all_program_factory.cpp
         all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp
