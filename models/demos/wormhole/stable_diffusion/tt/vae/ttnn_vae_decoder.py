@@ -121,6 +121,7 @@ class VaeDecoder:
 
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
         self.conv_out.conv_config.enable_weights_double_buffer = False
+        self.conv_out.conv_config.enable_act_double_buffer = False
         hidden_states = self.conv_out(hidden_states)
 
         return hidden_states
