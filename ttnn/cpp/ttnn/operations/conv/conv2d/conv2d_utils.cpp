@@ -42,10 +42,32 @@ uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     return divisor;
 }
 
+uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor, bool override_num) {
+    uint32_t divisor = start_divisor;
+    while (num % divisor != 0) {
+        divisor = divisor - 1;
+    }
+    if (override_num) {
+        divisor = 5;
+    }
+    return divisor;
+}
+
 uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     while (num1 % divisor != 0 or num2 % divisor != 0) {
         divisor = divisor - 1;
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor, bool override_num) {
+    uint32_t divisor = start_divisor;
+    while (num1 % divisor != 0 or num2 % divisor != 0) {
+        divisor = divisor - 1;
+    }
+    if (override_num) {
+        divisor = 5;
     }
     return divisor;
 }
@@ -56,6 +78,19 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
     while ((padded_num - num) >= (int)(padded_num / divisor)) {
         divisor = divisor - 1;
         padded_num = tt::round_up(num, divisor);
+    }
+    return divisor;
+}
+
+uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t start_divisor, bool override_num) {
+    uint32_t divisor = start_divisor;
+    uint32_t padded_num = tt::round_up(num, divisor);
+    while ((padded_num - num) >= (int)(padded_num / divisor)) {
+        divisor = divisor - 1;
+        padded_num = tt::round_up(num, divisor);
+    }
+    if (override_num) {
+        divisor = 5;
     }
     return divisor;
 }
@@ -204,7 +239,8 @@ ParallelConfig determine_output_parallel_config(
         } else if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
             const uint32_t start_divisor_c =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
-            uint32_t num_cores_c = find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c);
+            uint32_t num_cores_c =
+                find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c, true);
             const uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
             const uint32_t cores_x =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
