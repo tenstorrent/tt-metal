@@ -358,7 +358,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     this->initialize_active_devices();
 
     this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 5000);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
