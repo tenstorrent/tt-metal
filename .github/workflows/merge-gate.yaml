@@ -274,8 +274,7 @@ jobs:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.test-metalium == 'true'
+            needs.find-changes.outputs.tt-metalium-changed == 'true'
         }}
     secrets: inherit
     strategy:
