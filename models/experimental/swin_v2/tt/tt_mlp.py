@@ -13,7 +13,7 @@ program_configs = {
         per_core_M=8,
         per_core_N=12,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         mcast_in0=False,
     ),
     "linear_1_config_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -24,7 +24,7 @@ program_configs = {
         per_core_M=2,
         per_core_N=24,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
         mcast_in0=False,
     ),
     "linear_1_config_4": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -89,7 +89,7 @@ class TtMLP:
         device,
         parameters,
         inplace=None,
-        activation_layer=ttnn.relu,
+        activation_layer="relu",
         norm_layer=None,
     ):
         self.params = {} if inplace is None else {"inplace": inplace}
@@ -106,7 +106,7 @@ class TtMLP:
                     x,
                     memory_config=ttnn.create_sharded_memory_config(
                         x.shape,
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        core_grid=self.device.core_grid,
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     ),
@@ -129,7 +129,7 @@ class TtMLP:
                     x,
                     memory_config=ttnn.create_sharded_memory_config(
                         x.shape,
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        core_grid=self.device.core_grid,
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     ),
@@ -153,11 +153,11 @@ class TtMLP:
                     self.parameters[0].weight,
                     bias=self.parameters[0].bias,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    # dtype=ttnn.bfloat8_b,
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    core_grid=self.device.core_grid,
+                    activation=self.activation_layer,
                 )
             elif x.shape[-1] == 768:
                 x = ttnn.linear(
@@ -167,29 +167,19 @@ class TtMLP:
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    core_grid=self.device.core_grid,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    activation=self.activation_layer,
                 )
 
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            if self.norm_layer is not None:
-                x = ttnn.layer_norm(
-                    x,
-                    weight=self.parameters.norm_weight,
-                    bias=self.parameters.norm_bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-            x = self.activation_layer(
-                x,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
 
         if x.shape[-1] == 384:
             x = ttnn.to_memory_config(
                 x,
                 memory_config=ttnn.create_sharded_memory_config(
                     x.shape,
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    core_grid=self.device.core_grid,
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
@@ -212,7 +202,7 @@ class TtMLP:
                 x,
                 memory_config=ttnn.create_sharded_memory_config(
                     x.shape,
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    core_grid=self.device.core_grid,
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
@@ -235,7 +225,7 @@ class TtMLP:
                 x,
                 memory_config=ttnn.create_sharded_memory_config(
                     x.shape,
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    core_grid=self.device.core_grid,
                     strategy=ttnn.ShardStrategy.BLOCK,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
@@ -259,11 +249,10 @@ class TtMLP:
                 bias=self.parameters[3].bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
+                core_grid=self.device.core_grid,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
             )
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        ttnn.ReadDeviceProfiler(self.device)
         return x

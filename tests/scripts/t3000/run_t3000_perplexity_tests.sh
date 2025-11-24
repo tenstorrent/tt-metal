@@ -1,5 +1,7 @@
 #!/bin/bash
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 run_t3000_falcon7b_perplexity_tests() {
   # Record the start time
   fail=0
@@ -39,6 +41,7 @@ run_t3000_falcon40b_perplexity_tests() {
 }
 
 run_t3000_llama70b_perplexity_tests() {
+  # TODO: rewrite test to use HF reference: the code need to be rewritten completely to use common classes and functions instead of custom copies working only with Meta reference
 
   echo "LOG_METAL: Checking number of devices"
   python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
@@ -93,19 +96,21 @@ run_t3000_llama3_perplexity_tests_single_card() {
 
   echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_single_card"
 
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   for MESH_DEVICE in N150 N300; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
+    for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
+      tt_cache=$TT_CACHE_HOME/$hf_model
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
     done
   done
 
   # 11B test does not run on N150
-  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
+  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
+  MESH_DEVICE=N300 HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -122,7 +127,7 @@ run_t3000_mistral_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600
 
 }
@@ -139,21 +144,23 @@ run_t3000_llama3_perplexity_tests_t3000() {
 
   echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_t3000"
 
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
+  llama70b=meta-llama/Llama-3.1-70B-Instruct
+  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
 
   for MESH_DEVICE in T3K; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+    for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+      tt_cache=$TT_CACHE_HOME/$hf_model
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
     done
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
-    for LLAMA_DIR in "$llama70b" "$llama90b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
+    for hf_model in "$llama70b" "$llama90b"; do
+      tt_cache=$TT_CACHE_HOME/$hf_model
+      MESH_DEVICE=$MESH_DEVICE HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
     done
   done
 
@@ -172,11 +179,10 @@ run_t3000_qwen25_perplexity_tests() {
   start_time=$(date +%s)
 
   export PYTEST_ADDOPTS="--tb=short"
-  export HF_HOME=/mnt/MLPerf/huggingface
 
   echo "LOG_METAL: Running run_t3000_qwen25_perplexity_tests"
   qwen72b=Qwen/Qwen2.5-72B-Instruct
-  tt_cache_72b=$HF_HOME/tt_cache/Qwen--Qwen2.5-72B-Instruct
+  tt_cache_72b=$TT_CACHE_HOME/$qwen72b
 
   HF_MODEL=$qwen72b TT_CACHE_PATH=$tt_cache_72b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
   # Record the end time
@@ -198,9 +204,10 @@ run_t3000_qwen3_perplexity_tests() {
   pip install -r models/tt_transformers/requirements.txt
 
   echo "LOG_METAL: Running run_t3000_qwen3_perplexity_tests"
-  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
+  qwen32b=Qwen/Qwen3-32B
+  tt_cache_qwen32b=$TT_CACHE_HOME/$qwen32b
 
-  HF_MODEL=$qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
+  HF_MODEL=$qwen32b TT_CACHE_PATH=$tt_cache_qwen32b pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -216,9 +223,10 @@ run_t3000_gemma3_accuracy_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_gemma3_accuracy_tests"
-  gemma3_27b=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it
+  gemma3_27b=google/gemma-3-27b-it
+  tt_cache_gemma3_27b=$TT_CACHE_HOME/$gemma3_27b
 
-  HF_MODEL=$gemma3_27b pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+  HF_MODEL=$gemma3_27b TT_CACHE_PATH=$tt_cache_gemma3_27b pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
 
   # Record the end time
   end_time=$(date +%s)

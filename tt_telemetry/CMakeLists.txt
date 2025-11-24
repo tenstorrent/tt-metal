@@ -13,7 +13,14 @@ CPMAddPackage(
 )
 
 # Fetch websocketpp using CPM
-CPMAddPackage(NAME websocketpp GITHUB_REPOSITORY zaphoyd/websocketpp GIT_TAG 0.8.2 DOWNLOAD_ONLY YES)
+CPMAddPackage(
+    NAME websocketpp
+    GITHUB_REPOSITORY zaphoyd/websocketpp
+    GIT_TAG 0.8.2
+    DOWNLOAD_ONLY YES
+    PATCHES
+        websocketpp_cpp_cleanup.patch
+)
 
 # Create interface library for websocketpp
 if(websocketpp_ADDED)
@@ -66,16 +73,17 @@ target_sources(
     PRIVATE
         server/main.cpp
         telemetry/telemetry_collector.cpp
+        telemetry/watchdog.cpp
         telemetry/metric.cpp
         server/web_server.cpp
+        server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
-        telemetry/ethernet/chip_identifier.cpp
-        telemetry/ethernet/ethernet_endpoint.cpp
+        topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
-        telemetry/arc/arc_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp
+        telemetry/system/system_metrics.cpp
         telemetry/hal/hal.cpp
 )
 target_include_directories(
@@ -85,6 +93,7 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 target_link_libraries(
     tt_telemetry_server
@@ -95,4 +104,10 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
+        protobuf::libprotobuf # Add protobuf library for compatibility
 )
+
+# Add tests subdirectory
+if(TT_METAL_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

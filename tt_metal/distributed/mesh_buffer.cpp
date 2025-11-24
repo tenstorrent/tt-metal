@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "device.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -83,7 +83,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
-            [mesh_device](const ShardedBufferConfig& config) {
+            [](const ShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},

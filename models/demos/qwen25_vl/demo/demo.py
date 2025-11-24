@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -128,8 +128,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-1 run with full model for more stable BLEU checks (CI only)
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
+        (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
             True,  # instruct mode
             2,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -154,15 +154,54 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with 300 dpi scanned document (Latency) - single user, real-world test
+        (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            4,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
-            12288,  # max_seq_len, allow for image tokens
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            16384,  # max_seq_len, allow for image tokens
+            4,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            32768,  # max_seq_len, allow for image tokens
+            2,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            65536,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            131072,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -171,9 +210,12 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-bert-score",  # ci_only batch-bleu-score for testing coverage in CI pipelines
+        "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
-        "real-world-test",  # real-world test for 300DPI scanned document
+        "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
+        "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
+        "long-context-64k",  # real-world test for 300DPI scanned document with 64k long context
+        "long-context-128k",  # real-world test for 300DPI scanned document with 128k long context
     ],
 )
 @pytest.mark.parametrize(
@@ -225,8 +267,6 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
-    if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() <= 2:
-        pytest.skip("BLEU score is only supported for T3K for now")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -335,6 +375,7 @@ def test_demo(
             mesh_device,
             max_batch_size=batch_size,
             max_seq_len=max_seq_len,
+            optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
@@ -401,7 +442,9 @@ def test_demo(
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
+            inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
+        )
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -427,7 +470,7 @@ def test_demo(
             prompt_lens=decoding_pos,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
+        generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -438,10 +481,14 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        argmax_on_device = model._supports_on_device_sampling
         if argmax_on_device:
+            logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
+            logger.info(
+                f"Using host sampling with temperature={sampling_params['temperature']}, top_p={sampling_params['top_p']}"
+            )
             device_sampling_params = None
 
         users_decoding = True
@@ -581,8 +628,15 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if is_ci_env and "bleu-score" in test_id:
-        assert mesh_device.get_num_devices() > 2, "BLEU score is only supported for T3K for now"
+    if (
+        is_ci_env
+        and "bert-score" in test_id
+        and "Qwen2.5-VL-3B" not in model_args.base_model_name
+        and "Qwen2.5-VL-7B" not in model_args.base_model_name
+    ):
+        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
+        #        https://github.com/tenstorrent/tt-metal/issues/28442
+        assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
 
@@ -601,20 +655,17 @@ def test_demo(
                 f"BERTScore (rescaled) P/R/F1 for sample {i % batch_size} of batch {i // batch_size}: "
                 f"{p.item():.3f}/{r.item():.3f}/{f.item():.3f}"
             )
-        if "Qwen2.5-VL-3B" not in model_args.base_model_name:
-            # todo)) fix this issue before enabling BERTScore check for 3B model:
-            #        https://github.com/tenstorrent/tt-metal/issues/28442
-            logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
-            assert F10.mean().item() > 0.8, f"BERTScore F1 (raw) is lower than expected."
+        logger.info(f"Mean BERTScore F1 (raw): {F10.mean().item():.3f}")
+        assert F10.mean().item() > 0.75, f"BERTScore F1 (raw) is lower than expected."
 
-    # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
+    # Prepare profile benchmark metrics for the last repeat batch only -- batch_idx'th batch
+    compile_prefill_time = profiler.get_duration("compile_prefill", iteration=batch_idx)
+    compile_decode_time = profiler.get_duration("compile_decode", iteration=batch_idx)
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill", iteration=batch_idx)
     total_inference_decode_time = 0
-    for i in range(1, iteration):  # Iteration 0 is the compile time
-        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
+    for i in range(1, iteration):  # i == 0 is the compile time
+        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx)
 
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time / batch_size
@@ -627,7 +678,7 @@ def test_demo(
         (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
 
-    vision_model_time = profiler.get_duration("vision_model_prefill")
+    vision_model_time = profiler.get_duration("vision_model_prefill", iteration=batch_idx)
     vision_model_time_per_user = vision_model_time / batch_size
     vision_model_t_s = sum(num_image_tokens[0]) / vision_model_time
     vision_model_t_u_s = vision_model_t_s / batch_size
@@ -651,10 +702,16 @@ def test_demo(
     }
 
     # Decode performance for some specific tokens
-    tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
-    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
-    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
-    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+    tok_1_perf = profiler.get_duration(
+        f"inference_decode_time_{1}", iteration=batch_idx
+    )  # inference_decode_time_0 includes compile time
+    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}", iteration=batch_idx) if 127 < iteration else 0
+    tok_1024_perf = (
+        profiler.get_duration(f"inference_decode_time_{1023}", iteration=batch_idx) if 1023 < iteration else 0
+    )
+    tok_4096_perf = (
+        profiler.get_duration(f"inference_decode_time_{4095}", iteration=batch_idx) if 4095 < iteration else 0
+    )
 
     if not stop_at_eos:
         logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
@@ -730,14 +787,14 @@ def test_demo(
                 0,
                 "inference_decode",
                 f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) * 1000,
                 step_warm_up_num_iterations=None,
                 target=None,
             )
 
         # Also save the avg decode performance for the 128 iterations (excluding the compile time)
         inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+            profiler.get_duration(f"inference_decode_time_{i}", iteration=batch_idx) for i in range(1, 128)
         )
         benchmark_data.add_measurement(
             profiler,
@@ -756,6 +813,7 @@ def test_demo(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
+            config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )

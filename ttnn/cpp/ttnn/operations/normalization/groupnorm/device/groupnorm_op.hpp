@@ -27,7 +27,24 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 >>> output = m(input)
 */
 
-tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
+    const Tensor& a,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& input_mask,
+    const std::optional<const Tensor>& reciprocals,
+    Tensor& output,
+    float eps,
+    uint32_t num_groups,
+    uint32_t num_batches,
+    DataType im_data_format,
+    CoreCoord grid_size,
+    bool inplace,
+    uint32_t num_out_blocks,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford);
+
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,

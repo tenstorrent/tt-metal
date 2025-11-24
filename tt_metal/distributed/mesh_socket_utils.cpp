@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -75,8 +75,9 @@ void validate_fabric_config_for_sockets(
     static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
-        tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
+                                           // physical device
     };
 
     bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
@@ -283,7 +284,8 @@ void write_socket_configs(
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
         const auto sender_total_size_bytes =
-            sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
+            sender_size.md_size_bytes +
+            (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
 
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
@@ -325,7 +327,7 @@ void write_socket_configs(
 
                     // Write to the correct slot based on receiver ID
                     uint32_t receiver_enc_offset =
-                        enc_offset + receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t));
+                        enc_offset + (receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t)));
                     config_data[receiver_enc_offset] = *downstream_mesh_id;        // downstream_mesh_id
                     config_data[receiver_enc_offset + 1] = downstream_chip_id;     // downstream_chip_id
                     config_data[receiver_enc_offset + 2] = recv_virtual_core.y;    // downstream_noc_y

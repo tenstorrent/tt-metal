@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -46,12 +47,12 @@ class ControlPlaneFixture : public ::testing::Test {
 class BaseFabricFixture : public ::testing::Test {
 public:
     inline static tt::ARCH arch_;
-    inline static std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
+    inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(chip_id_t id) const {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
         return devices_map_.at(id);
     }
 
@@ -66,26 +67,37 @@ public:
     static void DoSetUpTestSuite(
         tt_fabric::FabricConfig fabric_config,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED) {
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
+        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {
             log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
+
+        // Fabric Reliability Mode
+        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
+        // If runtime option RELIABILITY_MODE is set, use the value from the runtime option
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        // Query runtime options for an env-parsed override
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        }
+        log_info(tt::LogTest, "Fabric Reliability Mode: {}", enchantum::to_string(reliability_mode));
+
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> ids;
+        std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
         tt::tt_fabric::SetFabricConfig(
-            fabric_config,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-            num_routing_planes,
-            fabric_tensix_config);
+            fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -116,12 +128,11 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
             auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-            tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                mesh_workload,
-                std::move(program_copy),
+            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
+            mesh_workload.add_program(
                 tt::tt_metal::distributed::MeshCoordinateRange(
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)));
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                std::move(program_copy));
             tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
         }
     }
@@ -184,35 +195,47 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class Fabric2DUDMModeFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricUDMMode::ENABLED);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class NightlyFabric2DUDMModeFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricUDMMode::ENABLED);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric2DDynamicFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
-
-class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
-
-class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
+class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
 public:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
     void SetUp(
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
 private:
@@ -224,9 +247,9 @@ private:
     }
 };
 
-class T3kCustomMeshGraphFabric2DDynamicFixture
-    : public CustomMeshGraphFabric2DDynamicFixture,
-      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
+class T3kCustomMeshGraphFabric2DFixture
+    : public CustomMeshGraphFabric2DFixture,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();
@@ -272,6 +295,7 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_UNICAST_READ = 7,          // read wont be supported without UDM mode
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 
@@ -279,12 +303,24 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
+
+void UDMFabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::tuple<RoutingDirection, uint32_t /*num_hops*/>& pair_ordered_dir);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
+    bool with_state = false);
+
+void Fabric2DMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state = false);
 
 void RunEDMConnectionStressTest(

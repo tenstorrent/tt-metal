@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
@@ -27,7 +26,6 @@ class PytorchResidualBlock(torch.nn.Module):
         return result
 
 
-@skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize("layer", [0])
 @pytest.mark.parametrize(
     "use_pretrained_weights",

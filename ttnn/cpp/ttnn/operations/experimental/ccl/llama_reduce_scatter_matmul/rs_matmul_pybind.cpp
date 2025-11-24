@@ -20,8 +20,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::llama_rs_matmul,
-        R"doc(all_gather_matmul(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
-
+        R"doc(
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -32,6 +31,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter stage. Defaults to `ttnn.Topology.Linear`.
             * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
             * :attr:`transpose_a` (bool)

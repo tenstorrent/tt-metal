@@ -7,7 +7,6 @@ import torch
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_layer import SegformerLayer
 from models.demos.segformer.tests.pcc.test_segformer_attention import (
@@ -74,7 +73,6 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, drop_path, sequence_reduction_ratio, mlp_ratio, block_i, segformer_i",
     [

@@ -18,17 +18,21 @@ target_sources(
             hw/inc/channel_util.hpp
             hw/inc/channels.hpp
             hw/inc/constants.hpp
-            hw/inc/lf_dev_mem_map.hpp
+            hw/inc/wormhole/lf_dev_mem_map.hpp
+            hw/inc/wormhole/risc_interface.hpp
+            hw/inc/blackhole/lf_dev_mem_map.hpp
+            hw/inc/blackhole/risc_interface.hpp
             hw/inc/header.hpp
             hw/inc/host_interface.hpp
             hw/inc/init-fsm-basic.hpp
-            hw/inc/risc_interface.hpp
             hw/inc/types.hpp
             hw/inc/kernel_api.hpp
     PRIVATE
         build.cpp
         host_util.cpp
-        host_interface.cpp
+        hal/lite_fabric_hal.cpp
+        hal/blackhole_impl.cpp
+        hal/wormhole_impl.cpp
 )
 
 target_include_directories(lite_fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

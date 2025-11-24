@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE /*unused*/>
 inline void llk_math_eltwise_unary_sfpu_cumsum_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cumsum, false>(

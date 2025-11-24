@@ -8,7 +8,6 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
@@ -25,12 +24,12 @@ namespace ttnn::operations::binary {
 
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
-        BinaryOpType binary_op_type;
+        BinaryOpType binary_op_type{};
         const std::optional<unary::EltwiseFusedActivations> activations;
         const std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation;
         const std::optional<float> scalar;
         const MemoryConfig memory_config;
-        const DataType dtype;
+        const DataType dtype{};
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 

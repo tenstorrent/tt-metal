@@ -1336,7 +1336,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
+        next_decoder_cache = past_key_values
 
         for decoder_layer in self.layers:
             if output_hidden_states:

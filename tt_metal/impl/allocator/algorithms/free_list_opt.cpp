@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -48,9 +48,9 @@ FreeListOpt::FreeListOpt(
     DeviceAddr min_allocation_size,
     DeviceAddr alignment,
     SearchPolicy policy) :
-    policy_(policy),
+    Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment),
     size_segregated_count((num_segerated_classes(max_size_bytes, size_segregated_base))),
-    Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
+    policy_(policy) {
     // Reduce reallocations by reserving memory for free list components
     constexpr size_t initial_block_count = 64;
     block_address_.reserve(initial_block_count);
@@ -342,7 +342,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
             size_t block_index = free_blocks_segregated_by_size_[i][j];
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
-                    {block_address_[block_index], block_address_[block_index] + block_size_[block_index]});
+                    {block_address_[block_index] + offset_bytes_,
+                     block_address_[block_index] + block_size_[block_index] + offset_bytes_});
             }
         }
     }
@@ -355,7 +356,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses(
 
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (meta_block_is_allocated_[i] && block_is_allocated_[i]) {
-            allocated_addresses.emplace_back(block_address_[i], block_address_[i] + block_size_[i]);
+            allocated_addresses.emplace_back(
+                block_address_[i] + offset_bytes_, block_address_[i] + block_size_[i] + offset_bytes_);
         }
     }
 
@@ -401,6 +403,9 @@ Statistics FreeListOpt::get_statistics() const {
     std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
         if (block_is_allocated_[i]) {
             total_allocated_bytes += block_size_[i];
         } else {

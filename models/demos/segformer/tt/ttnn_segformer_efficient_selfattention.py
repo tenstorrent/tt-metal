@@ -92,7 +92,6 @@ class TtSegformerEfficientSelfAttention:
             dtype=ttnn.bfloat16,
         )
 
-        query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         # Split Heads
         if self.num_attention_heads == 1:
             query_layer = query
@@ -107,20 +106,15 @@ class TtSegformerEfficientSelfAttention:
             elif len(hidden_states.shape) == 4:
                 batch_size, __, seq_len, num_channels = hidden_states.shape
 
-            # Need for RM input to reshape, then back to TILE after that
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-            hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, num_channels))
             if hidden_states.shape[3] == 160:
                 # conv config update
                 self.sr.output_layout = ttnn.TILE_LAYOUT
                 hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
             hidden_states, __, __ = self.sr(device, hidden_states)
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states = ttnn.layer_norm(
                 hidden_states,
                 weight=parameters.layer_norm.weight,
@@ -129,7 +123,6 @@ class TtSegformerEfficientSelfAttention:
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.to_memory_config(
             hidden_states,
             memory_config=ttnn.create_sharded_memory_config(
@@ -148,8 +141,8 @@ class TtSegformerEfficientSelfAttention:
             core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_b_x),
             dtype=ttnn.bfloat8_b,
         )
-
-        key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        if seq_len == 16384:
+            key = ttnn.to_memory_config(key, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         if self.num_attention_heads == 1:
             key_layer = key
         else:
@@ -165,7 +158,8 @@ class TtSegformerEfficientSelfAttention:
             dtype=ttnn.bfloat8_b,
         )
         ttnn.deallocate(hidden_states)
-        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+        if seq_len == 16384:
+            value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         if self.num_attention_heads == 1:
             value_layer = value
         else:
@@ -173,7 +167,6 @@ class TtSegformerEfficientSelfAttention:
                 0
             ]
 
-        key_layer = ttnn.to_memory_config(key_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         query_layer = ttnn.to_layout(query_layer, ttnn.TILE_LAYOUT)
 
         query_layer = ttnn.to_memory_config(
@@ -196,18 +189,13 @@ class TtSegformerEfficientSelfAttention:
         ttnn.deallocate(query_layer)
         ttnn.deallocate(key_layer)
 
-        attention_scores = ttnn.to_memory_config(attention_scores, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         scale_value = self.attention_head_size**-0.5
         attention_scores = ttnn.multiply(attention_scores, scale_value)
         # TODO: remove numeric_stable=False once accuracy issue is resolved
         # See issue: #29132
-        attention_probs = ttnn.softmax(
-            attention_scores, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, numeric_stable=False
-        )
+        attention_probs = ttnn.softmax(attention_scores, dim=-1, numeric_stable=False)
         ttnn.deallocate(attention_scores)
         attention_probs = ttnn.to_layout(attention_probs, ttnn.TILE_LAYOUT)
-
-        value_layer = ttnn.to_memory_config(value_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         attention_probs = ttnn.to_memory_config(
             attention_probs,

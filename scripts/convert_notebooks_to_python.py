@@ -21,7 +21,7 @@ import subprocess
 import sys
 import shutil
 
-NOTEBOOKS_DIR = Path("ttnn/tutorials/2025_dx_rework")
+NOTEBOOKS_DIR = Path("ttnn/tutorials")
 OUTPUT_DIR = Path("ttnn/tutorials/basic_python")
 TEMPLATE_DIR = Path("scripts/nbconvert_template")
 TEMPLATE_NAME = "ttnn_examples_convert"
@@ -78,6 +78,11 @@ def filter_modified_files(files: list[Path]) -> list[Path]:
     """
     Filter files that have changed since last commit
     """
+
+    # If input is empty list, then `git diff --name-only` will list unstaged files
+    # which is not what we want.
+    if not files:
+        return []
 
     # Make sure that untracked files are also added to the index
     # Otherwise, `git diff` will not show them

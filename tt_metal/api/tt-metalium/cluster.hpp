@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,6 +42,7 @@ enum class ClusterType : std::uint8_t {
     P300 = 14,                   // Production P300
     SIMULATOR_QUASAR = 15,       // Simulator Quasar
     BLACKHOLE_GALAXY = 16,       // Blackhole Galaxy, all chips with mmio
+    P300_X2 = 17,                // 2 P300 cards
 };
 
 /**

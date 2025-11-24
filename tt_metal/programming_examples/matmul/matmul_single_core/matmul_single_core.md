@@ -136,7 +136,7 @@ Launch program, enqueue & read in output buffer result into the host vector.
 ``` cpp
 distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
 distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::ReadShard(cq, output, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
 ```

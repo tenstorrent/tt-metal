@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -109,7 +109,7 @@ autograd::TensorPtr linear_op(
         auto grad_shape = out->get_grad().logical_shape();
         // for some reason, reshape produces wrong values when last dimensions not divisible by TILE
         if (tensor_shape[-2] % TILE_HEIGHT != 0 ||
-            tensor_shape[-1] % TILE_WIDTH != 0 && grad_shape[-1] % TILE_WIDTH != 0) {
+            ((tensor_shape[-1] % TILE_WIDTH != 0) && (grad_shape[-1] % TILE_WIDTH != 0))) {
             moreh_linear_backward(tensor, weight, bias, out);
         } else {
             ttnn_linear_backward(tensor, weight, bias, out);

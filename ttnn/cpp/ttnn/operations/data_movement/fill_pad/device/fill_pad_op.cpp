@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 

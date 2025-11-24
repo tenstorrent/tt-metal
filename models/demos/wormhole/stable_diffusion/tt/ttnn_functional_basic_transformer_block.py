@@ -73,7 +73,7 @@ class basic_transformer_block:
             end_grid = ttnn.CoreCoord(7, 3)
 
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
-        program_config = ttnn.LayerNormDefaultProgramConfig()
+        program_config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True)
 
         old_hidden_states = hidden_states
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)

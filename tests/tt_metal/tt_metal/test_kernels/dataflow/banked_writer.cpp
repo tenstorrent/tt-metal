@@ -14,21 +14,18 @@ void kernel_main() {
     std::uint32_t dst_addr_base = get_arg_val<uint32_t>(0);
     std::uint32_t num_tiles = get_arg_val<uint32_t>(1);
 
+    experimental::CircularBuffer cb(cb_id);
+    experimental::Noc noc(noc_index);
+
     const uint32_t ublock_size_tiles = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id);
-    const auto dst_addrgen = TensorAccessor(dst_args, dst_addr_base, page_size);
+    uint32_t tile_bytes = cb.get_tile_size();
+    const auto tensor_accessor = TensorAccessor(dst_args, dst_addr_base, page_size);
 
     // Write tiles from CB to L1(interleaved)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_noc_addr = get_noc_addr(i, dst_addrgen);
-
-        cb_wait_front(cb_id, ublock_size_tiles);
-        uint32_t l1_read_ptr = get_read_ptr(cb_id);
-
-        noc_async_write(l1_read_ptr, dst_noc_addr, tile_bytes);
-
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id, ublock_size_tiles);
+        cb.wait_front(ublock_size_tiles);
+        noc.async_write(cb, tensor_accessor, tile_bytes, {}, {.page_id = i});
+        noc.async_write_barrier();
+        cb.pop_front(ublock_size_tiles);
     }
 }

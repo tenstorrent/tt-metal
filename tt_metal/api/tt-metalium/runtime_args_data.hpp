@@ -12,6 +12,8 @@
 #include <string>
 #include <utility>
 
+#include <tt_stl/assert.hpp>
+
 namespace tt::tt_metal {
 // RuntimeArgsData provides an indirection to the runtime args
 // Prior to generating the cq cmds for the device, this points into a vector within the kernel
@@ -31,12 +33,12 @@ struct RuntimeArgsData {
     }
 
     std::uint32_t& operator[](std::size_t index) noexcept {
-        assert(in_bounds(index));
+        TT_ASSERT(in_bounds(index));
         return this->rt_args_data[index];
     }
 
     const std::uint32_t& operator[](std::size_t index) const noexcept {
-        assert(in_bounds(index));
+        TT_ASSERT(in_bounds(index));
         return this->rt_args_data[index];
     }
 

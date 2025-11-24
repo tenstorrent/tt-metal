@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,8 +29,7 @@ void bind_complex_tensor_type(py::module& m) {
 
 void bind_complex_tensor(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}real: ttnn.Tensor, imag: ttnn.Tensor -> ComplexTensor
-
+        R"doc(
             Create a complex tensor from real and imaginary part tensors.
 
             Args:

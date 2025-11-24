@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.ttnn_resnet.tests.resnet50_performant import (
+from models.demos.ttnn_resnet.tests.common.resnet50_performant import (
     run_resnet50_2cqs_inference,
     run_resnet50_inference,
     run_resnet50_trace_2cqs_inference,

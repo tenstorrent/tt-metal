@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -188,7 +188,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
     ttml::autograd::GradFunction grad =
-        [scale, query, key, value, attention_weights, out, mask, batch_num, heads, seq_len, embedding_dim, groups]() {
+        [scale, query, key, value, attention_weights, out, mask, groups]() {
             constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
             auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T

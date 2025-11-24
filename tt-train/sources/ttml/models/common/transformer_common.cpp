@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 
 namespace ttml::models::common::transformer {
 
-void initialize_weights_gpt2(autograd::ModuleBase& model) {
+void initialize_weights_gpt2(modules::ModuleBase& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
@@ -20,7 +20,7 @@ void initialize_weights_gpt2(autograd::ModuleBase& model) {
     }
 }
 
-void initialize_weights_he_kaiming_normal(autograd::ModuleBase& model) {
+void initialize_weights_he_kaiming_normal(modules::ModuleBase& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();

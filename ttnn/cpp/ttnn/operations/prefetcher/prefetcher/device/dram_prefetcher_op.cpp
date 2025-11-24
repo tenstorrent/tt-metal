@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,9 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
 namespace ttnn::operations::dram_prefetcher {
 

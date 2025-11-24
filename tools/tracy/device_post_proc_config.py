@@ -21,21 +21,21 @@ class default_setup(metaclass=MergeMetaclass):
         "NCRISC",
         "TRISC",
         "ERISC",
-        "CORE_AGG",
+        "TENSIX_RISC_AGG",
     ]
 
     timerAnalysis = {
         "trace_fw_duration": {
             "across": "ops",
             "type": "op_first_last",
-            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
-            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+            "start": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-FW"},
         },
         "trace_kernel_duration": {
             "across": "ops",
             "type": "op_first_last",
-            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
-            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+            "start": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-KERNEL"},
         },
         "trace2trace - FW": {
             "across": "device",
@@ -203,6 +203,42 @@ class test_multi_op(default_setup):
             "type": "adjacent",
             "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
             "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+    }
+    detectOps = False
+
+
+class test_multi_op_buffer_overflow(default_setup):
+    timerAnalysis = {
+        "BRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+        "NCRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+        },
+        "TRISC_0 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_1 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_2 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
         },
     }
     detectOps = False

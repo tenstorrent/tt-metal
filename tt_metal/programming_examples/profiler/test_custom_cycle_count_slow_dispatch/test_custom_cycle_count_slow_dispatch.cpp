@@ -61,7 +61,7 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     // Enqueue mesh workload (non-blocking)
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     return pass;

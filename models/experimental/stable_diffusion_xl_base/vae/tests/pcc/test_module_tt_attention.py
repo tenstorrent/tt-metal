@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
 import torch
 import pytest
 import ttnn
+from loguru import logger
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
@@ -19,14 +20,14 @@ from models.common.utility_functions import torch_random
     ],
 )
 @pytest.mark.parametrize(
-    "block_name",
+    "block_name, pcc",
     [
-        "encoder",
-        "decoder",
+        ("encoder", 0.999),
+        ("decoder", 0.997),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_attention(device, input_shape, encoder_shape, block_name, is_ci_env, reset_seeds):
+def test_vae_attention(device, input_shape, encoder_shape, block_name, pcc, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -81,4 +82,5 @@ def test_vae_attention(device, input_shape, encoder_shape, block_name, is_ci_env
     del vae, tt_attention
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

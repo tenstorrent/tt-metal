@@ -368,11 +368,13 @@ Max Prefill Chunk Sizes (text-only):
 |--------------|---------------|---------------|----------------|-------------|
 | Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
 | Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
+| Qwen2.5-7B | 4k tokens | 32k tokens | 128k tokens | 128k tokens |
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
+
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 

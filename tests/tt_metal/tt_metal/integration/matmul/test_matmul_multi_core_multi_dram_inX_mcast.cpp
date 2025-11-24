@@ -25,7 +25,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -77,7 +77,7 @@ create_program(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t single_tile_size = 2 * 1024;
@@ -97,8 +97,8 @@ create_program(
 
     CoreRange mcast_senders(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + mcast_xy_offset * (num_cores_c - 1),
-         (std::size_t)start_core_y + mcast_yx_offset * (num_cores_r - 1)});
+        {(std::size_t)start_core_x + (mcast_xy_offset * (num_cores_c - 1)),
+         (std::size_t)start_core_y + (mcast_yx_offset * (num_cores_r - 1))});
     CoreRange mcast_receivers(
         {(std::size_t)start_core_x + mcast_yx_offset, (std::size_t)start_core_y + mcast_xy_offset},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
@@ -269,8 +269,8 @@ bool write_runtime_args_to_device(
             CoreCoord mcast_sender = {(std::size_t)core_x, (std::size_t)core_y};
             CoreCoord core_start = {(std::size_t)(core_x + (1 - in1_or_in0)), (std::size_t)(core_y + in1_or_in0)};
             CoreCoord core_end = {
-                (std::size_t)(core_x + (1 - in1_or_in0) * (num_cores_c - 1)),
-                (std::size_t)(core_y + in1_or_in0 * (num_cores_r - 1))};
+                (std::size_t)(core_x + ((1 - in1_or_in0) * (num_cores_c - 1))),
+                (std::size_t)(core_y + (in1_or_in0 * (num_cores_r - 1)))};
             auto mcast_sender_physical = mesh_device->worker_core_from_logical_core(mcast_sender);
             auto core_start_physical = mesh_device->worker_core_from_logical_core(core_start);
             auto core_end_physical = mesh_device->worker_core_from_logical_core(core_end);
@@ -308,10 +308,10 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)in_mcast_sender_semaphore_id,
                 (std::uint32_t)in_mcast_receiver_semaphore_id};
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
-                (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                      // out_tensor_stride_w
-                (std::uint32_t)N,                                                      // out_tensor_stride_h
+                (std::uint32_t)out_dram_addr,                                              // out_tensor_addr
+                ((std::uint32_t)core_idx_x * per_core_N) + (core_idx_y * per_core_M * N),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                                                          // out_tensor_stride_w
+                (std::uint32_t)N,                                                          // out_tensor_stride_h
                 (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
                 (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
 
@@ -453,7 +453,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(
         auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
         for (int j = 0; j < N; j++) {
             auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
-            int tile_id = i * N + j;
+            int tile_id = (i * N) + j;
             int dram_bank = tile_id % device->num_dram_channels();
             uint32_t dram_address = ((tile_id / device->num_dram_channels()) * single_tile_size) + out_dram_addr;
             std::vector<uint32_t> result_vec;

@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "allocator_algorithm.hpp"
-#include "allocator_types.hpp"
 #include "hal_types.hpp"
 
 namespace tt {
@@ -40,10 +39,19 @@ public:
         SearchPolicy policy = SearchPolicy::BEST);
     void init() override;
 
+    // Returns start and end addresses of available blocks; addresses are absolute addresses with offset added
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
 
+    // Returns start and end addresses of allocated blocks; addresses are absolute addresses with offset added
     std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses() const override;
 
+    // Address limit is used as a final check to see if selected address is > address limit.
+    // The selected address is first converted to absolute address by adding offset_bytes_.
+    // Based on usage, it seems like offset_bytes_ is used to offset by address limit so that
+    // absolute address > address limit. Otherwise, bottom-up allocation will always fail without offset.
+    // Eg. In L1 allocator setup:
+    // - address limit (interleaved address limit): 100432
+    // - offset_bytes (l1 unreserved base): 100416
     std::optional<DeviceAddr> allocate(
         DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0) override;
 

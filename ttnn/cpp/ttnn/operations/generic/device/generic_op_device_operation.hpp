@@ -27,8 +27,10 @@ struct GenericOpDeviceOperation {
     };
 
     struct GenericProgram {
-        // to refactor this when we implement caching
-        struct shared_variables_t {};
+        struct shared_variables_t {
+            uint32_t num_kernel_handles{};
+            std::vector<tt::tt_metal::CBHandle> cb_handles;
+        };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -64,7 +66,9 @@ struct GenericOpDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes);
 
-    // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // Note: will either compute a program hash, or simply return user provided custom program hash
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic

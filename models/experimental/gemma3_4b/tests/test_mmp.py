@@ -16,11 +16,10 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.mmp import TtGemma3MultiModalProjector
 from models.experimental.gemma3_4b.tests.references import reference_vision_multi_modal
 
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "device",
     [

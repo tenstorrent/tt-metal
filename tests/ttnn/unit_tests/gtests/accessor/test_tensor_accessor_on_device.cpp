@@ -116,7 +116,7 @@ static void test_single_core_reshard(
     output_runtime_args.push_back(output_buffer->num_pages());
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -192,7 +192,7 @@ static void test_multi_core_copy(
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
     }
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -283,7 +283,7 @@ static void test_multi_core_interleaved_copy(
         // Calculate page range for this core
         uint32_t pages_per_core = total_pages / num_cores;
         uint32_t extra_pages = total_pages % num_cores;
-        uint32_t start_page_id = core_idx * pages_per_core + std::min(core_idx, extra_pages);
+        uint32_t start_page_id = (core_idx * pages_per_core) + std::min(core_idx, extra_pages);
         uint32_t end_page_id = start_page_id + pages_per_core + (core_idx < extra_pages ? 1 : 0);
 
         // Reader runtime args: input accessor common runtime args + input_base_address + start_page_id + end_page_id
@@ -301,7 +301,7 @@ static void test_multi_core_interleaved_copy(
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
@@ -392,7 +392,7 @@ static void test_single_core_copy(
     std::vector<uint32_t> output_runtime_args{output_buffer->address()};
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
-    auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
     mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 

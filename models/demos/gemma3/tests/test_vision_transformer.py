@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma3.tt.gemma_image_transformer import TtGemmaImageTransformer
 from models.demos.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),

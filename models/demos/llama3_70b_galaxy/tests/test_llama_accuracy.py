@@ -11,7 +11,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
@@ -186,6 +186,7 @@ def test_tt_model_acc(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=True,
+        decode_mode_only=True,
     )
     tt_sampling = TTSampling(
         args=model_args,
@@ -244,6 +245,7 @@ def test_tt_model_acc(
         ttnn.plus_one(
             current_pos_tensor,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
         )
         ttnn.plus_one(
             rot_mat_idxs,

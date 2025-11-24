@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -32,10 +31,12 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
@@ -47,7 +48,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size =
-        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -124,7 +125,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .compile_args = compute_args,
+        });
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
@@ -160,9 +164,11 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -189,7 +195,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
          full_cores_per_col] =
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
@@ -304,21 +311,30 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size, single_block_size, third_dim},
+            });
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+            });
     }
     if (has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+            });
     }
 
     if (has_cliff_col) {
@@ -326,7 +342,10 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim},
+            });
     }
 
     // RUNTIME ARGS
@@ -379,7 +398,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * a.element_size();
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
         start_column_id = end_column_id % row_size_bytes;
         if (end_column_id % row_size_bytes == 0 && end_column_id != 0) {
             start_row_id += single_block_size_col_arg * TILE_HEIGHT;
@@ -424,9 +443,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
@@ -509,14 +529,20 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.compile_args = compute_args});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = compute_args,
+            });
     }
     if (!core_range_cliff.empty()) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range_cliff,
-            ComputeConfig{.compile_args = compute_args_cliff});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = compute_args_cliff,
+            });
     }
 
     // 1D distribution of blocks across cores
@@ -612,9 +638,10 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    bool fp32_llk_acc = input.dtype() == DataType::FLOAT32;
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
@@ -662,7 +689,10 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .compile_args = compute_args,
+        });
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_tiles_per_shard});
 

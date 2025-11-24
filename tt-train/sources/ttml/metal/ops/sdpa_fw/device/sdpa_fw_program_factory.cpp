@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -156,8 +156,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     tt::tt_metal::Program program{};
     auto input_data_format = datatype_to_dataformat_converter(query.dtype());
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
     auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
@@ -484,7 +484,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

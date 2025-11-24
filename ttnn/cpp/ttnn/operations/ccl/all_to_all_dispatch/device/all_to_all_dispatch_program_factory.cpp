@@ -5,8 +5,6 @@
 #include "all_to_all_dispatch_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -137,7 +135,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
-    auto topology = tt::tt_fabric::get_fabric_topology();
+    auto topology = operation_attributes.topology;
 
     auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();

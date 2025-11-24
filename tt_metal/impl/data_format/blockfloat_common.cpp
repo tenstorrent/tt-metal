@@ -1,13 +1,14 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -40,9 +41,7 @@ uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
             exp = static_cast<uint32_t>(se);
         }
 
-        if (exp > max) {
-            max = exp;
-        }
+        max = std::max(exp, max);
     }
     return max;
 }
@@ -307,9 +306,7 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
             mantissa += 1;
         }
 
-        if (mantissa > MANTISSA_BFP_MAX_VAL) {
-            mantissa = MANTISSA_BFP_MAX_VAL;
-        }
+        mantissa = std::min(mantissa, MANTISSA_BFP_MAX_VAL);
     }
 
     // add sign bit only if result is not 0

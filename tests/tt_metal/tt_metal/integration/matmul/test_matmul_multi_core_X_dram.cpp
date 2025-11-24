@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -75,7 +75,7 @@ std::tuple<distributed::MeshWorkload, tt_metal::KernelHandle, tt_metal::KernelHa
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t single_tile_size = 2 * 1024;
@@ -254,7 +254,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             tt_metal::get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
         for (int j = 0; j < num_cores_c; j++) {
             std::vector<bfloat16> weights_slice = tt_metal::get_col_slice(identity, num_cores_c, j, K * 32, N * 32);
-            int core_index = i * num_cores_c + j;
+            int core_index = (i * num_cores_c) + j;
             CoreCoord core = {(std::size_t)j, (std::size_t)i};
 
             uint32_t dram_buffer_src0_addr = (core_index * per_core_M * K * single_tile_size) + dram_unreserved_base;
@@ -343,7 +343,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
         for (int j = 0; j < num_cores_c; j++) {
             auto per_core_golden = tt_metal::get_col_slice(golden_row, num_cores_c, j, per_core_M * 32, N * 32);
             std::vector<uint32_t> result_vec;
-            int core_index = i * num_cores_c + j;
+            int core_index = (i * num_cores_c) + j;
             uint32_t dram_buffer_dst_addr =
                 (core_index * per_core_M * per_core_N * single_tile_size) + dram_unreserved_base;
             int dram_dst_channel_id = 2;
@@ -443,10 +443,10 @@ bool assign_runtime_args_to_program(
             };
 
             const std::array writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
-                (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                      // out_tensor_stride_w
-                (std::uint32_t)N,                                                      // out_tensor_stride_h
+                (std::uint32_t)out_dram_addr,                                              // out_tensor_addr
+                ((std::uint32_t)core_idx_x * per_core_N) + (core_idx_y * per_core_M * N),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                                                          // out_tensor_stride_w
+                (std::uint32_t)N,                                                          // out_tensor_stride_h
                 (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
                 (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
 

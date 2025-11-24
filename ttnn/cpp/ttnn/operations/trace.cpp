@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/trace.hpp"
 
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed.hpp>
 

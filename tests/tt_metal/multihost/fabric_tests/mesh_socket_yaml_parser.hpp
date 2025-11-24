@@ -23,11 +23,6 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
 
-enum class RoutingType : uint32_t {
-    LowLatency = 0,
-    Dynamic = 1,
-};
-
 /*  TODO: Add support for other patterns.
     Patterns need to split into three layers:
     1. host patterns (number of host pairs)
@@ -44,12 +39,11 @@ enum class PatternType : uint32_t {
 // Data structures for parsed YAML configuration
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+    std::vector<std::vector<EthCoord>> eth_coord_mapping;
 };
 
 struct FabricConfig {
     tt::tt_fabric::Topology topology;
-    RoutingType routing_type;
 };
 
 struct MemoryConfig {
@@ -174,7 +168,7 @@ private:
     static MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
     static CoreCoord parse_core_coordinate(const YAML::Node& node);
     static PatternType parse_pattern_type(const std::string& pattern_string);
-    static std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
+    static std::vector<std::vector<EthCoord>> parse_eth_coord_mapping(const YAML::Node& node);
 
     // Validation helper methods
     static void validate_memory_config(const MemoryConfig& memory);

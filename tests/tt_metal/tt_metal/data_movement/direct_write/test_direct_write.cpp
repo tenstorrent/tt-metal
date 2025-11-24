@@ -19,8 +19,8 @@ namespace unit_tests::dm::direct_write {
 // Test config for direct write performance comparison
 struct DirectWriteConfig {
     uint32_t test_id = 0;
-    CoreCoord sender_core_coord = CoreCoord();
-    CoreCoord receiver_core_coord = CoreCoord();
+    CoreCoord sender_core_coord;
+    CoreCoord receiver_core_coord;
     uint32_t num_writes = 100;               // Number of direct writes to perform
     uint32_t write_value_base = 0x12340000;  // Base value for writes
     bool use_posted_writes = false;          // Posted vs non-posted writes
@@ -119,10 +119,10 @@ bool run_dm(
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // Launch the program - Use mesh workload approach
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

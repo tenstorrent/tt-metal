@@ -136,6 +136,12 @@ void MAIN {
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
 #endif
+#ifdef GE_INT32_INIT
+            GE_INT32_INIT
+#endif
+#ifdef LE_INT32_INIT
+            LE_INT32_INIT
+#endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
 #endif

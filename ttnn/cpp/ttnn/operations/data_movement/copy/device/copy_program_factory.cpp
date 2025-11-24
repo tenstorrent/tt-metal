@@ -5,7 +5,6 @@
 #include <math.h>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
@@ -13,6 +12,7 @@
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 using namespace tt::constants;
@@ -26,14 +26,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     bool tilized = output.layout() == Layout::TILE;
     bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format)
+    uint32_t input_unit_size = tilized ? tt::tile_size(input_cb_data_format)
                                        : input.padded_shape()[-1] * input.element_size();
     uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format)
+    uint32_t output_unit_size = tilized ? tt::tile_size(output_cb_data_format)
                                         : output.padded_shape()[-1] * output.element_size();
     uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {
@@ -55,7 +55,8 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = 2;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    auto input_alignment = input.buffer()->alignment();
+    uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
@@ -66,7 +67,8 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     if (convert_dtype) {
         output_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_units = 2;
-        uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
+        auto output_alignment = output.buffer()->alignment();
+        uint32_t aligned_output_unit_size = tt::align(output_unit_size, output_alignment);
         tt::tt_metal::CircularBufferConfig output_cb_config =
             tt::tt_metal::CircularBufferConfig(
                 num_output_units * aligned_output_unit_size, {{output_cb_index, output_cb_data_format}})

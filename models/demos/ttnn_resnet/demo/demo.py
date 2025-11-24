@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
 import torch
 from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data, get_data_loader
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.common.demo_utils import get_batch, get_data, get_data_loader
+from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -236,21 +235,3 @@ def run_resnet_inference(
 
     del tt_out
     return measurements, predictions
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, iterations",
-    ((16, 100),),
-)
-def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
-    run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, input_loc",
-    ((16, "models/demos/ttnn_resnet/demo/images/"),),
-)
-def test_demo_sample(device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
-    run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

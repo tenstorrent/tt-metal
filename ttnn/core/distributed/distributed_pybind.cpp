@@ -14,7 +14,6 @@
 #include <pybind11/cast.h>
 #include <pybind11/pytypes.h>
 
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -124,7 +123,9 @@ void py_module(py::module& module) {
         .def(
             "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, py::arg("index"))
         .def("dims", &MeshShape::dims)
-        .def("mesh_size", &MeshShape::mesh_size);
+        .def("mesh_size", &MeshShape::mesh_size)
+        .def("__eq__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs == rhs; })
+        .def("__ne__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs != rhs; });
 
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
@@ -466,10 +467,18 @@ void py_module(py::module& module) {
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
     py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
-        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
-            std::ostringstream str;
-            str << replicate;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig::Replicate& replicate) {
+                std::ostringstream str;
+                str << replicate;
+                return str.str();
+            })
+        .def(
+            "__eq__",
+            [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) { return true; })
+        .def("__ne__", [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) {
+            return false;
         });
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
 
@@ -571,9 +580,25 @@ void py_module(py::module& module) {
 
     auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
     py_tensor_topology
+        .def(
+            py::init<
+                tt::tt_metal::distributed::MeshShape,
+                ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+                std::vector<tt::tt_metal::distributed::MeshCoordinate>>(),
+            py::arg("distribution_shape"),
+            py::arg("placements"),
+            py::arg("mesh_coords"),
+            "Constructor for TensorTopology")
         .def("distribution_shape", &TensorTopology::distribution_shape, py::return_value_policy::reference_internal)
         .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal)
+        .def("__eq__", [](const TensorTopology& self, const TensorTopology& other) { return self == other; })
+        .def("__ne__", [](const TensorTopology& self, const TensorTopology& other) { return self != other; })
+        .def("__repr__", [](const TensorTopology& self) {
+            std::ostringstream oss;
+            oss << self;
+            return oss.str();
+        });
 
     module.def(
         "get_device_tensors",

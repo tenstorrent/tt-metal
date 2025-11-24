@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
 
 uint32_t tile_size(const ttnn::Tensor& input_tensor) {
     auto dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    return tt::tt_metal::detail::TileSize(dataformat);
+    return tt::tile_size(dataformat);
 }
 
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {

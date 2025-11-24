@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -209,7 +209,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& output) {
-    TT_FATAL(a.dtype() == output.dtype(), "Error");
+    TT_FATAL(
+        a.dtype() == output.dtype(),
+        "Input tensor dtype ({}) must match output tensor dtype ({})",
+        a.dtype(),
+        output.dtype());
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 

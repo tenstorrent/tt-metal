@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -12,7 +11,6 @@
 
 using namespace tt::constants;
 using namespace tt;
-using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::IDevice* device,
@@ -36,9 +34,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer* out_buffer) {
     tt_metal::Program program{};
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_cb_data_format);
-    uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_cb_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_cb_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_cb_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
@@ -175,12 +173,13 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_buffer->address(),                                      // out_tensor_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                          // out_tensor_stride_w
-                (std::uint32_t)N,                                                          // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+                (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                     // out_tensor_stride_w
+                (std::uint32_t)N,                     // out_tensor_stride_h
+                (std::uint32_t)out_subblock_w,        // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * N,    // out_tensor_next_subblock_stride_h
 
                 (std::uint32_t)out_subblock_w,                     // out_subblock_w
                 (std::uint32_t)out_subblock_h,                     // out_subblock_h

@@ -11,6 +11,7 @@ import traceback
 import types
 
 from contextlib import contextmanager
+from datetime import datetime
 from functools import wraps
 from importlib.machinery import ModuleSpec
 from importlib.util import module_from_spec
@@ -609,69 +610,102 @@ class Operation:
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
-                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-                if cq_id is None:
-                    output = decorated_function(*function_args, **function_kwargs)
-                else:
-                    with command_queue(cq_id):
-                        output = decorated_function(*function_args, **function_kwargs)
-
-                captured_graph = ttnn.graph.end_graph_capture()
-
+                # Initialize variables that may be needed in finally block
+                output = None
+                duration = None
+                captured_graph = None
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
                 global_tensor_comparison_records = []
                 global_golden_function_output = []
-                if ttnn.CONFIG.enable_comparison_mode:
-                    (
-                        output,
-                        (
-                            local_tensor_comparison_records,
-                            local_golden_function_output,
-                            global_tensor_comparison_records,
-                            global_golden_function_output,
-                        ),
-                    ) = output
+                output_tensors = []
 
-                if ttnn.CONFIG.enable_logging:
-                    for device in devices:
-                        ttnn.synchronize_device(device)
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
-                    output, duration = output.output, output.duration
-                    logger.debug(f"Finished {self.python_fully_qualified_name:50}")
+                try:
+                    if cq_id is None:
+                        output = decorated_function(*function_args, **function_kwargs)
+                    else:
+                        with command_queue(cq_id):
+                            output = decorated_function(*function_args, **function_kwargs)
 
-                    output_tensors = get_all_tensors(output)
-
+                except Exception as e:
+                    # Record error to database if reporting is enabled
                     if ttnn.CONFIG.report_path is not None:
+                        operation_id = ttnn._ttnn.get_python_operation_id()
+                        error_type = type(e).__name__
+                        error_message = str(e)
+                        stack_trace = traceback.format_exc()
+                        timestamp = datetime.now().isoformat()
+                        ttnn.database.insert_error(
+                            ttnn.CONFIG.report_path,
+                            operation_id,
+                            self.python_fully_qualified_name,
+                            error_type,
+                            error_message,
+                            stack_trace,
+                            timestamp,
+                        )
+                    raise
+                else:
+                    if ttnn.CONFIG.enable_comparison_mode:
+                        (
+                            output,
+                            (
+                                local_tensor_comparison_records,
+                                local_golden_function_output,
+                                global_tensor_comparison_records,
+                                global_golden_function_output,
+                            ),
+                        ) = output
+
+                    if ttnn.CONFIG.enable_logging:
+                        for device in devices:
+                            ttnn.synchronize_device(device)
+
+                        output, duration = output.output, output.duration
+                        logger.debug(f"Finished {self.python_fully_qualified_name:50}")
+
+                        output_tensors = get_all_tensors(output)
+
+                        if ttnn.CONFIG.report_path is not None:
+                            ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
+                            ttnn.database.insert_tensor_comparison_records(
+                                ttnn.CONFIG.report_path,
+                                "local_tensor_comparison_records",
+                                local_tensor_comparison_records,
+                            )
+                            if local_golden_function_output is not None:
+                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
+                            ttnn.database.insert_tensor_comparison_records(
+                                ttnn.CONFIG.report_path,
+                                "global_tensor_comparison_records",
+                                global_tensor_comparison_records,
+                            )
+                            if global_golden_function_output is not None:
+                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
+
+                            if ttnn.CONFIG.enable_graph_report:
+                                ttnn.tracer.visualize(
+                                    ttnn.tracer.GRAPH_STACK[-1],
+                                    file_name=ttnn.CONFIG.report_path
+                                    / ttnn.database.GRAPHS_PATH
+                                    / f"{operation_id}.svg",
+                                )
+                                # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+
+                finally:
+                    captured_graph = ttnn.graph.end_graph_capture()
+
+                    if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_path is not None:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
-                        ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
-                        ttnn.database.insert_tensor_comparison_records(
-                            ttnn.CONFIG.report_path,
-                            "local_tensor_comparison_records",
-                            local_tensor_comparison_records,
-                        )
-                        if global_golden_function_output is not None:
-                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
-                        ttnn.database.insert_tensor_comparison_records(
-                            ttnn.CONFIG.report_path,
-                            "global_tensor_comparison_records",
-                            global_tensor_comparison_records,
-                        )
-                        if global_golden_function_output is not None:
-                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
                         ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
                             ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
 
-                        if ttnn.CONFIG.enable_graph_report:
-                            ttnn.tracer.visualize(
-                                ttnn.tracer.GRAPH_STACK[-1],
-                                file_name=ttnn.CONFIG.report_path / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg",
-                            )
-                            # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
-                        ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
+                        if captured_graph is not None:
+                            ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)

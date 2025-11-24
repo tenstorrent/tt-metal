@@ -1,11 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <functional>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/core/core.hpp"
@@ -145,7 +143,7 @@ ttnn::Tensor RepeatOperation::invoke(
             repetition_vector.cbegin(),
             repetition_vector.begin(),
             std::multiplies<uint32_t>());
-        return tensor.reshape(ttnn::Shape(repetition_vector));
+        return ttnn::reshape(tensor, ttnn::Shape(repetition_vector));
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");

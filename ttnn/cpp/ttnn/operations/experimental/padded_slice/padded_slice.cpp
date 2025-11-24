@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/padded_slice_op.hpp"
+#include "device/padded_slice_device_operation.hpp"
+#include <array>
+#include <cstdint>
 #include <tt-logger/tt-logger.hpp>
-#include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -64,9 +65,11 @@ ttnn::Tensor PaddedSliceOperation::invoke(
         }
         return ret_input_tensor;
     });
-
+    std::array<uint32_t, 2> shard_shape = memory_config.shard_spec().value().shape;
+    bool no_pad = (shard_shape[1] == input_tensor.padded_shape()[3]);
+    bool rm_input = input_tensor.layout() == Layout::ROW_MAJOR;
     // No-op check
-    if (no_step && starts_zero && ends_max) {
+    if (no_step && starts_zero && ends_max && no_pad && rm_input) {
         return ret_adjustment(input_tensor);
     }
 
@@ -124,14 +127,13 @@ ttnn::Tensor PaddedSliceOperation::invoke(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
 
-    auto res =
-        tt::tt_metal::operation::run(
-            PaddedSliceDeviceOperation{
-                ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
-            {input_tensor},
-            {},
-            {optional_output_tensor})
-            .at(0);
+    auto res = ttnn::prim::padded_slice(
+        input_tensor,
+        ttnn::Shape(modified_begins),
+        ttnn::Shape(padded_ends),
+        ttnn::Shape(modified_step),
+        memory_config,
+        optional_output_tensor);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
     // memory config

@@ -2,8 +2,8 @@
 
 run_tg_cnn_tests() {
 
-  echo "LOG_METAL: Running run_tg_resnet50_tests"
-  env pytest -n auto models/demos/tg/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_tg" ; fail+=$?
+  echo "LOG_METAL: Running run_tg_cnn_tests"
+  env pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_tg" ; fail+=$?
 
   # Merge all the generated reports
   env python3 models/perf/merge_perf_results.py; fail+=$?
@@ -55,6 +55,20 @@ run_tg_llama_70b_prefill_model_perf_tests() {
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_llama_70b_prefill_model_perf_tests failed"
+    exit 1
+  fi
+}
+
+run_tg_mochi_model_perf_tests() {
+
+  echo "LOG_METAL: Running run_tg_mochi_model_perf_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache" --timeout=1500; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_mochi_model_perf_tests failed"
     exit 1
   fi
 }

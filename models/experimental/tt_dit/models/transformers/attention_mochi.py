@@ -53,7 +53,6 @@ class MochiAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -68,7 +67,6 @@ class MochiAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -81,7 +79,6 @@ class MochiAttention:
             bias=added_proj_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -92,7 +89,6 @@ class MochiAttention:
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -104,7 +100,6 @@ class MochiAttention:
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
@@ -259,9 +254,7 @@ class MochiAttention:
         """
 
         # Project spatial
-        qkv_1BNF = self.to_qkv(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        qkv_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=self.n_local_heads, transpose_key=False
         )
@@ -271,9 +264,7 @@ class MochiAttention:
         k_BHNE = self.norm_k(k_BHNE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         # Project prompt
-        add_qkv_1BLF = self.add_qkv_proj(
-            prompt_1BLP, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=self.n_local_heads, transpose_key=False
         )
@@ -352,9 +343,7 @@ class MochiAttention:
                 **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial on TP axis after projection
@@ -393,9 +382,7 @@ class MochiAttention:
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                     # **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLP = self.to_add_out(
-                prompt_1BLD, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-            )
+            prompt_1BLP = self.to_add_out(prompt_1BLD, compute_kernel_config=self.mm_compute_kernel_config)
 
             if self.parallel_config.tensor_parallel.factor > 1:
                 # Gather prompt on TP axis after projection

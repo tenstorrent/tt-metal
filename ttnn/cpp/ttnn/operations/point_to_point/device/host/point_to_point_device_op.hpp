@@ -30,6 +30,7 @@ struct PointToPointOp {
     struct tensor_args_t {
         const Tensor input_tensor;
         const std::optional<ttnn::Tensor> optional_output_tensor;
+        const std::optional<ttnn::Tensor> optional_intermediate_tensor;
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
@@ -105,10 +106,11 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt) {
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt) {
         return std::make_tuple(
             operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
-            tensor_args_t{input_tensor, optional_output_tensor});
+            tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
     };
 
 private:

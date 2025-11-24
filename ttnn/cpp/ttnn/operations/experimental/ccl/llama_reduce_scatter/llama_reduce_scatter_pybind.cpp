@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,8 +20,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 
             Args:
@@ -36,6 +35,8 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                topology (ttnn.Topology, optional): Communication topology to use. Defaults to `ttnn.Topology.Linear`.
+                use_noc1_only (bool, optional): Force NOC1-only transport. Defaults to `False`.
 
            Returns:
                ttnn.Tensor: the output tensor.

@@ -461,7 +461,7 @@ class ModelArgs:
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {os.path.join(self.TOKENIZER_PATH, 'tokenizer.model')}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
 
@@ -470,8 +470,8 @@ class ModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = os.path.join(self.CKPT_DIR, "consolidated.00.pth")
+        self.tokenizer_path = os.path.join(self.TOKENIZER_PATH, "tokenizer.model")
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
@@ -515,6 +515,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+                "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1209,7 +1210,7 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_vision():
+            if self.is_llama_vision():
                 self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok if self.is_gemma else nearest_32(self.vision_chunk_ntok)
 
             # RMS NORM
@@ -1253,6 +1254,55 @@ class ModelArgs:
                 f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
+
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            # for gemma we have different default supported seq lens than in tt_transformers
+            "N150": [128, 256],
+            "N300": [128, 256],
+            "T3K": [128, 256, 512, 1024],
+            "TG": [128, 256, 512, 1024],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            # EXAMPLE: "gemma-3-4b": {
+            #     "N150": [128, 256, 512, 1024, 2048],
+            # }
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
+        """
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
@@ -1356,7 +1406,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
@@ -1484,6 +1534,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -1507,7 +1560,7 @@ class ModelArgs:
         # self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self._set_model_specific_params()
 
@@ -1701,8 +1754,8 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def is_vision(self):
-        return self.vision_chunk_size > 0
+    def is_llama_vision(self):
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         if self.is_gemma:
@@ -1761,7 +1814,18 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2165,7 +2229,9 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2204,7 +2270,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2267,7 +2335,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModel.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModel.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModel.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModel.from_pretrained(self.CKPT_DIR)
@@ -2322,7 +2400,17 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                    model = AutoModelForCausalLM.from_config(config)
+                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             else:
                 if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration
@@ -2463,7 +2551,7 @@ class ModelArgs:
 
             return wrapper
 
-    def reference_attention(self):
+    def reference_attention(self, rope_embeddings="global"):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
@@ -2476,9 +2564,14 @@ class ModelArgs:
                 "MistralAttention",
                 "Gemma3Attention",
             )
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            if "gemma-3" in self.model_name:
+                if rope_embeddings == "local":
+                    rotary_emb = model.model.rotary_emb_local
+                else:
+                    rotary_emb = model.model.rotary_emb
+            else:
+                rotary_emb = model.model.rotary_emb
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2569,6 +2662,7 @@ class HfAttentionWrapper:
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
+        # self.past_key_value = StaticCache(config=attention.config, max_batch_size=1, max_cache_len=256)
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
 

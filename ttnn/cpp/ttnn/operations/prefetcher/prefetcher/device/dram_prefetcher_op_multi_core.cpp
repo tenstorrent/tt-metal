@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 #include "dram_prefetcher_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -17,7 +15,7 @@
 namespace ttnn::operations::dram_prefetcher {
 
 using std::vector;
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
@@ -223,7 +221,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     for (uint32_t t = 0; t < num_tensors; t++) {
         auto [page_size, num_pages] = get_max_page_size_and_num_pages(
-            max_page_size, tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
+            max_page_size, tensor_block_num_tiles[t], tt::tile_size(tensor_data_formats[t]));
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
 
@@ -231,7 +229,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
             max_page_size,
             block_width_in_tiles / num_receivers_per_reader,
-            tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
+            tt::tile_size(tensor_data_formats[t]));
         coalesced_page_sizes.push_back(coalesced_page_size);
         coalesced_num_pages.push_back(coalesced_num_page);
     }

@@ -9,7 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
+#include <climits>
 #include "device.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -29,6 +32,16 @@ std::vector<IDevice*> get_devices_from_coordinates(
         }
     }
     return devices;
+}
+
+std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_from_coordinates(
+    const MeshDeviceView& mesh, const std::vector<MeshCoordinate>& coords) {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    fabric_node_ids.reserve(coords.size());
+    for (const auto& coord : coords) {
+        fabric_node_ids.push_back(mesh.get_fabric_node_id(coord));
+    }
+    return fabric_node_ids;
 }
 
 }  // namespace
@@ -62,16 +75,27 @@ MeshDeviceView::MeshDeviceView(
     }
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
-    DeviceView devices_in_region;
+std::vector<IDevice*> MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
+    std::vector<IDevice*> devices_in_region;
     for (const auto& coord : range) {
         devices_.at(coord).if_local([&devices_in_region](const auto& device) { devices_in_region.push_back(device); });
     }
     return devices_in_region;
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& submesh_shape) const {
-    return get_devices(MeshCoordinateRange(submesh_shape));
+std::vector<IDevice*> MeshDeviceView::get_devices() const { return extract_locals(devices_.values()); }
+
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids(const MeshCoordinateRange& range) const {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids_in_region;
+    fabric_node_ids_in_region.reserve(range.shape().mesh_size());
+    for (const auto& coord : range) {
+        fabric_node_ids_in_region.push_back(get_fabric_node_id(coord));
+    }
+    return fabric_node_ids_in_region;
+}
+
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids() const {
+    return fabric_node_ids_.values();
 }
 
 std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
@@ -98,24 +122,26 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     return col_devices;
 }
 
-std::vector<std::vector<IDevice*>> MeshDeviceView::get_row_views() const {
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids_on_row(size_t row) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    std::vector<std::vector<IDevice*>> row_views;
-    row_views.reserve(shape_2d_->height());
-    for (size_t row = 0; row < shape_2d_->height(); ++row) {
-        row_views.push_back(get_devices_on_row(row));
+    TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
+    std::vector<tt::tt_fabric::FabricNodeId> row_fabric_node_ids;
+    row_fabric_node_ids.reserve(shape_2d_->width());
+    for (int col = 0; col < shape_2d_->width(); ++col) {
+        row_fabric_node_ids.push_back(get_fabric_node_id(MeshCoordinate(row, col)));
     }
-    return row_views;
+    return row_fabric_node_ids;
 }
 
-std::vector<std::vector<IDevice*>> MeshDeviceView::get_column_views() const {
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_fabric_node_ids_on_column(size_t col) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    std::vector<std::vector<IDevice*>> column_views;
-    column_views.reserve(shape_2d_->width());
-    for (size_t col = 0; col < shape_2d_->width(); ++col) {
-        column_views.push_back(get_devices_on_column(col));
+    TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
+    std::vector<tt::tt_fabric::FabricNodeId> col_fabric_node_ids;
+    col_fabric_node_ids.reserve(shape_2d_->height());
+    for (int row = 0; row < shape_2d_->height(); ++row) {
+        col_fabric_node_ids.push_back(get_fabric_node_id(MeshCoordinate(row, col)));
     }
-    return column_views;
+    return col_fabric_node_ids;
 }
 
 bool MeshDeviceView::empty() const noexcept { return devices_.shape().mesh_size() == 0; }
@@ -151,7 +177,7 @@ size_t MeshDeviceView::num_cols() const {
 }
 size_t MeshDeviceView::num_devices() const { return devices_.shape().mesh_size(); }
 
-MeshCoordinate MeshDeviceView::find_device(chip_id_t device_id) const {
+MeshCoordinate MeshDeviceView::find_device(ChipId device_id) const {
     auto it = device_coordinates_.find(device_id);
     TT_FATAL(it != device_coordinates_.end(), "Device not found in mesh: {}", device_id);
     return it->second;
@@ -181,7 +207,11 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         }
     }
 
-    TT_FATAL(line_coords.size() == length, "Failed to get line coordinates");
+    TT_FATAL(
+        line_coords.size() == length,
+        "Failed to get line coordinates, got {} coordinates, expected {}",
+        line_coords.size(),
+        length);
     return line_coords;
 }
 
@@ -243,11 +273,45 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, get_ring_coordinates());
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return extract_locals(devices_.values()); }
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_line_fabric_node_ids() const {
+    return get_fabric_node_ids_from_coordinates(*this, get_line_coordinates());
+}
+
+std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_ring_fabric_node_ids() const {
+    return get_fabric_node_ids_from_coordinates(*this, get_ring_coordinates());
+}
 
 bool MeshDeviceView::is_local(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());
     return devices_.at(coord).is_local();
+}
+
+MeshCoordinateRange MeshDeviceView::get_local_mesh_coord_range() const {
+    const MeshShape& mesh_shape = shape();
+    const size_t num_dims = mesh_shape.dims();
+
+    // Initialize min and max coordinates
+    tt::stl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
+    tt::stl::SmallVector<uint32_t> max_coords(num_dims, 0);
+    bool found_local = false;
+
+    // Iterate through all coordinates in the mesh
+    for (const auto& coord : MeshCoordinateRange(mesh_shape)) {
+        if (is_local(coord)) {
+            found_local = true;
+            for (size_t dim = 0; dim < num_dims; ++dim) {
+                min_coords[dim] = std::min(min_coords[dim], coord[dim]);
+                max_coords[dim] = std::max(max_coords[dim], coord[dim]);
+            }
+        }
+    }
+
+    TT_FATAL(found_local, "No local devices found in mesh device");
+
+    MeshCoordinate start_coord(tt::stl::Span<const uint32_t>(min_coords.data(), num_dims));
+    MeshCoordinate end_coord(tt::stl::Span<const uint32_t>(max_coords.data(), num_dims));
+
+    return MeshCoordinateRange(start_coord, end_coord);
 }
 
 }  // namespace tt::tt_metal::distributed

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,7 @@ void ttnn_device(py::module& module) {
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("num_command_queues") = 1,
         py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         py::return_value_policy::reference,
@@ -53,8 +54,9 @@ void ttnn_device(py::module& module) {
                 device_id (int): The device ID to open.
                 l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
+                num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
+                dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
                 worker_l1_size (int, optional): The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.
-                dispatch_core_type (ttnn.device.DispatchCoreType, optional): The type of dispatch core to use. Defaults to `ttnn.device.DispatchCoreType.WORKER`.
 
             Returns:
                 ttnn.Device: The device with the given device_id.
@@ -232,7 +234,7 @@ void device_module(py::module& m_device) {
     )doc");
     m_device.def(
         "CloseDevices",
-        [](const std::map<chip_id_t, MeshDevice*>& devices) {
+        [](const std::map<tt::ChipId, MeshDevice*>& devices) {
             for (const auto& device_entry : devices) {
                 device_entry.second->close();
             }
@@ -257,6 +259,14 @@ void device_module(py::module& m_device) {
 
     m_device.def("GetPCIeDeviceID", &tt::tt_metal::GetPCIeDeviceID, R"doc(
         Returns associated mmio device of give device id.
+    )doc");
+
+    m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, py::arg("root_dir"), R"doc(
+        Sets the root directory for TT Metal operations.
+        Args:
+            root_dir (str): Path to the root directory to set.
+        Example:
+            >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
 
     m_device.def(
@@ -483,15 +493,6 @@ void device_module(py::module& m_device) {
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
             )doc";
-    m_device.def(
-        "synchronize_device",
-        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, raw_optional(cq_id), sub_device_ids);
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {

@@ -68,7 +68,7 @@ void kernel_main() {
                         const uint32_t dst_page_id = dst_global_offset / dst_page_size;
                         const uint32_t dst_offset = dst_global_offset % dst_page_size;
 
-                        uint64_t source_address = accessor_src.get_noc_addr(src_page_id, src_offset);
+                        uint64_t source_address = src_page.noc_addr() + src_offset;
                         uint64_t destination_address = accessor_dst.get_noc_addr(dst_page_id, dst_offset);
                         noc_async_write(source_address, destination_address, transfer_size);
                     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,8 @@ protected:
 
 namespace {
 
-xt::xarray<float> matmul(const xt::xarray<float>& a, const xt::xarray<float>& b, bool transpose_a, bool transpose_b) {
+[[maybe_unused]] xt::xarray<float> matmul(
+    const xt::xarray<float>& a, const xt::xarray<float>& b, bool transpose_a, bool transpose_b) {
     // Conditionally transpose the inputs
     auto A = transpose_a ? xt::transpose(a) : a;
     auto B = transpose_b ? xt::transpose(b) : b;
@@ -38,7 +39,7 @@ xt::xarray<float> matmul(const xt::xarray<float>& a, const xt::xarray<float>& b,
 
 // Backward pass for matrix multiplication.
 // Given out_grad = dL/dy, compute gradients with respect to a and b.
-std::pair<xt::xarray<float>, xt::xarray<float>> matmul_backward(
+[[maybe_unused]] std::pair<xt::xarray<float>, xt::xarray<float>> matmul_backward(
     const xt::xarray<float>& a,
     const xt::xarray<float>& b,
     const xt::xarray<float>& out_grad,
@@ -75,7 +76,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> matmul_backward(
 
 namespace ttml::ttnn_fixed::tests {
 
-TEST(MatmulsTest, MatMulNoTranspose) {
+TEST_F(MatmulsTest, MatMulNoTranspose) {
     // Create simple matrices.
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
@@ -93,7 +94,7 @@ TEST(MatmulsTest, MatMulNoTranspose) {
     EXPECT_TRUE(xt::allclose(y, expected));
 }
 
-TEST(MatmulsTest, MatMulTransposeA) {
+TEST_F(MatmulsTest, MatMulTransposeA) {
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
 
@@ -109,7 +110,7 @@ TEST(MatmulsTest, MatMulTransposeA) {
     EXPECT_TRUE(xt::allclose(y, expected));
 }
 
-TEST(MatmulsTest, MatMulTransposeB) {
+TEST_F(MatmulsTest, MatMulTransposeB) {
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
 
@@ -125,7 +126,7 @@ TEST(MatmulsTest, MatMulTransposeB) {
     EXPECT_TRUE(xt::allclose(y, expected));
 }
 
-TEST(MatmulsTest, MatMulTransposeBoth) {
+TEST_F(MatmulsTest, MatMulTransposeBoth) {
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
 
@@ -141,7 +142,7 @@ TEST(MatmulsTest, MatMulTransposeBoth) {
     EXPECT_TRUE(xt::allclose(y, expected));
 }
 
-TEST(MatmulsTest, MatMulBackwardNoTranspose) {
+TEST_F(MatmulsTest, MatMulBackwardNoTranspose) {
     // Create matrices and an output gradient.
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
@@ -166,7 +167,7 @@ TEST(MatmulsTest, MatMulBackwardNoTranspose) {
     EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
 }
 
-TEST(MatmulsTest, MatMulBackwardTransposeA) {
+TEST_F(MatmulsTest, MatMulBackwardTransposeA) {
     // Test backward with transpose_a = true.
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
@@ -190,7 +191,7 @@ TEST(MatmulsTest, MatMulBackwardTransposeA) {
     EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
 }
 
-TEST(MatmulsTest, MatMulBackwardTransposeB) {
+TEST_F(MatmulsTest, MatMulBackwardTransposeB) {
     // Test backward with transpose_b = true.
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};
@@ -214,7 +215,7 @@ TEST(MatmulsTest, MatMulBackwardTransposeB) {
     EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
 }
 
-TEST(MatmulsTest, MatMulBackwardTransposeBoth) {
+TEST_F(MatmulsTest, MatMulBackwardTransposeBoth) {
     // Test backward with both transpose flags true.
     xt::xarray<float> a = {{1, 2}, {3, 4}};
     xt::xarray<float> b = {{5, 6}, {7, 8}};

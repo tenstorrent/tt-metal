@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,6 @@ void bind_untilize(py::module& module) {
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
-
         )doc";
 
     using OperationType = decltype(ttnn::untilize);

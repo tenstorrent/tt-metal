@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any
+from typing import Optional, Any
 import pathlib
 import json
 import datetime as dt
@@ -11,19 +11,23 @@ import hashlib
 import os
 import math
 from elasticsearch import Elasticsearch
-from framework.database import (
-    postgres_connection,
-    initialize_postgres_database,
-    push_run,
-    update_run,
-    generate_error_signature,
-    map_test_status_to_run_status,
-    generate_error_hash,
+from framework.database import generate_error_hash
+from framework.serialize import (
+    serialize,
+    serialize_structured,
+    deserialize,
+    deserialize_structured,
+    convert_enum_values_to_strings,
 )
-from framework.serialize import serialize, serialize_structured
-from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
-from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
+from infra.data_collection.pydantic_models import (
+    OpTest,
+    PerfMetric,
+    TestStatus,
+    OpParam,
+    OpRun,
+    RunStatus,
+)
 from framework.upload_sftp import upload_run_sftp
 
 # Optional numpy import for numeric handling in hot paths
@@ -33,16 +37,160 @@ except ImportError:
     np = None
 
 
+# --- Metric extraction helpers (module-private) ---
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_device_metric_name(key: str, suffix: Optional[str] = None) -> str:
+    base = key if key.startswith("device_") else f"device_{key}"
+    return f"{base}{suffix or ''}"
+
+
+def _add_metric(metrics: set, name: str, value: Any) -> None:
+    v = _to_float(value)
+    if v is not None:
+        metrics.add(PerfMetric(metric_name=name, metric_value=v))
+
+
+def _add_device_perf_from_dict(metrics: set, perf: dict, suffix: Optional[str] = None) -> None:
+    for k, v in perf.items():
+        _add_metric(metrics, _normalize_device_metric_name(k, suffix), v)
+
+
+def _map_status(value: Any) -> Optional[TestStatus]:
+    if value is None:
+        return None
+    try:
+        from framework.statuses import TestStatus as RunnerStatus
+
+        # TODO: consider removing this mapping and just using the TestStatus enum directly
+        if isinstance(value, RunnerStatus):
+            mapping = {
+                RunnerStatus.PASS: "pass",
+                RunnerStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+                RunnerStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+                RunnerStatus.NOT_RUN: "skipped",
+                RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+                RunnerStatus.FAIL_WATCHER: "fail_watcher",
+                RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                RunnerStatus.XFAIL: "xfail",  # Expected failure
+                RunnerStatus.XPASS: "xpass",  # Unexpected pass
+            }
+            return TestStatus(mapping.get(value, "error"))
+    except Exception:
+        pass
+    # If already a string, trust but verify
+    try:
+        s = str(value)
+        # Normalize common forms like "TestStatus.PASS"
+        if s.startswith("TestStatus."):
+            suffix = s.split(".", 1)[1].lower()
+            if suffix == "pass":
+                return TestStatus("pass")
+            return TestStatus(suffix)
+        return TestStatus(s)
+    except Exception:
+        return TestStatus("error")
+
+
+def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
+    """Collect both e2e performance and device performance metrics into PerfMetric set"""
+    metrics: set[PerfMetric] = set()
+
+    # Collect e2e and device metrics via helpers
+    _add_e2e_metrics(metrics, raw)
+    _add_device_metrics(metrics, raw)
+
+    return metrics if metrics else None
+
+
+def _coerce_to_optional_string(value: Any) -> Optional[str]:
+    """Convert any value to an optional string, handling common numeric types gracefully."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+
+    # Handle numpy numeric types first (before checking for regular float/int)
+    if np is not None and isinstance(value, np.number):
+        if np.isnan(value):
+            return None
+        if np.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return str(value)
+
+    # Handle regular Python numeric types
+    if isinstance(value, (int, float)):
+        # Handle special float cases
+        if isinstance(value, float):
+            if math.isnan(value):
+                return None
+            if math.isinf(value):
+                return "inf" if value > 0 else "-inf"
+        return str(value)
+
+    # For any other type, convert to string
+    return str(value)
+
+
+def _add_e2e_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    e2e_perf = raw.get("e2e_perf")
+    if e2e_perf is not None:
+        if isinstance(e2e_perf, dict):
+            _add_metric(metrics, "e2e_perf_uncached_ms", e2e_perf.get("uncached"))
+            _add_metric(metrics, "e2e_perf_cached_ms", e2e_perf.get("cached"))
+        else:
+            _add_metric(metrics, "e2e_perf_ms", e2e_perf)
+
+    # Also capture explicit fields when present (back/forward compat)
+    _add_metric(metrics, "e2e_perf_uncached_ms", raw.get("e2e_perf_uncached"))
+    _add_metric(metrics, "e2e_perf_cached_ms", raw.get("e2e_perf_cached"))
+
+
+def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    device_perf_raw = raw.get("device_perf")
+    if device_perf_raw is not None:
+        if isinstance(device_perf_raw, dict) and ("cached" in device_perf_raw or "uncached" in device_perf_raw):
+            uncached_perf = device_perf_raw.get("uncached")
+            if isinstance(uncached_perf, dict):
+                _add_device_perf_from_dict(metrics, uncached_perf, suffix="_uncached")
+
+            cached_perf = device_perf_raw.get("cached")
+            if isinstance(cached_perf, dict):
+                _add_device_perf_from_dict(metrics, cached_perf, suffix="_cached")
+        else:
+            # Original structure - single dict or list of dicts
+            if isinstance(device_perf_raw, list):
+                device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+            if isinstance(device_perf_raw, dict):
+                _add_device_perf_from_dict(metrics, device_perf_raw)
+
+    # Also accept separate fields when provided
+    device_perf_uncached = raw.get("device_perf_uncached")
+    if isinstance(device_perf_uncached, dict):
+        _add_device_perf_from_dict(metrics, device_perf_uncached, suffix="_uncached")
+
+    device_perf_cached = raw.get("device_perf_cached")
+    if isinstance(device_perf_cached, dict):
+        _add_device_perf_from_dict(metrics, device_perf_cached, suffix="_cached")
+
+
 class ResultDestination(ABC):
     """Abstract base class for test result destinations"""
 
     @abstractmethod
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """Initialize a new test run and return run_id if applicable"""
         pass
 
     @abstractmethod
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export test results and return status"""
         pass
 
@@ -57,137 +205,6 @@ class ResultDestination(ABC):
         pass
 
 
-class PostgresResultDestination(ResultDestination):
-    """PostgreSQL-based result destination"""
-
-    def __init__(self):
-        # No postgres_env parameter needed since database.py uses environment variables
-        pass
-
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
-        """Initialize PostgreSQL database and create run record"""
-        initialize_postgres_database()  # No env parameter needed
-
-        return push_run(
-            initiated_by=run_metadata["initiated_by"],
-            host=run_metadata["host"],
-            git_author=run_metadata["git_author"],
-            git_branch_name=run_metadata["git_branch_name"],
-            git_commit_hash=run_metadata["git_commit_hash"],
-            start_time_ts=run_metadata["start_time_ts"],
-            status=run_metadata["status"],
-            run_contents=run_metadata.get("run_contents"),
-            device=run_metadata.get("device"),
-            run_type="sweep",
-        )
-
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
-        """Export results to PostgreSQL database"""
-        if not results:
-            logger.info("No test results to push to PostgreSQL database.")
-            return "success"
-
-        run_id = run_context["run_id"]
-        test_start_time = run_context["test_start_time"]
-        test_end_time = run_context["test_end_time"]
-
-        try:
-            with postgres_connection() as (conn, cursor):  # No env parameter needed
-                sweep_name = header_info[0]["sweep_name"]
-
-                # Create test record
-                test_insert_query = """
-                INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id
-                """
-                cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
-                test_id = cursor.fetchone()[0]
-
-                # Insert test cases in batch
-                test_statuses = []
-                testcase_insert_query = """
-                INSERT INTO sweep_testcases (
-                    test_id, name, start_time_ts, end_time_ts,
-                    status, suite_name, test_vector, message, exception,
-                    e2e_perf, device_perf, error_signature
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                """
-
-                batch_values = []
-                for i, result in enumerate(results):
-                    db_status = self._map_test_status_to_db_status(result.get("status", None))
-                    test_statuses.append(db_status)
-                    testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
-                    exception_text = result.get("exception", None)
-                    error_sig = generate_error_signature(exception_text)
-                    error_hash = generate_error_hash(exception_text)
-
-                    testcase_values = (
-                        test_id,
-                        testcase_name,
-                        result.get("start_time_ts", None),
-                        result.get("end_time_ts", None),
-                        db_status,
-                        header_info[i].get("suite_name", None),
-                        json.dumps(_normalize_original_vector_data(result.get("original_vector_data", None))),
-                        result.get("message", None),
-                        exception_text,
-                        result.get("e2e_perf", None),
-                        json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
-                        error_sig,
-                    )
-                    batch_values.append(testcase_values)
-
-                if batch_values:
-                    cursor.executemany(testcase_insert_query, batch_values)
-                    logger.info(
-                        f"Successfully pushed {len(batch_values)} testcase results to PostgreSQL database for test {test_id}"
-                    )
-
-                # Update test status
-                test_status = map_test_status_to_run_status(test_statuses)
-                test_update_query = "UPDATE tests SET status = %s WHERE id = %s"
-                cursor.execute(test_update_query, (test_status, test_id))
-
-                return test_status
-        except Exception as e:
-            logger.error(f"Failed to push test result to PostgreSQL database: {e}")
-            raise
-
-    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
-        """Finalize the run in PostgreSQL"""
-        if run_id:
-            update_run(run_id, dt.datetime.now(), final_status)  # No env parameter needed
-
-    def validate_connection(self) -> bool:
-        """Validate PostgreSQL connection"""
-        try:
-            with postgres_connection() as (conn, cursor):  # No env parameter needed
-                cursor.execute("SELECT 1")
-                return True
-        except Exception as e:
-            logger.error(f"PostgreSQL connection validation failed: {e}")
-            return False
-
-    def _map_test_status_to_db_status(self, test_status):
-        """Map TestStatus enum to database status string"""
-        from framework.statuses import TestStatus
-
-        status_mapping = {
-            TestStatus.PASS: "pass",
-            TestStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
-            TestStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
-            TestStatus.FAIL_WATCHER: "fail_watcher",
-            TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
-            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
-            TestStatus.NOT_RUN: "skipped",
-        }
-        return status_mapping.get(test_status, "error")
-
-
 class ElasticResultDestination(ResultDestination):
     """Elasticsearch-based result destination"""
 
@@ -195,11 +212,11 @@ class ElasticResultDestination(ResultDestination):
         self.client = Elasticsearch(connection_string, basic_auth=(username, password))
         self.connection_string = connection_string
 
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """No specific run initialization needed for Elasticsearch"""
         return None
 
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export results to Elasticsearch"""
         if not results:
             return "success"
@@ -217,7 +234,8 @@ class ElasticResultDestination(ResultDestination):
         for i in range(len(results)):
             result = header_info[i].copy()
             for elem in results[i].keys():
-                if elem == "device_perf":
+                # Handle device performance fields (both old and new formats)
+                if elem in ["device_perf", "device_perf_uncached", "device_perf_cached"]:
                     result[elem] = results[i][elem]
                     continue
                 # Skip problematic fields that were added for PostgreSQL functionality
@@ -239,8 +257,8 @@ class ElasticResultDestination(ResultDestination):
             # Basic connection test - just try to get cluster info
             self.client.info()
             return True
-        except Exception as e:
-            logger.error(f"Elasticsearch connection validation failed: {e}")
+        except Exception:
+            logger.exception("Elasticsearch connection validation failed")
             return False
 
 
@@ -253,11 +271,11 @@ class FileResultDestination(ResultDestination):
         else:
             self.export_dir = export_dir
         # In-memory aggregation for building OpRun at finalize_run
-        self._run_metadata: Optional[Dict[str, Any]] = None
-        self._collected_tests: List[Dict[str, Any]] = []
+        self._run_metadata: Optional[dict[str, Any]] = None
+        self._collected_tests: list[dict[str, Any]] = []
         self._run_id: Optional[str] = None
 
-    def initialize_run(self, run_metadata: Dict[str, Any]) -> Optional[str]:
+    def initialize_run(self, run_metadata: dict[str, Any]) -> Optional[str]:
         """Prepare export directory and initialize run aggregation context."""
         if not self.export_dir.exists():
             self.export_dir.mkdir(parents=True)
@@ -269,7 +287,11 @@ class FileResultDestination(ResultDestination):
             # Use a short digest of run_contents to prevent overly long filenames
             run_contents = str(run_metadata.get("run_contents", "unknown"))
             digest = hashlib.sha256(run_contents.encode("utf-8")).hexdigest()[:12]
-            start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
+            start_ts = (
+                run_metadata.get("start_time_ts")
+                or run_metadata.get("run_start_ts")
+                or dt.datetime.now(dt.timezone.utc)
+            )
             ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
             # Sanitize host to avoid path issues and keep the filename short
             safe_host = host.replace("/", "_")[:32]
@@ -282,7 +304,7 @@ class FileResultDestination(ResultDestination):
 
         return self._run_id
 
-    def export_results(self, header_info: List[Dict], results: List[Dict], run_context: Dict[str, Any]) -> str:
+    def export_results(self, header_info: list[dict], results: list[dict], run_context: dict[str, Any]) -> str:
         """Export results to JSON file using Pydantic validation (OpTest)."""
         if not results:
             return "success"
@@ -293,7 +315,7 @@ class FileResultDestination(ResultDestination):
             timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
         else:
             # Fallback to current time if run_start_time is not available
-            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S")
         # Keep filenames short and safe: use sweep short name + digest
         short_sweep = str(sweep_name).split(".")[0] if sweep_name else "sweep"
         name_digest = hashlib.sha256(str(sweep_name).encode("utf-8")).hexdigest()[:12] if sweep_name else "na"
@@ -304,89 +326,7 @@ class FileResultDestination(ResultDestination):
         # this will be the list of OpTest objects that will be exported to the file
         validated_records = []
 
-        # Map internal TestStatus enum (or strings) to file schema enum values
-        def _map_status(value: Any) -> Optional[TestStatus]:
-            if value is None:
-                return None
-            try:
-                from framework.statuses import TestStatus as RunnerStatus
-
-                # TODO: consider removing this mapping and just using the TestStatus enum directly
-                if isinstance(value, RunnerStatus):
-                    mapping = {
-                        RunnerStatus.PASS: "pass",
-                        RunnerStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
-                        RunnerStatus.FAIL_CRASH_HANG: "fail_crash_hang",
-                        RunnerStatus.NOT_RUN: "skipped",
-                        RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
-                        RunnerStatus.FAIL_WATCHER: "fail_watcher",
-                        RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
-                    }
-                    return TestStatus(mapping.get(value, "error"))
-            except Exception:
-                pass
-            # If already a string, trust but verify
-            try:
-                s = str(value)
-                # Normalize common forms like "TestStatus.PASS"
-                if s.startswith("TestStatus."):
-                    suffix = s.split(".", 1)[1].lower()
-                    if suffix == "pass":
-                        return TestStatus("pass")
-                    return TestStatus(suffix)
-                return TestStatus(s)
-            except Exception:
-                return TestStatus("error")
-
-        def _coerce_device_perf(device_perf_raw: Any) -> Optional[set[PerfMetric]]:
-            if device_perf_raw is None:
-                return None
-            # If list of dicts, merge or take first
-            if isinstance(device_perf_raw, list):
-                device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
-                if device_perf_raw is None:
-                    return None
-            if not isinstance(device_perf_raw, dict):
-                return None
-            metrics: set[PerfMetric] = set()
-
-            def _to_float(v):
-                try:
-                    return float(v)
-                except Exception:
-                    return None
-
-            for k, v in device_perf_raw.items():
-                metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
-            return metrics if metrics else None
-
-        def _coerce_to_optional_string(value: Any) -> Optional[str]:
-            """Convert any value to an optional string, handling common numeric types gracefully."""
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return value
-
-            # Handle numpy numeric types first (before checking for regular float/int)
-            if np is not None and isinstance(value, np.number):
-                if np.isnan(value):
-                    return None
-                if np.isinf(value):
-                    return "inf" if value > 0 else "-inf"
-                return str(value)
-
-            # Handle regular Python numeric types
-            if isinstance(value, (int, float)):
-                # Handle special float cases
-                if isinstance(value, float):
-                    if math.isnan(value):
-                        return None
-                    if math.isinf(value):
-                        return "inf" if value > 0 else "-inf"
-                return str(value)
-
-            # For any other type, convert to string
-            return str(value)
+        # Map internal TestStatus enum (or strings) to file schema enum values via module helper
 
         for i in range(len(results)):
             header = header_info[i]
@@ -400,7 +340,7 @@ class FileResultDestination(ResultDestination):
             normalized_vector = _normalize_original_vector_data(raw.get("original_vector_data")) or {}
             # Flatten nested structure into a single-level dict with dotted keys
             flattened_vector = _flatten_any_to_dotted(normalized_vector)
-            op_param_list: List[OpParam] = []
+            op_param_list: list[OpParam] = []
             for k, v in flattened_vector.items():
                 # Coerce to JSON-friendly primitives when needed, but preserve dict/list for JSON column
                 coerced_value = v
@@ -437,6 +377,9 @@ class FileResultDestination(ResultDestination):
             _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
             _op_name = _parts[-1] if len(_parts) > 0 and _parts[-1] else (header.get("op_name") or "unknown")
 
+            exception = str(raw.get("exception", None))
+            error_hash = generate_error_hash(exception)
+
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
@@ -446,8 +389,8 @@ class FileResultDestination(ResultDestination):
                 filepath=header.get("sweep_name"),
                 success=is_success,
                 skipped=is_skipped,
-                error_message=raw.get("exception", None),
-                error_hash=generate_error_hash(raw.get("exception", None)),
+                error_message=exception,
+                error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
@@ -462,21 +405,29 @@ class FileResultDestination(ResultDestination):
                 card_type="n/a",
                 backend="n/a",
                 data_source="ttnn op test",
-                input_hash=header.get("input_hash"),
+                input_hash=raw.get("input_hash"),
                 message=_coerce_to_optional_string(raw.get("message", None)),
                 exception=_coerce_to_optional_string(raw.get("exception", None)),
-                metrics=raw.get("device_perf", None),
+                metrics=_collect_all_metrics(raw),
                 op_params_set=op_param_list,
             )
 
             # Convert to JSON-ready dict and deeply flatten any nested types
             record_dict = record.model_dump(mode="json")
             record_dict = _flatten_serialized(record_dict)
+            # Ensure deterministic ordering of metrics for stable outputs
+            metrics = record_dict.get("metrics")
+            if isinstance(metrics, list):
+                try:
+                    record_dict["metrics"] = sorted(metrics, key=lambda m: m.get("metric_name", ""))
+                except Exception:
+                    # Best-effort: if structure is unexpected, leave as-is
+                    pass
             validated_records.append(record_dict)
 
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
-        with open(tmp_path, "w") as file:
+        with open(tmp_path, "w", encoding="utf-8") as file:
             json.dump(validated_records, file, indent=2)
             try:
                 file.flush()
@@ -513,7 +464,7 @@ class FileResultDestination(ResultDestination):
         # Build OpRun record
         try:
             run_start_ts = self._run_metadata.get("run_start_ts")
-            run_end_ts = dt.datetime.now()
+            run_end_ts = dt.datetime.now(dt.timezone.utc)
             card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
 
             oprun = OpRun(
@@ -540,12 +491,13 @@ class FileResultDestination(ResultDestination):
             run_dict = oprun.model_dump(mode="json")
 
             # Choose filename based on generated run_id when available
-            run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
+            ts_fallback = run_start_ts or dt.datetime.now(dt.timezone.utc)
+            run_id_str = run_id or self._run_id or ts_fallback.strftime("%Y%m%d_%H%M%S")
             run_path = self.export_dir / f"oprun_{run_id_str}.json"
 
             # Atomic write to avoid truncated/invalid JSON on interruptions
             tmp_path = run_path.with_suffix(run_path.suffix + ".tmp")
-            with open(tmp_path, "w") as file:
+            with open(tmp_path, "w", encoding="utf-8") as file:
                 json.dump(run_dict, file, indent=2)
                 try:
                     file.flush()
@@ -597,7 +549,7 @@ def _normalize_original_vector_data(original):
         if isinstance(obj, dict):
             # Convert enum integer fields to readable strings inside dicts
             try:
-                normalized[k] = convert_enum_values_to_strings(obj)  # type: ignore[name-defined]
+                normalized[k] = convert_enum_values_to_strings(obj)
             except Exception:
                 normalized[k] = obj
         elif isinstance(obj, (list, str, int, float, bool)) or obj is None:
@@ -631,13 +583,14 @@ def _flatten_serialized(value):
     return value
 
 
-def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
+def _flatten_any_to_dotted(value: Any) -> dict[str, Any]:
     """
     Flatten an arbitrarily nested structure (dicts/lists/primitives) into a
-    single-level dict with dotted keys. List indices are included in the key path.
-    Example: {"a": {"b": [1, {"c": 2}]}} -> {"a.b.0": 1, "a.b.1.c": 2}
+    single-level dict with dotted keys for dict nesting. Lists are preserved
+    under their current key (no index flattening).
+    Example: {"a": {"b": [1, {"c": 2}]}} -> {"a.b": [1, {"c": 2}]}
     """
-    flat: Dict[str, Any] = {}
+    flat: dict[str, Any] = {}
 
     def _recurse(prefix: str, obj: Any):
         if isinstance(obj, dict):
@@ -671,8 +624,8 @@ class SupersetResultDestination(FileResultDestination):
         except Exception as e:
             logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
             return
-        print(f"Superset: run_path: {run_path}")
-        print(f"Superset: run_id: {run_id}")
+        logger.info(f"Superset: run_path={run_path}")
+        logger.info(f"Superset: run_id={run_id}")
 
         # Upload via SFTP if environment/configuration is available
         try:
@@ -693,9 +646,7 @@ class ResultDestinationFactory:
 
     @staticmethod
     def create_destination(result_destination: str, **kwargs) -> ResultDestination:
-        if result_destination == "postgres":
-            return PostgresResultDestination()
-        elif result_destination == "elastic":
+        if result_destination == "elastic":
             required_args = ["connection_string", "username", "password"]
             for arg in required_args:
                 if arg not in kwargs:

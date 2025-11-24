@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_backward_device_operation.hpp"
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -57,8 +56,6 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(src2_buffer).append_to(reader_compile_time_args);
 
-    bool dst0_is_dram = false;
-    bool dst1_is_dram = false;
     uint32_t dst0_address = 0;
     uint32_t dst1_address = 0;
 
@@ -66,7 +63,6 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         const auto& input_grad_tensor = input_grad.value();
         auto* dst0_buffer = input_grad_tensor.buffer();
         TT_ASSERT(dst0_buffer != nullptr, "input_grad buffer should be allocated on device!");
-        dst0_is_dram = is_dram(dst0_buffer);
         dst0_address = dst0_buffer->address();
     }
 
@@ -74,7 +70,6 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         const auto& other_grad_tensor = other_grad.value();
         auto* dst1_buffer = other_grad_tensor.buffer();
         TT_ASSERT(dst1_buffer != nullptr, "other_grad buffer should be allocated on device!");
-        dst1_is_dram = is_dram(dst1_buffer);
         dst1_address = dst1_buffer->address();
     }
 

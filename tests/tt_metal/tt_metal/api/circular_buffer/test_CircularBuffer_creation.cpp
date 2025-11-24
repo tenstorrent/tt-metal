@@ -58,9 +58,10 @@ bool test_cb_config_written_to_core(
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    uint32_t cb_config_buffer_size = program.impl().get_cb_size(device, core_coord, CoreType::WORKER);
+                    uint32_t cb_config_buffer_size =
+                        program.impl().get_cb_size(device, core_coord, tt::CoreType::WORKER);
 
-                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, CoreType::WORKER);
+                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
@@ -89,7 +90,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     initialize_program(program, cr_set);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t l1_unreserved_base = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
 

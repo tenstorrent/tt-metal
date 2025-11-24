@@ -12,12 +12,6 @@ from types import ModuleType
 
 from loguru import logger
 
-# Sets env and updates shared libs rpath
-# This is a tweak required for a proper wheel functioning
-import ttnn.library_tweaks
-
-library_tweaks.setup_ttnn_so()
-
 import ttnn._ttnn
 
 
@@ -101,6 +95,7 @@ from ttnn._ttnn.multi_device import (
     PlacementShard,
     MeshMapperConfig,
     MeshComposerConfig,
+    TensorTopology,
     get_device_tensors,
     from_host_shards,
     combine_device_tensors,
@@ -182,7 +177,6 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
-    ShardMode,
     ShardSpec,
     NdShardSpec,
     CoreRangeSet,
@@ -254,6 +248,7 @@ from ttnn.device import (
     SubDeviceId,
     SubDeviceManagerId,
     init_device_compute_kernel_config,
+    SetRootDir,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
@@ -329,6 +324,8 @@ ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwa
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
+ttnn.Tensor.__truediv__ = lambda self, *args, **kwargs: ttnn.divide(self, *args, **kwargs)
+ttnn.Tensor.__rtruediv__ = lambda self, *args, **kwargs: ttnn.rdiv(self, *args, **kwargs)
 ttnn.Tensor.__eq__ = lambda self, *args, **kwargs: ttnn.eq(self, *args, **kwargs)
 ttnn.Tensor.__ne__ = lambda self, *args, **kwargs: ttnn.ne(self, *args, **kwargs)
 ttnn.Tensor.__gt__ = lambda self, *args, **kwargs: ttnn.gt(self, *args, **kwargs)
@@ -350,9 +347,10 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
-    create_group_norm_weight_bias_rm,
+    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
+    create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
@@ -376,8 +374,10 @@ from ttnn.operations.conv2d import (
     Conv2dConfig,
     get_conv_output_dim,
     Conv2dSliceConfig,
-    Conv2dSliceHeight,
-    Conv2dSliceWidth,
+    Conv2dDRAMSliceHeight,
+    Conv2dDRAMSliceWidth,
+    Conv2dL1Full,
+    Conv2dL1FullSliceConfig,
     prepare_conv_weights,
     prepare_conv_bias,
     prepare_conv_transpose2d_weights,
@@ -395,6 +395,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -410,3 +411,30 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+
+import pathlib
+import importlib.util
+
+
+def _is_editable():
+    spec = importlib.util.find_spec(__package__)
+    if not spec or not spec.origin:
+        return False
+    path = pathlib.Path(spec.origin).resolve()
+    return "site-packages" not in str(path) and "dist-packages" not in str(path)
+
+
+if "TT_METAL_RUNTIME_ROOT" not in os.environ:
+    this_dir = pathlib.Path(__file__).resolve().parent
+
+    if _is_editable():
+        # Go two levels up from the package's __init__.py location
+        root_dir = this_dir.parent.parent
+    else:
+        # For installed packages, reference bundled data directory
+        root_dir = this_dir
+
+    SetRootDir(str(root_dir))

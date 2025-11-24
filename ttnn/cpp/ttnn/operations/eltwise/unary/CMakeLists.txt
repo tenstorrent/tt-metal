@@ -5,12 +5,16 @@ target_precompile_headers(ttnn_op_eltwise_unary REUSE_FROM TT::CommonPCH)
 set_target_properties(
     ttnn_op_eltwise_unary
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*
+    tanh_accurate/device/kernels/*
+)
 target_sources(
     ttnn_op_eltwise_unary
     PUBLIC
@@ -36,12 +40,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_unary
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_unary PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include <cstdint>
 #include <utility>
 
@@ -98,9 +99,7 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
     pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        output_semaphore_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
+        output_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     volatile PACKET_HEADER_TYPE* cur_pkt_header;
 
@@ -120,7 +119,7 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
             cur_is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
         cur_pkt_header = cur_is_forward ? pkt_hdr_forward : pkt_hdr_backward;
-        cur_pkt_header->to_chip_unicast(cur_hops);
+        fabric_set_unicast_route<false>(cur_pkt_header, cur_hops);
 
         const uint32_t my_relative_ring_id = (my_ring_id < dst_ring_id) ? my_ring_id : my_ring_id - 1;
         uint32_t packet_id = 0;
@@ -155,7 +154,6 @@ void kernel_main() {
                             payload_size_bytes,
                             output_semaphore_noc_addr_in_pkt,
                             1,
-                            32,
                             false);
 
                         prev_chunk_id = current_chunk_id;
@@ -178,7 +176,7 @@ void kernel_main() {
 
         // Handle final incomplete chunk
         if (packet_id % chunk_granularity != 0) {
-            pkt_hdr_seminc->to_chip_unicast(cur_hops);
+            fabric_set_unicast_route<false>(pkt_hdr_seminc, cur_hops);
             cur_connection.wait_for_empty_write_slot();
             cur_connection.send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));

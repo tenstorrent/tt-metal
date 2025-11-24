@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

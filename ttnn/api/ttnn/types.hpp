@@ -25,7 +25,6 @@ constexpr auto TILE_SIZE = 32;
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
 using tt::tt_metal::MemoryConfig;
-using tt::tt_metal::ShardMode;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::TensorMemoryLayout;
 

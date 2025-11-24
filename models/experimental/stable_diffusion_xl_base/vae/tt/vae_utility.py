@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,7 @@ def get_DRAM_conv_config(module_path, idx):
     is_encoder = True if module_path is not None and "encoder" == module_path else False
     if module_path is None:
         if idx == 1:
-            return None
+            return ttnn.Conv2dL1FullSliceConfig
         else:
             num_slices = 8
     elif is_encoder:
@@ -88,7 +88,7 @@ def get_DRAM_conv_config(module_path, idx):
         else:
             num_slices = 2
     elif "mid_block" in module_path:
-        return None
+        return ttnn.Conv2dL1FullSliceConfig
     else:
         parts = module_path.split(".")
         if "down_blocks" in module_path:
@@ -104,7 +104,7 @@ def get_DRAM_conv_config(module_path, idx):
             elif is_encoder:
                 num_slices = 8
             elif "upsamplers" not in module_path:
-                return None
+                return ttnn.Conv2dL1FullSliceConfig
             else:
                 num_slices = 2
         if block_id == 1:
@@ -130,13 +130,13 @@ def get_DRAM_conv_config(module_path, idx):
                 num_slices = 16
         if block_id == 3 and "upsamplers" not in module_path:
             if is_encoder:
-                return None
+                return ttnn.Conv2dL1FullSliceConfig
             if "resnets.0" in module_path and idx == 1:
                 num_slices = 16
             else:
                 num_slices = 8
 
-    slice_type = ttnn.Conv2dSliceWidth
+    slice_type = ttnn.Conv2dDRAMSliceWidth
     return ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
         num_slices=num_slices,

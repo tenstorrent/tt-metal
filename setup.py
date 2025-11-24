@@ -4,6 +4,7 @@
 
 import os
 import glob
+import platform
 import shutil
 import subprocess
 import sys
@@ -25,14 +26,25 @@ readme_path = Path(__file__).absolute().parent / "README.md"
 readme = readme_path.read_text(encoding="utf-8")
 
 
-# Get the platform-specific lib directory name
-def get_lib_dir():
-    if sys.platform == "win32":
-        return "bin"  # Windows DLLs go in bin directory
-    elif sys.platform.startswith("linux"):
-        return "lib64" if os.path.exists("/usr/lib64") else "lib"
-    else:  # macOS and others
-        return "lib"
+def get_lib_dir() -> str:
+    """
+    Inspired by GNUInstallDirs logic:
+    default = 'lib'
+    upgrade to 'lib64' only on 64-bit Linux that is not Debian/Arch/Alpine.
+    """
+    libdir = "lib"
+
+    if platform.system() == "Linux":
+        # skip lib64 on Debian/Arch/Alpine
+        if not (
+            Path("/etc/debian_version").exists()
+            or Path("/etc/arch-release").exists()
+            or Path("/etc/alpine-release").exists()
+        ):
+            if platform.architecture()[0] == "64bit":
+                libdir = "lib64"
+
+    return libdir
 
 
 BUNDLE_SFPI = False
@@ -114,7 +126,7 @@ def get_metal_main_version_scheme(metal_build_config, version):
 
     if getattr(version, "exact", False):
         # Exact tag (release/rc/dev*) already normalized by packaging
-        return version.version.public
+        return version.format_with("{tag}")
 
     # Untagged commit → let setuptools_scm choose X.Y.Z.devN
     return _guess_next_dev(version)
@@ -214,7 +226,9 @@ class CMakeBuild(build_ext):
             ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
         else:
-            build_dir = source_dir / "build_Release"
+            # Determine desired build type for wheel builds (e.g., Release, Debug, RelWithDebInfo)
+            build_type = os.environ.get("CIBW_BUILD_TYPE", "Release")
+            build_dir = source_dir / f"build_{build_type}"
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
@@ -226,8 +240,8 @@ class CMakeBuild(build_ext):
                     build_dir,
                     "-G",
                     "Ninja",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_INSTALL_PREFIX=build_Release",
+                    f"-DCMAKE_BUILD_TYPE={build_type}",
+                    f"-DCMAKE_INSTALL_PREFIX=build_{build_type}",
                     "-DBUILD_SHARED_LIBS=ON",
                     "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
@@ -318,6 +332,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
+            "ttnn/operations/normalization/kernel_util/compute/*",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
@@ -350,7 +365,7 @@ class CMakeBuild(build_ext):
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
-        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
+        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
@@ -397,10 +412,12 @@ setup(
     package_dir={
         "": "ttnn",
         "tracy": "tools/tracy",
+        "triage": "tools/triage",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
+    entry_points={"console_scripts": ["tt-triage = triage.triage:main"]},
 )

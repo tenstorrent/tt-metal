@@ -54,16 +54,16 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat mask_h_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tt::tt_metal::detail::TileSize(mask_h_cb_data_format);
+    uint32_t mask_h_single_tile_size = tt::tile_size(mask_h_cb_data_format);
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermed1_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
+    uint32_t intermed_single_tile_size = tt::tile_size(intermed_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -208,7 +208,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             reader_kernel_id,
             core,
             {input.buffer()->address(),
-             num_cols_read / Wt * HtWt + num_cols_read % Wt,
+             (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
              num_cols_read % Wt,
              num_cols_per_core,
              mask_h});

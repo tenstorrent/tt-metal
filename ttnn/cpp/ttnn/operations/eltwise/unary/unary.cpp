@@ -10,8 +10,9 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -30,6 +31,7 @@ inline Tensor unary_impl(
     bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
+                            output_dtype == DataType::UINT8 or input_dtype == DataType::UINT8 or
                             input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].type() == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
@@ -105,8 +107,6 @@ template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
-template struct ExecuteUnary<UnaryOpType::SQRT>;
-template struct ExecuteUnary<UnaryOpType::RSQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
@@ -119,6 +119,7 @@ template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
+template struct ExecuteUnary<UnaryOpType::CBRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -137,24 +138,12 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
-    const Tensor& input_tensor,
-    const bool parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-        memory_config,
-        optional_output_tensor);
-}
-
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG10>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG2>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG1P>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG10>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -200,17 +189,17 @@ Tensor ExecuteUnaryWithTwoFloatParameter<unary_op_type>::invoke(
 }
 
 template <UnaryOpType unary_op_type>
-template <typename T>
-Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type>::invoke(
+Tensor ExecuteUnaryTSVariant<unary_op_type>::invoke(
     const Tensor& input_tensor,
-    const T parameter,
+    ScalarVariant parameter,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
-        memory_config,
-        optional_output_tensor);
+    return std::visit(
+        [&](auto param) {
+            return detail::unary_impl(
+                input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
+        },
+        parameter);
 }
 
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
@@ -221,43 +210,32 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MAX>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MIN>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::REMAINDER>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_LE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_LT>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_NE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GT>;
 
 Tensor Sigmoid_accurate::invoke(
     const Tensor& input,
+    bool fast_and_approximate_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP),
+         UnaryWithParam(UnaryOpType::EXP, fast_and_approximate_mode ? 1.0f : 0.0f),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
@@ -265,16 +243,6 @@ Tensor Sigmoid_accurate::invoke(
 }
 
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
-Tensor LogSigmoid::invoke(
-    const Tensor& input,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
-        memory_config,
-        optional_output_tensor);
-}
 
 Tensor Eqz::invoke(
     const Tensor& input_tensor,
@@ -323,12 +291,8 @@ Tensor Tanh::invoke(
     bool approx) {
     UnaryOpType op_type = UnaryOpType::TANH;
 
-    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-
-    } else {
-        return ttnn::tanh_accurate(input_tensor, memory_config, optional_output_tensor);
-    }
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, static_cast<float>(approx)}}, memory_config, optional_output_tensor);
 }
 
 Tensor Prelu::invoke(
@@ -345,13 +309,8 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    DataType input_dtype = input_tensor.dtype();
 
-    if (input_dtype != DataType::UINT8) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    } else {
-        TT_THROW("ttnn.identity doesn't support uint8 datatype");
-    }
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Abs::invoke(
@@ -374,6 +333,24 @@ Tensor Mish::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::MISH;
+
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor LogSigmoid::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::LOGSIGMOID;
+
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Hardmish::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::HARDMISH;
 
     return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
@@ -448,6 +425,21 @@ Tensor Clamp::invoke(
         optional_output_tensor);
 }
 
+template <typename T>
+Tensor Rsub::invoke(
+    const Tensor& input_tensor,
+    T param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::RSUB;
+    return detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{op_type, {param}}}, memory_config, optional_output_tensor);
+}
+template Tensor Rsub::invoke<float>(
+    const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor Rsub::invoke<int32_t>(
+    const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
 Tensor Softshrink::invoke(
     const Tensor& input_tensor,
     const float lambda,
@@ -491,6 +483,32 @@ Tensor Rad2Deg::invoke(
         {},
         {},
         std::nullopt);
+}
+
+Tensor Where::invoke(
+    const Tensor& condition,
+    const ScalarVariant& value_true,
+    const ScalarVariant& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    Tensor input = condition;
+    // Check if we have any float scalars
+    bool has_float_scalar = std::holds_alternative<float>(value_true) || std::holds_alternative<float>(value_false);
+
+    // Convert input tensor to float32 only if input is INT32/UINT32 and scalars are float
+    if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && has_float_scalar) {
+        input = ttnn::typecast(condition, DataType::FLOAT32);
+    }
+    UnaryOpType op_type = UnaryOpType::WHERE_TSS;
+    auto param = std::visit(
+        [op_type](const auto& val_true, const auto& val_false) {
+            using T = std::decay_t<decltype(val_true)>;
+            return EltwiseUnaryWithParam{op_type, std::vector<T>{val_true, val_false}};
+        },
+        value_true,
+        value_false);
+
+    return detail::unary_impl(input, {param}, memory_config, optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, typename T>
@@ -571,7 +589,6 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     return detail::unary_impl(
         input_tensor, {EltwiseUnaryWithParam{unary_op_rev_type, (param)}}, memory_config, optional_output_tensor);
 }
-
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;
 template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>;
 

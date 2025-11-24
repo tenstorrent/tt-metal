@@ -10,7 +10,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 @pytest.mark.parametrize("input_data_type", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("C", [1, 2, 4])
+@pytest.mark.parametrize("C", [1, 2, 8, 16, 32])
 @pytest.mark.parametrize(
     "HW, core_grid",
     (
@@ -38,10 +38,7 @@ def test_convert_to_chw(device, C, HW, core_grid, input_data_type):
     )
     input_tensor = ttnn.to_device(input_tensor, device, input_memory_config)
 
-    output_memory_config = ttnn.create_sharded_memory_config(
-        [1, 1, C, HW], core_grid, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR
-    )
-    actual = ttnn.experimental.convert_to_chw(input_tensor, memory_config=output_memory_config, dtype=ttnn.bfloat16)
+    actual = ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.bfloat16)
 
     if input_data_type == ttnn.bfloat8_b:
         expected_pcc = 0.9999  # bfloat8_b can't be exactly compared to torch bfloat16
@@ -51,7 +48,7 @@ def test_convert_to_chw(device, C, HW, core_grid, input_data_type):
 
 
 @pytest.mark.parametrize("input_data_type", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("C", [1, 2, 4])
+@pytest.mark.parametrize("C", [1, 2, 8, 16, 32])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
@@ -82,14 +79,10 @@ def test_convert_to_chw_padded(device, C, HW, core_grid, padded_sharded_dim, inp
     input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    output_shard_shape = (C, padded_sharded_dim)
-    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-
     input_tensor = ttnn.from_torch(input_tensor, dtype=input_data_type, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device, memory_config=input_mem_config)
 
-    actual = ttnn.experimental.convert_to_chw(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    actual = ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.bfloat16)
 
     if input_data_type == ttnn.bfloat8_b:
         expected_pcc = 0.9999  # bfloat8_b can't be exactly compared to torch bfloat16

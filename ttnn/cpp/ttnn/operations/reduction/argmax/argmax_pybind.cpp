@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,17 +37,17 @@ void bind_reduction_argmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - FLOAT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - INT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - UINT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 The output tensor will be of the following data type and layout:
 
@@ -55,22 +55,19 @@ void bind_reduction_argmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
 
             Limitations:
-                Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
-
-            Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-                # Last dim reduction yields shape of [1, 1, 32, 1]
-                output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
-
-                # All dim reduction yields shape of []
-                output_alldim = ttnn.argmax(input_tensor)
-
+                - All input tensors must be on-device.
+                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Sharding is not supported for this operation
+                - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout
         )doc";
 
     using OperationType = decltype(ttnn::argmax);

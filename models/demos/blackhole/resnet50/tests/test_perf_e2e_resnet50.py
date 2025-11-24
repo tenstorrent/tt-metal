@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
+from models.demos.ttnn_resnet.tests.common.perf_e2e_resnet50 import run_perf_resnet
 
 # These perf figures were measured on one of the machines in ird -
 # as e2e perf depends on the performance of the host machine,

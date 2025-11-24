@@ -69,6 +69,11 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             input_shape[i],
             indices_shape[i]);
     }
+    TT_FATAL(
+        operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
+        "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
+        "concat the output tokens along.",
+        operation_attributes.output_concat_dim);
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
@@ -83,6 +88,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
 
     auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
+    uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 
     // experts are expert parallel across devices
     // tokens are data parallel across devices
@@ -94,7 +100,6 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     // axis, and skip any experts that are not on the specified axis
 
     uint32_t dispatch_devices = mesh_view.num_devices();
-    uint32_t tokens_per_device = input_shape[0];
     uint32_t hidden_size = input_shape[-1];
     if (operation_attributes.axis.has_value()) {
         uint32_t axis = operation_attributes.axis.value();
@@ -103,12 +108,12 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     }
 
     // final batch in the metadata tensor
-    uint32_t dispatched_tokens = tokens_per_device * dispatch_devices;
+    uint32_t batch = (output_concat_dim == 1) ? input_shape[0] * dispatch_devices : input_shape[0];
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t seq_len = indices_shape[-2];
+    uint32_t seq_len = (output_concat_dim == 2) ? indices_shape[-2] * dispatch_devices : indices_shape[-2];
 
-    auto output_shape = ttnn::Shape({1, dispatched_tokens, seq_len, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, dispatched_tokens, seq_len, selected_experts_k});
+    auto output_shape = ttnn::Shape({1, batch, seq_len, hidden_size});
+    auto metadata_shape = ttnn::Shape({1, batch, seq_len, selected_experts_k});
 
     log_debug(tt::LogOp, "output_shape: {}", output_shape);
     log_debug(tt::LogOp, "metadata_shape: {}", metadata_shape);
@@ -117,7 +122,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     log_debug(tt::LogOp, "mapping_shape: {}", mapping_shape);
     log_debug(tt::LogOp, "dispatch_devices: {}", dispatch_devices);
     log_debug(tt::LogOp, "hidden_size: {}", hidden_size);
-    log_debug(tt::LogOp, "dispatched_tokens: {}", dispatched_tokens);
+    log_debug(tt::LogOp, "batch: {}", batch);
     log_debug(tt::LogOp, "selected_experts_k: {}", selected_experts_k);
 
     auto mem_config = operation_attributes.output_mem_config;
@@ -162,7 +167,8 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    AllToAllTransferType impl) {
+    AllToAllTransferType impl,
+    uint32_t output_concat_dim) {
     return {
         operation_attributes_t{
             .worker_core_range_set = worker_core_range_set,
@@ -170,7 +176,8 @@ AllToAllDispatchDeviceOperation::invoke(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .impl = impl},
+            .impl = impl,
+            .output_concat_dim = output_concat_dim},
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,

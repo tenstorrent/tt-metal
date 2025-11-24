@@ -359,6 +359,10 @@ def mish(x, *args, **kwargs):
     return x * torch.tanh(softplus(x, beta=1.0, threshold=20.0))
 
 
+def hardmish(x, *args, **kwargs):
+    return x * (x + 2.8).clamp(0.0, 5.0) / 5
+
+
 def recip(x, *args, **kwargs):
     return torch.reciprocal(x)
 

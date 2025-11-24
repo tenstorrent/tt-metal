@@ -1,0 +1,70 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  - name: "LinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      num_links: 4
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+      size: 4096
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FullRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+      num_links: 4
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 100000
+      size: 4096
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 4
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+      size: 4096
+
+    patterns:
+      - type: all_to_all
+
+  - name: "TorusAllToAllMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      num_links: 4
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 20000
+      size: 4096
+
+    patterns:
+      - type: all_to_all

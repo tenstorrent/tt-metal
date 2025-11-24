@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "system_memory_cq_interface.hpp"
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_settings.hpp"
@@ -16,13 +16,13 @@ SystemMemoryCQInterface::SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id
     command_completion_region_size(
         (((cq_size - cq_start) / DispatchSettings::TRANSFER_PAGE_SIZE) / 4) * DispatchSettings::TRANSFER_PAGE_SIZE),
     command_issue_region_size((cq_size - cq_start) - this->command_completion_region_size),
+    id(cq_id),
     issue_fifo_size(command_issue_region_size >> 4),
     issue_fifo_limit(
         ((cq_start + this->command_issue_region_size) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4),
-    completion_fifo_size(command_completion_region_size >> 4),
-    completion_fifo_limit(issue_fifo_limit + completion_fifo_size),
     offset(get_absolute_cq_offset(channel, cq_id, cq_size)),
-    id(cq_id) {
+    completion_fifo_size(command_completion_region_size >> 4),
+    completion_fifo_limit(issue_fifo_limit + completion_fifo_size) {
     TT_ASSERT(
         this->command_completion_region_size % MetalContext::instance().hal().get_alignment(HalMemType::HOST) == 0 and
             this->command_issue_region_size % MetalContext::instance().hal().get_alignment(HalMemType::HOST) == 0,

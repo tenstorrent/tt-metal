@@ -21,9 +21,10 @@ std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) 
     return tensor.memory_config();
 }
 
-void set_printoptions(const std::string& profile) {
-    tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
-        enchantum::cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, ttsl::ascii_caseless_comp).value();
+void set_printoptions(TensorPrintProfile print_profile, SciMode sci_mode, int precision) {
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.profile = print_profile;
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.sci_mode = sci_mode;
+    tt::tt_metal::tensor_impl::TTNN_PRINT_OPTIONS.precision = precision;
 }
 
 void segfault_handler(int sig) {
@@ -61,10 +62,6 @@ CoreIDs& CoreIDs::instance() {
 std::int64_t CoreIDs::get_python_operation_id() { return python_operation_id.load(); }
 void CoreIDs::set_python_operation_id(std::int64_t python_operation_id_) { python_operation_id = python_operation_id_; }
 std::int64_t CoreIDs::fetch_and_increment_python_operation_id() { return python_operation_id.fetch_add(1); }
-
-std::int64_t CoreIDs::get_tensor_id() { return tensor_id.load(); }
-void CoreIDs::set_tensor_id(std::int64_t tensor_id_) { tensor_id = tensor_id_; }
-std::int64_t CoreIDs::fetch_and_increment_tensor_id() { return tensor_id.fetch_add(1); }
 
 std::int64_t CoreIDs::get_device_operation_id() { return device_operation_id.load(); }
 void CoreIDs::set_device_operation_id(std::int64_t device_operation_id_) { device_operation_id = device_operation_id_; }

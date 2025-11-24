@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "context.hpp"
 #include "device.hpp"
 #include "device_utils.hpp"
@@ -289,7 +289,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
 // Common Multi MMIO device test.
 TestResult mem_bench_multi_mmio_devices(
-    benchmark::State& state, std::map<chip_id_t, IDevice*>& devices, const Context& ctx) {
+    benchmark::State& state, std::map<ChipId, IDevice*>& devices, const Context& ctx) {
     TestResult results;
 
     // One thread to wait for program on each device

@@ -26,7 +26,8 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", input_tensor.layout());
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
@@ -34,44 +35,78 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
                 input_tensor.physical_volume() / input_tensor.padded_shape()[-1],
-            "Error");
+            "Shard spec shape[0] ({}) must equal physical volume / padded shape[-1] ({})",
+            input_tensor.shard_spec().value().shape[0],
+            input_tensor.physical_volume() / input_tensor.padded_shape()[-1]);
         TT_FATAL(
             operation_attributes.output_mem_config.is_sharded() &&
                 operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-            "Error");
-        TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+            "Output memory config must be sharded and not WIDTH_SHARDED but got memory_layout: {}",
+            operation_attributes.output_mem_config.memory_layout());
+        TT_FATAL(
+            input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Input tensor shard orientation must be ROW_MAJOR but got {}",
+            input_tensor.shard_spec().value().orientation);
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         uint32_t num_cores = core_grid.x * core_grid.y;
         // 1 Head Per Core Max for now
-        TT_FATAL(operation_attributes.num_q_heads <= num_cores, "Error");
-        TT_FATAL(operation_attributes.num_kv_heads <= num_cores, "Error");
-        TT_FATAL(operation_attributes.num_q_heads >= operation_attributes.num_kv_heads, "Error");
-        TT_FATAL(operation_attributes.num_q_heads % input_tensor.shard_spec().value().num_cores() == 0, "Error");
+        TT_FATAL(
+            operation_attributes.num_q_heads <= num_cores,
+            "Number of Q heads ({}) must be <= number of cores ({})",
+            operation_attributes.num_q_heads,
+            num_cores);
+        TT_FATAL(
+            operation_attributes.num_kv_heads <= num_cores,
+            "Number of KV heads ({}) must be <= number of cores ({})",
+            operation_attributes.num_kv_heads,
+            num_cores);
+        TT_FATAL(
+            operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
+            "Number of Q heads ({}) must be >= number of KV heads ({})",
+            operation_attributes.num_q_heads,
+            operation_attributes.num_kv_heads);
+        TT_FATAL(
+            operation_attributes.num_q_heads % input_tensor.shard_spec().value().num_cores() == 0,
+            "Number of Q heads ({}) must be divisible by number of cores ({})",
+            operation_attributes.num_q_heads,
+            input_tensor.shard_spec().value().num_cores());
         if (tensor_args.input_tensor_kv.has_value()) {
-            TT_FATAL(tensor_args.input_tensor_kv.value().is_sharded(), "Error");
+            TT_FATAL(tensor_args.input_tensor_kv.value().is_sharded(), "Input tensor KV must be sharded");
             TT_FATAL(
                 input_tensor.shard_spec().value().grid == tensor_args.input_tensor_kv.value().shard_spec().value().grid,
-                "Error");
+                "Input tensor and KV tensor must have the same shard grid");
             TT_FATAL(
                 input_tensor.shard_spec().value().orientation ==
                     tensor_args.input_tensor_kv.value().shard_spec().value().orientation,
-                "Error");
+                "Input tensor and KV tensor must have the same shard orientation");
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] ==
                     (operation_attributes.num_q_heads / operation_attributes.num_kv_heads) *
                         operation_attributes.head_dim,
-                "Error");
+                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads) * head_dim ({})",
+                input_tensor.shard_spec().value().shape[1],
+                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads) * operation_attributes.head_dim);
         } else {
-            TT_FATAL(operation_attributes.num_kv_heads % input_tensor.shard_spec().value().num_cores() == 0, "Error");
+            TT_FATAL(
+                operation_attributes.num_kv_heads % input_tensor.shard_spec().value().num_cores() == 0,
+                "Number of KV heads ({}) must be divisible by number of cores ({})",
+                operation_attributes.num_kv_heads,
+                input_tensor.shard_spec().value().num_cores());
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] ==
                     (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
                         operation_attributes.head_dim,
-                "Error");
+                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads + 2) * head_dim ({})",
+                input_tensor.shard_spec().value().shape[1],
+                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
+                    operation_attributes.head_dim);
         }
-        TT_FATAL(!operation_attributes.transpose_k_heads, "Error");
+        TT_FATAL(!operation_attributes.transpose_k_heads, "Transpose K heads must be false");
     } else {
-        TT_FATAL(operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            operation_attributes.output_mem_config.memory_layout());
     }
 
     if (tensor_args.input_tensor_kv.has_value()) {
@@ -81,29 +116,42 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor_kv.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
         TT_FATAL(input_tensor_kv.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
         TT_FATAL(input_tensor_kv.dtype() == input_tensor.dtype(), "KV tensor dtype must be same as Q tensor dtype!");
-        TT_FATAL(input_tensor_kv.layout() == Layout::TILE, "Error");
+        TT_FATAL(
+            input_tensor_kv.layout() == Layout::TILE,
+            "Input tensor KV layout must be TILE but got {}",
+            input_tensor_kv.layout());
 
         TT_FATAL(input_shape_kv[0] == input_shape[0], "KV tensor batch dim must be same as Q tensor batch!");
         TT_FATAL(input_shape_kv[1] == 1, "Unsupported input shape {} is not equal to 1", input_shape_kv[1]);
         TT_FATAL(input_shape_kv[2] == input_shape[2], "KV tensor seq_len dim must be same as Q tensor seq_len!");
         if (input_tensor_kv.is_sharded()) {
-            TT_FATAL(input_tensor.is_sharded(), "Error");
+            TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded when KV tensor is sharded");
             TT_FATAL(
                 input_tensor_kv.shard_spec().value().shape[0] ==
                     input_tensor_kv.physical_volume() / input_tensor_kv.padded_shape()[-1],
-                "Error");
-            TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
-            TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim, "Error");
+                "KV tensor shard spec shape[0] ({}) must equal physical volume / padded shape[-1] ({})",
+                input_tensor_kv.shard_spec().value().shape[0],
+                input_tensor_kv.physical_volume() / input_tensor_kv.padded_shape()[-1]);
             TT_FATAL(
-                operation_attributes.num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0, "Error");
+                input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+                "KV tensor shard orientation must be ROW_MAJOR but got {}",
+                input_tensor_kv.shard_spec().value().orientation);
+            TT_FATAL(
+                input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim,
+                "KV tensor shard spec shape[1] ({}) must equal 2 * head_dim ({})",
+                input_tensor_kv.shard_spec().value().shape[1],
+                2 * operation_attributes.head_dim);
+            TT_FATAL(
+                operation_attributes.num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0,
+                "Number of KV heads ({}) must be divisible by KV tensor number of cores ({})",
+                operation_attributes.num_kv_heads,
+                input_tensor_kv.shard_spec().value().num_cores());
         }
     }
 }
 
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return;
-}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
 
 NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

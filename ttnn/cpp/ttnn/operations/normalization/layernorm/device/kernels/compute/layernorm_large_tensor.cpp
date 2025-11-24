@@ -102,7 +102,7 @@ void MAIN {
 #endif
         tile_regs_commit();
         pack_tile(dst0, cb_ex);
-        reduce_uninit();
+        reduce_uninit<FLOAT32_REDUCTION>();
         tile_regs_release();
         cb_push_back(cb_ex, onetile);
         // End of
@@ -176,7 +176,7 @@ void MAIN {
             }
             cb_pop_front(cb_xmm, blk);
             cb_reserve_back(cb_ex2, onetile);
-            reduce_uninit();
+            reduce_uninit<FLOAT32_REDUCTION>();
             tile_regs_commit();
             pack_tile(dst0, cb_ex2);
             cb_push_back(cb_ex2, onetile);
@@ -292,9 +292,6 @@ void MAIN {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
-                if (ncht == 1) {
-                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
-                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {

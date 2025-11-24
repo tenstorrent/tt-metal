@@ -54,23 +54,18 @@ class TtShiftedWindowAttentionV2:
         )
 
         x = ttnn.permute(x, (0, 1, 3, 2, 4, 5), memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        qkv_bias = self.parameters.qkv.bias
-
         x = ttnn.reshape(
             x, (B * num_windows, self.window_size[0] * self.window_size[1], C), memory_config=ttnn.L1_MEMORY_CONFIG
         )
-
-        qkv_weight = self.parameters.qkv.weight
-
         qkv = ttnn.linear(
             x,
-            qkv_weight,
-            bias=qkv_bias,
+            self.parameters.qkv.weight,
+            bias=self.parameters.qkv.bias,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
 
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -83,6 +78,7 @@ class TtShiftedWindowAttentionV2:
         q = qkv[0:1, :, :, :, :]
         k = qkv[1:2, :, :, :, :]
         v = qkv[2:3, :, :, :, :]
+
         q = ttnn.squeeze(q, 0)
         k = ttnn.squeeze(k, 0)
         v = ttnn.squeeze(v, 0)
@@ -93,7 +89,7 @@ class TtShiftedWindowAttentionV2:
         k = ttnn_custom_normalize(k, dim=-1, device=self.device)
         k = ttnn.permute(k, [0, 1, 3, 2])
         q = ttnn_custom_normalize(q, dim=-1, device=self.device)
-        attn = q @ k
+        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         logit_scale = ttnn.clamp(logit_scale, max=4.605170185988092, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -119,6 +115,7 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
@@ -137,6 +134,7 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
 
         x = ttnn.reshape(
@@ -156,5 +154,4 @@ class TtShiftedWindowAttentionV2:
         x = ttnn.reshape(x, (B, H, W, C), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x[:, :H, :W, :]
-        ttnn.ReadDeviceProfiler(self.device)
         return x

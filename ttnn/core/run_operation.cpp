@@ -101,7 +101,6 @@ OutputTensors run_without_autoformat(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
@@ -162,7 +161,6 @@ Tensors run_with_autoformat(
     const OptionalTensors& optional_output_tensors,
     const float pad_value) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     Tensors formatted_input_tensors;
@@ -229,7 +227,6 @@ Tensors run_with_autoformat(
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
     const OptionalTensors& optional_output_tensors) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());

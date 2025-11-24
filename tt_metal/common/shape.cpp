@@ -4,7 +4,7 @@
 
 #include "shape.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
