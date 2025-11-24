@@ -164,9 +164,11 @@ EthernetEndpointUpMetric::EthernetEndpointUpMetric(
     link_info_(get_physical_link_info_for_endpoint(tray_id, asic_location, channel, topology_helper)) {}
 
 const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const {
-    auto path = ethernet_base_path();
-    path.push_back("linkIsUp");
-    return path;
+    return {
+        "tray" + std::to_string(*tray_id_),
+        "chip" + std::to_string(*asic_location_),
+        "channel" + std::to_string(channel_),
+        "linkIsUp"};
 }
 
 void EthernetEndpointUpMetric::update(
@@ -215,9 +217,11 @@ EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
 }
 
 const std::vector<std::string> EthernetCRCErrorCountMetric::telemetry_path() const {
-    auto path = ethernet_base_path();
-    path.push_back("crcErrorCount");
-    return path;
+    return {
+        "tray" + std::to_string(*tray_id_),
+        "chip" + std::to_string(*asic_location_),
+        "channel" + std::to_string(channel_),
+        "crcErrorCount"};
 }
 
 void EthernetCRCErrorCountMetric::update(
@@ -255,9 +259,11 @@ EthernetRetrainCountMetric::EthernetRetrainCountMetric(
 }
 
 const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() const {
-    auto path = ethernet_base_path();
-    path.push_back("retrainCount");
-    return path;
+    return {
+        "tray" + std::to_string(*tray_id_),
+        "chip" + std::to_string(*asic_location_),
+        "channel" + std::to_string(channel_),
+        "retrainCount"};
 }
 
 void EthernetRetrainCountMetric::update(
@@ -297,9 +303,11 @@ EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
 }
 
 const std::vector<std::string> EthernetCorrectedCodewordCountMetric::telemetry_path() const {
-    auto path = ethernet_base_path();
-    path.push_back("correctedCodewordCount");
-    return path;
+    return {
+        "tray" + std::to_string(*tray_id_),
+        "chip" + std::to_string(*asic_location_),
+        "channel" + std::to_string(channel_),
+        "correctedCodewordCount"};
 }
 
 void EthernetCorrectedCodewordCountMetric::update(
@@ -341,9 +349,11 @@ EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
 }
 
 const std::vector<std::string> EthernetUncorrectedCodewordCountMetric::telemetry_path() const {
-    auto path = ethernet_base_path();
-    path.push_back("uncorrectedCodewordCount");
-    return path;
+    return {
+        "tray" + std::to_string(*tray_id_),
+        "chip" + std::to_string(*asic_location_),
+        "channel" + std::to_string(channel_),
+        "uncorrectedCodewordCount"};
 }
 
 void EthernetUncorrectedCodewordCountMetric::update(

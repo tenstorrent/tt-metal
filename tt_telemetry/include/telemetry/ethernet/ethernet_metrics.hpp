@@ -26,14 +26,7 @@ namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
 }
 
-// Base class for all Ethernet metrics to share common path prefix
-class EthernetMetricBase {
-protected:
-    // Returns base path for all Ethernet metrics
-    const std::vector<std::string> ethernet_base_path() const { return {"ethernet"}; }
-};
-
-class EthernetEndpointUpMetric : public BoolMetric, public EthernetMetricBase {
+class EthernetEndpointUpMetric : public BoolMetric {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
 
@@ -60,7 +53,7 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetCRCErrorCountMetric : public UIntMetric, public EthernetMetricBase {
+class EthernetCRCErrorCountMetric : public UIntMetric {
 public:
     EthernetCRCErrorCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -87,7 +80,7 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetRetrainCountMetric : public UIntMetric, public EthernetMetricBase {
+class EthernetRetrainCountMetric : public UIntMetric {
 public:
     EthernetRetrainCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -114,7 +107,7 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetCorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
+class EthernetCorrectedCodewordCountMetric : public UIntMetric {
 public:
     EthernetCorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
@@ -141,7 +134,7 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class EthernetUncorrectedCodewordCountMetric : public UIntMetric, public EthernetMetricBase {
+class EthernetUncorrectedCodewordCountMetric : public UIntMetric {
 public:
     EthernetUncorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
