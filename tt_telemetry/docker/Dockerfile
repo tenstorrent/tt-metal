@@ -49,7 +49,7 @@ COPY build/tt_telemetry/ ./build/tt_telemetry/
 # Copy libs
 COPY build_Release/lib ./build_Release/lib
 
-# Copy the entire tt_telemetry directory (for backwards compatibility, if needed)
+# Copy the entire tt_telemetry directory (provides fallback path for frontend files and source tree access)
 COPY tt_telemetry/ ./tt_telemetry/
 
 # Set library search path to find the copied libraries

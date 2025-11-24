@@ -10,6 +10,7 @@
 #include <mutex>
 #include <queue>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include <numeric>
@@ -22,9 +23,18 @@
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
 #include <server/prom_formatter.hpp>
+#include <sys/stat.h>
+
+// Platform-specific headers for executable path detection
+#if defined(__linux__)
 #include <unistd.h>
 #include <climits>
-#include <sys/stat.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <climits>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -152,8 +162,9 @@ private:
         return buffer.str();
     }
 
-    // Get the directory containing the executable
+    // Get the directory containing the executable (platform-specific)
     std::string get_executable_dir() {
+#if defined(__linux__)
         char result[PATH_MAX];
         ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
         if (count != -1) {
@@ -166,6 +177,34 @@ private:
                 }
             }
         }
+#elif defined(__APPLE__)
+        char result[PATH_MAX];
+        uint32_t size = sizeof(result);
+        if (_NSGetExecutablePath(result, &size) == 0) {
+            // Resolve symlinks
+            char resolved[PATH_MAX];
+            if (realpath(result, resolved) != nullptr) {
+                // Find last directory separator
+                std::string path(resolved);
+                size_t last_slash = path.find_last_of('/');
+                if (last_slash != std::string::npos) {
+                    return path.substr(0, last_slash);
+                }
+            }
+        }
+#elif defined(_WIN32)
+        char result[MAX_PATH];
+        DWORD count = GetModuleFileNameA(NULL, result, MAX_PATH);
+        if (count > 0 && count < MAX_PATH) {
+            // Find last directory separator (Windows uses backslash)
+            for (DWORD i = count - 1; i > 0; --i) {
+                if (result[i] == '\\' || result[i] == '/') {
+                    result[i] = '\0';
+                    return std::string(result);
+                }
+            }
+        }
+#endif
         return "";
     }
 
@@ -223,11 +262,13 @@ public:
         // Find frontend directory using search logic
         std::string frontend_base = find_frontend_dir(metal_home);
         // Extract base path (remove "tt_telemetry/frontend/static" or "frontend/static" suffix)
-        if (frontend_base.ends_with("tt_telemetry/frontend/static")) {
-            metal_home_ =
-                frontend_base.substr(0, frontend_base.length() - 32);  // Remove "/tt_telemetry/frontend/static"
-        } else if (frontend_base.ends_with("frontend/static")) {
-            metal_home_ = frontend_base.substr(0, frontend_base.length() - 15);  // Remove "/frontend/static"
+        constexpr std::string_view tt_telemetry_frontend_suffix = "tt_telemetry/frontend/static";
+        constexpr std::string_view frontend_suffix = "frontend/static";
+
+        if (frontend_base.ends_with(tt_telemetry_frontend_suffix)) {
+            metal_home_ = frontend_base.substr(0, frontend_base.length() - tt_telemetry_frontend_suffix.length());
+        } else if (frontend_base.ends_with(frontend_suffix)) {
+            metal_home_ = frontend_base.substr(0, frontend_base.length() - frontend_suffix.length());
         } else {
             metal_home_ = frontend_base;
         }
