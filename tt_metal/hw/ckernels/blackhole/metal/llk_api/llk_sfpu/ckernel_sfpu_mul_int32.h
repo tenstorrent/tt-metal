@@ -60,21 +60,26 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // b0
+        // Note: SFPLOADMACRO requires VD to be split into:
+        //   VDHi = VD >> 2 (1 bit)
+        //   VDLo = VD & 3 (2 bits)
+        // e.g. SFPLOADMACRO((m << 2) | VDLo, ..., offset | VDHi).
+
+        // Load b0
         TT_SFPLOAD(b0, INT32, ADDR_MOD_7, offset_in1);
-        // a1
+        // Macro 0, VD=a1
         TT_SFPLOADMACRO((0 << 2) | (a1 & 3), INT32, ADDR_MOD_7, offset_in0 | (a1 >> 2));
-        // b1
+        // Macro 1, VD=b1
         TT_SFPLOADMACRO((1 << 2) | (b1 & 3), INT32, ADDR_MOD_7, offset_in1 | (b1 >> 2));
-        // a0
+        // Load a0
         TT_SFPLOAD(a0, INT32, ADDR_MOD_7, offset_in0);
-        // b2
+        // Macro 2, VD=b2
         TT_SFPLOADMACRO((2 << 2) | (b2 & 3), INT32, ADDR_MOD_7, offset_in1 | (b2 >> 2));
         // c = mul24_hi(a0, b2)
         TTI_SFPMUL24(a0, b2, p_sfpu::LCONST_0, c, sfpi::SFPMUL24_MOD1_UPPER);
         // b1 = b1 + a1
         TTI_SFPIADD(0, a1, b1, sfpi::SFPIADD_MOD1_CC_NONE);
-        // c
+        // Macro 3, VD=c
         TT_SFPLOADMACRO((3 << 2) | (c & 3), INT32, ADDR_MOD_6, offset_out | (c >> 2));
     }
     TTI_SFPNOP;
