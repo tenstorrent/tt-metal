@@ -384,7 +384,7 @@ void RunTestOnCore(
         case SanitizeL1Overflow: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
-                "(read or write past the end of local memory).",
+                "of length {} (read or write past the end of local memory).",
                 device->id(),
                 (is_eth_core) ? "acteth" : "worker",
                 core.x,
@@ -392,7 +392,8 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr);
+                l1_overflow_addr,
+                1);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
