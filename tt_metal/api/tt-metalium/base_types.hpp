@@ -5,6 +5,7 @@
 #pragma once
 
 #include <ostream>
+#include <cstdint>
 
 enum class MathFidelity : uint8_t {
     LoFi = 0,
