@@ -3,12 +3,10 @@
 
 namespace tt_metal {
 
-// Recent deprecation - NOT safe to remove yet (only 10 days old)
-[[deprecated("Use newRecentFunc1 instead")]]
+// VIOLATION: Removed recent deprecation (only 10 days old)
 void recentDeprecatedFunc1();
 
-// Another recent deprecation
-[[deprecated]]
+// VIOLATION: Removed recent deprecation (only 10 days old)
 struct RecentDeprecatedStruct {
     int value;
 };
