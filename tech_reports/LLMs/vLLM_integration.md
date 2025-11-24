@@ -47,7 +47,7 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
    - `max_cross_attn_tokens`: class property which returns the max number of tokens in cross attention. In vLLM, this property is used in [tt_model_runner.py (V0)](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) for padding cross page tables to `max_cross_blocks`.
    - `prefill_forward` (**image+text models**): returns `logits, cross_attention_masks, full_text_row_masked_out_mask`. The input arguments are the same as the text-only models with the addition of `images` and `cross_page_table` (the page table for paged cross attention which accesses the same `kv_cache` as self attention). `cross_page_table` has shape `(batch_size, num_vision_blocks)`.
      ```python
-      prefill_forward(tokens : torch.Tensor, images : List[List[PIL.Image.Image]], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor, sampling_params : TTSamplingParams, empty_slots : list))
+      prefill_forward(tokens : torch.Tensor, images : List[List[PIL.Image.Image]], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor, sampling_params : TTSamplingParams, empty_slots : list)
       ```
    - `decode_forward` (**image+text models**): same as the text-only models with the additional input arguments `cross_attention_masks` (output from prefill), `full_text_row_mask_out_mask` (output from prefill), and `cross_page_table`. `cross_page_table` has shape `(max_batch_size, max_cross_blocks)`.
      ```python
