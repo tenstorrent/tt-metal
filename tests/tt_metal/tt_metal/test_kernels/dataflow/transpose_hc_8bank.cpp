@@ -115,7 +115,7 @@ void kernel_main() {
                                     // from the closest align source address if source is not aligned to ALIGNMENT then
                                     // we go to the nearest address that is aligned and copy from there
                                     noc_async_read(banked_addr - banked_alignment, intermed_l1_scratch, ALIGNMENT);
-                                    const uint8_t* dest_tr0_l1_ptr{reinterpret_cast<uint8_t*>(dest_tr0_l1)};
+                                    uint8_t* dest_tr0_l1_ptr{reinterpret_cast<uint8_t*>(dest_tr0_l1)};
                                     // need the barrier to ensure that we can copy from the intermediate buffer
                                     noc_async_read_barrier();
                                     // if source is not aligned to ALIGNMENT then we need to skip forward by the amount
