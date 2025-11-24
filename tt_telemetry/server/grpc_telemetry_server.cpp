@@ -23,16 +23,19 @@ using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
 
-template <bool UseFilter, typename OutputType>
+template <bool UseFilter>
 static size_t populate_metrics(
-    OutputType* output, const TelemetrySnapshot& telemetry, const std::string& metric_query = "") {
+    tt::telemetry::QueryMetricResponse* output,
+    const TelemetrySnapshot& telemetry,
+    const std::string& metric_query = "") {
     size_t count = 0;
 
     // Iterate through all bool metrics
     for (const auto& [path, value] : telemetry.bool_metrics) {
         // If filtering is enabled, check if metric_query is a substring of the path
+        // Empty metric_query matches all metrics
         if constexpr (UseFilter) {
-            if (path.find(metric_query) == std::string::npos) {
+            if (!metric_query.empty() && path.find(metric_query) == std::string::npos) {
                 continue;  // Skip this metric
             }
         }
@@ -55,7 +58,7 @@ static size_t populate_metrics(
     // Iterate through all uint metrics
     for (const auto& [path, value] : telemetry.uint_metrics) {
         if constexpr (UseFilter) {
-            if (path.find(metric_query) == std::string::npos) {
+            if (!metric_query.empty() && path.find(metric_query) == std::string::npos) {
                 continue;
             }
         }
@@ -78,7 +81,7 @@ static size_t populate_metrics(
     // Iterate through all double metrics
     for (const auto& [path, value] : telemetry.double_metrics) {
         if constexpr (UseFilter) {
-            if (path.find(metric_query) == std::string::npos) {
+            if (!metric_query.empty() && path.find(metric_query) == std::string::npos) {
                 continue;
             }
         }
@@ -101,7 +104,7 @@ static size_t populate_metrics(
     // Iterate through all string metrics
     for (const auto& [path, value] : telemetry.string_metrics) {
         if constexpr (UseFilter) {
-            if (path.find(metric_query) == std::string::npos) {
+            if (!metric_query.empty() && path.find(metric_query) == std::string::npos) {
                 continue;
             }
         }
@@ -171,6 +174,51 @@ public:
         }
 
         log_debug(tt::LogAlways, "[gRPC] Found {} metric(s) matching query: '{}'", num_metrics, metric_query);
+        return Status::OK;
+    }
+
+    // ListMetrics RPC implementation
+    Status ListMetrics(
+        ServerContext* context, const ListMetricsRequest* request, ListMetricsResponse* response) override {
+        const std::string& metric_query = request->metric_query();
+
+        log_debug(tt::LogAlways, "[gRPC] ListMetrics received with query: '{}'", metric_query);
+
+        // Lock the mutex to safely access telemetry_state_
+        std::lock_guard<std::mutex> lock(state_mutex_);
+
+        // Add bool metric paths (with optional filtering)
+        for (const auto& [path, value] : telemetry_state_.bool_metrics) {
+            if (metric_query.empty() || path.find(metric_query) != std::string::npos) {
+                response->add_bool_metrics(path);
+            }
+        }
+
+        // Add uint metric paths (with optional filtering)
+        for (const auto& [path, value] : telemetry_state_.uint_metrics) {
+            if (metric_query.empty() || path.find(metric_query) != std::string::npos) {
+                response->add_uint_metrics(path);
+            }
+        }
+
+        // Add double metric paths (with optional filtering)
+        for (const auto& [path, value] : telemetry_state_.double_metrics) {
+            if (metric_query.empty() || path.find(metric_query) != std::string::npos) {
+                response->add_double_metrics(path);
+            }
+        }
+
+        // Add string metric paths (with optional filtering)
+        for (const auto& [path, value] : telemetry_state_.string_metrics) {
+            if (metric_query.empty() || path.find(metric_query) != std::string::npos) {
+                response->add_string_metrics(path);
+            }
+        }
+
+        [[maybe_unused]] size_t total_metrics = response->bool_metrics_size() + response->uint_metrics_size() +
+                                                response->double_metrics_size() + response->string_metrics_size();
+        log_debug(tt::LogAlways, "[gRPC] Returning {} total metric paths", total_metrics);
+
         return Status::OK;
     }
 
