@@ -5,7 +5,7 @@
 #include "all_to_all_async.hpp"
 #include <utility>
 #include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -51,7 +51,7 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
                 subdevice_id);
         } else {
             std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
-            return ttnn::operations::experimental::ccl::all_to_all_async_generic(
+            return ttnn::experimental::all_to_all_async_generic(
                 input_tensor,
                 optional_persistent_output_buffer,
                 in_dim,
