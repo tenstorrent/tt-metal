@@ -208,6 +208,7 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    TileDescriptor,
     CBFormatDescriptor,
     CBDescriptor,
     ReaderConfigDescriptor,
@@ -216,6 +217,7 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    cb_descriptor_from_sharded_tensor,
     TensorAccessorArgs,
 )
 

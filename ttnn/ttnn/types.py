@@ -90,6 +90,7 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
 
+TileDescriptor = ttnn._ttnn.program_descriptor.TileDescriptor
 CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
 CBDescriptor = ttnn._ttnn.program_descriptor.CBDescriptor
 ReaderConfigDescriptor = ttnn._ttnn.program_descriptor.ReaderConfigDescriptor
@@ -98,5 +99,6 @@ ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
 KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
+cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
