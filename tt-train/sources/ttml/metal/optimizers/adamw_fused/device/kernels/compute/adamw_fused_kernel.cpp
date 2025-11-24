@@ -134,13 +134,9 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_size + block_idx);
         }
-        // TODO: Check if can be merged
         binop_with_scalar_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_unary_tile(block_size + block_idx, inv_sqrt_bc2);
-        }
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             add_unary_tile(block_size + block_idx, epsilon);
         }
         cb_wait_front(cb_m_t, block_size);
