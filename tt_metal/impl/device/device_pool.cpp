@@ -125,12 +125,32 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     return std::make_pair(core_assigned_to_device_worker_thread, core_assigned_to_device_completion_queue_reader);
 }
 
+void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_cores) {
+    cpu_set_t cpuset;
+    pthread_t current_thread = pthread_self();
+    CPU_ZERO(&cpuset);
+
+    for (const auto& free_core : free_cores) {
+        CPU_SET(free_core, &cpuset);
+    }
+    int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
+            rc);
+    }
+}
+
 std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
-    const std::vector<ChipId>& device_ids,
-    std::unordered_set<uint32_t>& free_cores,
-    bool use_numa_node_based_thread_binding,
-    const uint8_t num_hw_cqs,
-    std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
+    const uint8_t num_hw_cqs, std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
+    std::vector<ChipId> device_ids;
+    for (ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+        device_ids.emplace_back(device_id);
+    }
+    bool use_numa_node_based_thread_binding =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_numa_based_affinity();
+    std::unordered_set<uint32_t> free_cores = {};
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     constexpr uint32_t max_num_procs_per_device = 2;
     // When using multiple command queues, assign separate CPU cores to worker and completion queue reader threads,
@@ -164,26 +184,14 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
             }
         }
     }
+
+    if (use_numa_node_based_thread_binding) {
+        // Bind main thread to cores not being used by workers
+        bind_current_thread_to_free_cores(free_cores);
+    }
+
     return worker_thread_to_cpu_core_map;
 }
-
-void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_cores) {
-    cpu_set_t cpuset;
-    pthread_t current_thread = pthread_self();
-    CPU_ZERO(&cpuset);
-
-    for (const auto& free_core : free_cores) {
-        CPU_SET(free_core, &cpuset);
-    }
-    int rc = pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
-    if (rc) {
-        log_warning(
-            tt::LogMetal,
-            "Unable to bind main thread to free CPU cores. May see performance degradation. Error Code: {}",
-            rc);
-    }
-}
-
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
@@ -242,14 +250,19 @@ void DevicePool::initialize(
         static DevicePool device_pool{};
         _inst = &device_pool;
     }
+
+    _inst->worker_thread_to_cpu_core_map =
+        device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs, _inst->completion_queue_reader_to_cpu_core_map);
+
+    _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
     _inst->worker_l1_size = worker_l1_size;
-    _inst->num_hw_cqs = num_hw_cqs;
-    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
+    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
 
     std::vector<ChipId> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
@@ -328,7 +341,6 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
@@ -344,7 +356,9 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
     this->initialize_active_devices();
-    this->wait_for_fabric_router_sync();
+
+    this->wait_for_fabric_router_sync(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 5000);
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -727,22 +741,6 @@ void DevicePool::init_firmware_on_active_devices() const {
 DevicePool::DevicePool() {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool constructor");
-    bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
-    std::vector<ChipId> all_device_ids;
-    for (ChipId device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
-        all_device_ids.emplace_back(device_id);
-    }
-    std::unordered_set<uint32_t> free_cores = {};
-    this->worker_thread_to_cpu_core_map = device_cpu_allocator::get_device_id_to_core_map(
-        all_device_ids,
-        free_cores,
-        use_numa_node_based_thread_binding,
-        num_hw_cqs,
-        this->completion_queue_reader_to_cpu_core_map);
-    if (use_numa_node_based_thread_binding) {
-        // Bind main thread to cores not being used by workers
-        device_cpu_allocator::bind_current_thread_to_free_cores(free_cores);
-    }
 }
 
 IDevice* DevicePool::get_active_device(ChipId device_id) const {

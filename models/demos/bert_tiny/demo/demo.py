@@ -12,7 +12,7 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 
@@ -48,7 +48,6 @@ def run_bert_question_and_answering_inference(
     model_location_generator,
     input_path,
 ):
-    disable_persistent_kernel_cache()
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
     pytorch_model = hugging_face_reference_model.eval()
@@ -156,8 +155,6 @@ def run_bert_question_and_answering_inference_squad_v2(
     model_location_generator,
     n_iterations,
 ):
-    disable_persistent_kernel_cache()
-
     model = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
     pytorch_model = hugging_face_reference_model.eval()
@@ -241,8 +238,6 @@ def run_bert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize("input_loc", ["models/demos/bert_tiny/demo/input_data.json"])
 def test_demo(input_loc, batch_size, sequence_size, model_name, model_location_generator, device):
-    disable_persistent_kernel_cache()
-
     return run_bert_question_and_answering_inference(
         device=device,
         model_name=model_name,
@@ -269,8 +264,6 @@ def test_demo_squadv2(
     model_location_generator,
     device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,
         model_name=model_name,
