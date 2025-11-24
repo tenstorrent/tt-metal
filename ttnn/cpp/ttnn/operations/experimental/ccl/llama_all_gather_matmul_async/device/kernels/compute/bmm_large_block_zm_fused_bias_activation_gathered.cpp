@@ -322,10 +322,10 @@ void MAIN {
                     // INJECT DELAY HERE FOR FUSED BIAS/ACTIVATION KERNELS
                     // This adds delay after matmul but before bias/activation
                     // ============================================================
-                    volatile uint32_t delay_cycles = 200000;  // ~200 microseconds
-                    for (volatile uint32_t i = 0; i < delay_cycles; i++) {
-                        asm volatile("nop");
-                    }
+                    // volatile uint32_t delay_cycles = 200000;  // ~200 microseconds
+                    // for (volatile uint32_t i = 0; i < delay_cycles; i++) {
+                    //     asm volatile("nop");
+                    // }
                     // ============================================================
                     if (last_out) {
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop

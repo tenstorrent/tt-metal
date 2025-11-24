@@ -75,10 +75,10 @@ void MAIN {
                     // ============================================================
                     // INJECT DELAY HERE - Will affect all matmul operations
                     // ============================================================
-                    volatile uint32_t delay_cycles = 200000;  // ~200 microseconds at 1 GHz
-                    for (volatile uint32_t i = 0; i < delay_cycles; i++) {
-                        asm volatile("nop");
-                    }
+                    // volatile uint32_t delay_cycles = 200000;  // ~200 microseconds at 1 GHz
+                    // for (volatile uint32_t i = 0; i < delay_cycles; i++) {
+                    //     asm volatile("nop");
+                    // }
 
                     if (last_out) {
                         // Pack out to output buffer
