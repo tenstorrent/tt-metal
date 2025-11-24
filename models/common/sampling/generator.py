@@ -157,7 +157,7 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
 
         key, slot = self._trace_slot(penalties_on)
-        print("at capture, ", slot, key)
+        logger.debug("At capture: slot=%r, key=%r", slot, key)
 
         logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(

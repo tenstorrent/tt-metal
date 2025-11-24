@@ -34,7 +34,7 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
 
-    # freqeuncy
+    # frequency
     freq_term = ttnn.multiply(context.output_counts, context.frequency_penalties, **op_kwargs)
     logits = ttnn.subtract(logits, freq_term, output_tensor=logits, **op_kwargs)
 
