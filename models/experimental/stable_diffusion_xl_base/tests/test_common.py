@@ -775,6 +775,7 @@ def run_tt_image_gen(
                     noise_pred,
                     dim=0,
                     cluster_axis=0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
