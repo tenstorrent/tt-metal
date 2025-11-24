@@ -1728,6 +1728,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* router_state_l1 = const_cast<tt_l1_ptr router_state*>(&routing_table_l1->state);
+    *router_state_l1 = tt::tt_fabric::router_state::ROUTER_STATE_ACTIVE;
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -1775,47 +1777,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         if constexpr (is_sender_channel_serviced[0]) {
             open_perf_recording_window(inner_loop_perf_telemetry_collector);
         }
+        if (*router_state_l1 != tt::tt_fabric::router_state::ROUTER_STATE_PAUSED) {
+            for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+                invalidate_l1_cache();
+                // Capture these to see if we made progress
 
-        for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-            invalidate_l1_cache();
-            // Capture these to see if we made progress
-
-            // There are some cases, mainly for performance, where we don't want to switch between sender channels
-            // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
-                remote_receiver_channels,
-                channel_connection_established,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                inner_loop_perf_telemetry_collector);
-            if constexpr (!dateline_connection) {
-                run_receiver_channel_step<0, DownstreamSenderVC0T, DownstreamSenderVC1T>(
-                    local_receiver_channels,
-                    downstream_edm_noc_interfaces_vc0,
-                    downstream_edm_noc_interface_vc1,
-                    receiver_channel_pointers_ch0,
-                    receiver_channel_0_trid_tracker,
-                    port_direction_table,
-                    receiver_channel_response_credit_senders,
-                    routing_table);
-            }
-            if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-                run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
-                    local_receiver_channels,
-                    downstream_edm_noc_interfaces_vc0,
-                    downstream_edm_noc_interface_vc1,
-                    receiver_channel_pointers_ch1,
-                    receiver_channel_1_trid_tracker,
-                    port_direction_table,
-                    receiver_channel_response_credit_senders,
-                    routing_table);
-            }
-
-            if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {
-                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
+                // There are some cases, mainly for performance, where we don't want to switch between sender channels
+                // so we interoduce this to provide finer grain control over when we disable the automatic switching
+                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -1824,37 +1793,75 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_sender_channel_free_slots_stream_ids,
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
-            }
-            if constexpr (is_2d_fabric) {
-                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector);
-                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector);
-            }
-            if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
-                run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch1,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector);
+                if constexpr (!dateline_connection) {
+                    run_receiver_channel_step<0, DownstreamSenderVC0T, DownstreamSenderVC1T>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc0,
+                        downstream_edm_noc_interface_vc1,
+                        receiver_channel_pointers_ch0,
+                        receiver_channel_0_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table);
+                }
+                if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
+                    run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
+                        local_receiver_channels,
+                        downstream_edm_noc_interfaces_vc0,
+                        downstream_edm_noc_interface_vc1,
+                        receiver_channel_pointers_ch1,
+                        receiver_channel_1_trid_tracker,
+                        port_direction_table,
+                        receiver_channel_response_credit_senders,
+                        routing_table);
+                }
+
+                if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {
+                    run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
+                }
+                if constexpr (is_2d_fabric) {
+                    run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
+                    run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
+                }
+                if constexpr (
+                    enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
+                    run_sender_channel_step<
+                        enable_packet_header_recording,
+                        VC1_RECEIVER_CHANNEL,
+                        NUM_SENDER_CHANNELS - 1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch1,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
+                }
             }
         }
 
