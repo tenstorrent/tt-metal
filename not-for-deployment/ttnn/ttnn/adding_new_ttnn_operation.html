@@ -78,6 +78,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#python-implementation">Python Implementation</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#step-1-add-python-binding">Step 1: Add Python binding</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#step-2-optional-add-golden-function-for-the-operation-in-python">Step 2: (Optional) Add golden function for the operation in Python</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#step-3-optional-add-example-usage-to-docs">Step 3: (Optional) Add example usage to docs</a></li>
 </ul>
 </li>
 </ul>
@@ -895,6 +896,48 @@ The operation will be auto-registered in python. If the operation is called <cit
 <p class="admonition-title">Note</p>
 <p><cite>ttnn.example</cite> is the name of the operation in Python because the operation was registered as <cite>ttnn::example</cite> in C++.</p>
 </div>
+</section>
+<section id="step-3-optional-add-example-usage-to-docs">
+<h4>Step 3: (Optional) Add example usage to docs<a class="headerlink" href="#step-3-optional-add-example-usage-to-docs" title="Permalink to this heading"></a>
+</h4>
+<p>It is good practice to include an example demonstrating how to use the new function.
+The simplest method is to add an <strong>Example</strong> section directly in the documentation passed to the <code class="docutils literal notranslate"><span class="pre">bind_registered_operation</span></code> function. However, this approach makes it difficult to keep the example up to date and prevents the snippet from being tested.</p>
+<p>A better approach is to place the example code in a test file and have it included automatically during the documentation build process.</p>
+<p>In the file
+<a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/docs_examples/examples_mapping.py">examples_mapping.py</a>,
+each function is mapped to an example usage snippet that will appear in its documentation.</p>
+<p>Add the new operation to the <code class="docutils literal notranslate"><span class="pre">FUNCTION_TO_EXAMPLES_MAPPING_DICT</span></code> dictionary, as shown below:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">FUNCTION_TO_EXAMPLES_MAPPING_DICT</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="o">...</span>
+    <span class="s2">"ttnn.example"</span><span class="p">:</span> <span class="n">example</span><span class="o">.</span><span class="n">test_example</span><span class="p">,</span>
+    <span class="o">...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Place the example usage function in a new file named <code class="docutils literal notranslate"><span class="pre">test_example_examples.py</span></code> (or an existing file, if appropriate).
+Make sure the file is imported at the top of <code class="docutils literal notranslate"><span class="pre">examples_mapping.py</span></code>:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># ...</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">test_data_movement_examples</span> <span class="k">as</span> <span class="n">data_movement</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">test_core_examples</span> <span class="k">as</span> <span class="n">core</span>
+
+<span class="c1"># Import the new file</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">test_example_examples</span> <span class="k">as</span> <span class="n">example</span>
+<span class="c1"># ...</span>
+</pre></div>
+</div>
+<p>Implement the example as a standard <code class="docutils literal notranslate"><span class="pre">ttnn</span></code> pytest:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">test_example</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="c1"># Create tensor</span>
+    <span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+    <span class="c1"># Call the new operation</span>
+    <span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">example</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>This ensures that all example code snippets are executed and validated in the TT-NN CI pipeline.</p>
 </section>
 </section>
 </section>

@@ -176,7 +176,7 @@ Any rank of tensor is supported, however tensors with rank &gt; 4 can only apply
 
 <span class="c1"># Pad the tensor with 1 zero on all sides</span>
 <span class="n">padded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">)],</span> <span class="mi">0</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Padded Tensor Shape:"</span><span class="p">,</span> <span class="n">padded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Padded Tensor Shape: Shape([1, 1, 16, 16])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Padded Tensor Shape:"</span><span class="p">,</span> <span class="n">padded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Padded Tensor Shape: Shape([1, 1, 16, 16])</span>
 </pre></div>
 </div>
 </div>

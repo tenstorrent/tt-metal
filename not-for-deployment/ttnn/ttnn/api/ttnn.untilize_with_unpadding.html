@@ -189,6 +189,7 @@
 
 <span class="c1"># Untilize the tensor with unpadding</span>
 <span class="n">untilized_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">untilize_with_unpadding</span><span class="p">(</span><span class="n">tilized_tensor</span><span class="p">,</span> <span class="n">output_tensor_end</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Untilized Tensor with Unpadding Shape:"</span><span class="p">,</span> <span class="n">untilized_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

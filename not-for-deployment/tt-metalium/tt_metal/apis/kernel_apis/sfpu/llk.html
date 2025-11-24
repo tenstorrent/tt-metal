@@ -127,15 +127,15 @@ C++ like interface for programming.</p>
 </h2>
 <p>The following flags must be specified to compile SFPI kernels:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="o">-</span><span class="n">m</span><span class="o">&lt;</span><span class="n">arch</span><span class="o">&gt;</span><span class="w"> </span><span class="o">-</span><span class="n">fno</span><span class="o">-</span><span class="n">exceptions</span>
+<div class="highlight"><pre><span></span><span class="o">-</span><span class="n">mcpu</span><span class="o">=&lt;</span><span class="n">cpu</span><span class="o">&gt;</span><span class="w"> </span><span class="o">-</span><span class="n">fno</span><span class="o">-</span><span class="n">exceptions</span>
 </pre></div>
 </div>
-<p>where <code class="docutils literal notranslate"><span class="pre">arch</span></code> is one of:</p>
+<p>where <code class="docutils literal notranslate"><span class="pre">cpu</span></code> is one of:</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>wormhole</p></li>
-<li><p>blackhole</p></li>
+<li><p>tt-wh-tensix</p></li>
+<li><p>tt-bh-tensix</p></li>
 </ul>
 </div>
 </blockquote>
@@ -144,10 +144,10 @@ C++ like interface for programming.</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-warn</span></code>: disable sfpu specific warnings/errors</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-combine</span></code>: disable sfpu instruction combining</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-cc</span></code>: disable sfpu CC optimizations</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-replay</span></code>: disable sfpu REPLAY optimizations</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-mno-tt-tensix-warn</span></code>: disable sfpu specific warnings/errors</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-mno-tt-tensix-optimize-combine</span></code>: disable sfpu instruction combining</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-mno-tt-tensix-optimize-cc</span></code>: disable sfpu CC optimizations</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-mno-tt-tensix-optimize-replay</span></code>: disable sfpu REPLAY optimizations</p></li>
 </ul>
 </div>
 </blockquote>

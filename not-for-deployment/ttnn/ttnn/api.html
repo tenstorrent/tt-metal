@@ -101,6 +101,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.full_like.html">ttnn.full_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.rand.html">ttnn.rand</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.from_buffer.html">ttnn.from_buffer</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#matrix-multiplication">Matrix Multiplication</a><ul>
@@ -411,6 +412,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.prod.html">ttnn.prod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.manual_seed.html">ttnn.manual_seed</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#data-movement">Data Movement</a><ul>
@@ -491,6 +493,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#pooling">Pooling</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.global_avg_pool2d.html">ttnn.global_avg_pool2d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.max_pool2d.html">ttnn.max_pool2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.avg_pool2d.html">ttnn.avg_pool2d</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#vision">Vision</a><ul>
@@ -716,6 +719,10 @@
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.rand.html#ttnn.rand" title="ttnn.rand"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rand</span></code></a></p></td>
 <td><p>Generates a tensor with the given shape, filled with random values from a uniform distribution.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.from_buffer.html#ttnn.from_buffer" title="ttnn.from_buffer"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.from_buffer</span></code></a></p></td>
+<td><p>Creates a device tensor with values from a buffer of the specified, data type, layout, and memory configuration.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1937,6 +1944,10 @@
 <td><p><a class="reference internal" href="api/ttnn.cumsum.html#ttnn.cumsum" title="ttnn.cumsum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cumsum</span></code></a></p></td>
 <td><p>Returns cumulative sum of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> along dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> For a given <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> of size N, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> will also contain N elements and be such that:</p></td>
 </tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.manual_seed.html#ttnn.manual_seed" title="ttnn.manual_seed"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.manual_seed</span></code></a></p></td>
+<td><p>Sets a seed to pseudo random number generators (PRNGs) on the specified device.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
@@ -2238,6 +2249,10 @@
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.max_pool2d.html#ttnn.max_pool2d" title="ttnn.max_pool2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.max_pool2d</span></code></a></p></td>
 <td><p>Applies a max pool convolution to the input tensor.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.avg_pool2d.html#ttnn.avg_pool2d" title="ttnn.avg_pool2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.avg_pool2d</span></code></a></p></td>
+<td><p>Applies an average pool convolution to the input tensor.</p></td>
 </tr>
 </tbody>
 </table>

@@ -186,7 +186,7 @@
 
 <span class="c1"># Permute the tensor dimensions</span>
 <span class="n">permuted_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Permuted Tensor Shape:"</span><span class="p">,</span> <span class="n">permuted_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Permuted Tensor Shape: Shape([1, 1, 32, 64])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Permuted Tensor Shape:"</span><span class="p">,</span> <span class="n">permuted_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Permuted Tensor Shape: Shape([1, 1, 32, 64])</span>
 </pre></div>
 </div>
 </div>
