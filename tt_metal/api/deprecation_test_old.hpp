@@ -3,12 +3,10 @@
 
 namespace tt_metal {
 
-// Old deprecation - safe to remove after 30 days
-[[deprecated("Use newOldFunc1 instead")]]
+// REMOVED: Old deprecation (was 40+ days old - SAFE)
 void oldDeprecatedFunc1();
 
-// Old deprecation without message
-[[deprecated]]
+// REMOVED: Old deprecation (was 40+ days old - SAFE)
 int oldDeprecatedFunc2(int x);
 
 // Old deprecated class
