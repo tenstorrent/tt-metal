@@ -26,6 +26,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     K,
     N,
     dim,
+    other_dim,
     num_links,
     ag_input_dtype,
     layout,
@@ -99,7 +100,6 @@ def run_strided_all_gather_minimal_matmul_impl(
     ag_output_tensor_goldens_list = []
     torch_matmul_output_list = []
 
-    other_dim = 2 if dim == 3 else 2
     shard_dims = [other_dim, dim]
     for i in range(num_iters):
         torch_dtype = torch.float32
@@ -326,23 +326,23 @@ def run_strided_all_gather_minimal_matmul_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "M, K, N, dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
+    "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        (64, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 2048, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 2048, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (128, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (128, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 1024, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
         "base",  # 1 forward pass through K
@@ -403,6 +403,7 @@ def test_strided_all_gather_minimal_matmul_async(
     K,
     N,
     dim,
+    other_dim,
     num_links,
     ag_input_dtype,
     layout,
@@ -441,6 +442,7 @@ def test_strided_all_gather_minimal_matmul_async(
         K,
         N,
         dim,
+        other_dim,
         num_links,
         ag_input_dtype,
         layout,

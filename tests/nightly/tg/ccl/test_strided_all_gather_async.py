@@ -16,25 +16,25 @@ from models.common.utility_functions import skip_for_blackhole
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, num_links, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "ag_output_shape, dim, other_dim, num_links, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
-        ([1, 1, 256, 128], 3, 1, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 256, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 512, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
+        ([1, 1, 256, 128], 3, 2, 1, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 256, 256], 3, 2, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 512, 256], 3, 2, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
         # 2 row tests
-        ([1, 1, 512, 128], 3, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        ([1, 1, 512, 128], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        ([1, 1, 512, 256], 3, 2, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
+        ([1, 1, 512, 128], 3, 2, 1, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 512, 128], 3, 2, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 512, 256], 3, 2, 2, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 64),
         # 4 row tests
-        ([1, 1, 1024, 128], 3, 1, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
-        ([1, 1, 1024, 128], 3, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
+        ([1, 1, 1024, 128], 3, 2, 1, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
+        ([1, 1, 1024, 128], 3, 2, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 128, 32),
         # Multiple y core tests
-        ([1, 1, 1024, 128], 3, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 128, 32),
+        ([1, 1, 1024, 128], 3, 2, 4, 1, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 128, 32),
         # Full tests
-        ([1, 1, 4096, 2048], 3, 1, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
-        ([1, 1, 4096, 2048], 3, 4, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
+        ([1, 1, 4096, 2048], 3, 2, 1, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
+        ([1, 1, 4096, 2048], 3, 2, 4, 1, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 256, 256),
         # Wan tests
-        ([1, 1, 75776, 5120], 3, 4, 2, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 6, 256, 256),
+        ([1, 1, 75776, 5120], 3, 2, 4, 2, 64, ttnn.TILE_LAYOUT, ttnn.bfloat16, 6, 256, 256),
     ],
     ids=[
         "1tile1chunk1worker1row1link",
@@ -86,6 +86,7 @@ def test_strided_all_gather_async(
     mesh_device,
     ag_output_shape,
     dim,
+    other_dim,
     num_links,
     ag_input_dtype,
     layout,
@@ -105,6 +106,7 @@ def test_strided_all_gather_async(
         mesh_device.get_num_devices(),
         ag_output_shape,
         dim,
+        other_dim,
         num_links,
         ag_input_dtype,
         layout,
