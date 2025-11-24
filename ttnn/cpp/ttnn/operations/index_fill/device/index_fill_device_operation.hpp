@@ -25,8 +25,8 @@ struct IndexFillOperation {
     using tensor_return_value_t = Tensor;
     struct MultiCore {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id{};
+            tt::tt_metal::KernelHandle writer_kernel_id{};
             std::vector<tt::tt_metal::CoreCoord> cores;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
