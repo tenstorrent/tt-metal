@@ -17,10 +17,10 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE, USERS_PER_ROW, get_weight_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_rope_tensors
+from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, even_int_div, get_rope_tensors
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -408,8 +408,24 @@ class DeepseekGenerator:
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int) -> torch.Tensor:
-        """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
+    def _decode_step(
+        self,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_tables: tuple[ttnn.Tensor, ...] | None = None,
+    ) -> torch.Tensor:
+        """Run a single decode step and return logits on host as torch tensor [1, 1, B, V].
+
+        Args:
+            tokens_step: Token tensor [B]
+            positions: Position tensor [B]
+            batch_size_per_row: Batch size per row
+            page_tables: Optional page tables tuple, one per layer. If None, uses self.page_tables_tt
+        """
+        # Use provided page tables or fall back to internal ones
+        page_tables_to_use = page_tables if page_tables is not None else self.page_tables_tt
+
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
         rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
@@ -426,7 +442,7 @@ class DeepseekGenerator:
             tt_positions,
             self.model_run_config_decode,
             rope_tensors,
-            self.page_tables_tt,
+            page_tables_to_use,
         )
         # Gather to host
         logits = ttnn.to_torch(
@@ -635,16 +651,21 @@ class DeepseekGenerator:
             out.append(1)
         return out
 
-    def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
+    def _prefill(
+        self, tokens: torch.Tensor, user_id: int, page_tables: tuple[ttnn.Tensor, ...] | None = None
+    ) -> torch.Tensor:
         """Run prefill for the full prompt sequence and return logits for the last position.
 
         Args:
             tokens: [1, 1, seq_len] padded token sequences
             user_id: user id for the prefill
+            page_tables: Optional page tables tuple, one per layer. If None, uses self.page_tables_tt
 
         Returns:
             logits: [1, 1, seq_len, V] logits for the full sequence
         """
+        # Use provided page tables or fall back to internal ones
+        page_tables_to_use = page_tables if page_tables is not None else self.page_tables_tt
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
@@ -679,7 +700,7 @@ class DeepseekGenerator:
             user_id=user_id,
             cfg=self.model_run_config_prefill,
             rope_tensors=rope_tensors,
-            page_tables=self.page_tables_tt,
+            page_tables=page_tables_to_use,
         )
 
         # Gather to host
@@ -728,16 +749,251 @@ class DeepseekGenerator:
         logger.info("Decode trace capture complete.")
         self._trace_id = trace_id
 
-    def decode_forward(
-        self, tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int, enable_trace: bool = False
-    ) -> torch.Tensor:
-        if not enable_trace:
-            return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
+    def _inject_vllm_kv_cache(self, kv_cache):
+        """Inject vLLM kv_cache into the run configs, replacing internal cache references.
+
+        vLLM kv_cache is a list of [k_cache, v_cache] pairs, one per layer.
+        The model expects kvpe_cache in cfg["mla"]["kvpe_cache"] for each decoder block.
+        """
+        if kv_cache is None:
+            return
+
+        num_layers = len(kv_cache)
+
+        # vLLM provides [k_cache, v_cache] per layer, but model uses kvpe_cache
+        # Update prefill config with vLLM kv_cache
+        layer_idx = 0
+        for block_type in ["mlp_decoder_block", "moe_decoder_block"]:
+            if block_type in self.model_run_config_prefill:
+                blocks = self.model_run_config_prefill[block_type]
+                for block_cfg in blocks:
+                    if layer_idx < num_layers and "mla" in block_cfg and "kvpe_cache" in block_cfg["mla"]:
+                        # Use k_cache from vLLM kv_cache [k_cache, v_cache]
+                        block_cfg["mla"]["kvpe_cache"] = kv_cache[layer_idx][0]  # Use k_cache
+                    layer_idx += 1
+
+        # Update decode config with vLLM kv_cache
+        layer_idx = 0
+        for block_type in ["mlp_decoder_block", "moe_decoder_block"]:
+            if block_type in self.model_run_config_decode:
+                blocks = self.model_run_config_decode[block_type]
+                for block_cfg in blocks:
+                    if layer_idx < num_layers and "mla" in block_cfg and "kvpe_cache" in block_cfg["mla"]:
+                        block_cfg["mla"]["kvpe_cache"] = kv_cache[layer_idx][0]  # Use k_cache
+                    layer_idx += 1
+
+    def _convert_vllm_page_table_for_user(self, page_table: torch.Tensor, user_id: int) -> tuple[ttnn.Tensor, ...]:
+        """
+        Convert vLLM's block_tables (page_table) to TTNN tensor format for a specific user.
+        Creates one page table per layer as expected by the model.
+
+        Args:
+            page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
+            user_id: The user index to extract the page table for
+
+        Returns:
+            Tuple of TTNN tensors, one per layer
+        """
+        # Calculate expected shape: [batch_per_shard, blocks_per_user]
+        _, dp_factor = self.mesh_device.shape
+        batch_per_shard = even_int_div(self.batch_size_per_row, self.mesh_device.shape[0])
+        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
+
+        # Extract the user's block table row
+        user_blocks = page_table[user_id, :blocks_per_user].clone()  # [max_num_blocks_per_req] or less
+
+        # Create a full page table with shape [batch_per_shard, blocks_per_user]
+        full_page_table = torch.full((batch_per_shard, blocks_per_user), -1, dtype=torch.int32)
+        local_user_id = user_id % batch_per_shard
+        num_user_blocks = min(user_blocks.shape[0], blocks_per_user)
+        full_page_table[local_user_id, :num_user_blocks] = user_blocks[:num_user_blocks]
+
+        # Convert to TTNN format using the model's helper
+        page_table_tt = MLA2D.create_page_table(
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            page_table=full_page_table,
+            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+        )
+
+        # Create one page table per layer (all identical)
+        num_layers = self.hf_config.num_hidden_layers
+        return tuple(page_table_tt for _ in range(num_layers))
+
+    def _convert_vllm_page_table_for_batch(self, page_table: torch.Tensor) -> tuple[ttnn.Tensor, ...]:
+        """
+        Convert vLLM's block_tables (page_table) to TTNN tensor format for the entire batch.
+        Creates one page table per layer as expected by the model.
+
+        Args:
+            page_table: torch.Tensor of shape [batch_size, max_num_blocks_per_req] from vLLM
+
+        Returns:
+            Tuple of TTNN tensors, one per layer
+        """
+        # Calculate expected shape: [batch_per_shard, blocks_per_user]
+        _, dp_factor = self.mesh_device.shape
+        batch_per_shard = even_int_div(self.batch_size_per_row, self.mesh_device.shape[0])
+        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
+
+        # Create a full page table structure for all users
+        full_page_table = torch.full((batch_per_shard, blocks_per_user), -1, dtype=torch.int32)
+
+        batch_size = page_table.shape[0]
+        for user_id in range(batch_size):
+            local_user_id = user_id % batch_per_shard
+            user_blocks = page_table[user_id, :blocks_per_user].clone()
+            num_user_blocks = min(user_blocks.shape[0], blocks_per_user)
+            full_page_table[local_user_id, :num_user_blocks] = user_blocks[:num_user_blocks]
+
+        # Convert to TTNN format
+        page_table_tt = MLA2D.create_page_table(
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            page_table=full_page_table,
+            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+        )
+
+        # Create one page table per layer
+        num_layers = self.hf_config.num_hidden_layers
+        return tuple(page_table_tt for _ in range(num_layers))
+
+    def prefill_forward(self, *args, **kwargs):
+        """Prefill forward pass, following vLLM interface."""
+        tokens = kwargs["tokens"]
+        prompt_lens = kwargs.get("prompt_lens", None)
+        page_table = kwargs.get("page_table", None)
+        kv_cache = kwargs.get("kv_cache", None)
+
+        # Inject vLLM kv_cache into configs
+        if kv_cache is not None:
+            self._inject_vllm_kv_cache(kv_cache)
+
+        # Process each user in the batch
+        num_of_users = tokens.shape[0]
+        last_logits = []
+
+        for user_id in range(num_of_users):
+            if prompt_lens is not None and prompt_lens[user_id] == 0:
+                # Return zero logits for empty prompts: shape [1, vocab_size]
+                last_logits.append(torch.zeros(1, self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype))
+                continue
+
+            # Get the actual sequence length for this user
+            seq_len = prompt_lens[user_id] if prompt_lens is not None else tokens.shape[1]
+            last_token_idx = seq_len - 1
+
+            # Pad sequence length to nearest multiple of SPARSITY_BLOCK_SIZE for MoE compatibility
+            padded_seq_len = ((seq_len + SPARSITY_BLOCK_SIZE - 1) // SPARSITY_BLOCK_SIZE) * SPARSITY_BLOCK_SIZE
+
+            # Extract and pad tokens for this user
+            user_tokens = tokens[user_id, :seq_len]  # [seq_len]
+            if padded_seq_len > seq_len:
+                # Pad with zeros (pad_token_id would be better, but 0 is safe)
+                padding = torch.zeros(padded_seq_len - seq_len, dtype=user_tokens.dtype, device=user_tokens.device)
+                user_tokens = torch.cat([user_tokens, padding])
+
+            # Convert vLLM page_table to model format for this specific user
+            page_tables = (
+                self._convert_vllm_page_table_for_user(page_table, user_id) if page_table is not None else None
+            )
+
+            # Use vLLM cache and page tables
+            user_out = self._prefill(user_tokens, user_id, page_tables)
+            # user_out shape: [1, 1, padded_seq_len, V]
+            # Extract only the last token's logits (at position last_token_idx)
+            user_logits = user_out.squeeze(0).squeeze(0)[last_token_idx]  # [V]
+            # Reshape to [1, V] to match expected output format
+            last_logits.append(user_logits.unsqueeze(0))  # [1, V]
+
+        # Stack to [batch, 1, vocab_size]
+        last_logits = torch.stack(last_logits)  # [num_of_users, 1, V]
+        return last_logits
+
+    def decode_forward(self, *args, **kwargs):
+        """Decode forward pass, supporting both vLLM interface and internal interface."""
+        # Check if this is vLLM interface (has 'start_pos' keyword)
+        if "start_pos" in kwargs:
+            # vLLM interface
+            tokens = kwargs["tokens"]
+            start_pos = kwargs["start_pos"]
+            page_table = kwargs.get("page_table", None)
+            kv_cache = kwargs.get("kv_cache", None)
+
+            # Inject vLLM kv_cache into configs
+            if kv_cache is not None:
+                self._inject_vllm_kv_cache(kv_cache)
+
+            # Ensure tokens_step is 1D: [B]
+            tokens_step = tokens.squeeze()
+            if tokens_step.dim() != 1:
+                tokens_step = tokens_step.view(-1)
+
+            # Convert vLLM page_table to model format for the entire batch
+            page_tables = self._convert_vllm_page_table_for_batch(page_table) if page_table is not None else None
+
+            # Use vLLM cache and page tables
+            return_value = (
+                self._decode_step(
+                    tokens_step=tokens_step,
+                    positions=start_pos,
+                    batch_size_per_row=self.batch_size_per_row,
+                    page_tables=page_tables,
+                )
+                .squeeze(0)
+                .squeeze(0)
+                .unsqueeze(1)  # [1,1,B,V] -> [B, 1, V]
+            )
+            return return_value
         else:
-            # Capture trace and return trace output
-            if self._trace_id is None:
-                self._capture_decode_trace(tokens, positions, batch_size_per_row)
-                # First call: return the captured run's output
+            # Internal interface (for backward compatibility)
+            tokens = args[0] if len(args) > 0 else kwargs.get("tokens")
+            positions = args[1] if len(args) > 1 else kwargs.get("positions")
+            batch_size_per_row = args[2] if len(args) > 2 else kwargs.get("batch_size_per_row", self.batch_size_per_row)
+            enable_trace = kwargs.get("enable_trace", False)
+
+            if not enable_trace:
+                return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
+            else:
+                # Capture trace and return trace output
+                if self._trace_id is None:
+                    self._capture_decode_trace(tokens, positions, batch_size_per_row)
+                    # First call: return the captured run's output
+                    assert self._trace_output is not None
+                    logits = ttnn.to_torch(
+                        self._trace_output,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
+                        ),
+                    )
+                    return logits.squeeze(0).squeeze(0)
+
+                logger.info(f"Decode trace already captured, updating persistent inputs and executing")
+                # Update persistent inputs and execute
+                assert (
+                    self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
+                )
+                torch_input = tokens.view(1, 1, -1).to(torch.int32)
+                host_tokens = ttnn.from_torch(
+                    torch_input,
+                    device=None,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+
+                ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
+                host_positions = ttnn.from_torch(
+                    positions,
+                    device=None,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                    dtype=ttnn.int32,
+                )
+
+                ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
+                self.ccl.reset_sem_counters()
+                ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
                     self._trace_output,
@@ -746,39 +1002,6 @@ class DeepseekGenerator:
                     ),
                 )
                 return logits.squeeze(0).squeeze(0)
-
-            logger.info(f"Decode trace already captured, updating persistent inputs and executing")
-            # Update persistent inputs and execute
-            assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
-            torch_input = tokens.view(1, 1, -1).to(torch.int32)
-            host_tokens = ttnn.from_torch(
-                torch_input,
-                device=None,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-            ttnn.copy_host_to_device_tensor(host_tokens, self._trace_tokens)
-            host_positions = ttnn.from_torch(
-                positions,
-                device=None,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-                dtype=ttnn.int32,
-            )
-
-            ttnn.copy_host_to_device_tensor(host_positions, self._trace_positions)
-            self.ccl.reset_sem_counters()
-            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
-            assert self._trace_output is not None
-            logits = ttnn.to_torch(
-                self._trace_output,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                ),
-            )
-            return logits.squeeze(0).squeeze(0)
 
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]
