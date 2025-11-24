@@ -6,8 +6,6 @@
 #include <tt-metalium/constants.hpp>
 #include <optional>
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::dram_prefetcher {
 
 DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_program_factory(
