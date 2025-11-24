@@ -23,7 +23,7 @@ void bind_manual_seed_operation(py::module& module) {
             Keyword Args:
                 device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t or None.
                 user_ids (uint32_t or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
-                sub_core_grids (optional): custom core range set must for multi user execution.Core are constrained to numbers 0 to 31.
+                sub_core_grids (optional): Custom core range set must be provided for multi-user execution. Core IDs are constrained to numbers 0 to 31.
             Returns:
                 Tensor (ttnn.Tensor): An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
 

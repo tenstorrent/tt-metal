@@ -29,7 +29,6 @@ void MAIN {
     user_ids += metadata_fields;  // Skip metadata
 
     // Get info
-    const uint32_t user_id = 0;
     for (uint32_t i = 0; i < number_of_ids; i++) {
         if (core_id == user_ids[i]) {
             // Read seed from circular buffer

@@ -91,8 +91,8 @@ void ManualSeedDeviceOperation::validate_on_program_cache_hit(
     if (operation_attributes.seeds.has_value()) {
         if (operation_attributes.user_ids.has_value()) {
             TT_FATAL(
-                operation_attributes.user_ids.value() >= 0 && operation_attributes.user_ids.value() <= 32,
-                "User IDs scalar must be in the range [0, 32].");
+                operation_attributes.user_ids.value() >= 0 && operation_attributes.user_ids.value() <= 31,
+                "User IDs scalar must be in the range [0, 31].");
         }
     }
 }
