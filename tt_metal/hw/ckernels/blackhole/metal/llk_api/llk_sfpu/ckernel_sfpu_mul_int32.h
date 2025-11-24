@@ -115,6 +115,9 @@ inline void mul_int32_init() {
     // - bit 6: set means VD=16 (only readable by scheduled SFPSTORE).
     // - bits 5-3: delay (0-7).
     // - bits 2-0: template index (4+i), or 3 means SFPSTORE.
+    //
+    // The 32-bit value is then stored via SFPCONFIG to
+    // LoadMacroConfig[lane].Sequence[m] where m means the macro index 0-3.
 
     // Macro 0:
     {
