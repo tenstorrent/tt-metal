@@ -144,8 +144,9 @@ ConcatDeviceOperation::create_op_performance_model(
     return result;
 }
 
+namespace {
 // Calculate maximum tensors per concat based on runtime args limit
-static uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
+uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& input_tensors, const std::int64_t dim) {
     // Runtime args are limited by available L1 kernel config memory.
     // The general limit is 341 uint32_t args (from kernel_types.hpp:max_runtime_args),
     // but concat kernels are compiled with NUM_RUNTIME_ARGS=256.
@@ -242,6 +243,7 @@ static uint32_t calculate_max_tensors_per_concat(const std::vector<Tensor>& inpu
         return max_tensors;
     }
 }
+}  // anonymous namespace
 
 Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
