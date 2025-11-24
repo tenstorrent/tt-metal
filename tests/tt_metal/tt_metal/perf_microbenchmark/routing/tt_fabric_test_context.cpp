@@ -610,13 +610,13 @@ void TestContext::report_latency_results(const TestConfig& config) {
     latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
     latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
     latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
-    
+
     // Initialize with default tolerance (will be updated during golden comparison)
     latency_result.tolerance_percent = 1.0;
-    
+
     // Add to results vector
     latency_results_.push_back(latency_result);
-    
+
     // Write to CSV file
     generate_latency_csv(config);
 }
