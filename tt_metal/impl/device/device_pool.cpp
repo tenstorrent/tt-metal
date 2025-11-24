@@ -357,16 +357,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
 
-    // Calculate timeout based on system size: 4s + 1s * num_hosts
-    // to avoid false positive timeouts as init time scales with system size
-    uint32_t timeout_ms;
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        timeout_ms = 15000;  // Keep simulator timeout unchanged
-    } else {
-        const auto num_hosts = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-        timeout_ms = 4000 + 1000 * num_hosts;
-    }
-    this->wait_for_fabric_router_sync(timeout_ms);
+    this->wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -637,6 +628,16 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     if (using_fast_dispatch_) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
+}
+
+uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
+    // Calculate timeout based on system size: 4s + 1s * num_hosts
+    // to avoid false positive timeouts as init time scales with system size
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        return 15000;  // Keep simulator timeout unchanged
+    }
+    const auto num_hosts = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    return 4000 + 1000 * num_hosts;
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
