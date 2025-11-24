@@ -17,6 +17,7 @@
 
 constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
+constexpr bool is_2d_fabric = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
     using namespace tt::tt_fabric;
@@ -24,16 +25,27 @@ void kernel_main() {
 
     DPRINT << "SENDER: Starting latency sender kernel\n";
 
-    // Result buffer for storing latency samples (timestamp pairs)
+    // Common runtime args
     const size_t result_buffer_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
-    const size_t num_hops_to_responder = get_arg_val<uint32_t>(arg_idx++);
     const size_t scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // Sender's scratch (for receiving echo)
     const size_t responder_scratch_buffer_address =
         get_arg_val<uint32_t>(arg_idx++);  // Responder's scratch (for sending TO)
+
+    // Topology-specific routing args
+    uint32_t num_hops_to_responder = 0;
+    uint32_t dst_device_id = 0;
+    uint32_t dst_mesh_id = 0;
+
+    if constexpr (!is_2d_fabric) {
+        num_hops_to_responder = get_arg_val<uint32_t>(arg_idx++);
+    } else {
+        dst_device_id = get_arg_val<uint32_t>(arg_idx++);
+        dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     DPRINT << "SENDER: Config - payload_size=" << (uint32_t)payload_size_bytes << " burst_size=" << (uint32_t)burst_size
            << " num_bursts=" << (uint32_t)num_bursts << " hops=" << (uint32_t)num_hops_to_responder << "\n";
@@ -49,8 +61,15 @@ void kernel_main() {
     auto* sem_inc_packet_header = PacketHeaderPool::allocate_header();
 
     // Setup packet headers for routing
-    fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_responder);
-    fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_responder);
+    if constexpr (!is_2d_fabric) {
+        // 1D routing: use Low Latency header with hop count
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)payload_packet_header, num_hops_to_responder);
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)sem_inc_packet_header, num_hops_to_responder);
+    } else {
+        // 2D routing: use Hybrid Mesh header with device/mesh IDs (static routing)
+        fabric_set_unicast_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
+        fabric_set_unicast_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
+    }
 
     // Setup NOC addresses for destination (responder device)
     // Send payload to responder's scratch buffer (not its timestamp buffer)
