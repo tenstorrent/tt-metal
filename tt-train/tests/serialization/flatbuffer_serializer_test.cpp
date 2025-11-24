@@ -15,9 +15,9 @@
 #include <random>
 #include <string>
 #include <tt-metalium/bfloat16.hpp>
-#include <ttnn/api/ttnn/tensor/serialization.hpp>
 #include <vector>
 
+#include "api/ttnn/tensor/serialization.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -744,10 +744,6 @@ std::ostream& operator<<(std::ostream& os, const SerializationConfig& config) {
 
 std::ostream& operator<<(std::ostream& os, const TensorTestCase& test_case) {
     return os << to_string(test_case);
-}
-
-std::ostream& operator<<(std::ostream& os, const TestParam& param) {
-    return os << to_string(param);
 }
 
 }  // namespace

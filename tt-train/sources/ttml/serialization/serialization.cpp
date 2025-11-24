@@ -9,10 +9,10 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
-#include <ttnn/api/ttnn/tensor/serialization.hpp>
-#include <ttnn/api/ttnn/tensor/tensor_impl.hpp>
 #include <ttnn/tensor/types.hpp>
 
+#include "api/ttnn/tensor/serialization.hpp"
+#include "api/ttnn/tensor/tensor_impl.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
