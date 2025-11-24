@@ -280,6 +280,9 @@ public:
         const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
 private:
+    // Number of downstream mux connections (all directions except self = 3)
+    static constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = 3;
+
     // ==================================================================================
     // Mux-specific: Support for inter-mux connections (mux → downstream mux)
     // Each mux can connect to 3 other muxes (all directions except itself)
@@ -292,8 +295,9 @@ private:
         uint32_t connection_region_idx,
         uint32_t stream_id) const;
 
-    // Number of downstream mux connections (all directions except self = 3)
-    static constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = 3;
+    // Helper to collect all downstream mux connection infos
+    std::array<MuxConnectionInfo, NUM_DOWNSTREAM_MUX_CONNECTIONS> get_all_mux_connection_infos(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Flow control semaphores (mux → downstream mux direction) for each downstream mux connection
     // - Stored in current MUX's L1 memory
@@ -354,6 +358,10 @@ private:
 
     // Number of mux connections: [0]=local, [1]=downstream_en, [2]=downstream_ws
     static constexpr uint32_t NUM_MUX_CONNECTIONS = 3;
+
+    // Helper to collect all mux connection infos
+    std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> get_all_mux_connection_infos(
+        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Flow control semaphores (relay → mux direction) for each mux connection
     // - Stored in RELAY's L1 memory

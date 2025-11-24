@@ -440,26 +440,11 @@ MuxConnectionInfo FabricTensixDatamoverMuxConfig::get_mux_connection_info(
         .stream_id = stream_id};
 }
 
-// Overload that updates fabric endpoint info from fabric_router_config
-std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
+std::array<MuxConnectionInfo, FabricTensixDatamoverMuxConfig::NUM_DOWNSTREAM_MUX_CONNECTIONS>
+FabricTensixDatamoverMuxConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const auto& tensix_config = fabric_context.get_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        fabric_tensix_config);
-
-    auto* channel_allocator = fabric_router_config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-
-    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
-    wait_for_fabric_endpoint_ready_ = true;
-
-    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
-    TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
 
     auto downstream_dirs = get_all_other_directions(direction);
 
@@ -485,6 +470,32 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
         mux_infos[i] = get_mux_connection_info(
             downstream_mux_noc_coord, downstream_mux_channel, connection_region_idx, mux_stream_id);
     }
+
+    return mux_infos;
+}
+
+std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
+        tt::tt_fabric::FabricEriscDatamoverType::Default,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        fabric_tensix_config);
+
+    auto channel_allocator = fabric_router_config.channel_allocator.get();
+    const auto static_channel_allocator =
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+
+    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    wait_for_fabric_endpoint_ready_ = true;
+
+    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
+    TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
+
+    auto mux_infos = get_all_mux_connection_infos(fabric_node_id, routing_plane_id, direction);
 
     // Build compile time args following similar pattern to relay
     std::vector<uint32_t> ct_args = {
@@ -630,6 +641,45 @@ MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
         .stream_id = stream_id};
 }
 
+std::array<MuxConnectionInfo, FabricTensixDatamoverRelayConfig::NUM_MUX_CONNECTIONS>
+FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+
+    // Determine directions to check: [0]=local, [1]=perp1, [2]=perp2
+    auto [perp_dir1, perp_dir2] = get_perpendicular_directions(direction);
+    std::array<eth_chan_directions, NUM_MUX_CONNECTIONS> target_mux_dirs = {direction, perp_dir1, perp_dir2};
+
+    std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> mux_infos;
+
+    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
+        auto target_dir = target_mux_dirs[i];
+        auto mux_noc_coord = tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, target_dir);
+
+        // Determine which channel on the target mux we connect to
+        uint32_t mux_channel_id;
+        if (i == 0) {
+            // Local connection
+            mux_channel_id = static_cast<uint32_t>(UdmMuxChannelId::LOCAL_RELAY_CHANNEL);
+        } else {
+            // Downstream connection (perpendicular)
+            // EAST/NORTH relay connects to EAST_OR_NORTH_RELAY_CHANNEL
+            // WEST/SOUTH relay connects to WEST_OR_SOUTH_RELAY_CHANNEL
+            mux_channel_id = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::NORTH)
+                                 ? static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL)
+                                 : static_cast<uint32_t>(UdmMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL);
+        }
+
+        // Get stream ID for the target mux channel
+        uint32_t mux_stream_id = tensix_config.get_channel_credits_stream_id(mux_channel_id, FabricTensixCoreType::MUX);
+
+        mux_infos[i] = get_mux_connection_info(mux_noc_coord, mux_channel_id, i, mux_stream_id);
+    }
+
+    return mux_infos;
+}
+
 std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
@@ -641,57 +691,13 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
 
     // Channel IDs and stream IDs
     constexpr uint32_t router_to_relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
-    constexpr std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_channel_ids = {
-        static_cast<uint32_t>(UdmMuxChannelId::LOCAL_RELAY_CHANNEL),
-        static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL),
-        static_cast<uint32_t>(UdmMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL)};
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
     const auto router_to_relay_channel_stream_id =
         tensix_config.get_channel_credits_stream_id(router_to_relay_channel_id, FabricTensixCoreType::RELAY);
 
-    // Build stream IDs array using loop
-    std::array<uint32_t, NUM_MUX_CONNECTIONS> mux_stream_ids;
-    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
-        mux_stream_ids[i] = tensix_config.get_channel_credits_stream_id(mux_channel_ids[i], FabricTensixCoreType::MUX);
-    }
-
-    // Determine which perpendicular directions to check based on relay direction
-    // E/W relay connects to N/S downstream mux; N/S relay connects to E/W downstream mux
-    auto [downstream_en_dir, downstream_ws_dir] = get_perpendicular_directions(direction);
-
-    // Query NOC coords from mapping: [0]=local (same direction), [1]=downstream_en, [2]=downstream_ws (perpendicular)
-    std::array<const std::pair<uint32_t, uint32_t>*, NUM_MUX_CONNECTIONS> mux_noc_coords = {
-        tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, direction),
-        tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, downstream_en_dir),
-        tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, downstream_ws_dir)};
-
-    // Determine downstream mux channel based on relay direction
-    // EAST/NORTH relay connects to EAST_OR_NORTH_RELAY_CHANNEL, WEST/SOUTH relay connects to
-    // WEST_OR_SOUTH_RELAY_CHANNEL
-    uint32_t downstream_mux_channel =
-        (direction == eth_chan_directions::EAST || direction == eth_chan_directions::NORTH)
-            ? static_cast<uint32_t>(UdmMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL)
-            : static_cast<uint32_t>(UdmMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL);
-
-    // Find the index of this channel in mux_channel_ids array
-    uint32_t idx = 0;
-    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
-        if (mux_channel_ids[i] == downstream_mux_channel) {
-            idx = i;
-            break;
-        }
-    }
-
-    // Collect all mux connection info using loop
-    std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> mux_infos;
-    for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
-        // determines which mux channel the current relay should use: for local always use 0, for east/north relay we
-        // use 1, for west/south relay we use 2
-        uint32_t curr_idx = (i == 0) ? 0 : idx;
-        mux_infos[i] =
-            get_mux_connection_info(mux_noc_coords[i], mux_channel_ids[curr_idx], i, mux_stream_ids[curr_idx]);
-    }
+    // Collect all mux connection info
+    auto mux_infos = get_all_mux_connection_infos(fabric_node_id, routing_plane_id, direction);
 
     std::vector<uint32_t> ct_args = {
         num_buffers_full_size_channel_,                                          // 0: NUM_BUFFERS
