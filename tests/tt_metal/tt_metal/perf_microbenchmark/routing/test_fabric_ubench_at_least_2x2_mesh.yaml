@@ -92,10 +92,9 @@ Tests:
 
     senders:
       - device: [0, 0]
-        latency_burst_size: 1
         patterns:
           - ftype: unicast
-            num_packets: 256  # num_packets represents num_bursts in latency mode
+            num_packets: 256  # number of independent latency samples to collect
             destination:
               device: [0, 1]
 
@@ -170,10 +169,9 @@ Tests:
 
     senders:
       - device: [0, 0]
-        latency_burst_size: 1
         patterns:
           - ftype: unicast
-            num_packets: 256  # num_packets represents num_bursts in latency mode
+            num_packets: 256  # number of independent latency samples to collect
             destination:
               device: [0, 1]
 
@@ -228,9 +226,8 @@ Tests:
 
     senders:
       - device: [0, 0]
-        latency_burst_size: 1
         patterns:
           - ftype: unicast
-            num_packets: 256  # num_packets represents num_bursts in latency mode
+            num_packets: 256  # number of independent latency samples to collect
             destination:
               device: [0, 1]

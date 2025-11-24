@@ -58,7 +58,6 @@ struct ParsedSenderConfig {
     std::optional<CoreCoord> core;
     std::vector<ParsedTrafficPatternConfig> patterns;
     std::optional<uint32_t> link_id;  // Link ID for multi-link tests
-    uint32_t latency_burst_size = 1;  // Burst size for latency tests (only used in latency_test_mode)
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -96,7 +95,6 @@ struct SenderConfig {
     std::optional<CoreCoord> core;
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;  // Link ID for multi-link tests
-    uint32_t latency_burst_size = 1;  // Burst size for latency tests (only used in latency_test_mode)
 };
 
 enum class HighLevelTrafficPattern {

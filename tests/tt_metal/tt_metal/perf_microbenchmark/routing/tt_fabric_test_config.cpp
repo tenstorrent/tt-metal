@@ -146,9 +146,6 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["link_id"]) {
         config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
     }
-    if (sender_yaml["latency_burst_size"]) {
-        config.latency_burst_size = parse_scalar<uint32_t>(sender_yaml["latency_burst_size"]);
-    }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
     TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");

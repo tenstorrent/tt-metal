@@ -28,8 +28,7 @@ void kernel_main() {
     const size_t semaphore_address =
         get_arg_val<uint32_t>(arg_idx++);  // Shared sync address (same offset on all devices)
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-    const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
-    const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
+    const size_t num_samples = get_arg_val<uint32_t>(arg_idx++);
     const size_t responder_receive_buffer_address =
         get_arg_val<uint32_t>(arg_idx++);  // Responder's receive buffer (receives from sender)
     const size_t sender_receive_buffer_address =
@@ -102,7 +101,7 @@ void kernel_main() {
     // Store response elapsed times in timestamp buffer
     volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(timestamp_buffer_address);
     // Clear result buffer before writing elapsed times to avoid reading stale data
-    for (uint32_t i = 0; i < num_bursts; i++) {
+    for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
     }
     volatile uint32_t* responder_receive_ptr = reinterpret_cast<volatile uint32_t*>(responder_receive_buffer_address);
@@ -113,109 +112,49 @@ void kernel_main() {
         send_seminc_packet();
     }
 
-    // Validate burst size
-    if (burst_size > 1) {
-        while (1);  // Invalid config - hang instead of reporting garbage numbers
-    }
-
     // Main response loop
     // Wait for incoming packets and immediately send ack back
-    // Use receive buffer for receiving payloads to avoid overwriting timestamps
+    // We send 1 packet at a time, and the fact that we received a packet
+    // indicates our previous response packet was flushed through the system
+    for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
+        // Wait for incoming packet from sender
+        if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+            noc_semaphore_wait(responder_receive_ptr, sample_idx + 1);
+        } else {
+            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), 1);
+            *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
+        }
 
-    if (burst_size == 1) {
-        // for burst size one, we can safely assume we don't need to wait for space because
-        // we are only sending 1 packet at a time, and the fact that we received a packet
-        // indicates our previous response packet was flushed through the system
-        for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
-            // Wait for incoming packet from sender
-            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
-            } else {
-                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+        // Capture start timestamp after receiving packet
+        uint64_t start_timestamp = get_timestamp();
+
+        if constexpr (enable_fused_payload_with_sync) {
+            if (payload_size_bytes > 0) {
+                fabric_connection.send_payload_without_header_non_blocking_from_address(
+                    responder_receive_buffer_address, payload_size_bytes);
             }
-
-            // Capture start timestamp after receiving packet
-            uint64_t start_timestamp = get_timestamp();
-
-            if constexpr (enable_fused_payload_with_sync) {
+            fabric_connection.send_payload_flush_non_blocking_from_address(
+                (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            if constexpr (sem_inc_only) {
+                fabric_connection.send_payload_flush_non_blocking_from_address(
+                    (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+            } else {
                 if (payload_size_bytes > 0) {
                     fabric_connection.send_payload_without_header_non_blocking_from_address(
                         responder_receive_buffer_address, payload_size_bytes);
                 }
                 fabric_connection.send_payload_flush_non_blocking_from_address(
                     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-            } else {
-                if constexpr (sem_inc_only) {
-                    fabric_connection.send_payload_flush_non_blocking_from_address(
-                        (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
-                } else {
-                    if (payload_size_bytes > 0) {
-                        fabric_connection.send_payload_without_header_non_blocking_from_address(
-                            responder_receive_buffer_address, payload_size_bytes);
-                    }
-                    fabric_connection.send_payload_flush_non_blocking_from_address(
-                        (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-                }
             }
-
-            // Capture end timestamp after sending response
-            uint64_t end_timestamp = get_timestamp();
-
-            // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
-            uint64_t elapsed_cycles = end_timestamp - start_timestamp;
-            result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
         }
-    } else {
-        for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
-            // Wait for incoming packet from sender
-            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
-            } else {
-                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
-            }
 
-            // Capture start timestamp after receiving packet
-            uint64_t start_timestamp = get_timestamp();
+        // Capture end timestamp after sending response
+        uint64_t end_timestamp = get_timestamp();
 
-            for (size_t i = 0; i < burst_size; i++) {
-                if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                    noc_semaphore_wait(responder_receive_ptr, burst_idx + 1);
-                } else {
-                    noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
-                }
-
-                if constexpr (enable_fused_payload_with_sync) {
-                    fabric_connection.wait_for_empty_write_slot();
-                    if (payload_size_bytes > 0) {
-                        fabric_connection.send_payload_without_header_non_blocking_from_address(
-                            responder_receive_buffer_address, payload_size_bytes);
-                    }
-                    fabric_connection.send_payload_flush_non_blocking_from_address(
-                        (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-                } else {
-                    if constexpr (sem_inc_only) {
-                        fabric_connection.wait_for_empty_write_slot();
-                        fabric_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
-                    } else {
-                        fabric_connection.wait_for_empty_write_slot();
-                        if (payload_size_bytes > 0) {
-                            fabric_connection.send_payload_without_header_non_blocking_from_address(
-                                responder_receive_buffer_address, payload_size_bytes);
-                        }
-                        fabric_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-                    }
-                }
-            }
-
-            // Capture end timestamp after sending response
-            uint64_t end_timestamp = get_timestamp();
-
-            // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
-            uint64_t elapsed_cycles = end_timestamp - start_timestamp;
-            result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
-        }
+        // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
+        uint64_t elapsed_cycles = end_timestamp - start_timestamp;
+        result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
     }
 
     fabric_connection.close();

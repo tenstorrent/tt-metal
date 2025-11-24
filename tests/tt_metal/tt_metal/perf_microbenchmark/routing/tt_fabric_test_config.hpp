@@ -480,7 +480,6 @@ private:
         resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
         resolved_sender.core = parsed_sender.core;
         resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
-        resolved_sender.latency_burst_size = parsed_sender.latency_burst_size;  // Copy latency burst size
 
         resolved_sender.patterns.reserve(parsed_sender.patterns.size());
         for (const auto& parsed_pattern : parsed_sender.patterns) {

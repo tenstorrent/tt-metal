@@ -1247,8 +1247,7 @@ void TestDevice::create_latency_sender_kernel(
     CoreCoord core,
     FabricNodeId dest_node,
     uint32_t payload_size,
-    uint32_t burst_size,
-    uint32_t num_bursts,
+    uint32_t num_samples,
     NocSendType noc_send_type,
     CoreCoord responder_virtual_core) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
@@ -1292,10 +1291,10 @@ void TestDevice::create_latency_sender_kernel(
     // Runtime args
     // Calculate send and receive buffer addresses after timestamp storage
     TT_FATAL(
-        num_bursts <= MAX_LATENCY_SAMPLES,
-        "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
-        "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
-        num_bursts,
+        num_samples <= MAX_LATENCY_SAMPLES,
+        "Latency test num_samples ({}) exceeds maximum supported samples ({}). "
+        "Increase RESULT_BUFFER_SIZE or reduce num_samples.",
+        num_samples,
         MAX_LATENCY_SAMPLES);
 
     uint32_t send_buffer_address = get_latency_send_buffer_address();
@@ -1307,8 +1306,7 @@ void TestDevice::create_latency_sender_kernel(
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
         semaphore_address,                                // shared semaphore address (same offset on all devices)
         payload_size,                                     // payload size
-        burst_size,                                       // burst size (typically 1)
-        num_bursts,                                       // num bursts
+        num_samples,                                      // number of latency samples to collect
         send_buffer_address,                              // sender's send buffer (to write before sending)
         receive_buffer_address,                           // sender's receive buffer (to wait on)
         static_cast<uint32_t>(responder_virtual_core.x),  // responder's virtual NOC X coordinate
@@ -1345,8 +1343,7 @@ void TestDevice::create_latency_responder_kernel(
     CoreCoord core,
     FabricNodeId sender_node,
     uint32_t payload_size,
-    uint32_t burst_size,
-    uint32_t num_bursts,
+    uint32_t num_samples,
     NocSendType noc_send_type,
     uint32_t sender_send_buffer_address,
     uint32_t sender_receive_buffer_address,
@@ -1394,10 +1391,10 @@ void TestDevice::create_latency_responder_kernel(
     // Calculate responder's receive buffer and sender's receive buffer addresses
     constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
     TT_FATAL(
-        num_bursts <= MAX_LATENCY_SAMPLES,
-        "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
-        "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
-        num_bursts,
+        num_samples <= MAX_LATENCY_SAMPLES,
+        "Latency test num_samples ({}) exceeds maximum supported samples ({}). "
+        "Increase RESULT_BUFFER_SIZE or reduce num_samples.",
+        num_samples,
         MAX_LATENCY_SAMPLES);
 
     // Use sender's actual buffer addresses and coordinates passed from caller (no recomputation)
@@ -1410,8 +1407,7 @@ void TestDevice::create_latency_responder_kernel(
         sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
         semaphore_address,                                // shared semaphore address (same offset on all devices)
         payload_size,                                     // payload size
-        burst_size,                                       // burst size (typically 1)
-        num_bursts,                                       // num bursts
+        num_samples,                                      // number of latency samples to collect
         responder_receive_buffer_address,                 // responder's receive buffer (receives from sender)
         sender_receive_buffer_address,                    // sender's receive buffer (responder writes here)
         static_cast<uint32_t>(sender_virtual_core.x),     // sender's virtual NOC X coordinate

@@ -29,8 +29,7 @@ void kernel_main() {
     const size_t semaphore_address =
         get_arg_val<uint32_t>(arg_idx++);  // Shared sync address (same offset on all devices)
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-    const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
-    const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
+    const size_t num_samples = get_arg_val<uint32_t>(arg_idx++);
     const size_t send_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // Sender's send buffer (write before sending)
     const size_t receive_buffer_address =
         get_arg_val<uint32_t>(arg_idx++);  // Sender's receive buffer (wait for response)
@@ -122,13 +121,9 @@ void kernel_main() {
     volatile uint32_t* result_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
 
     // Clear result buffer before writing elapsed times to avoid reading stale data
-    uint32_t result_buffer_size = num_bursts * sizeof(uint32_t);
-    for (uint32_t i = 0; i < num_bursts; i++) {
+    uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_samples; i++) {
         result_ptr[i] = 0;
-    }
-    // Validate burst size
-    if (burst_size > 1) {
-        while (1);  // Invalid config - hang instead of reporting garbage numbers
     }
 
     // Main latency measurement loop
@@ -139,26 +134,21 @@ void kernel_main() {
     // Initialize receive buffer to 0
     *receive_buffer_ptr = 0;
 
-    if (burst_size > 1) {
-        while (1);  // invalid config -- hang instead of reporting garbage numbers
-    }
-
-    for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
+    for (size_t sample_idx = 0; sample_idx < num_samples; sample_idx++) {
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
             // Write incrementing value to send buffer BEFORE sending
-            *send_buffer_ptr = burst_idx + 1;
+            *send_buffer_ptr = sample_idx + 1;
             *receive_buffer_ptr = 0;
         }
 
-        for (size_t j = 0; j < burst_size; j++) {
-            if constexpr (enable_fused_payload_with_sync) {
-                send_payload_packet();
+        // Send one message per sample
+        if constexpr (enable_fused_payload_with_sync) {
+            send_payload_packet();
+        } else {
+            if constexpr (sem_inc_only) {
+                send_seminc_packet();
             } else {
-                if constexpr (sem_inc_only) {
-                    send_seminc_packet();
-                } else {
-                    send_payload_packet();
-                }
+                send_payload_packet();
             }
         }
         auto start_timestamp = get_timestamp();
@@ -168,11 +158,9 @@ void kernel_main() {
 
         // Wait on receive buffer for response from responder
         if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-            noc_semaphore_wait(receive_buffer_ptr, burst_idx + 1);
+            noc_semaphore_wait(receive_buffer_ptr, sample_idx + 1);
         } else {
-            for (size_t j = 0; j < burst_size; j++) {
-                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
-            }
+            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), 1);
             *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }
 
@@ -180,7 +168,7 @@ void kernel_main() {
 
         // Store elapsed time in cycles (truncated to uint32_t, sufficient for latency measurements)
         auto elapsed_cycles = end_timestamp - start_timestamp;
-        result_ptr[burst_idx] = static_cast<uint32_t>(elapsed_cycles);
+        result_ptr[sample_idx] = static_cast<uint32_t>(elapsed_cycles);
     }
 
     fabric_connection.close();

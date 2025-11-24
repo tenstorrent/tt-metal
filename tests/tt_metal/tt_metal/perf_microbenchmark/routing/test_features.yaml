@@ -293,14 +293,11 @@ Tests:
 
     senders:
       - device: [0, 0]
-        # latency_burst_size: Number of packets sent in a single burst (typically 1 for latency)
-        # This controls the granularity of latency measurement
-        latency_burst_size: 1
         patterns:
           - ftype: unicast
             # In latency mode, num_packets represents the number of latency samples to collect
             # Each sample is a complete round-trip measurement
-            num_packets: 256  # number of independent bursts to send
+            num_packets: 256  # number of independent latency samples to collect
             destination:
               device: [0, 1]
 
@@ -324,8 +321,7 @@ Tests:
 
     senders:
       - device: [0, 0]
-        latency_burst_size: 1 # send a single message per burst
         patterns:
-          - num_packets: 256  # send 256 independent bursts
+          - num_packets: 256  # collect 256 independent latency samples
             destination:
               device: [0, 3]  # Destination 3 hops away in ring topology

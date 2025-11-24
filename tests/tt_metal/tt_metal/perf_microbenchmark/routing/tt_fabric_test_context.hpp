@@ -419,7 +419,6 @@ public:
                         sender_core,
                         responder_device_id,
                         sender_config.parameters.payload_size_bytes,
-                        latency_burst_size_,  // Still need this as it's not in TrafficParameters
                         sender_config.parameters.num_packets,
                         sender_config.parameters.noc_send_type,
                         responder_virtual_core);
@@ -441,7 +440,7 @@ public:
                     const auto& sender_config = sender_configs[0].first;
 
                     uint32_t payload_size = sender_config.parameters.payload_size_bytes;
-                    uint32_t num_bursts = sender_config.parameters.num_packets;
+                    uint32_t num_samples = sender_config.parameters.num_packets;
                     NocSendType noc_send_type = sender_config.parameters.noc_send_type;
                     FabricNodeId sender_device_id = sender_config.src_node_id;
 
@@ -459,8 +458,7 @@ public:
                         receiver_core,
                         sender_device_id,
                         payload_size,
-                        latency_burst_size_,  // Still need this as it's not in TrafficParameters
-                        num_bursts,
+                        num_samples,
                         noc_send_type,
                         sender_send_buffer_address,
                         sender_receive_buffer_address,
@@ -793,10 +791,10 @@ private:
      *    dynamic allocation of send/receive buffers
      * 3. Store latency samples in result buffers rather than throughput metrics
      * 4. Use a single sender-responder pair rather than arbitrary traffic patterns
+     * 5. Constrained to 1 message per sample (no batching)
      *
      * This function manually populates the senders_ and receivers_ maps for latency test
-     * workers, sets their latency-specific kernel sources, and stores latency parameters
-     * (burst size, payload size, etc.) for later use during kernel compilation and result collection.
+     * workers and sets their latency-specific kernel sources.
      */
     void setup_latency_test_workers(TestConfig& config);
 
@@ -1916,7 +1914,6 @@ private:
     bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
     bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
-    uint32_t latency_burst_size_ = 1;  // Latency-specific parameter (not in TrafficParameters)
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 

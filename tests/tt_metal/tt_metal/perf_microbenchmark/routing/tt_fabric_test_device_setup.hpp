@@ -291,8 +291,7 @@ public:
         CoreCoord core,
         FabricNodeId dest_node,
         uint32_t payload_size,
-        uint32_t burst_size,
-        uint32_t num_bursts,
+        uint32_t num_samples,
         NocSendType noc_send_type,
         CoreCoord responder_virtual_core);
 
@@ -300,8 +299,7 @@ public:
         CoreCoord core,
         FabricNodeId sender_node,
         uint32_t payload_size,
-        uint32_t burst_size,
-        uint32_t num_bursts,
+        uint32_t num_samples,
         NocSendType noc_send_type,
         uint32_t sender_send_buffer_address,
         uint32_t sender_receive_buffer_address,

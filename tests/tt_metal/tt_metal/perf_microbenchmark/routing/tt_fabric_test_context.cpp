@@ -391,25 +391,24 @@ void TestContext::collect_latency_results() {
     auto sender_location = get_latency_sender_location();
     auto responder_location = get_latency_receiver_location();
 
-    const TestDevice* sender_device = sender_location.device;
-    MeshCoordinate sender_coord = sender_location.mesh_coord;
-    CoreCoord sender_core = sender_location.core;
-
-    MeshCoordinate responder_coord = responder_location.mesh_coord;
-    CoreCoord responder_core = responder_location.core;
-
     // Get num_samples from sender config
-    const auto& sender_configs = sender_device->get_senders().begin()->second.get_configs();
+    const auto& sender_configs = sender_location.device->get_senders().begin()->second.get_configs();
     uint32_t num_samples = sender_configs[0].first.parameters.num_packets;
-    uint32_t result_buffer_size = num_samples * sizeof(uint32_t);  // 1 elapsed time per sample
+    uint32_t result_buffer_size = num_samples * sizeof(uint32_t);
 
-    // Read latency samples from sender device using the latency worker core
+    // Read latency samples from sender device
     auto sender_result_data = fixture_->read_buffer_from_cores(
-        sender_coord, {sender_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+        sender_location.mesh_coord,
+        {sender_location.core},
+        sender_memory_map_.get_result_buffer_address(),
+        result_buffer_size);
 
     // Read responder timestamps from responder device
     auto responder_result_data = fixture_->read_buffer_from_cores(
-        responder_coord, {responder_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+        responder_location.mesh_coord,
+        {responder_location.core},
+        sender_memory_map_.get_result_buffer_address(),
+        result_buffer_size);
 
     log_info(tt::LogTest, "Collected {} latency samples from sender and responder", num_samples);
 }
@@ -649,9 +648,6 @@ void TestContext::setup_latency_test_workers(TestConfig& config) {
     FabricNodeId sender_device_id = sender.device;
     FabricNodeId receiver_device_id = dest.device.value();
 
-    // Store latency_burst_size for later use (not part of TrafficParameters)
-    latency_burst_size_ = sender.latency_burst_size;
-
     // Create sender worker on sender device
     if (fixture_->is_local_fabric_node_id(sender_device_id)) {
         const auto& sender_coord = fixture_->get_device_coord(sender_device_id);
@@ -732,7 +728,7 @@ void TestContext::setup_latency_test_mode(const TestConfig& config) {
     // Validate that latency tests don't use multiple iterations
     TT_FATAL(
         config.iteration_number == 1 || config.iteration_number == 0,
-        "Latency tests do not support multiple iterations. Use num_bursts in the test config instead to "
+        "Latency tests do not support multiple iterations. Use num_packets in the test config instead to "
         "collect multiple samples. Got {} iterations.",
         config.iteration_number);
 
@@ -746,7 +742,7 @@ void TestContext::setup_latency_test_mode(const TestConfig& config) {
 
     log_info(
         tt::LogTest,
-        "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
+        "Latency test mode: sender={}, responder={}, payload={} bytes, samples={}",
         sender.device.chip_id,
         dest.device.value().chip_id,
         pattern.size.value(),
