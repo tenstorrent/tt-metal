@@ -37,9 +37,9 @@ void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const 
 
 class DirectedRetrainingFixture : public ::testing::Test {
 protected:
-    tt::tt_metal::MetalContext* context_;
-    const tt::Cluster* cluster_;
-    const std::unique_ptr<tt::umd::Cluster>* driver_;
+    tt::tt_metal::MetalContext* context_{};
+    const tt::Cluster* cluster_{};
+    const std::unique_ptr<tt::umd::Cluster>* driver_{};
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id_;

@@ -1359,7 +1359,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
     uint32_t reset_asic_location,
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    log_output_rank0("Building reset topology for specific link:");
+    log_output_rank0("Building reset topology for specified link");
     log_output_rank0("  Host: " + reset_host);
     log_output_rank0("  Tray ID: " + std::to_string(reset_tray_id));
     log_output_rank0("  ASIC Location: " + std::to_string(reset_asic_location));
