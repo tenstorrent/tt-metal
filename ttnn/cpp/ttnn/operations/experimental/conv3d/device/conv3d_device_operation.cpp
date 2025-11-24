@@ -209,6 +209,7 @@ Conv3dDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<Tensor>& bias_tensor,
+    const Conv3dConfig& config,
     tt::tt_metal::DataType dtype_,
     uint32_t output_channels_,
     const std::array<uint32_t, 3>& kernel_size_,
@@ -217,7 +218,6 @@ Conv3dDeviceOperation::invoke(
     const std::array<uint32_t, 3>& dilation_,
     const std::string& padding_mode_,
     uint32_t groups_,
-    const Conv3dConfig& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(
