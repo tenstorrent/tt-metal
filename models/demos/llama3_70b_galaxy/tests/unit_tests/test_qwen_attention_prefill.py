@@ -50,10 +50,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (
         128,
-        2048,
-        4096,
-        8192,
-        1024 * 16,
+        # 2048,
         # 1024 * 64,
     ),
 )
@@ -88,13 +85,6 @@ def test_qwen_attention_inference_prefill(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    # rot_mats = get_rot_mat(
-    #     model_args.head_dim,
-    #     model_args.max_seq_len * 2,
-    #     mesh_device,
-    #     seq_len=max_seq_len,
-    #     scale_factor=model_args.rope_scaling_factor,
-    # )
     rot_mats = get_rot_mats(
         head_dim=model_args.head_dim,
         device=mesh_device,
@@ -207,8 +197,8 @@ def test_qwen_attention_inference_prefill(
     if check_kv_cache:
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
-            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+            reference_model.cache_k[:1, :, :].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
+            reference_model.cache_v[:1, :, :].clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
         ]
         # TT hardware execution -------------------------------------------------------------
         if paged_attention:

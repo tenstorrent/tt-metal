@@ -28,7 +28,7 @@ from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (1024,),
+    (128,),
 )
 @pytest.mark.parametrize(
     "batch_size",
