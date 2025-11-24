@@ -21,9 +21,9 @@ void bind_manual_seed_operation(py::module& module) {
                 seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
 
             Keyword Args:
-                device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t.
+                device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t or None.
                 user_ids (uint32_t or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
-                sub_core_grids (optional): number of cores must equal the number of users (which is constrained to 32).
+                sub_core_grids (optional): custom core range set must for multi user execution.Core are constrained to numbers 0 to 31.
             Returns:
                 Tensor: An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
 
@@ -36,10 +36,8 @@ void bind_manual_seed_operation(py::module& module) {
 
                     * - Dtypes
                       - Layouts
-                    * - X
-                      - X
-                    * - X
-                      - X
+                    * - UINT32
+                      - ROW_MAJOR_LAYOUT
 
                 Supported dtypes and layout for user_ids tensor values:
 
@@ -48,10 +46,9 @@ void bind_manual_seed_operation(py::module& module) {
 
                     * - Dtypes
                       - Layouts
-                    * - X, X
-                      - X
+                    * - UINT32
+                      - ROW_MAJOR_LAYOUT
         )doc";
-    // TODO: To be filled when implementing device logic
     using OperationType = decltype(ttnn::manual_seed);
     bind_registered_operation(
         module,
