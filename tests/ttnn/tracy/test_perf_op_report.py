@@ -224,30 +224,36 @@ op_support_count_tests = [
         "name": "Op_Support_Count_10",
         "command": "build/programming_examples/profiler/test_multi_op 100",
         "op_support_count": 10,
+        # Number of ops we expect to detect is 43 because that is the minimum number of ops that will be reported for any program with at least 43 ops regardless of op support count value
+        "expected_op_count": 43,
         "is_binary_exe": True,
     },
     {
         "name": "Op_Support_Count_100",
         "command": "build/programming_examples/profiler/test_multi_op 10000",
         "op_support_count": 100,
+        "expected_op_count": 100,
         "is_binary_exe": True,
     },
     {
         "name": "Op_Support_Count_1000",
         "command": "build/programming_examples/profiler/test_multi_op 10000",
         "op_support_count": 1000,
+        "expected_op_count": 1000,
         "is_binary_exe": True,
     },
     {
         "name": "Op_Support_Count_5000",
         "command": "build/programming_examples/profiler/test_multi_op 10000",
         "op_support_count": 5000,
+        "expected_op_count": 5000,
         "is_binary_exe": True,
     },
     {
         "name": "Op_Support_Count_10000",
         "command": "build/programming_examples/profiler/test_multi_op 10000",
         "op_support_count": 10000,
+        "expected_op_count": 10000,
         "is_binary_exe": True,
     },
 ]
@@ -269,7 +275,7 @@ class TestOpSupportCount:
         actual_count = df.groupby(
             ["GLOBAL CALL COUNT", "METAL TRACE ID", "METAL TRACE REPLAY SESSION ID"], dropna=False
         ).ngroups
-        expected_count = request.param["op_support_count"]
+        expected_count = request.param["expected_op_count"]
 
         assert (
             actual_count == expected_count
@@ -280,6 +286,8 @@ op_support_count_with_sum_profiling_enabled_test = {
     "name": "Op_Support_Count_200_With_Sum_Profiling_Enabled",
     "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops_single_core"',
     "op_support_count": 200,
+    # Number of ops we expect to detect is higher than the op support count value because BRISC, NCRISC, and TRISC1 use the extra space reserved for accumulation zones to record ops instead
+    "expected_op_count": 266,
     "sum_profiling": True,
 }
 
@@ -303,7 +311,7 @@ class TestOpSupportCountWithSumProfilingEnabled:
         actual_count = res.groupby(
             ["GLOBAL CALL COUNT", "METAL TRACE ID", "METAL TRACE REPLAY SESSION ID"], dropna=False
         ).ngroups
-        expected_count = request["op_support_count"]
+        expected_count = request["expected_op_count"]
 
         assert (
             actual_count == expected_count
