@@ -1887,3 +1887,74 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
                 torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
             )
         torch.isclose(output_tensor, golden_tensor, equal_nan=True)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "input_vals, torch_input_dtype, torch_output_dtype, ttnn_input_dtype, ttnn_output_dtype",
+    [
+        ([16457, 16429, 32641], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
+        ([0, 0, 0], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
+        ([65535, 65534, 65533], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
+        ([31744, 64512], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
+        ([-1, 0, 2147483647], torch.int32, torch.uint32, ttnn.int32, ttnn.uint32),
+    ],
+)
+def test_unary_bitcast_ttnn(
+    input_shapes, input_vals, torch_input_dtype, torch_output_dtype, ttnn_input_dtype, ttnn_output_dtype, device
+):
+    """Test bitcast operation - reinterprets bit pattern without conversion"""
+    # Create PyTorch reference
+    x_torch = torch.tensor(input_vals, dtype=torch_input_dtype)
+    y_torch = x_torch.view(torch_output_dtype)
+
+    # Pad input to match tile size
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    padded_vals = input_vals + [0] * (num_elements - len(input_vals))
+
+    # Create TTNN tensor
+    input_tensor = ttnn.Tensor(
+        padded_vals,
+        shape=input_shapes,
+        data_type=ttnn_input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    # Perform bitcast
+    output_tensor = ttnn.bitcast(input_tensor, ttnn_output_dtype)
+    # Convert to torch tensor
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_output_dtype)
+
+    # Extract the relevant values from the output tensor
+    output_vals = output_tensor.flatten()
+    expected_vals = y_torch.tolist()
+
+    # Compare values
+    # Note: NaN values may convert to inf due to hardware packer limitation
+    # For non-NaN, non-inf values, we expect exact match
+    for i, (expected, actual) in enumerate(zip(expected_vals, output_vals)):
+        if torch.isnan(torch.tensor(expected)):
+            # NaN values may convert to inf in bfloat16 due to packer hardware limitation
+            assert torch.isinf(torch.tensor(actual)) or torch.isnan(
+                torch.tensor(actual)
+            ), f"Value {i}: Expected NaN, got {actual}"
+        elif torch.isinf(torch.tensor(expected)):
+            # Inf values should match
+            assert torch.isinf(torch.tensor(actual)), f"Value {i}: Expected Inf, got {actual}"
+        else:
+            # Normal values should match exactly
+            # Note: For float32, there may be precision loss due to hardware limitations
+            if torch_output_dtype == torch.float32:
+                # Allow small tolerance for float32 precision issues
+                assert (
+                    abs(expected - actual) < 1e-5 or expected == actual
+                ), f"Value {i}: Expected {expected}, got {actual}, diff: {abs(expected - actual)}"
+            else:
+                assert expected == actual, f"Value {i}: Expected {expected}, got {actual}"
