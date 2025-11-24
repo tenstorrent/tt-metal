@@ -8,10 +8,10 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
+from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import custom_preprocessor
 from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
-from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertAttention
-from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_attention import TtnnSentenceBertAttention
+from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertLayer
+from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -22,26 +22,30 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ttnn_sentence_bert_attention(device, inputs, model_location_generator):
-    target_prefix = f"encoder.layer.{0}.attention."
+def test_ttnn_sentence_bert_layer(device, inputs, model_location_generator):
+    target_prefix = f"encoder.layer.{0}."
 
     config = transformers.BertConfig.from_pretrained(inputs[0])
     hidden_states = torch.randn(inputs[1], dtype=torch.bfloat16)
     attention_mask = torch.randn(inputs[2], dtype=torch.bfloat16)
-    reference_module = BertAttention(config).to(torch.bfloat16)
+    reference_module = BertLayer(config).to(torch.bfloat16)
     reference_module = load_torch_model(
         reference_module, target_prefix=target_prefix, model_location_generator=model_location_generator
     )
-    reference_out = reference_module(hidden_states, attention_mask)
+    reference_out = reference_module(
+        hidden_states,
+        attention_mask,
+    )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_module,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
-    ttnn_module = TtnnSentenceBertAttention(parameters=parameters, config=config)
+    ttnn_module = TtnnSentenceBertLayer(parameters=parameters, config=config)
     ttnn_hidden_states = ttnn.from_torch(
         hidden_states.unsqueeze(dim=1), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
+    ttnn_attention_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     sharded_input = ttnn.to_memory_config(
         ttnn_hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
@@ -51,7 +55,6 @@ def test_ttnn_sentence_bert_attention(device, inputs, model_location_generator):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    ttnn_attention_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_out = ttnn_module(
         sharded_input,
         ttnn_attention_mask,

@@ -8,7 +8,7 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
+from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import custom_preprocessor
 from models.demos.nlp.encoder.sentence_bert.common.common import load_torch_model
 from models.demos.nlp.encoder.sentence_bert.common.reference.sentence_bert import BertPooler
 from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler

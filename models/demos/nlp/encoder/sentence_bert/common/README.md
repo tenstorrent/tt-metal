@@ -18,7 +18,7 @@ Find sentence_bert instructions for the following device implementations:
 
 - Wormhole: [demos/wormhole/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/wormhole/README.md)
 
-- Blackhole:[demos/blackhole/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/blackhole/sentence_bert/README.md)
+- Blackhole:[demos/blackhole/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/blackhole/README.md)
 
 - QuietBox / LoudBox: [demos/t3000/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/t3000/sentence_bert/README.md)
 

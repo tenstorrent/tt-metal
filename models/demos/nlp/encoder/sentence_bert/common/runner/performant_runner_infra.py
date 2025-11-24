@@ -15,7 +15,7 @@ from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentence_bert_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 if is_blackhole():
-    from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
+    from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import custom_preprocessor
 else:
     from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import custom_preprocessor
 

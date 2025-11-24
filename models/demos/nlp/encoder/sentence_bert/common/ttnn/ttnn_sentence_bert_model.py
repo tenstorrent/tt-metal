@@ -10,7 +10,7 @@ from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_encode
 from models.demos.nlp.encoder.sentence_bert.common.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
 
 if is_blackhole():
-    from models.demos.blackhole.sentence_bert.ttnn.common import ttnn_mean_pooling
+    from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import ttnn_mean_pooling
 else:
     from models.demos.nlp.encoder.sentence_bert.wormhole.ttnn.common import ttnn_mean_pooling
 

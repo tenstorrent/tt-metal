@@ -6,7 +6,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 if is_blackhole():
-    from models.demos.blackhole.sentence_bert.ttnn.common import (
+    from models.demos.nlp.encoder.sentence_bert.blackhole.ttnn.common import (
         pre_softmax_config,
         query_key_value_matmul_program_config,
         softmax_config,

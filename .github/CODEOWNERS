@@ -302,7 +302,7 @@ models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn @tenstorrent/c
 models/demos/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/nlp/encoder/sentence_bert/common@arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/nlp/encoder/sentence_bert/wormhole @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/nlp/encoder/sentence_bert/blackhole @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/grok @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
 models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
