@@ -16,6 +16,11 @@ from models.demos.gemma3.tt.model_config import ModelArgs
 
 @torch.no_grad()
 @pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -33,7 +38,7 @@ from models.demos.gemma3.tt.model_config import ModelArgs
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
+def test_rmsnorm_inference(mesh_device, seq_len, batch_size, dummy_weights, reset_seeds):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -41,11 +46,38 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128,
+        dummy_weights=dummy_weights,
     )
 
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
+    # Verify weights are random for dummy_weights=True, consistent for dummy_weights=False
+    weight_key = "model.multi_modal_projector.mm_soft_emb_norm.weight"
+    assert weight_key in state_dict, f"Weight {weight_key} not found in state_dict"
+
+    if dummy_weights:
+        # For dummy weights, verify they change on each load (truly random)
+        state_dict_2 = tt_model_args.load_state_dict()
+        assert weight_key in state_dict_2, f"Weight {weight_key} not found in state_dict_2"
+
+        weight_diff = (state_dict[weight_key] - state_dict_2[weight_key]).abs().max().item()
+        logger.info(f"✓ Dummy weights verification: Max diff between two loads = {weight_diff}")
+        assert weight_diff > 0.01, f"Dummy weights should be random but got diff={weight_diff}"
+        logger.info(f"✓ Verified: Weights are truly random (different on each load)")
+    else:
+        # For real weights, verify they're identical on each load
+        state_dict_2 = tt_model_args.load_state_dict()
+        assert weight_key in state_dict_2, f"Weight {weight_key} not found in state_dict_2"
+
+        weight_diff = (state_dict[weight_key] - state_dict_2[weight_key]).abs().max().item()
+        logger.info(f"✓ Real weights verification: Max diff between two loads = {weight_diff}")
+        assert weight_diff < 1e-6, f"Real weights should be identical but got diff={weight_diff}"
+        logger.info(f"✓ Verified: Weights are from checkpoint (identical on each load)")
+
+    logger.info(f"Running test with dummy_weights={dummy_weights}")
+
+    # Load reference model for PCC check (both dummy and real weights)
     reference_model = tt_model_args.reference_vision_rms_norm()  # Gemma3 RMSNorm
     first_layer_prefix = "model.multi_modal_projector.mm_soft_emb_norm."
 
@@ -53,7 +85,7 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    # reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict)
 
     tt_inner_norm = RMSNorm(
         device=mesh_device,
@@ -72,7 +104,6 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
     tt_model = tt_inner_norm
 
     input = torch.rand(1, 1, 1152)
-
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -97,15 +128,16 @@ def test_rmsnorm_inference(mesh_device, seq_len, batch_size, reset_seeds):
         ),
     )[:1, :, :].squeeze(0)
 
+    # Check PCC for both dummy and real weights
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
     if passing:
-        logger.info("rms_norm Passed!")
+        logger.info(f"rms_norm {'with dummy weights ' if dummy_weights else ''}Passed!")
     else:
-        logger.warning("rms_norm Failed!")
+        logger.warning(f"rms_norm {'with dummy weights ' if dummy_weights else ''}Failed!")
 
     assert passing, f"rms_norm output does not meet PCC requirement {0.99}."
 
