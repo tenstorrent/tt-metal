@@ -16,7 +16,7 @@ from models.common.utility_functions import (
     enable_persistent_kernel_cache,
     is_grayskull,
 )
-from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.demos.nlp.encoder.squeezebert.tt import ttnn_functional_squeezebert
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 from models.perf.perf_utils import prep_perf_report
 

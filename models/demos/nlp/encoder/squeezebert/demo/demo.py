@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
-from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.demos.nlp.encoder.squeezebert.tt import ttnn_functional_squeezebert
 
 
 def load_inputs(input_path, batch):
@@ -266,7 +266,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
 )
 @pytest.mark.parametrize(
     "model_name, input_loc",
-    ((["squeezebert/squeezebert-uncased", "models/demos/squeezebert/demo/input_data.json"]),),
+    ((["squeezebert/squeezebert-uncased", "models/demos/nlp/encoder/squeezebert/demo/input_data.json"]),),
 )
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, reset_seeds):
