@@ -8,10 +8,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "create_qkv_heads_program_factory.hpp"
-
 #include "ttnn/decorators.hpp"
-
 #include "create_qkv_heads_device_operation_types.hpp"
+
+#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental::create_qkv_heads {
 

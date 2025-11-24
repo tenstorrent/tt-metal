@@ -8,7 +8,6 @@
 #include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
@@ -33,7 +32,6 @@ uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     using namespace tt::tt_metal;
-    using namespace tt::constants;
 
     Program program{};
 
