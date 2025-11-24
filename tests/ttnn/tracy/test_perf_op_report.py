@@ -224,7 +224,7 @@ op_support_count_tests = [
         "name": "Op_Support_Count_10",
         "command": "build/programming_examples/profiler/test_multi_op 100",
         "op_support_count": 10,
-        # Number of ops we expect to detect is 43 because that is the minimum number of ops that will be reported for any program with at least 43 ops regardless of op support count value
+        # Number of ops we expect to detect is 43 because that is the minimum number of ops that will be reported for any program with at least 43 ops
         "expected_op_count": 43,
         "is_binary_exe": True,
     },
