@@ -357,8 +357,16 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
 
-    this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 5000);
+    // Calculate timeout based on system size: 4s + 1s * num_hosts
+    // to avoid false positive timeouts as init time scales with system size
+    uint32_t timeout_ms;
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        timeout_ms = 15000;  // Keep simulator timeout unchanged
+    } else {
+        const auto num_hosts = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+        timeout_ms = 4000 + 1000 * num_hosts;
+    }
+    this->wait_for_fabric_router_sync(timeout_ms);
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
