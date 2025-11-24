@@ -23,21 +23,21 @@ inline void write_data(
     uint32_t onetile,
     uint32_t input_num_tiles) {
     DPRINT << "start writing data\n";
+
+    cb_wait_front(cb_int_cb_l, input_num_tiles);
+    DPRINT << "waiting front for s tensor\n";
+    uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
-    uint32_t chunk_size = input_num_tiles;  // to be modified with tiny tiles HERE
-    for (uint32_t i = 0; i < num_tiles_l / chunk_size; ++i) {
-        cb_wait_front(cb_int_cb_l, chunk_size);
-        uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
-        noc_async_write(l1_read_addr, dst_noc_addr, chunk_size * page_bytes);
-        dst_noc_addr += chunk_size * page_bytes;
-        noc_async_write_barrier();
-        cb_pop_front(cb_int_cb_l, chunk_size);
-    }
+    noc_async_write(l1_read_addr, dst_noc_addr, input_num_tiles * page_bytes);
+    noc_async_write_barrier();
+    DPRINT << "after noc write for s tensor\n";
+    cb_pop_front(cb_int_cb_l, input_num_tiles);
+
     DPRINT << "finished writing l tensor\n";
     // for tensor s
     cb_wait_front(cb_int_cb_s, onetile);
     DPRINT << "waiting front for s tensor\n";
-    uint32_t l1_read_addr = get_read_ptr(cb_int_cb_s);
+    l1_read_addr = get_read_ptr(cb_int_cb_s);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_s, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);
     noc_async_write_barrier();
@@ -73,7 +73,7 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    uint32_t input_num_tiles = 8;  // to be modified with tiny tiles HERE
+    uint32_t input_num_tiles = 4;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
 

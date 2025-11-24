@@ -36,28 +36,17 @@ inline void read_from_local(
     uint32_t onetile,
     uint32_t input_num_tiles) {
     // read l, s, m data from own device and push it to compute cbs
-    DPRINT << "start reading from local\n";
-    DPRINT << "input num tiles: " << (uint32_t)input_num_tiles << "\n";
-    DPRINT << "I SHOULD BE less than : " << (uint32_t)(num_tiles_l / input_num_tiles) << "\n";
+    cb_reserve_back(cb_id_in_l, input_num_tiles);
+    uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    DPRINT << "src adr l: " << (uint32_t)src_addr_l << "\n";
-    DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
-    DPRINT << "reserving cb id: " << (uint32_t)cb_id_in_l << "\n";
-    for (uint32_t i = 0; i < num_tiles_l / input_num_tiles; ++i) {
-        DPRINT << "reserving cb for l tensor with " << (uint32_t)input_num_tiles << "\n";
-        cb_reserve_back(cb_id_in_l, input_num_tiles);
-        DPRINT << "reserved cb for l tensor\n";
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
-        noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
-        read_addr += input_num_tiles * page_bytes;
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in_l, input_num_tiles);
-    }
+    noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
+    noc_async_read_barrier();
+    cb_push_back(cb_id_in_l, input_num_tiles);
 
     DPRINT << "finished reading l tensor\n";
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in_s);
+    l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
@@ -89,7 +78,6 @@ void kernel_main() {
     constexpr uint32_t core_noc_x = get_compile_time_arg_val(10);
     constexpr uint32_t core_noc_y = get_compile_time_arg_val(11);
     constexpr auto packet_buffer_args = TensorAccessorArgs<12>();
-    constexpr auto packet_buffer_args_2 = TensorAccessorArgs<accessor_2_idx>();
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -104,23 +92,22 @@ void kernel_main() {
     const auto page_idx_end = get_arg_val<uint32_t>(8);
     const auto max_pages_per_packet = get_arg_val<uint32_t>(9);
     const auto intermediate_base_addr = get_arg_val<uint32_t>(10);
-    const auto intermediate_base_addr_2 = get_arg_val<uint32_t>(11);
-    const auto packet_size_bytes = get_arg_val<uint32_t>(12);
-    const auto page_size_bytes = get_arg_val<uint32_t>(13);
-    const auto page_segments = get_arg_val<uint32_t>(14);
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(15);
-    const uint32_t sender_semaphore_addr2 = get_arg_val<uint32_t>(16);
-    const uint8_t sender_num_hops = get_arg_val<uint32_t>(17);  // always 1
-    const bool sender_is_forward = get_arg_val<uint32_t>(18);
+    const auto packet_size_bytes = get_arg_val<uint32_t>(11);
+    const auto page_size_bytes = get_arg_val<uint32_t>(12);
+    const auto page_segments = get_arg_val<uint32_t>(13);  // always 1 delete unecessay parts
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(14);
+    const uint32_t sender_semaphore_addr2 = get_arg_val<uint32_t>(15);
+    const uint8_t sender_num_hops = get_arg_val<uint32_t>(16);  // always 1
+    const bool sender_is_forward = get_arg_val<uint32_t>(17);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 18;
+    size_t conn_arg_idx = 17;
     uint32_t num_tiles_l = page_idx_end;
 
-    uint32_t chunk_size = 8;  // to be modified with tiny tiles HERE
+    uint32_t chunk_size = 4;  // to be modified with tiny tiles HERE
 
-    const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
-    const auto packet_buffer_2 = TensorAccessor(packet_buffer_args_2, intermediate_base_addr_2, packet_size_bytes);
+    const uint32_t new_packet_size_bytes = packet_size_bytes + page_size_bytes * 2;
+    const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, new_packet_size_bytes);
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -147,7 +134,7 @@ void kernel_main() {
     fabric_connection.close();
 
     cb_reserve_back(packet_cb_id, 1);
-    const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     // read local data from own device and push to compute cbs
     read_from_local(
@@ -176,72 +163,39 @@ void kernel_main() {
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
-    uint32_t packet_idx = page_idx_start / max_pages_per_packet;
+    uint32_t packet_idx = 0;  // page_idx_start / max_pages_per_packet;
 
     cb_reserve_back(receiver_cb_id_l, chunk_size);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    uint32_t count = 0;
-    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
-            if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
-                noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
-                noc_async_read_barrier();
 
-                packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
-                ++packet_idx;
-            }
+    // read the single packet
+    uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
+    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
+    noc_async_read_barrier();
 
-            const uint32_t page_offset = page_segment_idx * packet_size_bytes;
-            const uint32_t dest_addr = dest_page_base_addr + page_offset;
-            const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
-            const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
-
-            tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
-            ++packet_page_idx;
-            dest_page_base_addr += aligned_page_size_bytes;
-        }
-        count++;
-        if (count == chunk_size || page_idx == page_idx_end - 1) {
-            cb_push_back(receiver_cb_id_l, count);
-            count = 0;
-            dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-            if (page_idx != page_idx_end - 1) {
-                cb_reserve_back(receiver_cb_id_l, chunk_size);
-            }
-        }
-    }
+    tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     DPRINT << "print data from cb receiver l\n";
     print_full_tile(receiver_cb_id_l, 0, false);
-    cb_push_back(packet_cb_id, 1);
-    DPRINT << "after receiving packet l\n";
+    cb_push_back(receiver_cb_id_l, chunk_size);
 
     // now receiving s and m
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
-    const uint32_t dest_page_base_addr_s2 = get_write_ptr(receiver_cb_id_s);
-    const uint32_t dest_page_base_addr_m2 = get_write_ptr(receiver_cb_id_m);
 
-    DPRINT << "after reserving back s and m cb\n";
-
-    auto packet_idx_sm = 0;
-    const uint64_t pkt_noc_addr2 = packet_buffer_2.get_noc_addr(packet_idx_sm, 0, 0);
-    // read the single packet that contains both s and m to a temporary buffer
-    // then copy first tile to s and second tile to m
-    noc_async_read(pkt_noc_addr2, packet_l1_addr, page_size_bytes * 2);
-    DPRINT << "after reading s and m packet\n";
-    noc_async_read_barrier();
-
-    tt_memmove<false, false, false, 0>(dest_page_base_addr_s2, packet_l1_addr, page_size_bytes);
+    uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<false, false, false, 0>(
-        dest_page_base_addr_m2, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
-
+        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     DPRINT << "print data from cb receiver s\n";
     print_full_tile(receiver_cb_id_s, 0, false);
-
     cb_push_back(receiver_cb_id_s, 1);
+
+    uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+    tt_memmove<false, false, false, 0>(
+        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_m, 1);
+
+    cb_push_back(packet_cb_id, 1);
+    DPRINT << "after receiving packet l\n";
 
     noc_semaphore_set(local_semaphore_ptr, 0);
 
@@ -293,6 +247,9 @@ void kernel_main() {
     local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr2);
     noc_semaphore_wait(local_semaphore_ptr, 1);
 
+    cb_reserve_back(packet_cb_id, 1);
+    packet_l1_addr = get_write_ptr(packet_cb_id);
+
     DPRINT << "after waiting on semaphore from device 2\n";
 
     page_idx_start = 0;
@@ -301,56 +258,27 @@ void kernel_main() {
 
     cb_reserve_back(receiver_cb_id_l, chunk_size);
     dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-    count = 0;
-    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
-            if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
-                noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
-                noc_async_read_barrier();
-
-                packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
-                ++packet_idx;
-            }
-
-            const uint32_t page_offset = page_segment_idx * packet_size_bytes;
-            const uint32_t dest_addr = dest_page_base_addr + page_offset;
-            const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
-            const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
-
-            tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
-            ++packet_page_idx;
-            dest_page_base_addr += aligned_page_size_bytes;
-        }
-        count++;
-        if (count == chunk_size || page_idx == page_idx_end - 1) {
-            cb_push_back(receiver_cb_id_l, count);
-            count = 0;
-            dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
-            if (page_idx != page_idx_end - 1) {
-                cb_reserve_back(receiver_cb_id_l, chunk_size);
-            }
-        }
-    }
-    cb_push_back(packet_cb_id, 1);
-
-    // now receiving s and m
-    cb_reserve_back(receiver_cb_id_s, 1);
-    cb_reserve_back(receiver_cb_id_m, 1);
-    const uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    const uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
-
-    packet_idx_sm = 0;
-    const uint64_t packet_noc_addr2 = packet_buffer_2.get_noc_addr(packet_idx_sm, 0, 0);
-    // read the single packet that contains both s and m to a temporary buffer
-    // then copy first tile to s and second tile to m
-    noc_async_read(packet_noc_addr2, packet_l1_addr, page_size_bytes * 2);
+    packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
+    noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
 
-    tt_memmove<false, false, false, 0>(dest_page_base_addr_s, packet_l1_addr, page_size_bytes);
+    tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    cb_push_back(receiver_cb_id_l, chunk_size);
+
+    cb_reserve_back(receiver_cb_id_s, 1);
+    cb_reserve_back(receiver_cb_id_m, 1);
+    dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
+    dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
+
     tt_memmove<false, false, false, 0>(
-        dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
+        dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+    tt_memmove<false, false, false, 0>(
+        dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+
+    cb_push_back(receiver_cb_id_s, 1);
+    cb_push_back(receiver_cb_id_m, 1);
+
+    cb_push_back(packet_cb_id, 1);
 
     noc_semaphore_set(local_semaphore_ptr, 0);
     DPRINT << "root reader kernel completed\n";
