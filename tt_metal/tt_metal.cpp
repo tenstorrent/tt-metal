@@ -59,7 +59,6 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
-#include "impl/buffers/circular_buffer_constants.hpp"
 
 namespace tt::tt_metal {
 enum class FabricConfig : uint32_t;
