@@ -254,8 +254,20 @@ tt::stl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
+    // Exclude runtime-only parameters from hash:
+    // - update_idxs: values are runtime-only (used only in runtime args), size is validated to match input tensor shape
+    // (already in tensor_args)
+    // - batch_offset: validated to be 0, doesn't affect program structure
+    // Include parameters that affect program structure:
+    // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
+    // - share_cache: affects program structure (semaphore setup)
+    // - mesh_coords: affects program factory selection
     return operation::hash_operation<PagedFusedUpdateCacheDeviceOperation>(
-        operation_attributes, tensor_args, program_factory.index());
+        operation_attributes.compute_kernel_config,
+        operation_attributes.share_cache,
+        operation_attributes.mesh_coords,
+        tensor_args,
+        program_factory.index());
 }
 
 std::tuple<
