@@ -236,7 +236,7 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args() const;
+    std::vector<uint32_t> get_compile_time_args() const override;
 };
 
 /**
