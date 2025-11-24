@@ -646,8 +646,8 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 2048:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
+        if seq_len > 1024:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096:
@@ -668,7 +668,7 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        if seq_len > 2048:
+        if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
