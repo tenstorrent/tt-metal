@@ -243,7 +243,7 @@ void GrpcTelemetryServer::stop() {
     }
 }
 
-void GrpcTelemetryServer::on_telemetry_updated(const TelemetrySnapshot& delta) {
+void GrpcTelemetryServer::on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) {
     std::lock_guard<std::mutex> lock(state_mutex_);  // use state mutex to protect metric_paths_by_name_
-    update_name_to_paths_mapping(&metric_paths_by_name_, delta);
+    update_name_to_paths_mapping(&metric_paths_by_name_, *delta);
 }

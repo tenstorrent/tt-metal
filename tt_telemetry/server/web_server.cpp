@@ -99,9 +99,9 @@ private:
     }
 
     // Called after telemetry has been merged into the state
-    void on_telemetry_updated(const TelemetrySnapshot& delta) override {
+    void on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) override {
         handle_new_clients();
-        send_snapshot_to_clients(delta);
+        send_snapshot_to_clients(*delta);
     }
 
     std::string join_paths(const std::string& base, const std::string& path) {

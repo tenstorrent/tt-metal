@@ -26,7 +26,7 @@ class Service;
 }
 
 // UNIX domain socket path for the gRPC server
-constexpr const char* GRPC_TELEMETRY_SOCKET_PATH = "/tmp/tt_telemetry2.sock";
+constexpr const char* GRPC_TELEMETRY_SOCKET_PATH = "/tmp/tt_telemetry.sock";
 
 class GrpcTelemetryServer : public TelemetrySubscriber {
 public:
@@ -41,7 +41,7 @@ public:
 
 protected:
     // Called when telemetry is updated
-    void on_telemetry_updated(const TelemetrySnapshot& delta) override;
+    void on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) override;
 
 private:
     // gRPC server instance
