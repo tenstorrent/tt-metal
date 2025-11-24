@@ -200,23 +200,6 @@ CPMAddPackage(
         "FLATBUFFERS_STRICT_MODE ON"
 )
 
-# Add FLATBUFFERS_LARGE_SIZE compile definition to flatbuffers targets
-if(flatbuffers_ADDED)
-    # Add compile definition to flatbuffers library target
-    if(TARGET flatbuffers)
-        target_compile_definitions(flatbuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
-    endif()
-    if(TARGET flatbuffers::flatbuffers)
-        target_compile_definitions(flatbuffers::flatbuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
-    endif()
-    if(TARGET FlatBuffers::FlatBuffers)
-        target_compile_definitions(FlatBuffers::FlatBuffers PUBLIC FLATBUFFERS_LARGE_SIZE)
-    endif()
-    if(TARGET flatc)
-        target_compile_definitions(flatc PRIVATE FLATBUFFERS_LARGE_SIZE)
-    endif()
-endif()
-
 if(flatbuffers_ADDED)
     # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
     target_compile_options(flatc PRIVATE -Wno-restrict)

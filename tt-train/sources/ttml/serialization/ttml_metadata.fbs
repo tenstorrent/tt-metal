@@ -35,6 +35,10 @@ table SizeTValue {
     value: uint64;
 }
 
+table BFloat16Value {
+    value: uint16;  // bfloat16 stored as uint16 (bit-exact representation)
+}
+
 table StringValue {
     value: string;
 }
@@ -64,6 +68,10 @@ table VectorUInt32 {
     values: [uint32];
 }
 
+table VectorBFloat16 {
+    values: [uint16];  // Array of bfloat16 values stored as uint16 (bit-exact representation)
+}
+
 table VectorString {
     values: [string];
 }
@@ -77,6 +85,7 @@ union SerializableType {
     DoubleValue,
     UInt32Value,
     SizeTValue,
+    BFloat16Value,
     StringValue,
     VectorChar,
     VectorInt,
@@ -84,6 +93,7 @@ union SerializableType {
     VectorDouble,
     VectorUInt8,
     VectorUInt32,
+    VectorBFloat16,
     VectorString,
 }
 

@@ -14,11 +14,14 @@
 #include <flatbuffers/flatbuffers.h>
 #include <fmt/format.h>
 
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <tt-metalium/bfloat16.hpp>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -26,7 +29,7 @@
 // Include generated FlatBuffer code
 #include "tar_reader.hpp"
 #include "tar_writer.hpp"
-#include "ttml_tensor_generated.h"
+#include "ttml_metadata_generated.h"
 
 namespace {
 
@@ -47,7 +50,7 @@ namespace ttml::serialization {
 
 class FlatBufferFile::Impl {
 public:
-    explicit Impl(bool use_tarball) : m_use_tarball(use_tarball) {
+    explicit Impl(bool use_tarball, bool compress) : m_use_tarball(use_tarball), m_compress(compress) {
     }
 
     void set_use_tarball(bool use_tarball) {
@@ -56,6 +59,14 @@ public:
 
     bool get_use_tarball() const {
         return m_use_tarball;
+    }
+
+    void set_compress(bool compress) {
+        m_compress = compress;
+    }
+
+    bool get_compress() const {
+        return m_compress;
     }
 
     // Methods to store different types
@@ -87,6 +98,10 @@ public:
         m_data[std::string(key)] = value;
     }
 
+    void put(std::string_view key, bfloat16 value) {
+        m_data[std::string(key)] = value;
+    }
+
     void put(std::string_view key, std::string_view value) {
         m_data[std::string(key)] = std::string(value);
     }
@@ -114,6 +129,10 @@ public:
 
     void put(std::string_view key, std::span<const uint32_t> value) {
         m_data[std::string(key)] = std::vector<uint32_t>(value.begin(), value.end());
+    }
+
+    void put(std::string_view key, std::span<const bfloat16> value) {
+        m_data[std::string(key)] = std::vector<bfloat16>(value.begin(), value.end());
     }
 
     void put(std::string_view key, std::span<const std::string> value) {
@@ -169,6 +188,11 @@ public:
                         auto offset = ttml::flatbuffer::CreateSizeTValue(builder, static_cast<uint64_t>(val));
                         union_offset = offset.Union();
                         union_type = ttml::flatbuffer::SerializableType::SizeTValue;
+                    } else if constexpr (std::is_same_v<T, bfloat16>) {
+                        uint16_t bf16_bits = std::bit_cast<uint16_t>(val);
+                        auto offset = ttml::flatbuffer::CreateBFloat16Value(builder, bf16_bits);
+                        union_offset = offset.Union();
+                        union_type = ttml::flatbuffer::SerializableType::BFloat16Value;
                     } else if constexpr (std::is_same_v<T, std::string>) {
                         auto str_offset = builder.CreateString(val);
                         auto offset = ttml::flatbuffer::CreateStringValue(builder, str_offset);
@@ -205,6 +229,16 @@ public:
                         auto offset = ttml::flatbuffer::CreateVectorUInt32(builder, vec_offset);
                         union_offset = offset.Union();
                         union_type = ttml::flatbuffer::SerializableType::VectorUInt32;
+                    } else if constexpr (std::is_same_v<T, std::vector<bfloat16>>) {
+                        std::vector<uint16_t> uint16_vec;
+                        uint16_vec.reserve(val.size());
+                        for (bfloat16 bf16 : val) {
+                            uint16_vec.push_back(std::bit_cast<uint16_t>(bf16));
+                        }
+                        auto vec_offset = builder.CreateVector(uint16_vec);
+                        auto offset = ttml::flatbuffer::CreateVectorBFloat16(builder, vec_offset);
+                        union_offset = offset.Union();
+                        union_type = ttml::flatbuffer::SerializableType::VectorBFloat16;
                     } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
                         std::vector<flatbuffers::Offset<flatbuffers::String>> string_offsets;
                         for (const auto& s : val) {
@@ -292,6 +326,8 @@ public:
                     estimated_size += std::get<std::vector<double>>(value).size() * sizeof(double);
                 } else if (std::holds_alternative<std::vector<uint32_t>>(value)) {
                     estimated_size += std::get<std::vector<uint32_t>>(value).size() * sizeof(uint32_t);
+                } else if (std::holds_alternative<std::vector<bfloat16>>(value)) {
+                    estimated_size += std::get<std::vector<bfloat16>>(value).size() * sizeof(uint16_t);
                 } else if (std::holds_alternative<std::string>(value)) {
                     estimated_size += std::get<std::string>(value).size();
                 }
@@ -361,16 +397,24 @@ public:
 
     // Serialization method - tarball version
     void serialize_tarball(
-        std::string_view filename, std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
+        std::string_view filename,
+        std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files,
+        bool compress = true) {
         // Create tarball in memory with multiple files
         TarWriter tar_writer;
 
+        // Add flatbuffer metadata files
         for (auto& [file_name, flatbuffer_data] : flatbuffer_files) {
             tar_writer.add_file(file_name, std::move(flatbuffer_data));
         }
 
+        // Add tensor files to tarball
+        for (auto& [tensor_filename, tensor_data] : m_tensor_files) {
+            tar_writer.add_file(tensor_filename, std::move(tensor_data));
+        }
+
         // Write tarball to file (single write operation)
-        tar_writer.write_to_file(std::string(filename));
+        tar_writer.write_to_file(std::string(filename), true, compress);
     }
 
     // Serialization method - non-tarball version
@@ -406,7 +450,7 @@ public:
         }
 
         if (m_use_tarball) {
-            serialize_tarball(filename, flatbuffer_files);
+            serialize_tarball(filename, flatbuffer_files, m_compress);
         } else {
             serialize_non_tarball(filename, flatbuffer_files);
         }
@@ -492,6 +536,14 @@ public:
                         m_data[key] = static_cast<size_t>(val->value());
                     break;
                 }
+                case ttml::flatbuffer::SerializableType::BFloat16Value: {
+                    auto* val = kv_pair->value_as_BFloat16Value();
+                    if (val) {
+                        uint16_t bf16_bits = val->value();
+                        m_data[key] = std::bit_cast<bfloat16>(bf16_bits);
+                    }
+                    break;
+                }
                 case ttml::flatbuffer::SerializableType::StringValue: {
                     auto* val = kv_pair->value_as_StringValue();
                     if (val && val->value()) {
@@ -546,6 +598,18 @@ public:
                     }
                     break;
                 }
+                case ttml::flatbuffer::SerializableType::VectorBFloat16: {
+                    auto* val = kv_pair->value_as_VectorBFloat16();
+                    if (val && val->values()) {
+                        std::vector<bfloat16> result;
+                        result.reserve(val->values()->size());
+                        for (uint16_t bf16_bits : *val->values()) {
+                            result.push_back(std::bit_cast<bfloat16>(bf16_bits));
+                        }
+                        m_data[key] = result;
+                    }
+                    break;
+                }
                 case ttml::flatbuffer::SerializableType::VectorString: {
                     auto* val = kv_pair->value_as_VectorString();
                     if (val && val->values()) {
@@ -587,9 +651,11 @@ public:
             return;
         }
 
-        // Deserialize each flatbuffer file
+        // Deserialize each flatbuffer file and extract tensor files
         bool found_flatbuffer = false;
         constexpr size_t flatbuffer_ext_len = constexpr_strlen(flatbuffer_ext);
+        constexpr const char* tensor_ext = ".tensorbin";
+        constexpr size_t tensor_ext_len = constexpr_strlen(tensor_ext);
 
         for (const auto& file_name : files) {
             // Extract prefix from filename (remove .flatbuffer extension)
@@ -599,7 +665,7 @@ public:
                 clean_name.pop_back();
             }
 
-            // Check if filename ends with .flatbuffer using find
+            // Check if filename ends with .flatbuffer
             size_t ext_pos = clean_name.rfind(flatbuffer_ext);
             if (ext_pos != std::string::npos && ext_pos + flatbuffer_ext_len == clean_name.size()) {
                 found_flatbuffer = true;
@@ -608,6 +674,14 @@ public:
                 // Read and deserialize the flatbuffer file (use original filename for lookup)
                 std::vector<uint8_t> buffer = tar_reader.get_file(file_name);
                 deserialize_flatbuffer(buffer, prefix);
+            } else {
+                // Check if it's a tensor file (.tensorbin)
+                size_t tensor_ext_pos = clean_name.rfind(tensor_ext);
+                if (tensor_ext_pos != std::string::npos && tensor_ext_pos + tensor_ext_len == clean_name.size()) {
+                    // Extract tensor file data from tarball
+                    std::vector<uint8_t> tensor_data = tar_reader.get_file(file_name);
+                    m_tensor_files[clean_name] = std::move(tensor_data);
+                }
             }
         }
 
@@ -725,36 +799,16 @@ public:
         return get_value<size_t>(key);
     }
 
+    bfloat16 get_bfloat16(std::string_view key) const {
+        return get_value<bfloat16>(key);
+    }
+
     std::string get_string(std::string_view key) const {
         return get_value<std::string>(key);
     }
 
-    std::vector<char> get_vector_char(std::string_view key) const {
-        return get_value<std::vector<char>>(key);
-    }
-
     std::vector<uint8_t> get_vector_uint8(std::string_view key) const {
         return get_value<std::vector<uint8_t>>(key);
-    }
-
-    std::vector<int> get_vector_int(std::string_view key) const {
-        return get_value<std::vector<int>>(key);
-    }
-
-    std::vector<float> get_vector_float(std::string_view key) const {
-        return get_value<std::vector<float>>(key);
-    }
-
-    std::vector<double> get_vector_double(std::string_view key) const {
-        return get_value<std::vector<double>>(key);
-    }
-
-    std::vector<uint32_t> get_vector_uint32(std::string_view key) const {
-        return get_value<std::vector<uint32_t>>(key);
-    }
-
-    std::vector<std::string> get_vector_string(std::string_view key) const {
-        return get_value<std::vector<std::string>>(key);
     }
 
     ValueType get_value_type(std::string_view key) const {
@@ -766,9 +820,31 @@ public:
         }
     }
 
+    // Method to add tensor file data (for inclusion in tarball)
+    void add_tensor_file(std::string_view filename, std::vector<uint8_t>&& data) {
+        m_tensor_files[std::string(filename)] = std::move(data);
+    }
+
+    // Method to get tensor file data from tarball (for extraction during deserialization)
+    std::vector<uint8_t> get_tensor_file(std::string_view filename) const {
+        auto it = m_tensor_files.find(std::string(filename));
+        if (it != m_tensor_files.end()) {
+            return it->second;
+        }
+        throw std::runtime_error(fmt::format("Tensor file not found: {}", filename));
+    }
+
+    // Method to check if tensor file exists
+    bool has_tensor_file(std::string_view filename) const {
+        return m_tensor_files.find(std::string(filename)) != m_tensor_files.end();
+    }
+
 private:
     std::unordered_map<std::string, ValueType> m_data;
+    std::unordered_map<std::string, std::vector<uint8_t>>
+        m_tensor_files;  // Tensor files extracted from tarball or to include in tarball
     bool m_use_tarball;
+    bool m_compress;
 
     // Helper function to get value from m_data
     template <typename T>
@@ -786,7 +862,8 @@ private:
     }
 };
 
-FlatBufferFile::FlatBufferFile(bool use_tarball) : m_impl(std::make_unique<Impl>(use_tarball)) {
+FlatBufferFile::FlatBufferFile(bool use_tarball, bool compress) :
+    m_impl(std::make_unique<Impl>(use_tarball, compress)) {
 }
 
 FlatBufferFile::~FlatBufferFile() {
@@ -824,6 +901,10 @@ void FlatBufferFile::put(std::string_view key, size_t value) {
     m_impl->put(key, value);
 }
 
+void FlatBufferFile::put(std::string_view key, bfloat16 value) {
+    m_impl->put(key, value);
+}
+
 void FlatBufferFile::put(std::string_view key, std::string_view value) {
     m_impl->put(key, value);
 }
@@ -856,6 +937,10 @@ void FlatBufferFile::put(std::string_view key, std::span<const uint32_t> value) 
     m_impl->put(key, value);
 }
 
+void FlatBufferFile::put(std::string_view key, std::span<const bfloat16> value) {
+    m_impl->put(key, value);
+}
+
 void FlatBufferFile::put(std::string_view key, std::span<const std::string> value) {
     m_impl->put(key, value);
 }
@@ -870,6 +955,26 @@ void FlatBufferFile::set_use_tarball(bool use_tarball) {
 
 bool FlatBufferFile::get_use_tarball() const {
     return m_impl->get_use_tarball();
+}
+
+void FlatBufferFile::set_compress(bool compress) {
+    m_impl->set_compress(compress);
+}
+
+bool FlatBufferFile::get_compress() const {
+    return m_impl->get_compress();
+}
+
+void FlatBufferFile::add_tensor_file(std::string_view filename, std::vector<uint8_t>&& data) {
+    m_impl->add_tensor_file(filename, std::move(data));
+}
+
+std::vector<uint8_t> FlatBufferFile::get_tensor_file(std::string_view filename) const {
+    return m_impl->get_tensor_file(filename);
+}
+
+bool FlatBufferFile::has_tensor_file(std::string_view filename) const {
+    return m_impl->has_tensor_file(filename);
 }
 
 void FlatBufferFile::serialize(std::string_view filename) {
@@ -908,36 +1013,16 @@ size_t FlatBufferFile::get_size_t(std::string_view key) const {
     return m_impl->get_size_t(key);
 }
 
+bfloat16 FlatBufferFile::get_bfloat16(std::string_view key) const {
+    return m_impl->get_bfloat16(key);
+}
+
 std::string FlatBufferFile::get_string(std::string_view key) const {
     return m_impl->get_string(key);
 }
 
-std::vector<char> FlatBufferFile::get_vector_char(std::string_view key) const {
-    return m_impl->get_vector_char(key);
-}
-
 std::vector<uint8_t> FlatBufferFile::get_vector_uint8(std::string_view key) const {
     return m_impl->get_vector_uint8(key);
-}
-
-std::vector<int> FlatBufferFile::get_vector_int(std::string_view key) const {
-    return m_impl->get_vector_int(key);
-}
-
-std::vector<float> FlatBufferFile::get_vector_float(std::string_view key) const {
-    return m_impl->get_vector_float(key);
-}
-
-std::vector<double> FlatBufferFile::get_vector_double(std::string_view key) const {
-    return m_impl->get_vector_double(key);
-}
-
-std::vector<uint32_t> FlatBufferFile::get_vector_uint32(std::string_view key) const {
-    return m_impl->get_vector_uint32(key);
-}
-
-std::vector<std::string> FlatBufferFile::get_vector_string(std::string_view key) const {
-    return m_impl->get_vector_string(key);
 }
 
 ValueType FlatBufferFile::get_value_type(std::string_view key) const {

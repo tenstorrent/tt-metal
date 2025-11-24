@@ -7,6 +7,10 @@
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <filesystem>
+#include <fstream>
+#include <ttnn/api/ttnn/tensor/serialization.hpp>
+#include <ttnn/api/ttnn/tensor/tensor_impl.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -18,26 +22,27 @@
 #include "optimizers/sgd.hpp"
 namespace ttml::serialization {
 
+// Concept for trivially copyable types
+template <typename T>
+concept TriviallyCopyable = std::is_trivially_copyable_v<T>;
+
 // demangle type name
 
 // trivial type to the std::string
-template <typename T>
+template <TriviallyCopyable T>
 std::span<const uint8_t> to_bytes(T& value) {
-    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
     auto ptr = reinterpret_cast<uint8_t*>(&value);
     return std::span<const uint8_t>(ptr, sizeof(T));
 }
 
-template <>
-std::span<const uint8_t> to_bytes(ttnn::Shape& value) {
+// Specialization for ttnn::Shape (not trivially copyable, handled specially)
+inline std::span<const uint8_t> to_bytes(ttnn::Shape& value) {
     auto ptr = reinterpret_cast<const uint8_t*>(value.view().data());
     return std::span<const uint8_t>(ptr, sizeof(value[0]) * value.rank());
 }
 
-template <typename T>
+template <TriviallyCopyable T>
 void from_bytes(std::span<const uint8_t> bytes, T& value) {
-    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-
     if (bytes.size() != sizeof(T)) {
         std::ostringstream oss;
         oss << "Invalid byte size for conversion to type T. Expected: " << sizeof(T) << " Actual: " << bytes.size()
@@ -48,8 +53,8 @@ void from_bytes(std::span<const uint8_t> bytes, T& value) {
     std::memcpy(&value, bytes.data(), sizeof(T));
 }
 
-template <>
-void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
+// Specialization for ttnn::Shape (not trivially copyable, handled specially)
+inline void from_bytes(std::span<const uint8_t> bytes, ttnn::Shape& value) {
     if (bytes.size() % sizeof(uint32_t) != 0) {
         std::ostringstream oss;
         oss << "Invalid byte size for conversion to type T. Expected divisible by" << sizeof(uint32_t)
@@ -68,61 +73,140 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
 }
 
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
+    // Use tt-metal's flatbuffer serialization methods directly
+    // Generate a unique filename for this tensor (relative path for tarball)
+    std::string tensor_filename = std::string(name) + ".tensorbin";
+
+    // Store metadata before any conversion
     auto shape = tensor.logical_shape();
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
     auto storage_type = tensor.storage_type();
 
+    // For device tensors with ROW_MAJOR layout, we cannot read the buffer without converting layouts
+    // The device buffer read API (enqueue_read) requires TILE layout for non-sharded tensors
+    // This is a fundamental limitation - there is no way to get/set the buffer without converting layouts
+    // for ROW_MAJOR device tensors
+    tt::tt_metal::Tensor tensor_to_dump = tensor;
+    if (tensor.storage_type() == tt::tt_metal::StorageType::DEVICE &&
+        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        TT_THROW(
+            "ROW_MAJOR device tensors cannot be serialized using dump_tensor_flatbuffer. "
+            "The device buffer read API requires TILE layout for non-sharded tensors. "
+            "Please convert the tensor to TILE layout or CPU before serialization: "
+            "tensor.to_layout(Layout::TILE) or tensor.cpu()");
+    }
+
+    // Write tensor to a temporary file, then read it back into memory
+    // This allows us to include it in the tarball via tar_writer
+    std::filesystem::path temp_tensor_path = std::filesystem::temp_directory_path() / tensor_filename;
+    std::filesystem::path temp_parent = temp_tensor_path.parent_path();
+    if (!temp_parent.empty()) {
+        std::filesystem::create_directories(temp_parent);
+    }
+
+    std::string temp_tensor_file = temp_tensor_path.string();
+    tt::tt_metal::dump_tensor_flatbuffer(temp_tensor_file, tensor_to_dump);
+
+    // Read the tensor file back into memory
+    std::ifstream tensor_file(temp_tensor_file, std::ios::binary | std::ios::ate);
+    if (!tensor_file.is_open()) {
+        std::filesystem::remove(temp_tensor_file);  // Clean up temp file
+        throw std::runtime_error(fmt::format("Failed to read tensor file: {}", temp_tensor_file));
+    }
+
+    size_t file_size = tensor_file.tellg();
+    tensor_file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> tensor_data(file_size);
+    tensor_file.read(reinterpret_cast<char*>(tensor_data.data()), file_size);
+    tensor_file.close();
+    std::filesystem::remove(temp_tensor_file);  // Clean up temp file
+
+    if (!tensor_file.good() && file_size > 0) {
+        throw std::runtime_error(fmt::format("Failed to read tensor file data: {}", temp_tensor_file));
+    }
+
+    // Add tensor file to FlatBufferFile for inclusion in tarball
+    file.add_tensor_file(tensor_filename, std::move(tensor_data));
+
+    // Store the filename in FlatBufferFile (relative path for tarball extraction)
+    file.put(std::string(name) + "/tensor_file", std::string_view(tensor_filename));
+
+    // Store metadata needed to restore tensor properties (layout, shape, storage_type) on deserialization
     file.put(std::string(name) + "/shape", to_bytes(shape));
     file.put(std::string(name) + "/data_type", static_cast<int>(data_type));
     file.put(std::string(name) + "/layout", static_cast<int>(layout));
     file.put(std::string(name) + "/storage_type", static_cast<int>(storage_type));
-
-    // we currently assume that there are two types of runs: single device and DDP
-    // once we decide to use other parallelization techniques (tensor parallel, FSDP) we need to update this code
-    if (data_type == tt::tt_metal::DataType::BFLOAT16) {
-        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, core::IdentityComposer{});
-        // pick weights from first device
-        auto data = data_all_devices.front();
-        file.put(std::string(name) + "/data", std::span<const float>(data.data(), data.size()));
-    } else if (data_type == tt::tt_metal::DataType::UINT32) {
-        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
-        // pick weights from first device
-        auto data = data_all_devices.front();
-        file.put(std::string(name) + "/data", std::span<const uint32_t>(data.data(), data.size()));
-    } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
-    }
 }
 
 void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor) {
-    tt::tt_metal::DataType data_type{};
-    tt::tt_metal::Layout layout{};
+    // Use tt-metal's flatbuffer deserialization methods directly
+    std::string tensor_filename = file.get_string(std::string(name) + "/tensor_file");
+
+    // If using tarball mode, extract tensor file from tarball to temp location
+    std::string actual_tensor_path = tensor_filename;
+    if (file.get_use_tarball() && file.has_tensor_file(tensor_filename)) {
+        // Extract tensor file from tarball to temp location
+        std::vector<uint8_t> tensor_data = file.get_tensor_file(tensor_filename);
+        std::filesystem::path temp_tensor_path = std::filesystem::temp_directory_path() / tensor_filename;
+        std::filesystem::path temp_parent = temp_tensor_path.parent_path();
+        if (!temp_parent.empty()) {
+            std::filesystem::create_directories(temp_parent);
+        }
+
+        std::ofstream temp_file(temp_tensor_path, std::ios::binary);
+        if (!temp_file.is_open()) {
+            throw std::runtime_error(fmt::format("Failed to create temp tensor file: {}", temp_tensor_path.string()));
+        }
+        temp_file.write(reinterpret_cast<const char*>(tensor_data.data()), tensor_data.size());
+        temp_file.close();
+
+        actual_tensor_path = temp_tensor_path.string();
+    }
+
+    // Use tt-metal's load_tensor_flatbuffer to read tensor from file
+    tensor = tt::tt_metal::load_tensor_flatbuffer(actual_tensor_path, &ttml::autograd::ctx().get_device());
+
+    // Clean up temp file if we created one
+    if (file.get_use_tarball() && file.has_tensor_file(tensor_filename)) {
+        std::filesystem::remove(actual_tensor_path);
+    }
+
+    // Restore original layout and shape if needed
+    tt::tt_metal::Layout original_layout{};
+    get_enum(file, std::string(name) + "/layout", original_layout);
+
+    ttnn::Shape original_shape{};
+    std::vector<uint8_t> shape_bytes = file.get_vector_uint8(std::string(name) + "/shape");
+    from_bytes(shape_bytes, original_shape);
+
+    // If tensor was padded to TILE layout (for ROW_MAJOR device tensors), unpad it
+    if (tensor.layout() == tt::tt_metal::Layout::TILE && original_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+        // Convert to CPU first, then unpad and convert layout
+        tensor = tensor.cpu();
+        if (tensor.logical_shape() != original_shape) {
+            tensor = tensor.unpad_from_tile(original_shape);
+        }
+        tensor = tensor.to_layout(original_layout);
+    } else if (tensor.layout() != original_layout) {
+        // For other cases, just convert layout
+        tensor = tensor.cpu().to_layout(original_layout);
+    }
+
+    // Restore storage type if needed
     tt::tt_metal::StorageType storage_type{};
-
-    auto shape = ttnn::Shape({1, 1, 1, 1});
-    std::vector<uint8_t> bytes = file.get_vector_uint8(std::string(name) + "/shape");
-    from_bytes<ttnn::Shape>(bytes, shape);
-
-    get_enum(file, std::string(name) + "/data_type", data_type);
-    get_enum(file, std::string(name) + "/layout", layout);
     get_enum(file, std::string(name) + "/storage_type", storage_type);
 
-    if (data_type == tt::tt_metal::DataType::BFLOAT16) {
-        std::vector<float> data = file.get_vector_float(std::string(name) + "/data");
-        tensor = core::from_vector(data, shape, &ttml::autograd::ctx().get_device(), layout);
-    } else if (data_type == tt::tt_metal::DataType::UINT32) {
-        std::vector<uint32_t> data = file.get_vector_uint32(std::string(name) + "/data");
-        tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
-            data, shape, &ttml::autograd::ctx().get_device(), layout);
-    } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
+    if (storage_type == tt::tt_metal::StorageType::DEVICE &&
+        tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+        tensor = tensor.to_device(&ttml::autograd::ctx().get_device());
     }
 }
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads) {
-    write_ttnn_tensor(file, std::string(name) + "/value", tensor->get_value());
+    write_ttnn_tensor(file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::FULL));
     auto& grad = tensor->get_grad();
     bool has_grads = save_grads && core::is_tensor_initialized(grad);
     file.put(std::string(name) + "/requires_grads", tensor->get_requires_grad());

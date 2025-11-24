@@ -42,6 +42,7 @@ struct ScopeExit {
     ~ScopeExit() {
         m_dtor_func();
     }
+
     T m_dtor_func;
 };
 
@@ -153,13 +154,14 @@ void TarWriter::write_to_file(std::string_view filename, bool use_tarball, bool 
             std::filesystem::path file_path = dir_path / entry.filename;
 
             const std::string file_path_str = file_path.string();
-            const int fd = open(file_path_str.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd = open(file_path_str.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {
                 throw std::runtime_error("Failed to open file for writing: " + file_path.string());
             }
-            ScopeExit close_fd([fd]() noexcept {
+            ScopeExit close_fd([&fd]() noexcept {
                 if (fd >= 0) {
                     close(fd);
+                    fd = -1;
                 }
             });
 
@@ -190,15 +192,16 @@ void TarWriter::write_to_file(std::string_view filename, bool use_tarball, bool 
     constexpr size_t chunk_size = 32 * 1024 * 1024;
     const int compression_level = 1;
 
-    const int fd = open(std::string(filename).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(std::string(filename).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
     if (fd < 0) {
         throw std::runtime_error("Unable to open file for writing: " + std::string(filename));
     }
 
-    ScopeExit close_fd([fd]() noexcept {
+    ScopeExit close_fd([&fd]() noexcept {
         if (fd >= 0) {
             close(fd);
+            fd = -1;
         }
     });
 
