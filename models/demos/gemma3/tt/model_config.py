@@ -379,6 +379,8 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "gemma-3-4b-it": "models/demos/gemma3/model_params/gemma-3-4b-it",
+        "gemma-3-27b-it": "models/demos/gemma3/model_params/gemma-3-27b-it",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -1821,18 +1823,11 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModelForCausalLM.from_config(config)
+                # For dummy weights, use from_config to avoid loading checkpoint
+                model = AutoModelForCausalLM.from_config(config)
 
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
-                state_dict = model.state_dict()
+                # Randomize weights for dummy mode
+                state_dict = {k: torch.randn_like(v) for k, v in model.state_dict().items()}
             else:
                 reference_model = Transformer(self)
                 state_dict = reference_model.state_dict()
@@ -2342,16 +2337,8 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModel.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModel.from_config(config)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+                # For dummy weights, use from_config to avoid loading checkpoint
+                model = AutoModel.from_config(config)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModel.from_pretrained(self.CKPT_DIR)
@@ -2407,16 +2394,8 @@ class ModelArgs:
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModelForCausalLM.from_config(config)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+                # For dummy weights, use from_config to avoid loading checkpoint
+                model = AutoModelForCausalLM.from_config(config)
             else:
                 if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration
