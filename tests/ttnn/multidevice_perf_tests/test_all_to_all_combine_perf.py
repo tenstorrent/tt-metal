@@ -31,17 +31,17 @@ def test_all_to_all_combine_perf(
     benchmark_data = BenchmarkData()
     step_name = f"all_to_all_combine_{arch_type}_{stage}_perf"
 
-    subdir = "moe_perf"
-    if arch_type == "6U":
-        file = f"pytest tests/nightly/tg/ccl/test_all_to_all_combine_6U.py"
-    elif arch_type == "T3K":
-        file = f"pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py"
-    else:
-        raise ValueError(f"Invalid arch_type: {arch_type}")
-
     # Unlike dispatch which has separate test_decode_perf and test_prefill_perf functions,
     # combine uses a single test_perf function with decode/prefill as pytest ids
-    command = file + f"::test_perf -k {stage}"
+    subdir = "moe_perf"
+    if arch_type == "6U":
+        file = f"pytest tests/ttnn/multidevice_perf_tests/test_moe_ops_metrics.py"
+        command = file + f"::test_combine_galaxy_perf -k {stage}"
+    elif arch_type == "T3K":
+        file = f"pytest tests/ttnn/multidevice_perf_tests/test_moe_ops_metrics.py"
+        command = file + f"::test_combine_perf -k {stage}"
+    else:
+        raise ValueError(f"Invalid arch_type: {arch_type}")
 
     cols = ["DEVICE KERNEL"]
     op_name = "AllToAllCombineDeviceOperation"
