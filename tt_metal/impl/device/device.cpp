@@ -5,10 +5,8 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
-#include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <tt-metalium/program_cache.hpp>
