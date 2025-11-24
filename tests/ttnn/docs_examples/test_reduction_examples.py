@@ -156,4 +156,4 @@ def test_manual_seed(device):
     user_id_tensor = ttnn.from_torch(
         torch.Tensor([0, 1, 2]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device
     )
-    ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=user_id_tensor)
+    ttnn.manual_seed(seeds=seed_tensor, user_ids=user_id_tensor)

@@ -25,7 +25,7 @@ void bind_manual_seed_operation(py::module& module) {
                 user_ids (uint32_t or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
                 sub_core_grids (optional): custom core range set must for multi user execution.Core are constrained to numbers 0 to 31.
             Returns:
-                Tensor: An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
+                Tensor (ttnn.Tensor): An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
 
             Note:
 
