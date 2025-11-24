@@ -44,7 +44,7 @@ void UpdateGoldenOutput(
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
 
-    if (risc != "ER") {
+    if (risc != "ER0") {
         const std::string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
         golden_output.push_back(output_line_risc);
     }
@@ -95,7 +95,7 @@ void RunTest(
         CreateKernel(program_, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", crs, config);
 
         for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
-            UpdateGoldenOutput(golden_output, mesh_device, "ER");
+            UpdateGoldenOutput(golden_output, mesh_device, "ER0");
         }
     }
 
