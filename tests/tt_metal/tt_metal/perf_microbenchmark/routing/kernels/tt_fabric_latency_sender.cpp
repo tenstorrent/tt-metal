@@ -27,7 +27,8 @@ void kernel_main() {
 
     // Common runtime args
     const size_t result_buffer_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t remote_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
@@ -47,14 +48,10 @@ void kernel_main() {
         dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    DPRINT << "SENDER: Config - payload_size=" << (uint32_t)payload_size_bytes << " burst_size=" << (uint32_t)burst_size
-           << " num_bursts=" << (uint32_t)num_bursts << " hops=" << (uint32_t)num_hops_to_responder << "\n";
-
     // Build fabric connection
     auto fabric_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
     fabric_connection.open();
-    DPRINT << "SENDER: Fabric connection opened\n";
 
     // Allocate packet headers from pool
     auto* payload_packet_header = PacketHeaderPool::allocate_header();
@@ -74,7 +71,7 @@ void kernel_main() {
     // Setup NOC addresses for destination (responder device)
     // Send payload to responder's scratch buffer (not its timestamp buffer)
     auto dest_semaphore_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
+        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), remote_semaphore_address, 0);
     auto dest_payload_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), responder_scratch_buffer_address, 0);
 
@@ -106,18 +103,16 @@ void kernel_main() {
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         };
 
-    auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
-        *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
+    auto wait_for_semaphore_then_reset = [local_semaphore_address](size_t target_value) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), target_value);
+        *reinterpret_cast<volatile uint32_t*>(local_semaphore_address) = 0;
     };
 
     // Warmup: flush the datapath
-    DPRINT << "SENDER: Starting warmup\n";
     {
         send_seminc_packet();
         wait_for_semaphore_then_reset(1);
     }
-    DPRINT << "SENDER: Warmup complete\n";
 
     // Validate burst size
     if (burst_size > 1) {
@@ -129,7 +124,6 @@ void kernel_main() {
     // Store results as pairs of (start_timestamp, end_timestamp) in result buffer
     volatile uint64_t* result_ptr = reinterpret_cast<volatile uint64_t*>(result_buffer_address);
 
-    DPRINT << "SENDER: Starting measurement loop for " << (uint32_t)num_bursts << " bursts\n";
     // Use separate scratch buffer for payload echo to avoid corrupting timestamp data
     auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(scratch_buffer_address);
     for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
@@ -164,7 +158,6 @@ void kernel_main() {
             noc_async_writes_flushed();
             start_timestamp = get_timestamp();
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                // TODO: add separate src buffer -- technically a race but in practice this will never hit.
                 *payload_l1_ptr = 0;
             }
 
@@ -172,29 +165,20 @@ void kernel_main() {
                 noc_semaphore_wait_min(payload_l1_ptr, burst_idx + 1);
             } else {
                 for (size_t j = 0; j < burst_size; j++) {
-                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
+                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), j + 1);
                 }
             }
 
             end_timestamp = get_timestamp();
-            *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
+            *reinterpret_cast<volatile uint32_t*>(local_semaphore_address) = 0;
         }
-
-        // Wait for ack from responder
-        // wait_for_semaphore_then_reset(burst_idx + 2);  // +2 because warmup used 1
 
         // Store timestamp pair in result buffer
         result_ptr[burst_idx * 2] = start_timestamp;
         result_ptr[burst_idx * 2 + 1] = end_timestamp;
-
-        if (burst_idx % 10 == 0 || burst_idx == num_bursts - 1) {
-            DPRINT << "SENDER: Completed burst " << (uint32_t)burst_idx << "/" << (uint32_t)num_bursts << "\n";
-        }
     }
 
-    DPRINT << "SENDER: All bursts complete, closing connection\n";
     fabric_connection.close();
 
     noc_async_full_barrier();
-    DPRINT << "SENDER: Done\n";
 }

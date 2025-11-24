@@ -196,13 +196,6 @@ public:
                 latency_worker_core_ = sender.core.value();
             }
 
-            // Allocate L1 addresses for latency semaphores
-            // Use fixed L1 addresses that don't conflict with memory maps
-            // These will be zeroed out by the kernel initialization
-            constexpr uint32_t LATENCY_SEMAPHORE_BASE_ADDRESS = 0x80000;  // Safe L1 address
-            latency_semaphore_addresses_[latency_sender_device_] = LATENCY_SEMAPHORE_BASE_ADDRESS;
-            latency_semaphore_addresses_[latency_responder_device_] = LATENCY_SEMAPHORE_BASE_ADDRESS;
-
             log_info(
                 tt::LogTest,
                 "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
@@ -424,39 +417,67 @@ public:
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
 
-            // Set up latency test mode if enabled
+            // First pass for latency tests: create semaphores only
             if (latency_test_mode_) {
                 bool is_latency_sender = (device_id == latency_sender_device_);
                 bool is_latency_responder = (device_id == latency_responder_device_);
 
+                if (is_latency_sender || is_latency_responder) {
+                    // Create semaphore and store its address for exchange
+                    uint32_t local_sem_addr = test_device.create_latency_semaphore(latency_worker_core_);
+                    latency_semaphore_addresses_[device_id] = local_sem_addr;
+                }
+            }
+        }
+
+        // Second pass for latency tests: create kernels with known remote addresses
+        // For non-latency tests: create normal kernels
+        if (latency_test_mode_) {
+            TT_FATAL(latency_semaphore_addresses_.size() == 2, "Expected 2 semaphore addresses for latency test");
+            uint32_t sender_sem_addr = latency_semaphore_addresses_.at(latency_sender_device_);
+            uint32_t responder_sem_addr = latency_semaphore_addresses_.at(latency_responder_device_);
+
+            for (auto& [coord, test_device] : test_devices_) {
+                auto device_id = test_device.get_node_id();
+                bool is_latency_sender = (device_id == latency_sender_device_);
+                bool is_latency_responder = (device_id == latency_responder_device_);
+
                 if (is_latency_sender) {
-                    // Create latency sender kernel directly
+                    // Create sender kernel with both addresses known
                     test_device.create_latency_sender_kernel(
                         latency_worker_core_,
                         latency_responder_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_semaphore_addresses_[device_id],
-                        latency_noc_send_type_);
+                        latency_noc_send_type_,
+                        sender_sem_addr,      // local semaphore
+                        responder_sem_addr);  // remote semaphore
                 } else if (is_latency_responder) {
-                    // Create latency responder kernel directly
+                    // Create responder kernel with both addresses known
                     test_device.create_latency_responder_kernel(
                         latency_worker_core_,
                         latency_sender_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_semaphore_addresses_[device_id],
-                        latency_noc_send_type_);
+                        latency_noc_send_type_,
+                        responder_sem_addr,  // local semaphore
+                        sender_sem_addr);    // remote semaphore
                 } else {
                     // For non-latency devices in a latency test, create normal kernels
                     test_device.create_kernels();
                 }
-            } else {
-                // Normal mode: create standard kernels
+            }
+        } else {
+            // Normal mode: create standard kernels for all devices
+            for (auto& [coord, test_device] : test_devices_) {
                 test_device.create_kernels();
             }
+        }
+
+        // Enqueue all programs
+        for (auto& [coord, test_device] : test_devices_) {
             auto& program_handle = test_device.get_program_handle();
             if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
@@ -2157,7 +2178,8 @@ private:
     bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
     FabricNodeId latency_sender_device_{MeshId{0}, 0};
     FabricNodeId latency_responder_device_{MeshId{0}, 0};
-    std::unordered_map<FabricNodeId, tt::tt_metal::DeviceAddr> latency_semaphore_addresses_;
+    std::unordered_map<FabricNodeId, uint32_t>
+        latency_semaphore_addresses_;  // Semaphore L1 addresses for sender and responder
     uint32_t latency_burst_size_ = 1;
     uint32_t latency_num_bursts_ = 100;
     uint32_t latency_payload_size_ = 0;

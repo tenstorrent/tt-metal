@@ -26,7 +26,8 @@ void kernel_main() {
 
     // Common runtime args
     const size_t timestamp_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // For storing response timestamps
-    const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t remote_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
@@ -45,21 +46,10 @@ void kernel_main() {
         dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    DPRINT << "RESPONDER: Config - payload_size=" << (uint32_t)payload_size_bytes
-           << " burst_size=" << (uint32_t)burst_size << " num_bursts=" << (uint32_t)num_bursts
-           << " hops=" << (uint32_t)num_hops_back_to_sender << "\n";
-
     // Build fabric connection for sending response back
     auto fabric_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
-    // ASSERT(fabric_connection.is_logically_connected());
-    // if (!fabric_connection.is_logically_connected()) {
-    //     while (true) {
-    //     }
-    // }
-
     fabric_connection.open();
-    DPRINT << "RESPONDER: Fabric connection opened\n";
 
     // Allocate packet headers from pool
     auto* payload_packet_header = PacketHeaderPool::allocate_header();
@@ -78,7 +68,7 @@ void kernel_main() {
 
     // Setup NOC addresses for destination (sender device)
     auto dest_semaphore_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
+        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), remote_semaphore_address, 0);
     auto dest_payload_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), sender_scratch_buffer_address, 0);
 
@@ -110,9 +100,9 @@ void kernel_main() {
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         };
 
-    auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
-        *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
+    auto wait_for_semaphore_then_reset = [local_semaphore_address](size_t target_value) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), target_value);
+        *reinterpret_cast<volatile uint32_t*>(local_semaphore_address) = 0;
     };
 
     // Warmup: respond to flush packet
@@ -141,12 +131,10 @@ void kernel_main() {
         // indicates our previous response packet was flushed through the system
         for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
             // Wait for incoming packet from sender
-            // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
-
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
             } else {
-                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), burst_idx + 1);
             }
 
             // Capture start timestamp after receiving packet
@@ -187,7 +175,7 @@ void kernel_main() {
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
             } else {
-                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), burst_idx + 1);
             }
 
             // Capture start timestamp after receiving packet
@@ -197,7 +185,7 @@ void kernel_main() {
                 if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                     noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
                 } else {
-                    noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+                    noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), burst_idx + 1);
                 }
 
                 if constexpr (enable_fused_payload_with_sync) {
