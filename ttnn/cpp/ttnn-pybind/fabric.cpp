@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "./fabric.hpp"
+#include "fabric.hpp"
 
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
