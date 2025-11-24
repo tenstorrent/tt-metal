@@ -198,6 +198,9 @@ DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =
