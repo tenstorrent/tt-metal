@@ -287,9 +287,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-asan.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-asan.outputs.wheel-artifact-name }}
 
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
