@@ -83,7 +83,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
 )
-@pytest.mark.parametrize("welford_mode", welford_flavors)
+@pytest.mark.parametrize("welford_mode", ("legacy", "welford_normal", "welford_reciprocal"))
 def test_group_norm_no_input_mask_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode):
     base.run_group_norm_DRAM(
         device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, use_input_mask=False
