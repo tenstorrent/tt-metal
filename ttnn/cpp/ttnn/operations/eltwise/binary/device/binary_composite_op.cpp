@@ -198,7 +198,8 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
     if (not(use_legacy ? *use_legacy
                        : has_legacy_only_args or
@@ -216,7 +217,8 @@ Tensor ExecuteDiv::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     TT_FATAL(
@@ -243,7 +245,8 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy) {
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = round_mode.has_value() or output_dtype.has_value() or accurate_mode;
 
     DataType input_dtype = input_a.dtype();
@@ -269,7 +272,8 @@ Tensor ExecuteDiv::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     TT_FATAL(
