@@ -211,9 +211,7 @@ def read_wait_globals(
 
         # sem_l1_base is a firmware global array of L1 pointers; index by core type
         sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
-        sem_base_val = sem_base_ptr[0].read() + my_dispatch_cb_sem_id * 16
-
-        sem_value = int.from_bytes(loc_mem_access.read(sem_base_val, 4), byteorder="little")
+        sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
         local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
 
         # Two's-complement 32-bit wrapping difference
