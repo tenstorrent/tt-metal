@@ -343,65 +343,9 @@ class MasterConfigLoader:
                         if len(numbers) >= 2:
                             shard_shape = [int(numbers[0]), int(numbers[1])]
 
-                # Adjust shard shape to be tile-aligned (round to nearest multiple of 32)
-                # BUT: For WIDTH_SHARDED, shard height must match physical height
-                #      For HEIGHT_SHARDED, shard width must match physical width
-                # This ensures compatibility even if traced configs have non-tile-aligned shapes
-                if shard_shape and len(shard_shape) >= 2:
-                    TILE_SIZE = 32
-                    height, width = shard_shape[0], shard_shape[1]
-
-                    # Calculate physical dimensions from tensor shape
-                    physical_height = None
-                    physical_width = None
-                    if tensor_shape and len(tensor_shape) >= 4:
-                        # For 4D tensors [B, H, W, C] or [B, C, H, W]
-                        # For WIDTH_SHARDED: shard height must match physical height
-                        #   Physical height = product of all dims except last (width dim)
-                        #   Physical width = last dim (width dim)
-                        # For HEIGHT_SHARDED: shard width must match physical width
-                        #   Physical height = first dims (height dims)
-                        #   Physical width = product of remaining dims
-                        # For simplicity, use:
-                        #   Physical height = product of all dims except last
-                        #   Physical width = last dim
-                        # This works for both WIDTH_SHARDED and HEIGHT_SHARDED
-                        import math
-
-                        physical_height = (
-                            math.prod(tensor_shape[:-1])
-                            if len(tensor_shape) > 1
-                            else tensor_shape[0]
-                            if len(tensor_shape) > 0
-                            else None
-                        )
-                        physical_width = tensor_shape[-1] if len(tensor_shape) >= 1 else None
-
-                    # Adjust height - but respect physical height for WIDTH_SHARDED
-                    if "WIDTH_SHARDED" in memory_layout and physical_height is not None:
-                        # For WIDTH_SHARDED, shard height must match physical height exactly
-                        adjusted_height = physical_height
-                    else:
-                        # Round to nearest tile-aligned size (round up to ensure we don't shrink)
-                        adjusted_height = ((height + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-                        # But don't exceed physical height if we know it
-                        if physical_height is not None and adjusted_height > physical_height:
-                            adjusted_height = physical_height
-
-                    # Adjust width - but respect physical width for HEIGHT_SHARDED
-                    if "HEIGHT_SHARDED" in memory_layout and physical_width is not None:
-                        # For HEIGHT_SHARDED, shard width must match physical width exactly
-                        adjusted_width = physical_width
-                    else:
-                        # Round to nearest tile-aligned size (round up to ensure we don't shrink)
-                        adjusted_width = ((width + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-                        # But don't exceed physical width if we know it
-                        if physical_width is not None and adjusted_width > physical_width:
-                            adjusted_width = physical_width
-
-                    if adjusted_height != height or adjusted_width != width:
-                        # Only adjust if needed - prefer rounding up to preserve data
-                        shard_shape = [adjusted_height, adjusted_width]
+                # Use shard shape directly from traced config - no validation or adjustment
+                # Traced configs come from real model runs that worked, so use them as-is
+                # shard_shape is already extracted above, use it directly
 
                 # Parse orientation
                 orientation_str = shard_spec.get("orientation", "ShardOrientation::ROW_MAJOR")
@@ -1044,52 +988,9 @@ class MasterConfigLoader:
                     invalid_reasons = []
 
                     if mem_config and hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
-                        shard_shape = mem_config.shard_spec.shape
-
-                        # Check tile alignment of shard shape
-                        # BUT: For WIDTH_SHARDED, shard height must match physical height
-                        #      For HEIGHT_SHARDED, shard width must match physical width
-                        if shard_shape and len(shard_shape) >= 2:
-                            height, width = shard_shape[0], shard_shape[1]
-
-                            # Calculate physical dimensions from tensor shape
-                            physical_height = None
-                            physical_width = None
-                            if shape and len(shape) >= 4:
-                                import math
-
-                                physical_height = (
-                                    math.prod(shape[:-1]) if len(shape) > 1 else shape[0] if len(shape) > 0 else None
-                                )
-                                physical_width = shape[-1] if len(shape) >= 1 else None
-
-                            # Get memory layout
-                            memory_layout_str = (
-                                str(mem_config.memory_layout) if hasattr(mem_config, "memory_layout") else ""
-                            )
-
-                            # Adjust height - respect physical height for WIDTH_SHARDED
-                            if "WIDTH_SHARDED" in memory_layout_str and physical_height is not None:
-                                height_aligned = physical_height
-                            else:
-                                height_aligned = ((height + 31) // 32) * 32
-                                if physical_height is not None and height_aligned > physical_height:
-                                    height_aligned = physical_height
-
-                            # Adjust width - respect physical width for HEIGHT_SHARDED
-                            if "HEIGHT_SHARDED" in memory_layout_str and physical_width is not None:
-                                width_aligned = physical_width
-                            else:
-                                width_aligned = ((width + 31) // 32) * 32
-                                if physical_width is not None and width_aligned > physical_width:
-                                    width_aligned = physical_width
-
-                            if height_aligned != height or width_aligned != width:
-                                # Update shard shape in memory config
-                                mem_config.shard_spec.shape = (height_aligned, width_aligned)
-                                invalid_reasons.append(
-                                    f"shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
-                                )
+                        # Use shard shape directly from config - no validation or adjustment
+                        # Traced configs come from real model runs, so use them as-is
+                        pass
 
                         # Check number of cores (report but don't filter)
                         if hasattr(mem_config.shard_spec, "num_cores"):
@@ -1100,54 +1001,9 @@ class MasterConfigLoader:
 
                     # Check output memory config too
                     if output_mem_config and hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
-                        shard_shape = output_mem_config.shard_spec.shape
-                        if shard_shape and len(shard_shape) >= 2:
-                            height, width = shard_shape[0], shard_shape[1]
-
-                            # Calculate physical dimensions from tensor shape (use output shape if available, else input shape)
-                            output_shape = cfg.get("output_shape") or cfg.get("target_shape") or shape
-                            physical_height = None
-                            physical_width = None
-                            if output_shape and len(output_shape) >= 4:
-                                import math
-
-                                physical_height = (
-                                    math.prod(output_shape[:-1])
-                                    if len(output_shape) > 1
-                                    else output_shape[0]
-                                    if len(output_shape) > 0
-                                    else None
-                                )
-                                physical_width = output_shape[-1] if len(output_shape) >= 1 else None
-
-                            # Get memory layout
-                            memory_layout_str = (
-                                str(output_mem_config.memory_layout)
-                                if hasattr(output_mem_config, "memory_layout")
-                                else ""
-                            )
-
-                            # Adjust height - respect physical height for WIDTH_SHARDED
-                            if "WIDTH_SHARDED" in memory_layout_str and physical_height is not None:
-                                height_aligned = physical_height
-                            else:
-                                height_aligned = ((height + 31) // 32) * 32
-                                if physical_height is not None and height_aligned > physical_height:
-                                    height_aligned = physical_height
-
-                            # Adjust width - respect physical width for HEIGHT_SHARDED
-                            if "HEIGHT_SHARDED" in memory_layout_str and physical_width is not None:
-                                width_aligned = physical_width
-                            else:
-                                width_aligned = ((width + 31) // 32) * 32
-                                if physical_width is not None and width_aligned > physical_width:
-                                    width_aligned = physical_width
-
-                            if height_aligned != height or width_aligned != width:
-                                output_mem_config.shard_spec.shape = (height_aligned, width_aligned)
-                                invalid_reasons.append(
-                                    f"output_shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
-                                )
+                        # Use shard shape directly from config - no validation or adjustment
+                        # Traced configs come from real model runs, so use them as-is
+                        pass
 
                         # Check number of cores for output too
                         if hasattr(output_mem_config.shard_spec, "num_cores"):
