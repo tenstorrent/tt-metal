@@ -241,11 +241,7 @@ int main(int argc, char** argv) {
                     test_context.report_code_profiling_results();
                 }
 
-                // Validation (skip in benchmark or latency mode)
-                if (!test_context.get_benchmark_mode() && !test_context.get_latency_test_mode()) {
-                    test_context.validate_results();
-                    log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
-                }
+                test_context.validate_results();
 
                 // Performance profiling (benchmark mode)
                 if (test_context.get_benchmark_mode()) {

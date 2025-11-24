@@ -160,6 +160,27 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     return config;
 }
 
+static void validate_latency_test_config(const ParsedTestConfig& test_config) {
+    TT_FATAL(
+        !test_config.patterns.has_value() || test_config.patterns.value().empty(),
+        "Test '{}': latency_test_mode does not support high-level patterns",
+        test_config.name);
+    TT_FATAL(
+        test_config.senders.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one sender, got {}",
+        test_config.name,
+        test_config.senders.size());
+    TT_FATAL(
+        test_config.senders[0].patterns.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+        test_config.name,
+        test_config.senders[0].patterns.size());
+    TT_FATAL(
+        test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+        "Test '{}': latency_test_mode only supports unicast",
+        test_config.name);
+}
+
 ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
     ParsedTestConfig test_config;
 
@@ -239,24 +260,7 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
 
     // Validate latency test mode requirements
     if (test_config.latency_test_mode) {
-        TT_FATAL(
-            !test_config.patterns.has_value() || test_config.patterns.value().empty(),
-            "Test '{}': latency_test_mode does not support high-level patterns",
-            test_config.name);
-        TT_FATAL(
-            test_config.senders.size() == 1,
-            "Test '{}': latency_test_mode requires exactly one sender, got {}",
-            test_config.name,
-            test_config.senders.size());
-        TT_FATAL(
-            test_config.senders[0].patterns.size() == 1,
-            "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
-            test_config.name,
-            test_config.senders[0].patterns.size());
-        TT_FATAL(
-            test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
-            "Test '{}': latency_test_mode only supports unicast",
-            test_config.name);
+        validate_latency_test_config(test_config);
     }
 
     if (test_yaml["sync"]) {
