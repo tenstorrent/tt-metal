@@ -10,6 +10,18 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 using tt::data_movement::common::tt_memmove;
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 8; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right =
+            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 inline void read_from_local(
     uint32_t src_addr_l,  // source address for l tensor
     uint32_t num_tiles_l,
@@ -142,6 +154,10 @@ void kernel_main() {
         1,
         input_num_tiles);
     DPRINT << "after root 2 reads from local\n";
+    DPRINT << "printing m from compute cb m\n";
+    print_full_tile(compute_cb_m, 0, false);
+    DPRINT << "printing s from compute cb s\n";
+    print_full_tile(compute_cb_s, 0, false);
 
     // device 3 is sending data to device 2
     uint32_t chunk_size = input_num_tiles;  // 8; HERE
@@ -211,6 +227,10 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
 
+    DPRINT << "print data from cb receiver m\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
+    DPRINT << "print data from cb receiver s\n";
+    print_full_tile(receiver_cb_id_s, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
 

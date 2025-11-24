@@ -34,27 +34,21 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     max_tile_init();
-    DPRINT << "after init\n";
 
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
     cb_wait_front(in0, num_tiles);
     cb_wait_front(in1, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
-    DPRINT << "before loop\n";
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
         max_tile(dst_reg_0, dst_reg_1, static_cast<int>(vector_mode));
-        DPRINT << "BEFORE PACK TILE\n";
         pack_tile(dst_reg_0, out_cb, i);
-        DPRINT << "AFTER PACK TILE\n";
         release_dst();
-        DPRINT << "AFTER RELEASE DST\n";
     }
     cb_push_back(out_cb, num_tiles);
-    DPRINT << "after move loop\n";
 }
 
 /**
@@ -262,6 +256,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
+            DPRINT << "mul col j=" << j << "\n";
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             cb_pop_front(in0_cb, 1);
@@ -269,6 +264,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
             pack_tile(0, out_cb);
             cb_push_back(out_cb, 1);
             release_dst();
+            DPRINT << "after release dst\n";
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -307,21 +303,26 @@ void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
-
+    DPRINT << "START OF ADD\n";
     add_tiles_init(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
+        DPRINT << "add tile i=" << i << "\n";
         acquire_dst();
         add_tiles(in0_cb, in1_cb, i, i, 0);
+        DPRINT << "after add_tiles\n";
         pack_tile(0, out_cb, i);
+        DPRINT << "after pack_tile\n";
         release_dst();
     }
+    DPRINT << "after add loop\n";
     cb_push_back(out_cb, num_tiles);
 
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
+    DPRINT << "END OF ADD\n";
 }
 
 /**
@@ -331,10 +332,12 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-
+    DPRINT << "START OF MUL\n";
     mul_tiles_init(in0_cb, in1_cb);
+    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
+    DPRINT << "before mul loop\n";
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         acquire_dst();
@@ -343,7 +346,9 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_reserve_back(in0_cb, 1);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
+        DPRINT << "after push back\n";
         release_dst();
+        DPRINT << "after release dst\n";
     }
 }
 
