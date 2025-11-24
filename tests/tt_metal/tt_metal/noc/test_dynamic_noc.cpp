@@ -311,11 +311,12 @@ void build_and_run_program_ethernet(
     // Arg 8: num_dests
     // Arg 9-10: semaphores (for num_riscs=2)
     // Arg 11: l1_addr (safe L1 address from HAL)
+    constexpr bool mcast_enable = true;
     std::vector<uint32_t> erisc0_rt_args_prog1 = {
         (std::uint32_t)worker_core_physical.x,
         (std::uint32_t)worker_core_physical.y,
-        0,  // risc index (ERISC0)
-        1,  // mcast_enable
+        0,             // risc index (ERISC0)
+        mcast_enable,  // mcast_enable
         top_left_core_physical.x,
         top_left_core_physical.y,
         bottom_right_core_physical.x,
@@ -328,8 +329,8 @@ void build_and_run_program_ethernet(
     std::vector<uint32_t> erisc1_rt_args_prog1 = {
         (std::uint32_t)worker_core_physical.x,
         (std::uint32_t)worker_core_physical.y,
-        1,  // risc index (ERISC1)
-        1,  // mcast_enable
+        1,             // risc index (ERISC1)
+        mcast_enable,  // mcast_enable
         top_left_core_physical.x,
         top_left_core_physical.y,
         bottom_right_core_physical.x,
@@ -342,8 +343,8 @@ void build_and_run_program_ethernet(
     std::vector<uint32_t> erisc0_rt_args_prog2 = {
         (std::uint32_t)worker_core_physical.x,
         (std::uint32_t)worker_core_physical.y,
-        0,  // risc index (ERISC0)
-        1,  // mcast_enable
+        0,             // risc index (ERISC0)
+        mcast_enable,  // mcast_enable
         top_left_core_physical.x,
         top_left_core_physical.y,
         bottom_right_core_physical.x,
@@ -356,8 +357,8 @@ void build_and_run_program_ethernet(
     std::vector<uint32_t> erisc1_rt_args_prog2 = {
         (std::uint32_t)worker_core_physical.x,
         (std::uint32_t)worker_core_physical.y,
-        1,  // risc index (ERISC1)
-        1,  // mcast_enable
+        1,             // risc index (ERISC1)
+        mcast_enable,  // mcast_enable
         top_left_core_physical.x,
         top_left_core_physical.y,
         bottom_right_core_physical.x,

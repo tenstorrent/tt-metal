@@ -29,26 +29,20 @@ inline __attribute__((always_inline)) void risc_context_switch() {
     ncrisc_noc_counters_init();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
 
-#if defined(KERNEL_BUILD)
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        ncrisc_noc_full_sync<1>();
-    }
-
-    service_eth_msg();
-    update_boot_results_eth_link_status_check();
-
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        ncrisc_noc_counters_init<1>();
-    }
-#elif defined(FW_BUILD)
-    // Note, FW always runs with dedicated NOC
-    ncrisc_noc_full_sync();
+#if defined(NOC_MODE) && (NOC_MODE == DM_DEDICATED_NOC)
+    // Sync and init NOC0
+    ncrisc_noc_full_sync<1>();
+#endif
     service_eth_msg();
     update_boot_results_eth_link_status_check();
     ncrisc_noc_counters_init<1>();
-#else
-#error "Unknown build type for risc_context_switch"
-#endif  // KERNEL_BUILD
+
+#if defined(NOC_MODE) && (NOC_MODE == DM_DYNAMIC_NOC)
+    // Reprogram cmd bufs for dynamic NOC
+    dynamic_noc_init();
+    // Base firmware using the same counters as us. No need
+    // to reinit them with dynamic_noc_local_state_init()
+#endif  // NOC_MODE == DM_DYNAMIC_NOC
 
 #endif  // (COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
 

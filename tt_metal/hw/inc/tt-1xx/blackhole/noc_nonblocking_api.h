@@ -514,21 +514,11 @@ inline __attribute__((always_inline)) void dynamic_noc_init() {
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
 
         // program brisc cmd_buf 0
-        //
-        // active erisc specific behavior
-        // If active erisc is running on ERISC1 (Single ERISC mode), base firmware is running concurrently on ERISC0
-        // and they are using this cmd_buf. Do not reprogram it. Being in this function implies ERISC1 is dynamic NOC,
-        // and ERISC1 is NCRISC therefore this cmd_buf will not be conflicting with base firmware.
-        //
-        // Does this register need to be reprogrammed each time we come back from base firmware on ERISC0?
-        // No. NOC_RET_ADDR_COORDINATE is programmed each time we call ncrisc_noc_fast_ functions
-#if !(defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1) && (COMPILE_FOR_AERISC == 0))
         NOC_CMD_BUF_WRITE_REG(
             noc,
             DYNAMIC_NOC_BRISC_RD_CMD_BUF,
             NOC_RET_ADDR_COORDINATE,
             (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
-#endif
 
         // program brisc cmd_buf 1
         NOC_CMD_BUF_WRITE_REG(
