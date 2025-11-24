@@ -198,26 +198,19 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseSwitchMeshDevice) {
     const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
     EXPECT_EQ(connected_meshes.size(), 1) << "Switch should be connected to 1 compute mesh";
 
-    // Open mesh device on switch (switch is treated the same as a mesh underneath)
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
-    {
-        mesh_device = ttnn::distributed::open_mesh_device(
-            mesh_shape,
-            l1_small_size_,
-            trace_region_size_,
-            1,  // num_command_queues
-            tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
-
-        ASSERT_NE(mesh_device, nullptr) << "Failed to open switch mesh device";
-        EXPECT_EQ(mesh_device->shape(), mesh_shape) << "Switch mesh device shape mismatch";
-    }
-
-    // Close mesh device
-    ttnn::distributed::close_mesh_device(mesh_device);
-    mesh_device.reset();
-
-    // Verify device is closed (should not crash on reset)
-    EXPECT_EQ(mesh_device, nullptr);
+    // Attempting to open mesh device on switch should fail
+    // Devices cannot be created on tt-switch meshes
+    EXPECT_THROW(
+        {
+            ttnn::distributed::open_mesh_device(
+                mesh_shape,
+                l1_small_size_,
+                trace_region_size_,
+                1,  // num_command_queues
+                tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
+        },
+        std::exception)
+        << "Opening mesh device on switch should fail";
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
@@ -324,41 +317,19 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnSwitchFabricNodes) {
 
     EXPECT_EQ(device_ids.size(), 4) << "Switch mesh should have 4 devices (2x2)";
 
-    // Create unit meshes for each device on the switch (switch is treated the same as a mesh)
-    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> unit_meshes;
-    {
-        unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-            device_ids,
-            l1_small_size_,
-            trace_region_size_,
-            1,  // num_command_queues
-            tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
-
-        EXPECT_EQ(unit_meshes.size(), device_ids.size()) << "Should create one unit mesh per device on switch";
-
-        // Verify each unit mesh has correct fabric node ID mapping
-        for (const auto& [device_id, unit_mesh] : unit_meshes) {
-            ASSERT_NE(unit_mesh, nullptr) << "Unit mesh for switch device " << device_id << " should not be null";
-            EXPECT_EQ(unit_mesh->shape(), tt::tt_metal::distributed::MeshShape(1, 1)) << "Unit mesh should be 1x1";
-
-            // Verify fabric node ID is correctly mapped (should have switch mesh_id)
-            auto expected_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device_id);
-            auto actual_fabric_node_id = unit_mesh->get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(0, 0));
-            EXPECT_EQ(actual_fabric_node_id.mesh_id, expected_fabric_node_id.mesh_id)
-                << "Fabric node mesh ID mismatch for switch device " << device_id;
-            EXPECT_EQ(actual_fabric_node_id.chip_id, expected_fabric_node_id.chip_id)
-                << "Fabric node chip ID mismatch for switch device " << device_id;
-
-            // Verify the mesh_id matches the switch mesh_id
-            EXPECT_EQ(*actual_fabric_node_id.mesh_id, mesh_id_val) << "Fabric node should have switch mesh_id";
-        }
-    }
-
-    // Close all unit meshes
-    for (auto& [device_id, unit_mesh] : unit_meshes) {
-        unit_mesh->close();
-    }
-    unit_meshes.clear();
+    // Attempting to create unit meshes on switch devices should fail
+    // Devices cannot be created on tt-switch meshes
+    EXPECT_THROW(
+        {
+            tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+                device_ids,
+                l1_small_size_,
+                trace_region_size_,
+                1,  // num_command_queues
+                tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
+        },
+        std::exception)
+        << "Creating unit meshes on switch devices should fail";
 }
 
 }  // namespace test
