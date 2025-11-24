@@ -637,7 +637,10 @@ uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
     }
     
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    return rtoptions.get_fabric_router_sync_timeout_ms();
+    auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
+    
+    // Return user override if set, otherwise use fabric default
+    return timeout.value_or(5000);
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
