@@ -14,6 +14,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/test_common.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/kernel_common.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/global_semaphore.hpp>
@@ -113,7 +114,7 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
-void run_addrgen_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
+void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 
@@ -227,27 +228,31 @@ Notes:
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
 
-    const std::string KDIR =
-        is_fused_atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/fused_atomic_inc/"
-                            : "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/unicast/";
+    const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
-    // Helper to select writer kernel based on API variant
-    auto get_writer_kernel_path = [&KDIR](AddrgenApiVariant variant) -> std::string {
+    // Helper to map API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
+    auto get_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
+        // Returns OperationType and ApiVariant enums
         switch (variant) {
-            case AddrgenApiVariant::UnicastWrite: return KDIR + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
-            case AddrgenApiVariant::UnicastWriteWithState: return KDIR + "unicast_tx_writer_with_state_addrgen.cpp";
-            case AddrgenApiVariant::UnicastWriteSetState: return KDIR + "unicast_tx_writer_set_state_addrgen.cpp";
-            case AddrgenApiVariant::FusedAtomicIncWrite: return KDIR + "fused_atomic_inc_tx_writer_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
+            case AddrgenApiVariant::UnicastWriteWithState: return {OperationType::BasicWrite, ApiVariant::WithState};
+            case AddrgenApiVariant::UnicastWriteSetState: return {OperationType::BasicWrite, ApiVariant::SetState};
+            case AddrgenApiVariant::FusedAtomicIncWrite: return {OperationType::FusedAtomicInc, ApiVariant::Basic};
             case AddrgenApiVariant::FusedAtomicIncWriteWithState:
-                return KDIR + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
+                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
             case AddrgenApiVariant::FusedAtomicIncWriteSetState:
-                return KDIR + "fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
-            default: TT_FATAL(false, "Unknown API variant"); return "";
+                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
+            case AddrgenApiVariant::ScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
+            case AddrgenApiVariant::ScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
+            case AddrgenApiVariant::ScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
+            default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
 
-    const std::string receiver_kernel_name =
-        is_fused_atomic_inc ? "fused_atomic_inc_rx_addrgen.cpp" : "unicast_rx_addrgen.cpp";
+    auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
+
+    // All receivers use the unified kernel now
+    const std::string receiver_kernel_name = "rx_addrgen.cpp";
 
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
@@ -260,6 +265,16 @@ Notes:
 
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
 
+    // Calculate aligned page sizes for source (DRAM) and destination (DRAM or L1)
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);  // Source is always DRAM
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
+
+    // Round up to alignment boundary
+    uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
+    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
+
     // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
     // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
@@ -269,23 +284,23 @@ Notes:
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
-    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
-                      .set_page_size(CB_ID, p.page_size);
+    // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, src_aligned_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
-    // Reader kernel (DRAM->CB)
+    // Reader kernel (DRAM->CB) - now uses unified kernel with OPERATION_TYPE compile-time arg
     std::vector<uint32_t> reader_cta;
     tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
-    reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+    reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    reader_cta.push_back(1u);              // SRC_IS_DRAM
     reader_cta.push_back(NUM_PAGES);
-    reader_cta.push_back(p.page_size);
-
-    const std::string reader_kernel_name =
-        is_fused_atomic_inc ? "fused_atomic_inc_tx_reader_to_cb_addrgen.cpp" : "unicast_tx_reader_to_cb_addrgen.cpp";
+    reader_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    reader_cta.push_back(src_aligned_page_size);  // Aligned page size (source buffer spacing)
 
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        KDIR + reader_kernel_name,
+        KDIR + "tx_reader_to_cb_addrgen.cpp",  // Unified reader kernel
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -294,15 +309,19 @@ Notes:
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC)
+    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(NUM_PAGES);
-    writer_cta.push_back(p.page_size);
+    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
+    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
+    writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        get_writer_kernel_path(p.api_variant),  // Use helper to select kernel
+        KDIR + "unicast_tx_writer_addrgen.cpp",  // Unified unicast writer kernel
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
