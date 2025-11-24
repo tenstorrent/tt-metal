@@ -145,14 +145,7 @@ ManualSeedDeviceOperation::invoke(
     }
     operation_attributes.sub_core_grids = sub_core_grids;
     // Prepare tensor arguments
-    // TODO: To be removed when API will be fixed with https://github.com/tenstorrent/tt-metal/pull/32260
-    auto output_tensor = create_device_tensor(
-        ttnn::TensorSpec(
-            ttnn::Shape{1},
-            tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig())),
-        operation_attributes.device);
-
-    tensor_args_t tensor_args{output_tensor};
+    tensor_args_t tensor_args{};
     if (std::holds_alternative<Tensor>(seeds)) {
         tensor_args.seeds = std::get<Tensor>(seeds);
     }
