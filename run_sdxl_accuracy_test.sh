@@ -4,7 +4,7 @@
 # This runs the test with device encoders, trace enabled, device VAE, and no CFG parallel
 
 LOG_FILE="sdxl_accuracy_test_results_$(date +%Y%m%d_%H%M%S).log"
-NUM_RUNS=20
+NUM_RUNS=30
 TEST_COMMAND="TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7 TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py::test_accuracy_sdxl -k \"device_encoders and with_trace and device_vae and no_cfg_parallel\" --num-prompts=5000 -v -s"
 
 echo "Running SDXL accuracy test with configuration:"
