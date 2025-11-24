@@ -29,7 +29,6 @@
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
 #include "debug/stack_usage.h"
-#include "debug/dprint.h"
 
 uint8_t noc_index;
 
@@ -225,7 +224,7 @@ int __attribute__((noinline)) main(void) {
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    ncrisc_noc_counters_init<1>();
+    ncrisc_noc_counters_init();
 #endif
 
     ncrisc_noc_full_sync();

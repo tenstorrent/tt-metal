@@ -34,6 +34,7 @@
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -163,11 +164,10 @@ void RunTestOnCore(
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines};
+        eth_test_common::set_arch_specific_eth_config(config);
         dram_copy_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp",
-            core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines});
+            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
     } else {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
