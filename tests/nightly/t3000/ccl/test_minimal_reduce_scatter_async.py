@@ -19,7 +19,7 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 
 def run_reduce_scatter_impl(
     mesh_device,
-    num_devices_UNUSED,
+    num_devices,
     rs_input_shape,
     dim,
     num_links,
@@ -45,8 +45,6 @@ def run_reduce_scatter_impl(
     torch.manual_seed(0)
 
     tile = (32, 32)
-
-    num_devices = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
 
     ##### Fabric setup #####
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -129,14 +127,18 @@ def run_reduce_scatter_impl(
         input_tensors = torch.chunk(rs_input_tensor, num_devices, dim)
         torch_input_tensor_list.append(input_tensors)
 
-        shard_dims = (None, dim) if cluster_axis == 1 else (dim, None)
         input_tensor_mesh = ttnn.from_torch(
             rs_input_tensor,
             device=mesh_device,
             layout=layout,
             dtype=rs_input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
         )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
@@ -215,7 +217,6 @@ def run_reduce_scatter_impl(
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
-            # TODO how to concat tensors in 2D mesh
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
             tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
             tt_reduce_scatter_output_tensor.deallocate(True)
