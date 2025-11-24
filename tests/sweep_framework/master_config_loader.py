@@ -344,13 +344,48 @@ class MasterConfigLoader:
                             shard_shape = [int(numbers[0]), int(numbers[1])]
 
                 # Adjust shard shape to be tile-aligned (round to nearest multiple of 32)
+                # BUT: For WIDTH_SHARDED, shard height must match physical height
+                #      For HEIGHT_SHARDED, shard width must match physical width
                 # This ensures compatibility even if traced configs have non-tile-aligned shapes
                 if shard_shape and len(shard_shape) >= 2:
                     TILE_SIZE = 32
                     height, width = shard_shape[0], shard_shape[1]
-                    # Round to nearest tile-aligned size (round up to ensure we don't shrink)
-                    adjusted_height = ((height + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-                    adjusted_width = ((width + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+
+                    # Calculate physical dimensions from tensor shape
+                    physical_height = None
+                    physical_width = None
+                    if tensor_shape and len(tensor_shape) >= 4:
+                        # For 4D tensors [B, H, W, C] or [B, C, H, W]
+                        # Physical height is typically shape[1] or shape[2] depending on layout
+                        # Physical width is typically shape[2] or shape[3] depending on layout
+                        # For TILE layout: [B, C, H, W] -> physical H=H, W=W
+                        # For ROW_MAJOR: [B, H, W, C] -> physical H=H, W=W
+                        # Use the last two dimensions as height and width
+                        physical_height = tensor_shape[-2] if len(tensor_shape) >= 2 else None
+                        physical_width = tensor_shape[-1] if len(tensor_shape) >= 1 else None
+
+                    # Adjust height - but respect physical height for WIDTH_SHARDED
+                    if "WIDTH_SHARDED" in memory_layout and physical_height is not None:
+                        # For WIDTH_SHARDED, shard height must match physical height exactly
+                        adjusted_height = physical_height
+                    else:
+                        # Round to nearest tile-aligned size (round up to ensure we don't shrink)
+                        adjusted_height = ((height + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+                        # But don't exceed physical height if we know it
+                        if physical_height is not None and adjusted_height > physical_height:
+                            adjusted_height = physical_height
+
+                    # Adjust width - but respect physical width for HEIGHT_SHARDED
+                    if "HEIGHT_SHARDED" in memory_layout and physical_width is not None:
+                        # For HEIGHT_SHARDED, shard width must match physical width exactly
+                        adjusted_width = physical_width
+                    else:
+                        # Round to nearest tile-aligned size (round up to ensure we don't shrink)
+                        adjusted_width = ((width + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+                        # But don't exceed physical width if we know it
+                        if physical_width is not None and adjusted_width > physical_width:
+                            adjusted_width = physical_width
+
                     if adjusted_height != height or adjusted_width != width:
                         # Only adjust if needed - prefer rounding up to preserve data
                         shard_shape = [adjusted_height, adjusted_width]
