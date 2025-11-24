@@ -75,9 +75,9 @@ public:
     // QueryMetric RPC implementation
     Status QueryMetric(
         ServerContext* context, const QueryMetricRequest* request, QueryMetricResponse* response) override {
-        const std::string& metric_name = request->metric_name();
+        const std::string& metric_query = request->metric_query();
 
-        log_debug(tt::LogAlways, "gRPC QueryMetric received for metric: {}", metric_name);
+        log_debug(tt::LogAlways, "gRPC QueryMetric received for metric: {}", metric_query);
 
         bool found_any = false;
 
@@ -85,7 +85,7 @@ public:
         std::lock_guard<std::mutex> lock(state_mutex_);
 
         // Get all metric paths that contain the metric name
-        auto it = metric_paths_by_name_.find(metric_name);
+        auto it = metric_paths_by_name_.find(metric_query);
         if (it != metric_paths_by_name_.end()) {
             for (const auto& metric_path : it->second) {
                 // Check each metric type map to find the requested metric
@@ -169,8 +169,8 @@ public:
 
         // Metric not found in any map - return error status
         if (!found_any) {
-            log_debug(tt::LogAlways, "Metric '{}' not found in telemetry state", metric_name);
-            return Status(grpc::StatusCode::NOT_FOUND, "Metric '" + metric_name + "' not found");
+            log_debug(tt::LogAlways, "Metric '{}' not found in telemetry state", metric_query);
+            return Status(grpc::StatusCode::NOT_FOUND, "Metric '" + metric_query + "' not found");
         }
 
         return Status::OK;

@@ -73,19 +73,19 @@ class TelemetryClient:
             print(f"RPC failed: {e.code()}: {e.details()}")
             return False, timestamp_ms, 0
 
-    def query_metric(self, metric_name: str, timeout: float = 5.0) -> tuple[bool, list[dict]]:
+    def query_metric(self, metric_query: str, timeout: float = 5.0) -> tuple[bool, list[dict]]:
         """
         Query a metric by name.
 
         Args:
-            metric_name: Name of the metric to query
+            metric_query: Name of the metric to query
             timeout: RPC timeout in seconds
 
         Returns:
             Tuple of (success, results) where results is a list of dicts with keys:
             'path', 'timestamp', 'value', 'type'
         """
-        request = telemetry_service_pb2.QueryMetricRequest(metric_name=metric_name)
+        request = telemetry_service_pb2.QueryMetricRequest(metric_query=metric_query)
 
         try:
             response = self.stub.QueryMetric(request, timeout=timeout)
@@ -143,10 +143,10 @@ def ping(client: TelemetryClient, params: Dict[str, Any] | None):
 
 
 def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
-    metric_name = params["metric_name"]
-    success, results = client.query_metric(metric_name)
+    metric_query = params["metric_query"]
+    success, results = client.query_metric(metric_query)
     if success:
-        print(f"Query results for '{metric_name}':")
+        print(f"Query results for '{metric_query}':")
         for i, result in enumerate(results, 1):
             print(f"  Result {i}:")
             print(f"    Path:      {result['path']}")
@@ -154,7 +154,7 @@ def query_metric(client: TelemetryClient, params: Dict[str, Any] | None):
             print(f"    Value:     {result['value']}")
             print(f"    Timestamp: {result['timestamp']}")
     else:
-        print(f"Query failed for metric: {metric_name}")
+        print(f"Query failed for metric: {metric_query}")
 
 
 if __name__ == "__main__":
@@ -185,7 +185,7 @@ if __name__ == "__main__":
         Command(
             handler=lambda params: query_metric(client, params),
             command="query",
-            params=[Param(name="metric_name", type=str)],
+            params=[Param(name="metric_query", type=str)],
             description="Query a metric by name",
         ),
     ]
