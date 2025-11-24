@@ -14,13 +14,14 @@ def test_reduce_to_root_basic(mesh_device):
     root_coord = (1, 0)
     num_devices = 4
     # currently change shape to fit tile, change later to tiny tile, make same shape in terms of number of packets
-    l_shape = [8, 256]  # should be tiny tile (8,256)
+    l_shape = [8, 128]  # should be tiny tile (8,256)
     s_shape = [8, 32]  # should be tiny tile (8,1)
     m_shape = [8, 32]  # should be tiny tile (8,1)
-    intermediate_shapes = [[8, 256], [2, 8, 32]]  # should be (8,256) and (2,8,1)
+    intermediate_shapes = [[8, 192], [2, 8, 32]]  # should be (8,256) and (2,8,1)  (8, 320) = (8, 256 + 64)
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((8, 32))
+    shard_spec_l_shape = (8, 192)
     shard_spec_sm_shape = (16, 32)
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
@@ -37,6 +38,13 @@ def test_reduce_to_root_basic(mesh_device):
         s_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+
+    shard_spec_int_l = ttnn.ShardSpec(
+        shard_grid,
+        shard_spec_l_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
     shard_spec_sm = ttnn.ShardSpec(
         shard_grid,
         shard_spec_sm_shape,
@@ -47,6 +55,10 @@ def test_reduce_to_root_basic(mesh_device):
     )
     mem_config_s = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_s
+    )
+
+    mesh_config_int_l = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_int_l
     )
 
     mem_config_sm = ttnn.MemoryConfig(
@@ -94,7 +106,7 @@ def test_reduce_to_root_basic(mesh_device):
         layout=layout,
         tile=tile,
         dtype=dtype,
-        memory_config=mem_config_l,
+        memory_config=mesh_config_int_l,
         mesh_mapper=mesh_mapper,
     )
     intermediate_sm = ttnn.from_torch(

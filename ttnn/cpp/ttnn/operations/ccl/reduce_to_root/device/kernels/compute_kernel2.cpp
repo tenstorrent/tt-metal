@@ -59,7 +59,7 @@ constexpr uint32_t cb_l1_temp = get_compile_time_arg_val(15);             // tem
 constexpr uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // temp for l2
 constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
-constexpr uint32_t vDHt = 8;  // get_compile_time_arg_val(19);
+constexpr uint32_t vDHt = 4;  // get_compile_time_arg_val(19);
 constexpr uint32_t loop_size = get_compile_time_arg_val(20);
 
 void MAIN {
