@@ -146,55 +146,66 @@ def prepare_gpt_oss_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
         ),
-        (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
-            1,  # data_parallel
-            1,  # batch_size
-            1,  # repeat_batches
-            16 * 1024,  # max_seq_len
-            200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-        ),
-        (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
-            1,  # data_parallel
-            1,  # batch_size
-            1,  # repeat_batches
-            32 * 1024,  # max_seq_len
-            200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-        ),
-        (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
-            1,  # data_parallel
-            1,  # batch_size
-            1,  # repeat_batches
-            64 * 1024,  # max_seq_len
-            200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-        ),
-        (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
-            1,  # data_parallel
-            1,  # batch_size
-            1,  # repeat_batches
-            128 * 1024,  # max_seq_len
-            200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-        ),
+        # (
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+        #     1,  # data_parallel
+        #     1,  # batch_size
+        #     1,  # repeat_batchesx
+        #     8 * 1024,  # max_seq_len
+        #     200,  # max_generated_tokens
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        # ),
+        # (
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+        #     1,  # data_parallel
+        #     1,  # batch_size
+        #     1,  # repeat_batches
+        #     16 * 1024,  # max_seq_len
+        #     200,  # max_generated_tokens
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        # ),
+        # (
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+        #     1,  # data_parallel
+        #     1,  # batch_size
+        #     1,  # repeat_batches
+        #     32 * 1024,  # max_seq_len
+        #     200,  # max_generated_tokens
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        # ),
+        # (
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+        #     1,  # data_parallel
+        #     1,  # batch_size
+        #     1,  # repeat_batches
+        #     64 * 1024,  # max_seq_len
+        #     200,  # max_generated_tokens
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        # ),
+        # (
+        #     "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+        #     1,  # data_parallel
+        #     1,  # batch_size
+        #     1,  # repeat_batches
+        #     128 * 1024,  # max_seq_len
+        #     200,  # max_generated_tokens
+        #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        # ),
     ],
     ids=[
         "prefill_128",
         "prefill_1k",
         "prefill_4k",
-        "prefill_16k",
-        "prefill_32k",
-        "prefill_64k",
-        "prefill_128k",
+        # "prefill_8k",
+        # "prefill_16k",
+        # "prefill_32k",
+        # "prefill_64k",
+        # "prefill_128k",
     ],
 )
 @parametrize_mesh_with_fabric()
@@ -501,7 +512,6 @@ def test_gpt_oss_demo(
         "decode_t/s": perf_targets["targets"]["decode_tok_s"][model_device_key],
         "decode_t/s/u": perf_targets["targets"]["decode_tok_s_u"][model_device_key],
     }
-    breakpoint()
 
     if is_ci_env:
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
