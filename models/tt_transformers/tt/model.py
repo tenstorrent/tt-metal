@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.tt_sampling import TTSampling
+from models.common.utils import LogProbsCalculator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -44,6 +45,7 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
+        self.log_probs_calculator = LogProbsCalculator(self.vocab_size, self.mesh_device)
         self.tt_ccl = TT_CCL(self.mesh_device)
 
         embd_kwargs = {
@@ -428,7 +430,14 @@ class Transformer(LightweightModule):
             tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
             # Update device tensors for the next iteration
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            return tt_toks
+
+            # Calculate log-prob stats
+            self.log_probs_calculator.compute_global_stats(tt_logits)
+            # Prepare correct logits for each user on all chips
+            selected_logits = self.log_probs_calculator.prepare_correct_logits(tt_logits, tt_toks)
+            tt_log_probs = self.log_probs_calculator.calculate_log_probs(selected_logits)
+
+            return tt_toks, tt_log_probs
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:

@@ -64,6 +64,35 @@ class LogProbsCalculator:
         self.vocab_size = vocab_size
         self.mesh_device = mesh_device
 
+        # Create mask for each user on each chip.
+        batch_size = 32
+
+        num_devices = self.mesh_device.get_num_devices()
+        # TODO: Test this for 6U Galaxy
+        # Enforce working on 8 devices instead of all 32 since logits are sharded across 8 devices
+        num_devices = 8 if num_devices == 32 else num_devices
+
+        # Create mask tensor with shape (num_devices, batch_size)
+        # Each row will have device_id starting from 0 to num_devices - 1
+        mask_tensor = torch.arange(num_devices).unsqueeze(1).expand(num_devices, batch_size)
+
+        if self.mesh_device.get_num_devices() == 32:
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape)
+        elif self.mesh_device.get_num_devices() == 8:
+            mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+        else:
+            raise ValueError(f"Unsupported number of devices: {num_devices}")
+
+        self.mask = ttnn.as_tensor(
+            mask_tensor,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            preprocess=lambda x: x.to(torch.bfloat16),
+            mesh_mapper=mesh_mapper,
+        )
+
     def compute_global_stats(
         self,
         logits_tensor: ttnn.Tensor,
@@ -78,8 +107,8 @@ class LogProbsCalculator:
         """
         # Calculate local max
         local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True)
+
         # All-gather local max to get global max
-        print(f"mesh_device: {self.mesh_device}")
         gathered_max_tensors = ttnn.all_gather(
             local_max_tensor,
             dim=3,
@@ -93,6 +122,7 @@ class LogProbsCalculator:
         # Calculate stable local sum-exp using subtract of global-max from each local logit
         subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max)
         sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1, keepdim=True)
+
         # All-gather stable local sum-exp to get global sum-exp
         gathered_sum_exp_tensors = ttnn.all_gather(
             sum_exp_tensor,
@@ -104,9 +134,57 @@ class LogProbsCalculator:
         )
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1, keepdim=True)
 
+    def prepare_correct_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
+        """
+        Prepare global idx tensor with correct values on all devices.
+        """
+        size_per_device = logits_tensor.shape[-1]
+
+        # convert global_idx_tensor to ttnn.TILE_LAYOUT
+        global_idx_tilized_tensor = ttnn.to_layout(global_idx_tensor, ttnn.TILE_LAYOUT)
+
+        # TODO: Raise an issue on this since for UINT_32 ttnnn.div produces incorrect output (all zeros)
+        global_idx_tilized_tensor = ttnn.typecast(global_idx_tilized_tensor, ttnn.float32)
+
+        # Get chip_id for each user based on global_idx values in global_idx_tensor
+        chip_ids_tensor = ttnn.div(
+            global_idx_tilized_tensor, size_per_device, round_mode="floor", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # Get local index for each user based on global_idx values in global_idx_tensor
+        remainder_tensor = ttnn.remainder(
+            global_idx_tilized_tensor, size_per_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # Convert remainder_tensor to int32
+        remainder_tensor = ttnn.typecast(remainder_tensor, ttnn.uint32)
+
+        # Get logits for each user on each chip based on local index
+        selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor)
+
+        # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
+        ttnn.eq_(chip_ids_tensor, self.mask)
+
+        # Multiply selected_logits_tensor with chip_ids_tensor to get expected logits for each user
+        selected_logits_tensor = ttnn.multiply(selected_logits_tensor, chip_ids_tensor)
+
+        # Use ttnn.all_gather to get logits across all devices
+        selected_logits_tensor = ttnn.all_gather(
+            selected_logits_tensor,
+            dim=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=None,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # Apply sum over device dimension to get logits for each user on all chips
+        selected_logits_tensor = ttnn.sum(selected_logits_tensor, dim=2, keepdim=True)
+
+        return selected_logits_tensor
+
     def calculate_log_probs(self, logits_tensor: ttnn.Tensor):
         """
-        Calculate log-probs for a given logits tensor and indices tensor.
+        Calculate log-probs for a given logits tensor.
         """
         if self.global_max is None or self.global_exp_sum is None:
             raise ValueError("Global max or global exp sum is not calculated yet. Call compute_global_stats first.")
