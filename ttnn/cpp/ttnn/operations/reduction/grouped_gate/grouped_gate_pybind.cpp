@@ -1,0 +1,67 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/reduction/grouped_gate/grouped_gate_pybind.hpp"
+#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "ttnn/operations/reduction/grouped_gate/grouped_gate.hpp"
+
+namespace ttnn::operations::reduction {
+
+namespace py = pybind11;
+
+void py_bind_grouped_gate(py::module& module) {
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::grouped_gate,
+        R"doc(
+            Gating mechanism for routing inputs in a mixture-of-experts (MoE) model, specifically optimized for DeepSeek.
+
+            Args:
+                scores (ttnn.Tensor): Input scores tensor.
+                bias (ttnn.Tensor): Bias tensor.
+                route_scale (float): Routing scale factor.
+                epsilon (float): Epsilon for numerical stability.
+                n_groups (int): Number of groups.
+                topk (int): Number of experts per group to consider.
+                topk_groups (int): Number of top groups to route to.
+                n_activated_experts (int): Number of final experts to select.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None.
+
+            Returns:
+                Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the routing weights and selected expert indices.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const decltype(ttnn::grouped_gate)& self,
+               const ttnn::Tensor& scores,
+               const ttnn::Tensor& bias,
+               const float route_scale,
+               const float epsilon,
+               const uint32_t n_groups,
+               const uint32_t topk,
+               const uint32_t topk_groups,
+               const uint32_t n_activated_experts,
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(
+                    scores,
+                    bias,
+                    route_scale,
+                    epsilon,
+                    n_groups,
+                    topk,
+                    topk_groups,
+                    n_activated_experts,
+                    memory_config);
+            },
+            py::arg("scores"),
+            py::arg("bias"),
+            py::arg("route_scale"),
+            py::arg("epsilon"),
+            py::arg("n_groups"),
+            py::arg("topk"),
+            py::arg("topk_groups"),
+            py::arg("n_activated_experts"),
+            py::arg("memory_config") = std::nullopt});
+}
+
+}  // namespace ttnn::operations::reduction

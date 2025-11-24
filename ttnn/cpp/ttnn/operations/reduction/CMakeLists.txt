@@ -21,6 +21,8 @@ file(
     sampling/device/kernels/*
     topk/device/kernels/*
     manual_seed/device/kernels/*
+    grouped_gate/device/kernels/dataflow/*
+    grouped_gate/device/kernels/compute/*
 )
 target_sources(
     ttnn_op_reduction
@@ -69,6 +71,9 @@ target_sources(
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp
         manual_seed/device/manual_seed_program_factory.cpp
+        grouped_gate/grouped_gate.cpp
+        grouped_gate/device/grouped_gate_device_operation.cpp
+        grouped_gate/device/grouped_gate_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})

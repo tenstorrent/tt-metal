@@ -20,6 +20,7 @@
 #include "ttnn/operations/reduction/sampling/sampling_pybind.hpp"
 #include "ttnn/operations/reduction/topk/topk_pybind.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed_pybind.hpp"
+#include "ttnn/operations/reduction/grouped_gate/grouped_gate_pybind.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -44,6 +45,7 @@ void py_module(py::module& module) {
     detail::bind_reduction_sampling_operation(module);
     detail::bind_reduction_topk_operation(module);
     detail::bind_manual_seed_operation(module);
+    py_bind_grouped_gate(module);
 }
 
 }  // namespace ttnn::operations::reduction
