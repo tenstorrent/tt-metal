@@ -48,12 +48,7 @@ class SamplingGenerator:
         self.enable_internal_trace = enable_internal_trace
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
-        self.tt_penalties = TTPenalties(
-            mesh_device=mesh_device,
-            max_batch_size=args.max_batch_size,
-            vocab_size=args.vocab_size,
-            sub_core_grids=getattr(args, "sub_core_grids", None),
-        )
+        self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
 
@@ -157,7 +152,6 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
 
         key, slot = self._trace_slot(penalties_on)
-        print("at capture, ", slot, key)
 
         logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(
@@ -230,7 +224,6 @@ class SamplingGenerator:
             tt_out = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
-            tt_out = ttnn.reshape(tt_out, [32, 1])
             self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
