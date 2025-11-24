@@ -226,7 +226,8 @@ ParallelConfig determine_output_parallel_config(
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
     ShardOrientation block_shard_orientation,
-    bool is_mm_conv) {
+    bool is_mm_conv,
+    bool override_divisor) {
     ParallelConfig output_parallel_config = input_parallel_config;
     if (!is_mm_conv) {
         const uint32_t out_channels_ntiles = tt::div_up(out_channels, tt::constants::TILE_WIDTH);
@@ -240,7 +241,7 @@ ParallelConfig determine_output_parallel_config(
             const uint32_t start_divisor_c =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
             uint32_t num_cores_c =
-                find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c, true);
+                find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c, override_divisor);
             const uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
             const uint32_t cores_x =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
@@ -758,7 +759,12 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
+        parallel_config,
+        compute_grid_size,
+        out_channels,
+        parallel_config.shard_orientation,
+        is_mm_conv,
+        conv_config.override_divisor);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
@@ -972,7 +978,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             compute_grid_size,
             out_channels,
             shard_orientation,
-            is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
+            is_mm_conv,
+            conv_config.override_divisor /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
 
         const uint32_t in_channels_padded = tt::round_up(
             in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
@@ -1243,7 +1250,12 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             .shard_scheme = sliced_input_tensor_memory_config.memory_layout(),
             .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
         ParallelConfig output_parallel_config = determine_output_parallel_config(
-            parallel_config, params.compute_grid, params.out_channels, shard_orientation, params.mm_conv);
+            parallel_config,
+            params.compute_grid,
+            params.out_channels,
+            shard_orientation,
+            params.mm_conv,
+            conv_config.override_divisor);
 
         uint32_t padded_in_channels = tt::round_up(
             params.in_channels,

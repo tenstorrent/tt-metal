@@ -119,6 +119,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
+            override_divisor=True,
         )
 
         self.conv_configs["ABH_0_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
@@ -131,6 +132,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
+            override_divisor=True,
         )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -142,6 +144,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=64,
+            override_divisor=True,
         )
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -153,6 +156,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
+            override_divisor=True,
         )
         self.conv_configs["ABH_128_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
@@ -164,6 +168,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=128,
+            override_divisor=True,
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_w_dtype,
@@ -186,6 +191,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
+            override_divisor=True,
         )
 
         self.conv_configs["ABH_256_ADB_WDB_BS"] = ttnn.Conv2dConfig(
@@ -198,6 +204,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=256,
+            override_divisor=True,
         )
 
         self.conv_configs["ABH_512_NO_ADB_BS"] = ttnn.Conv2dConfig(
@@ -234,6 +241,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=512,
+            override_divisor=True,
         )
 
         self.conv_configs["ABH_1024_NO_ADB_BS"] = ttnn.Conv2dConfig(
@@ -258,6 +266,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=1024,
+            override_divisor=True,
         )
 
         # DEFAULT CONF
