@@ -2750,8 +2750,8 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         cabling_descriptor_path,
         all_hostnames,
         gsd_yaml,
-        false,  // strict_validation
-        false   // assert_on_connection_mismatch
+        true,  // strict_validation
+        true   // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
