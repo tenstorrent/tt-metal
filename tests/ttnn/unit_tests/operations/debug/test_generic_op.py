@@ -39,7 +39,9 @@ def test_eltwise_exp(device, num_tiles):
     max_core = ttnn.CoreCoord(7, 7)
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), max_core)])
     (_, core_grid, core_group_1, core_group_2, work_per_core1, _) = ttnn.split_work_to_cores(all_cores, num_tiles)
-    # assert core_group_2 is {}, "tt_metal/kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
+    assert (
+        len(core_group_2.ranges()) == 0
+    ), "tt_metal/kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
 
     input_cb_data_format = ttnn.bfloat16  # this will be mapped tt::DataFormat::Float16_b
     cb_total_size = 2 * 2 * 1024  # tt::DataFormat::Float16_b hard coded to have size 2 * 1024
