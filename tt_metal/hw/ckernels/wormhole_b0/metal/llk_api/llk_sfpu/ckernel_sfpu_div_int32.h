@@ -29,4 +29,10 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::dst_reg++;
     }
 }
+
+template <bool APPROXIMATION_MODE>
+inline void div_init() {
+    _init_reciprocal_<false>();
+}
+
 }  // namespace ckernel::sfpu

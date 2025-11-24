@@ -278,8 +278,9 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     if (attributes.binary_op_type == BinaryOpType::DIV && input_tensor_a.dtype() == DataType::INT32) {
         if (tensor_b.has_value() && tensor_b->dtype() == DataType::INT32) {
             output_dtype = DataType::FLOAT32;
+        } else if (!tensor_b.has_value()) {
+            output_dtype = DataType::FLOAT32;
         }
-        output_dtype = DataType::FLOAT32;
     }
 
     // Broadcasting Rules Overview:
