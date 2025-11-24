@@ -237,9 +237,8 @@ class RunTimeOptions {
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
-    // Fabric router sync timeout configuration
-    uint32_t fabric_router_sync_timeout_base_ms = 4000;
-    uint32_t fabric_router_sync_timeout_per_host_ms = 1000;
+    // Fabric router sync timeout configuration (in milliseconds)
+    uint32_t fabric_router_sync_timeout_ms = 5000;
 
 public:
     RunTimeOptions();
@@ -560,8 +559,7 @@ public:
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
-    uint32_t get_fabric_router_sync_timeout_base_ms() const { return fabric_router_sync_timeout_base_ms; }
-    uint32_t get_fabric_router_sync_timeout_per_host_ms() const { return fabric_router_sync_timeout_per_host_ms; }
+    uint32_t get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

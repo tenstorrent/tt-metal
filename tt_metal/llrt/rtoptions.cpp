@@ -163,8 +163,7 @@ enum class EnvVarID {
     // ========================================
     // FABRIC CONFIGURATION
     // ========================================
-    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS,      // Base timeout for fabric router sync
-    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS,  // Additional timeout per host
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1046,31 +1045,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // ========================================
         // FABRIC CONFIGURATION
         // ========================================
-        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS
-        // Base timeout in milliseconds for fabric router sync
-        // Default: 4000ms
-        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS=5000
-        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS:
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS
+        // Timeout in milliseconds for fabric router sync
+        // Default: 5000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=8000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS:
             try {
-                this->fabric_router_sync_timeout_base_ms = std::stoi(value);
+                this->fabric_router_sync_timeout_ms = std::stoi(value);
             } catch (const std::invalid_argument& ia) {
-                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS: {}", value);
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
             } catch (const std::out_of_range&) {
-                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS value out of range: {}", value);
-            }
-            break;
-
-        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS
-        // Additional timeout in milliseconds per host for fabric router sync
-        // Default: 1000ms
-        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS=2000
-        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS:
-            try {
-                this->fabric_router_sync_timeout_per_host_ms = std::stoi(value);
-            } catch (const std::invalid_argument& ia) {
-                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS: {}", value);
-            } catch (const std::out_of_range&) {
-                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS value out of range: {}", value);
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
             }
             break;
     }
