@@ -166,6 +166,8 @@ void kernel_main() {
     // device 0 is sending data to device 1
 
     print_full_tile(compute_cb_m, 0, false);
+    DPRINT << "printing s from compute cb s\n";
+    print_full_tile(compute_cb_s, 0, false);
 
     DPRINT << "after reading from local\n";
     // receive l, s and m data from sender
@@ -235,8 +237,8 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m2, packet_l1_addr + aligned_page_size_bytes, page_size_bytes);
 
-    DPRINT << "print data from cb receiver m\n";
-    print_full_tile(receiver_cb_id_m, 0, false);
+    DPRINT << "print data from cb receiver s\n";
+    print_full_tile(receiver_cb_id_s, 0, false);
 
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);

@@ -202,7 +202,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // CreateCircularBuffer(program, all_cores, cb_sender_m_config);
 
     constexpr auto compute_cb_l = tt::CBIndex::c_3;
-    constexpr auto cb_compute_num_pages = input_num_tiles;
+    constexpr auto cb_compute_num_pages = 2 * input_num_tiles;
     tt::tt_metal::CircularBufferConfig cb_compute_l_config =
         tt::tt_metal::CircularBufferConfig(
             cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
@@ -365,21 +365,37 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_tile_dims(cb_s_temp, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_s_temp_config);
 
-    constexpr auto cb_m1_temp = tt::CBIndex::c_23;
-    tt::tt_metal::CircularBufferConfig cb_m1_temp_config =
+    constexpr auto cb_s1_temp = tt::CBIndex::c_23;
+    tt::tt_metal::CircularBufferConfig cb_s1_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_m1_temp, input_dataformat}})
-            .set_page_size(cb_m1_temp, aligned_input_page_size_bytes)
-            .set_tile_dims(cb_m1_temp, stats_tile);
-    // CreateCircularBuffer(program, all_cores, cb_m1_temp_config);
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s1_temp, input_dataformat}})
+            .set_page_size(cb_s1_temp, aligned_input_page_size_bytes)
+            .set_tile_dims(cb_s1_temp, stats_tile);
+    // CreateCircularBuffer(program, all_cores, cb_s1_temp_config);
 
-    constexpr auto cb_m2_temp = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig cb_m2_temp_config =
+    constexpr auto cb_s2_temp = tt::CBIndex::c_24;
+    tt::tt_metal::CircularBufferConfig cb_s2_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_m2_temp, input_dataformat}})
-            .set_page_size(cb_m2_temp, aligned_input_page_size_bytes)
-            .set_tile_dims(cb_m2_temp, stats_tile);
-    // CreateCircularBuffer(program, all_cores, cb_m2_temp_config);
+            cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_s2_temp, input_dataformat}})
+            .set_page_size(cb_s2_temp, aligned_input_page_size_bytes)
+            .set_tile_dims(cb_s2_temp, stats_tile);
+    // CreateCircularBuffer(program, all_cores, cb_s2_temp_config);
+
+    constexpr auto cb_l1_temp = tt::CBIndex::c_25;
+    tt::tt_metal::CircularBufferConfig cb_l1_temp_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_compute_num_pages * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
+            .set_page_size(cb_l1_temp, aligned_input_page_size_bytes)
+            .set_tile_dims(cb_l1_temp, stats_tile);
+    // CreateCircularBuffer(program, all_cores, cb_l1_temp_config);
+
+    constexpr auto cb_l2_temp = tt::CBIndex::c_26;
+    tt::tt_metal::CircularBufferConfig cb_l2_temp_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_compute_num_pages * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
+            .set_page_size(cb_l2_temp, aligned_input_page_size_bytes)
+            .set_tile_dims(cb_l2_temp, stats_tile);
+    // CreateCircularBuffer(program, all_cores, cb_l2_temp_config);
 
     // create cbs only on needed devices
     if (is_sender_device) {
@@ -408,8 +424,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         CreateCircularBuffer(program, all_cores, cb_exp_max_diff_config);
         CreateCircularBuffer(program, all_cores, cb_m_temp_config);
         CreateCircularBuffer(program, all_cores, cb_s_temp_config);
-        CreateCircularBuffer(program, all_cores, cb_m1_temp_config);
-        CreateCircularBuffer(program, all_cores, cb_m2_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_s1_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_s2_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_l1_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_l2_temp_config);
 
     } else if (is_root2_device) {
         CreateCircularBuffer(program, all_cores, cb_compute_l_config);
@@ -429,8 +447,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         CreateCircularBuffer(program, all_cores, cb_exp_max_diff_config);
         CreateCircularBuffer(program, all_cores, cb_m_temp_config);
         CreateCircularBuffer(program, all_cores, cb_s_temp_config);
-        CreateCircularBuffer(program, all_cores, cb_m1_temp_config);
-        CreateCircularBuffer(program, all_cores, cb_m2_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_s1_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_s2_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_l1_temp_config);
+        CreateCircularBuffer(program, all_cores, cb_l2_temp_config);
     }
 
     printf("after creating circular buffers\n");
@@ -568,9 +588,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         scale_fp32 = 1;
         uint32_t loop_size = is_root_device ? 2 : 1;
         compute_ct_args = {
-            compute_out_cb_l, compute_cb_2_l,    compute_cb_l, compute_cb_2_s,  compute_cb_m,     compute_cb_2_m,
-            compute_out_cb_m, cb_exp_max_diff_2, compute_cb_s, cb_exp_max_diff, compute_out_cb_s, cb_m_temp,
-            cb_s_temp,        cb_m1_temp,        cb_m2_temp,   scale_fp32,      Sq_chunk_t,       vDHt,
+            compute_out_cb_l, compute_cb_2_l,   compute_cb_l,      compute_cb_2_s, compute_cb_m,
+            compute_cb_2_m,   compute_out_cb_m, cb_exp_max_diff_2, compute_cb_s,   cb_exp_max_diff,
+            compute_out_cb_s, cb_m_temp,        cb_s_temp,         cb_s1_temp,     cb_s2_temp,
+            cb_l1_temp,       cb_l2_temp,       scale_fp32,        Sq_chunk_t,     vDHt,
             loop_size,
         };
         tt::tt_metal::CreateKernel(
