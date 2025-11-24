@@ -2355,20 +2355,20 @@ struct noc_traits_t {
 };
 
 /**
- * @brief RAII style wrapper for a debug scope
+ * @brief RAII style wrapper for a scoped lock
  *
  * @tparam ReleaseFunc The function to call when this instance goes out of scope.
  */
 template <typename ReleaseFunc = void (*)()>
-class DebugScope {
+class Lock {
 public:
-    inline __attribute__((always_inline)) DebugScope(ReleaseFunc release_func) : release_func_(release_func) {}
-    inline __attribute__((always_inline)) ~DebugScope() { release_func_(); }
+    inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~Lock() { release_func_(); }
 
-    DebugScope(const DebugScope&) = delete;
-    DebugScope(DebugScope&&) = delete;
-    DebugScope& operator=(const DebugScope&) = delete;
-    DebugScope& operator=(DebugScope&&) = delete;
+    Lock(const Lock&) = delete;
+    Lock(Lock&&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    Lock& operator=(Lock&&) = delete;
 
 private:
     ReleaseFunc release_func_;
@@ -2780,13 +2780,13 @@ public:
         return rd_ptr_bytes;
     }
 
-    [[nodiscard]] auto debug_scope() {
+    [[nodiscard]] auto scoped_lock() {
         // TODO: Register with the debugger to track the lock
-        return DebugScope([this]() { debug_scope_release(); });
+        return Lock([this]() { release_scoped_lock(); });
     }
 
 private:
-    void debug_scope_release() {
+    void release_scoped_lock() {
         // TODO: Unregister with the debugger
     }
 
@@ -3398,6 +3398,10 @@ public:
         return byte_diff / sizeof(T);
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
     bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
     bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
@@ -3407,6 +3411,10 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     AddressType address_;
 };
 

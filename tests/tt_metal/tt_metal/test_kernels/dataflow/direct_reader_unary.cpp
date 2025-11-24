@@ -25,7 +25,6 @@ void kernel_main() {
     uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    auto ds = cb.debug_scope();
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         cb.reserve_back(ublock_size_tiles);
         noc.async_read(
