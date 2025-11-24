@@ -159,6 +159,12 @@ enum class EnvVarID {
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
+
+    // ========================================
+    // FABRIC CONFIGURATION
+    // ========================================
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS,      // Base timeout for fabric router sync
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS,  // Additional timeout per host
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1036,6 +1042,37 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->numa_based_affinity = is_env_enabled(value);
             break;
         }
+
+        // ========================================
+        // FABRIC CONFIGURATION
+        // ========================================
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS
+        // Base timeout in milliseconds for fabric router sync
+        // Default: 4000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS=5000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS:
+            try {
+                this->fabric_router_sync_timeout_base_ms = std::stoi(value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_BASE_MS value out of range: {}", value);
+            }
+            break;
+
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS
+        // Additional timeout in milliseconds per host for fabric router sync
+        // Default: 1000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS=2000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS:
+            try {
+                this->fabric_router_sync_timeout_per_host_ms = std::stoi(value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_PER_HOST_MS value out of range: {}", value);
+            }
+            break;
     }
 }
 

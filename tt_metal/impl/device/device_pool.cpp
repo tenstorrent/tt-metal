@@ -16,6 +16,7 @@
 #include <future>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -631,13 +632,29 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 }
 
 uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
-    // Calculate timeout based on system size: 4s + 1s * num_hosts
+    // Calculate timeout based on system size: base_timeout + per_host_timeout * num_hosts
     // to avoid false positive timeouts as init time scales with system size
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         return 15000;  // Keep simulator timeout unchanged
     }
-    const auto num_hosts = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-    return 4000 + 1000 * num_hosts;
+    
+    // Count unique NUMA nodes to determine number of hosts
+    // Multiple PCI devices can be mapped to each host
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto pci_devices = cluster.number_of_pci_devices();
+    std::unordered_set<uint32_t> numa_nodes;
+    
+    for (size_t device_id = 0; device_id < pci_devices; ++device_id) {
+        auto associated_node = cluster.get_numa_node_for_device(device_id);
+        numa_nodes.insert(associated_node);
+    }
+    
+    const auto num_hosts = numa_nodes.size();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto base_timeout = rtoptions.get_fabric_router_sync_timeout_base_ms();
+    const auto per_host_timeout = rtoptions.get_fabric_router_sync_timeout_per_host_ms();
+    
+    return base_timeout + per_host_timeout * num_hosts;
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
