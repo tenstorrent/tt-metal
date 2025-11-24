@@ -119,8 +119,8 @@ class VaeDecoder:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        hidden_states = ttnn.silu(hidden_states)
-
+        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
+        self.conv_out.conv_config.enable_weights_double_buffer = False
         hidden_states = self.conv_out(hidden_states)
 
         return hidden_states
