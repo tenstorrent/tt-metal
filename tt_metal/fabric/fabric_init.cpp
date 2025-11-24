@@ -490,8 +490,8 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-    const auto [addresses_to_clear, buffer_size_uint32] = control_plane.get_fabric_context().get_fabric_router_addresses_to_clear();
-    std::vector<uint32_t> router_zero_buf(buffer_size_uint32, 0);
+    const auto [addresses_to_clear, zero_buf_size] = control_plane.get_fabric_context().get_fabric_router_addresses_to_clear();
+    std::vector<uint32_t> router_zero_buf(zero_buf_size, 0);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {
