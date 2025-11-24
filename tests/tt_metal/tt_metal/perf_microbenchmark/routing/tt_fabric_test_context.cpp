@@ -345,6 +345,18 @@ std::vector<GoldenCsvEntry>::iterator TestContext::fetch_corresponding_golden_en
     return golden_it;
 }
 
+std::vector<GoldenLatencyEntry>::iterator TestContext::fetch_corresponding_golden_latency_entry(
+    const LatencyResult& test_result) {
+    auto golden_it =
+        std::find_if(golden_latency_entries_.begin(), golden_latency_entries_.end(), [&](const GoldenLatencyEntry& golden) {
+            return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
+                   golden.ntype == test_result.ntype && golden.topology == test_result.topology &&
+                   golden.num_devices == test_result.num_devices && golden.num_links == test_result.num_links &&
+                   golden.payload_size == test_result.payload_size;
+        });
+    return golden_it;
+}
+
 ComparisonResult TestContext::create_comparison_result(const BandwidthResultSummary& test_result) {
     std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
     ComparisonResult comp_result;
@@ -635,10 +647,13 @@ void TestContext::report_latency_results(const TestConfig& config) {
     latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
     latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
     latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
-
+    
+    // Initialize with default tolerance (will be updated during golden comparison)
+    latency_result.tolerance_percent = 1.0;
+    
     // Add to results vector
     latency_results_.push_back(latency_result);
-
+    
     // Write to CSV file
     generate_latency_csv(config);
 }

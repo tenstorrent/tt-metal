@@ -276,8 +276,18 @@ int main(int argc, char** argv) {
         test_context.generate_bandwidth_summary();
     }
 
+    // Latency summary is generated after all tests have run
+    if (latency_test_mode) {
+        test_context.generate_latency_summary();
+    }
+
     // Setup Bandwidth CSV files for CI to upload
     if (benchmark_mode) {
+        test_context.setup_ci_artifacts();
+    }
+
+    // Setup Latency CSV files for CI to upload
+    if (latency_test_mode) {
         test_context.setup_ci_artifacts();
     }
 
