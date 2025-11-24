@@ -17,44 +17,63 @@
 #include <array>
 // clang-format on
 
-constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
-constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
-constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
-constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
-constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
-// header only buffer slot size is the same as the edm packet header size
+// ========== Scalar configuration values from MuxConfig::get_compile_time_args ==========
+constexpr size_t NUM_TOTAL_CHANNELS = get_compile_time_arg_val(0);
+constexpr size_t status_address = get_compile_time_arg_val(1);
+constexpr size_t termination_signal_address = get_compile_time_arg_val(2);
+constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(3);
+constexpr size_t fabric_router_status_address = get_compile_time_arg_val(4);
+constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(5);
+constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(6);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(7);
+constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(8));
+constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(9) == 1;
+constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = get_compile_time_arg_val(10);
+constexpr uint32_t NUM_CHANNEL_TYPES = get_compile_time_arg_val(11);
 
-constexpr size_t status_address = get_compile_time_arg_val(5);
-constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
-constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
-constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
-constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(9);
-constexpr size_t channels_base_l1_address = get_compile_time_arg_val(10);
-constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(11);
-constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
+// ========== Per-channel-type arrays (7 arrays × NUM_CHANNEL_TYPES entries) ==========
+constexpr uint32_t NUM_CHANNELS_ARRAY_START_IDX = 12;
+constexpr uint32_t NUM_BUFFERS_ARRAY_START_IDX = NUM_CHANNELS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t BUFFER_SIZE_ARRAY_START_IDX = NUM_BUFFERS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX = BUFFER_SIZE_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX =
+    FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 
-constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
-constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
-constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
-
-constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
-constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
+// ========== Extract per-channel-type configuration ==========
+// In UDM mux mode, we have 3 channel types:
+// [0] = WORKER_CHANNEL
+// [1] = RELAY_TO_MUX_CHANNEL
+// [2] = MUX_TO_MUX_CHANNEL
+constexpr std::array<uint32_t, NUM_CHANNEL_TYPES> num_channels_per_type =
+    fill_array_with_next_n_args<uint32_t, NUM_CHANNELS_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<uint32_t, NUM_CHANNEL_TYPES> num_buffers_per_type =
+    fill_array_with_next_n_args<uint32_t, NUM_BUFFERS_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> buffer_size_per_type =
+    fill_array_with_next_n_args<size_t, BUFFER_SIZE_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_info_base_addrs =
+    fill_array_with_next_n_args<size_t, CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> connection_handshake_base_addrs =
+    fill_array_with_next_n_args<size_t, CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> flow_control_base_addrs =
+    fill_array_with_next_n_args<size_t, FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
+constexpr std::array<size_t, NUM_CHANNEL_TYPES> channel_buffer_base_addrs =
+    fill_array_with_next_n_args<size_t, CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
 
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
-constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(18) != 0;
+constexpr uint32_t BUBBLE_FLOW_CONTROL_START_IDX = CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(BUBBLE_FLOW_CONTROL_START_IDX) != 0;
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
-constexpr size_t FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_FULL_SIZE_CHANNELS;
-constexpr size_t HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_HEADER_ONLY_CHANNELS;
 
-// Downstream mux connection configuration (arg 19)
-constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = get_compile_time_arg_val(19);
-
-// Downstream mux connection arrays (args 20+): each array has NUM_DOWNSTREAM_MUX_CONNECTIONS elements
-// [0]=first downstream, [1]=second downstream, [2]=third downstream (all directions except self)
-constexpr uint32_t DOWNSTREAM_MUX_ACTIVE_START_IDX = 20;
+// ========== Downstream mux connection arrays (11 arrays from MuxConfig) ==========
+// These come right after the per-channel-type arrays in MuxConfig::get_compile_time_args
+constexpr uint32_t DOWNSTREAM_MUX_ACTIVE_START_IDX = BUBBLE_FLOW_CONTROL_START_IDX + 1;
 constexpr uint32_t DOWNSTREAM_MUX_NOC_X_START_IDX = DOWNSTREAM_MUX_ACTIVE_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
 constexpr uint32_t DOWNSTREAM_MUX_NOC_Y_START_IDX = DOWNSTREAM_MUX_NOC_X_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
 constexpr uint32_t DOWNSTREAM_MUX_BUFFER_BASE_ADDR_START_IDX =
@@ -126,9 +145,28 @@ constexpr size_t CHANNEL_STREAM_IDS_START_IDX = NUM_UPSTREAM_ROUTERS_IDX + 2;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
+// ========== Channel type indices (must match ChannelTypes enum order in host) ==========
+// In UDM mux mode:
+constexpr uint32_t WORKER_CHANNEL_TYPE_IDX = 0;        // WORKER_CHANNEL
+constexpr uint32_t RELAY_TO_MUX_CHANNEL_TYPE_IDX = 1;  // RELAY_TO_MUX_CHANNEL
+constexpr uint32_t MUX_TO_MUX_CHANNEL_TYPE_IDX = 2;    // MUX_TO_MUX_CHANNEL
+
+// Extract per-type configuration
+constexpr uint32_t NUM_WORKER_CHANNELS = num_channels_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_RELAY_TO_MUX_CHANNELS = num_channels_per_type[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_MUX_TO_MUX_CHANNELS = num_channels_per_type[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+
+constexpr uint32_t NUM_BUFFERS_WORKER = num_buffers_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_BUFFERS_RELAY_TO_MUX = num_buffers_per_type[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+constexpr uint32_t NUM_BUFFERS_MUX_TO_MUX = num_buffers_per_type[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+
+constexpr size_t BUFFER_SIZE_WORKER = buffer_size_per_type[WORKER_CHANNEL_TYPE_IDX];
+constexpr size_t BUFFER_SIZE_RELAY_TO_MUX = buffer_size_per_type[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+constexpr size_t BUFFER_SIZE_MUX_TO_MUX = buffer_size_per_type[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
-using FabricMuxToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_BUFFERS_FULL_SIZE_CHANNEL>;
+using FabricMuxToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_BUFFERS_MUX_TO_MUX>;
 }  // namespace tt::tt_fabric
 
 static_assert(noc_index == 0, "Mux kernel requires noc_index to be 0 so relay kernel can use 1");
@@ -261,42 +299,69 @@ void kernel_main() {
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
-    std::array<bool, FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> full_size_channel_injection_status = {};
-    std::array<bool, HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> header_only_channel_injection_status = {};
+    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_injection_status = {};
+    std::array<bool, NUM_RELAY_TO_MUX_CHANNELS> relay_to_mux_channel_injection_status = {};
+    std::array<bool, NUM_MUX_TO_MUX_CHANNELS> mux_to_mux_channel_injection_status = {};
     if constexpr (enable_bubble_flow_control) {
-        for (size_t i = 0; i < FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
-            full_size_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
+        for (size_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+            worker_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
         }
-        for (size_t i = 0; i < HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
-            header_only_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
+        for (size_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
+            relay_to_mux_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
+        }
+        for (size_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
+            mux_to_mux_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
         }
     }
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
-        full_size_channels;
+    // ========== Create channel arrays grouped by type ==========
+    // Worker channels (WORKER_CHANNEL)
+    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS> worker_channels;
+    std::array<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS>
+        worker_channel_interfaces;
+    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_connection_established;
+
+    // Relay-to-mux channels (RELAY_TO_MUX_CHANNEL)
+    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_RELAY_TO_MUX>, NUM_RELAY_TO_MUX_CHANNELS>
+        relay_to_mux_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
-        NUM_FULL_SIZE_CHANNELS>
-        full_size_channel_worker_interfaces;
-    std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_RELAY_TO_MUX>,
+        NUM_RELAY_TO_MUX_CHANNELS>
+        relay_to_mux_channel_interfaces;
+    std::array<bool, NUM_RELAY_TO_MUX_CHANNELS> relay_to_mux_channel_connection_established;
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-        header_only_channels;
+    // Mux-to-mux channels (MUX_TO_MUX_CHANNEL)
+    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_MUX_TO_MUX>, NUM_MUX_TO_MUX_CHANNELS>
+        mux_to_mux_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
-        NUM_HEADER_ONLY_CHANNELS>
-        header_only_channel_worker_interfaces;
-    std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_MUX_TO_MUX>,
+        NUM_MUX_TO_MUX_CHANNELS>
+        mux_to_mux_channel_interfaces;
+    std::array<bool, NUM_MUX_TO_MUX_CHANNELS> mux_to_mux_channel_connection_established;
 
-    // Stream IDs
-    constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
-        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
+    // ========== Parse stream IDs and persistent flags (grouped by type) ==========
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_stream_ids =
+        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_RELAY_TO_MUX_CHANNELS> relay_to_mux_stream_ids = fill_array_with_next_n_args<
+        uint32_t,
+        CHANNEL_STREAM_IDS_START_IDX + NUM_WORKER_CHANNELS,
+        NUM_RELAY_TO_MUX_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_MUX_TO_MUX_CHANNELS> mux_to_mux_stream_ids = fill_array_with_next_n_args<
+        uint32_t,
+        CHANNEL_STREAM_IDS_START_IDX + NUM_WORKER_CHANNELS + NUM_RELAY_TO_MUX_CHANNELS,
+        NUM_MUX_TO_MUX_CHANNELS>();
 
-    // Persistent channel flags
     constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
-        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_is_persistent =
+        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_RELAY_TO_MUX_CHANNELS> relay_to_mux_is_persistent = fill_array_with_next_n_args<
+        uint32_t,
+        IS_PERSISTENT_CHANNELS_START_IDX + NUM_WORKER_CHANNELS,
+        NUM_RELAY_TO_MUX_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_MUX_TO_MUX_CHANNELS> mux_to_mux_is_persistent = fill_array_with_next_n_args<
+        uint32_t,
+        IS_PERSISTENT_CHANNELS_START_IDX + NUM_WORKER_CHANNELS + NUM_RELAY_TO_MUX_CHANNELS,
+        NUM_MUX_TO_MUX_CHANNELS>();
 
     // Relay termination signal address (for mux to signal relay during teardown)
     constexpr size_t RELAY_TERMINATION_SIGNAL_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
@@ -305,39 +370,67 @@ void kernel_main() {
     // Direction (last compile-time argument)
     constexpr size_t direction = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 1);
 
-    size_t channel_base_address = channels_base_l1_address;
-    size_t connection_info_address = connection_info_base_address;
-    size_t connection_handshake_address = connection_handshake_base_address;
-    size_t sender_flow_control_address = sender_flow_control_base_address;
+    // ========== Setup worker channels (WORKER_CHANNEL) ==========
+    size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_connection_info_address = connection_info_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_connection_handshake_address = connection_handshake_base_addrs[WORKER_CHANNEL_TYPE_IDX];
+    size_t worker_flow_control_address = flow_control_base_addrs[WORKER_CHANNEL_TYPE_IDX];
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-            &full_size_channels[i],
-            &full_size_channel_worker_interfaces[i],
-            full_size_channel_connection_established[i],
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+        setup_channel<NUM_BUFFERS_WORKER>(
+            &worker_channels[i],
+            &worker_channel_interfaces[i],
+            worker_channel_connection_established[i],
             i,
-            BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i]);
+            BUFFER_SIZE_WORKER,
+            worker_channel_base_address,
+            worker_connection_info_address,
+            worker_connection_handshake_address,
+            worker_flow_control_address,
+            StreamId{worker_stream_ids[i]},
+            worker_is_persistent[i] == 1);
     }
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-            &header_only_channels[i],
-            &header_only_channel_worker_interfaces[i],
-            header_only_channel_connection_established[i],
+    // ========== Setup relay-to-mux channels (RELAY_TO_MUX_CHANNEL) ==========
+    size_t relay_to_mux_channel_base_address = channel_buffer_base_addrs[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t relay_to_mux_connection_info_address = connection_info_base_addrs[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t relay_to_mux_connection_handshake_address = connection_handshake_base_addrs[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t relay_to_mux_flow_control_address = flow_control_base_addrs[RELAY_TO_MUX_CHANNEL_TYPE_IDX];
+
+    for (uint32_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
+        setup_channel<NUM_BUFFERS_RELAY_TO_MUX>(
+            &relay_to_mux_channels[i],
+            &relay_to_mux_channel_interfaces[i],
+            relay_to_mux_channel_connection_established[i],
             i,
-            sizeof(PACKET_HEADER_TYPE),
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
+            BUFFER_SIZE_RELAY_TO_MUX,
+            relay_to_mux_channel_base_address,
+            relay_to_mux_connection_info_address,
+            relay_to_mux_connection_handshake_address,
+            relay_to_mux_flow_control_address,
+            StreamId{relay_to_mux_stream_ids[i]},
+            relay_to_mux_is_persistent[i] == 1);
+    }
+
+    // ========== Setup mux-to-mux channels (MUX_TO_MUX_CHANNEL) ==========
+    size_t mux_to_mux_channel_base_address = channel_buffer_base_addrs[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t mux_to_mux_connection_info_address = connection_info_base_addrs[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t mux_to_mux_connection_handshake_address = connection_handshake_base_addrs[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+    size_t mux_to_mux_flow_control_address = flow_control_base_addrs[MUX_TO_MUX_CHANNEL_TYPE_IDX];
+
+    for (uint32_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
+        setup_channel<NUM_BUFFERS_MUX_TO_MUX>(
+            &mux_to_mux_channels[i],
+            &mux_to_mux_channel_interfaces[i],
+            mux_to_mux_channel_connection_established[i],
+            i,
+            BUFFER_SIZE_MUX_TO_MUX,
+            mux_to_mux_channel_base_address,
+            mux_to_mux_connection_info_address,
+            mux_to_mux_connection_handshake_address,
+            mux_to_mux_flow_control_address,
+            StreamId{mux_to_mux_stream_ids[i]},
+            mux_to_mux_is_persistent[i] == 1);
     }
 
     // Construct downstream mux connections similar to how relay kernel does it for mux_connections
@@ -354,10 +447,10 @@ void kernel_main() {
                 downstream_mux_noc_x[i],
                 downstream_mux_noc_y[i],
                 downstream_mux_buffer_base_addr[i],
-                static_cast<uint8_t>(NUM_BUFFERS_FULL_SIZE_CHANNEL),
+                static_cast<uint8_t>(NUM_BUFFERS_MUX_TO_MUX),
                 downstream_mux_connection_handshake_addr[i],
                 downstream_mux_worker_location_info_addr[i],
-                static_cast<uint16_t>(BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL),
+                static_cast<uint16_t>(BUFFER_SIZE_MUX_TO_MUX),
                 downstream_mux_buffer_index_addr[i],
                 reinterpret_cast<volatile uint32_t*>(downstream_mux_flow_control_semaphore_addr[i]),
                 reinterpret_cast<volatile uint32_t*>(downstream_mux_teardown_semaphore_addr[i]),
@@ -405,45 +498,64 @@ void kernel_main() {
         }
     }
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        if (is_persistent_channels[i]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_FULL_SIZE_CHANNEL>(full_size_channel_worker_interfaces[i]);
+    // Wait for persistent channels to be ready
+    for (uint32_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
+        if (worker_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_WORKER>(worker_channel_interfaces[i]);
         }
     }
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        if (is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                header_only_channel_worker_interfaces[i]);
+    for (uint32_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
+        if (relay_to_mux_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_RELAY_TO_MUX>(relay_to_mux_channel_interfaces[i]);
+        }
+    }
+
+    for (uint32_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
+        if (mux_to_mux_is_persistent[i] == 1) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_MUX_TO_MUX>(mux_to_mux_channel_interfaces[i]);
         }
     }
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
-                for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL, direction>(
-                        full_size_channels[channel_id],
-                        full_size_channel_worker_interfaces[channel_id],
-                        fabric_connection,
-                        downstream_mux_connections,
-                        full_size_channel_connection_established[channel_id],
-                        StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id],
-                        enable_bubble_flow_control ? full_size_channel_injection_status[channel_id] : false);
-                }
-            }
-
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL, direction>(
-                    header_only_channels[channel_id],
-                    header_only_channel_worker_interfaces[channel_id],
+            // Process worker channels (WORKER_CHANNEL)
+            for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
+                forward_data<NUM_BUFFERS_WORKER, direction>(
+                    worker_channels[channel_id],
+                    worker_channel_interfaces[channel_id],
                     fabric_connection,
                     downstream_mux_connections,
-                    header_only_channel_connection_established[channel_id],
-                    StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    enable_bubble_flow_control ? header_only_channel_injection_status[channel_id] : false);
+                    worker_channel_connection_established[channel_id],
+                    StreamId{worker_stream_ids[channel_id]},
+                    worker_is_persistent[channel_id] == 1,
+                    enable_bubble_flow_control ? worker_channel_injection_status[channel_id] : false);
+            }
+
+            // Process relay-to-mux channels (RELAY_TO_MUX_CHANNEL)
+            for (uint32_t channel_id = 0; channel_id < NUM_RELAY_TO_MUX_CHANNELS; channel_id++) {
+                forward_data<NUM_BUFFERS_RELAY_TO_MUX, direction>(
+                    relay_to_mux_channels[channel_id],
+                    relay_to_mux_channel_interfaces[channel_id],
+                    fabric_connection,
+                    downstream_mux_connections,
+                    relay_to_mux_channel_connection_established[channel_id],
+                    StreamId{relay_to_mux_stream_ids[channel_id]},
+                    relay_to_mux_is_persistent[channel_id] == 1,
+                    enable_bubble_flow_control ? relay_to_mux_channel_injection_status[channel_id] : false);
+            }
+
+            // Process mux-to-mux channels (MUX_TO_MUX_CHANNEL)
+            for (uint32_t channel_id = 0; channel_id < NUM_MUX_TO_MUX_CHANNELS; channel_id++) {
+                forward_data<NUM_BUFFERS_MUX_TO_MUX, direction>(
+                    mux_to_mux_channels[channel_id],
+                    mux_to_mux_channel_interfaces[channel_id],
+                    fabric_connection,
+                    downstream_mux_connections,
+                    mux_to_mux_channel_connection_established[channel_id],
+                    StreamId{mux_to_mux_stream_ids[channel_id]},
+                    mux_to_mux_is_persistent[channel_id] == 1,
+                    enable_bubble_flow_control ? mux_to_mux_channel_injection_status[channel_id] : false);
             }
         }
     }

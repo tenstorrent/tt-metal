@@ -22,7 +22,7 @@
 namespace tt::tt_fabric {
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
-enum class FabricTensixCoreType : uint8_t {
+enum class FabricTensixCoreType : uint32_t {
     MUX = 0,   // BRISC - runs MUX kernel
     RELAY = 1  // NCRISC - runs Relay kernel (UDM mode only)
 };
@@ -46,7 +46,7 @@ public:
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
     size_t get_num_riscs_per_core() const { return num_used_riscs_per_tensix_; }
-    uint8_t get_num_buffers_per_channel() const { return num_buffers_per_channel_; }
+    size_t get_num_buffers_per_channel() const { return num_buffers_per_channel_; }
     size_t get_buffer_size_bytes_full_size_channel() const { return buffer_size_bytes_full_size_channel_; }
 
     // Get base L1 address for a core type
@@ -56,7 +56,7 @@ public:
     std::pair<uint32_t, uint32_t> get_noc_xy(tt::tt_metal::IDevice* device, uint32_t eth_chan_id) const;
 
     // Get channel base address for mux channel ID
-    size_t get_channels_base_address(FabricTensixCoreType core_id, uint8_t tensix_channel_id) const;
+    size_t get_channels_base_address(FabricTensixCoreType core_id, size_t tensix_channel_id) const;
 
     // Get the core type for a given ethernet channel on a specific device
     FabricTensixCoreType get_core_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
@@ -140,7 +140,18 @@ private:
         std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, std::pair<uint32_t, uint32_t>>>>
         fabric_router_noc_coords_map_;
 
+    // Channel type configuration maps (sorted by ChannelTypes enum)
+    // [channel type] -> [number of channels of that type]
+    std::map<ChannelTypes, uint32_t> mux_channel_counts_;
+    // [channel type] -> [number of buffers per channel of that type]
+    std::map<ChannelTypes, uint32_t> mux_channel_buffer_counts_;
+
+    // Cached min/max ethernet channels across all devices
+    size_t min_eth_channels_ = 0;
+    size_t max_eth_channels_ = 0;
+
     // Helper methods for initialization
+    void find_min_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices);
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig

@@ -41,26 +41,42 @@ using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFER
 
 static_assert(noc_index == 1, "Relay kernel requires noc_index to be 1 for correct noc address calculation");
 
-constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
-constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(1);
-constexpr size_t status_address = get_compile_time_arg_val(2);
-constexpr size_t termination_signal_address = get_compile_time_arg_val(3);
-constexpr size_t connection_info_base_address = get_compile_time_arg_val(4);
-constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(5);
-constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(6);
-constexpr size_t channels_base_l1_address = get_compile_time_arg_val(7);
-constexpr size_t channel_stream_id = get_compile_time_arg_val(8);
-constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(9);
-constexpr size_t mux_num_buffers = get_compile_time_arg_val(10);
-constexpr size_t mux_buffer_size_bytes = get_compile_time_arg_val(11);
-constexpr size_t downstream_mux_status_readback_address = get_compile_time_arg_val(12);
+// Scalar configuration values
+constexpr size_t status_address = get_compile_time_arg_val(0);
+constexpr size_t termination_signal_address = get_compile_time_arg_val(1);
+constexpr size_t channel_stream_id = get_compile_time_arg_val(2);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(3);
+constexpr size_t mux_num_buffers = get_compile_time_arg_val(4);
+constexpr size_t mux_buffer_size_bytes = get_compile_time_arg_val(5);
+constexpr size_t downstream_mux_status_readback_address = get_compile_time_arg_val(6);
+constexpr uint32_t NUM_MUX_CONNECTIONS = get_compile_time_arg_val(7);
+constexpr uint32_t NUM_CHANNEL_TYPES = get_compile_time_arg_val(8);
 
-// Mux connection configuration (arg 13)
-constexpr uint32_t NUM_MUX_CONNECTIONS = get_compile_time_arg_val(13);
+// Per-channel-type arrays start at index 9
+// Relay only has one channel type (ROUTER_CHANNEL), so arrays have size 1
+constexpr uint32_t NUM_CHANNELS_ARRAY_START_IDX = 9;
+constexpr uint32_t NUM_BUFFERS_ARRAY_START_IDX = NUM_CHANNELS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t BUFFER_SIZE_ARRAY_START_IDX = NUM_BUFFERS_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX = BUFFER_SIZE_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX =
+    FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 
-// Mux connection arrays: [0]=local, [1]=downstream_en, [2]=downstream_ws (args 14-46)
-// Each array has NUM_MUX_CONNECTIONS elements, indices computed incrementally
-constexpr uint32_t MUX_ACTIVE_START_IDX = 14;
+// Extract relay channel configuration (relay has only 1 channel type with 1 channel)
+constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(NUM_CHANNELS_ARRAY_START_IDX);
+constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(NUM_BUFFERS_ARRAY_START_IDX);
+constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(BUFFER_SIZE_ARRAY_START_IDX);
+constexpr size_t connection_info_base_address = get_compile_time_arg_val(CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX);
+constexpr size_t connection_handshake_base_address =
+    get_compile_time_arg_val(CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX);
+constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX);
+constexpr size_t channels_base_l1_address = get_compile_time_arg_val(CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX);
+
+// Mux connection arrays start immediately after channel type arrays
+constexpr uint32_t MUX_ACTIVE_START_IDX = CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 constexpr uint32_t MUX_NOC_X_START_IDX = MUX_ACTIVE_START_IDX + NUM_MUX_CONNECTIONS;
 constexpr uint32_t MUX_NOC_Y_START_IDX = MUX_NOC_X_START_IDX + NUM_MUX_CONNECTIONS;
 constexpr uint32_t MUX_BUFFER_BASE_ADDR_START_IDX = MUX_NOC_Y_START_IDX + NUM_MUX_CONNECTIONS;

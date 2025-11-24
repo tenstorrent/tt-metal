@@ -22,8 +22,7 @@
 namespace tt::tt_fabric {
 
 // Forward declarations
-enum class FabricMuxChannelType : uint8_t;
-enum class FabricTensixCoreType : uint8_t;
+enum class FabricTensixCoreType : uint32_t;
 
 // Shared struct for mux/relay connection info (used by both mux→mux and relay→mux connections)
 struct MuxConnectionInfo {
@@ -40,43 +39,47 @@ struct MuxConnectionInfo {
     size_t stream_id;                    // Receiver mux's stream ID for credit tracking
 };
 
-/**
- * UDM Mode Channel Assignments
- * - Defines which channels are reserved for specific purposes in UDM mode
- * - Channel 0: Worker channel (for local chip traffic)
- * - Channel 1: Relay channel (relay connects to this mux channel)
- * - Channel 2: Inter-mux channel (for forwarding traffic between muxes)
- */
-enum class UdmMuxChannelId : uint32_t {
-    WORKER_CHANNEL_BASE = 0,          // Local worker traffic
-    LOCAL_RELAY_CHANNEL = 1,          // Relay connects to mux on this channel
-    EAST_OR_NORTH_RELAY_CHANNEL = 2,  // Upstream East or North Relay connects to mux on this channel
-    WEST_OR_SOUTH_RELAY_CHANNEL = 3,  // Upstream West or South Relay connects to mux on this channel
+enum class ChannelTypes : uint32_t {
+    WORKER_CHANNEL = 0,
+    ROUTER_CHANNEL = 1,
+    RELAY_TO_MUX_CHANNEL = 2,
+    MUX_TO_MUX_CHANNEL = 3,
+    NUM_CHANNEL_TYPES = 4
+};
+
+enum class UdmMuxRelayToMuxChannelId : uint32_t {
+    LOCAL_RELAY_CHANNEL = 0,          // Relay connects to mux on this channel
+    EAST_OR_NORTH_RELAY_CHANNEL = 1,  // Upstream East or North Relay connects to mux on this channel
+    WEST_OR_SOUTH_RELAY_CHANNEL = 2,  // Upstream West or South Relay connects to mux on this channel
+    NUM_CHANNELS = 3
+};
+
+enum class UdmMuxInterMuxChannelId : uint32_t {
     // ==================================================================================
     // Inter-Mux channels
     // Used for forwarding local fabric requests to the correct router endpoint
     // Each Mux on a direction will have different upstream Mux connect to self
     // For East mux:
-    //   Channel 4: Accept connection from West Mux
-    //   Channel 5: Accept connection from North Mux
-    //   Channel 6: Accept connection from South Mux
+    //   Channel 0: Accept connection from West Mux
+    //   Channel 1: Accept connection from North Mux
+    //   Channel 2: Accept connection from South Mux
     // For West mux:
-    //   Channel 4: Accept connection from East Mux
-    //   Channel 5: Accept connection from North Mux
-    //   Channel 6: Accept connection from South Mux
+    //   Channel 0: Accept connection from East Mux
+    //   Channel 1: Accept connection from North Mux
+    //   Channel 2: Accept connection from South Mux
     // For North mux:
-    //   Channel 4: Accept connection from East Mux
-    //   Channel 5: Accept connection from West Mux
-    //   Channel 6: Accept connection from South Mux
+    //   Channel 0: Accept connection from East Mux
+    //   Channel 1: Accept connection from West Mux
+    //   Channel 2: Accept connection from South Mux
     // For South mux:
-    //   Channel 4: Accept connection from East Mux
-    //   Channel 5: Accept connection from West Mux
-    //   Channel 6: Accept connection from North Mux
+    //   Channel 0: Accept connection from East Mux
+    //   Channel 1: Accept connection from West Mux
+    //   Channel 2: Accept connection from North Mux
     // ==================================================================================
-    EAST_OR_WEST_MUX_CHANNEL = 4,    // Upstream East or West Mux connects to mux on this channel
-    WEST_OR_NORTH_MUX_CHANNEL = 5,   // Upstream West or North Mux connects to mux on this channel
-    NORTH_OR_SOUTH_MUX_CHANNEL = 6,  // Upstream North or South Mux connects to mux on this channel
-    NUM_CHANNELS = 7
+    EAST_OR_WEST_MUX_CHANNEL = 0,    // Upstream East or West Mux connects to mux on this channel
+    WEST_OR_NORTH_MUX_CHANNEL = 1,   // Upstream West or North Mux connects to mux on this channel
+    NORTH_OR_SOUTH_MUX_CHANNEL = 2,  // Upstream North or South Mux connects to mux on this channel
+    NUM_CHANNELS = 3
 };
 
 /**
@@ -95,6 +98,19 @@ enum class UdmNoCSelection : uint32_t {
     mux_noc = 0,
     relay_noc = 1  // this should be the same as edm_to_local_chip_noc, need to have it in some common files between
                    // host and device.
+};
+
+/**
+ * Generic channel configuration for base config
+ * Used to pass channel type-agnostic configuration to FabricTensixDatamoverBaseConfig
+ */
+struct ChannelTypeConfig {
+    size_t num_channels;
+    size_t num_buffers_per_channel;
+    size_t buffer_size_bytes;
+
+    ChannelTypeConfig(size_t num_ch = 0, size_t num_buf = 0, size_t buf_size = 0) :
+        num_channels(num_ch), num_buffers_per_channel(num_buf), buffer_size_bytes(buf_size) {}
 };
 
 /**
@@ -122,18 +138,20 @@ protected:
 public:
     virtual ~FabricTensixDatamoverBaseConfig() = default;
 
-    // Common getters
-    uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
-    uint8_t get_num_buffers(FabricMuxChannelType channel_type) const;
-    size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const;
+    // Common getters - accept ChannelTypes to select the correct channel type configuration
+    size_t get_num_channels(ChannelTypes channel_type) const;
+    size_t get_total_num_channels() const;  // Returns total channels across all types
+    size_t get_num_buffers(ChannelTypes channel_type) const;
+    size_t get_buffer_size_bytes(ChannelTypes channel_type) const;
+    const std::map<ChannelTypes, ChannelTypeConfig>& get_channel_configs() const;
     size_t get_status_address() const;
     size_t get_termination_signal_address() const;
-    size_t get_channel_credits_stream_id(FabricMuxChannelType channel_type, uint32_t channel_id) const;
-    size_t get_channel_base_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
-    size_t get_connection_info_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
-    size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
-    size_t get_flow_control_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
-    size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    virtual size_t get_channel_credits_stream_id(ChannelTypes channel_type, uint32_t channel_id) const;
+    size_t get_channel_base_address(ChannelTypes channel_type, uint32_t channel_id) const;
+    size_t get_connection_info_address(ChannelTypes channel_type, uint32_t channel_id) const;
+    size_t get_connection_handshake_address(ChannelTypes channel_type, uint32_t channel_id) const;
+    size_t get_flow_control_address(ChannelTypes channel_type, uint32_t channel_id) const;
+    size_t get_buffer_index_address(ChannelTypes channel_type, uint32_t channel_id) const;
     size_t get_memory_map_end_address() const;
 
     // Configuration setters
@@ -155,41 +173,31 @@ public:
         const std::vector<bool>& sender_channel_is_traffic_injection_channel_array) const;
 
 protected:
-    static constexpr uint8_t default_num_buffers = 8;
+    static constexpr size_t default_num_buffers = 8;
     static constexpr size_t default_num_full_size_channel_iters = 1;
     static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
-    // Constructor for derived classes
+    // Constructor for derived classes - accepts map of channel type configurations
+    // Uses std::map (not unordered_map) to maintain sorted order by ChannelTypes enum
     FabricTensixDatamoverBaseConfig(
-        uint8_t num_full_size_channels,
-        uint8_t num_header_only_channels,
-        uint8_t num_buffers_full_size_channel,
-        uint8_t num_buffers_header_only_channel,
-        size_t buffer_size_bytes_full_size_channel,
+        const std::map<ChannelTypes, ChannelTypeConfig>& channel_configs,
         size_t base_l1_address,
-        size_t l1_end_address,
-        CoreType core_type = CoreType::WORKER);
+        size_t l1_end_address);
 
     // Helper methods
-    void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    void append_default_stream_ids_to_ct_args(std::vector<uint32_t>& ct_args) const;
+    void validate_channel_id(ChannelTypes channel_type, size_t channel_id) const;
+    size_t get_channel_global_offset(ChannelTypes channel_type, size_t channel_id) const;
     void append_default_persistent_channel_flags_to_ct_args(std::vector<uint32_t>& ct_args) const;
 
     // Configuration parameters
-    CoreType core_type_ = CoreType::WORKER;
-    uint8_t core_type_index_ = 0;
-    uint8_t noc_aligned_address_size_bytes_ = 0;
+    size_t core_type_index_ = 0;
+    size_t noc_aligned_address_size_bytes_ = 0;
 
-    uint8_t num_full_size_channels_ = 0;
-    uint8_t num_header_only_channels_ = 0;
-    uint8_t num_buffers_full_size_channel_ = 0;
-    uint8_t num_buffers_header_only_channel_ = 0;
-    size_t buffer_size_bytes_full_size_channel_ = 0;
-    size_t buffer_size_bytes_header_only_channel_ = 0;
+    // Channel type configurations (sorted by ChannelTypes enum)
+    std::map<ChannelTypes, ChannelTypeConfig> channel_configs_;
 
-    size_t full_size_channel_size_bytes_ = 0;
-    size_t header_only_channel_size_bytes_ = 0;
+    // Total number of channels across all channel types (cached for efficiency)
+    size_t num_total_channels_ = 0;
 
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
@@ -210,51 +218,47 @@ protected:
     // Termination signals from host or other cores (e.g., mux signals relay during teardown)
     MemoryRegion termination_signal_region_{};
 
-    // EDMChannelWorkerLocationInfo (per channel) - stores connection metadata for each channel:
+    // EDMChannelWorkerLocationInfo (per channel type) - stores connection metadata for each channel:
     //   - worker_semaphore_address: Remote L1 address to update worker's read counter
     //   - worker_teardown_semaphore_address: Remote L1 address to acknowledge teardown
     //   - worker_xy: NOC coordinates (x,y) of connected worker/client
     //   - edm_read_counter: Local tracking of packets read by the local kernel
     // Remote clients populate this when establishing connection; local kernel reads it to get client NOC coords
-    MemoryRegion connection_info_region_{};
+    std::map<ChannelTypes, MemoryRegion> connection_info_regions_{};
 
-    // Connection liveness/handshake region (per channel)
+    // Connection liveness/handshake region (per channel type)
     // Remote clients write to this address to signal connection state changes:
     //   - Write 1 (open_connection_value): Client requests connection establishment
     //   - Write 2 (close_connection_request_value): Client requests connection teardown
     // Local polls these addresses to detect when clients want to connect/disconnect
-    MemoryRegion connection_handshake_region_{};
+    std::map<ChannelTypes, MemoryRegion> connection_handshake_regions_{};
 
-    // RESERVED/UNUSED: Flow control region (per channel)
+    // RESERVED/UNUSED: Flow control region (per channel type)
     // This region is allocated but NOT currently used by mux/relay kernels
     // Instead, mux/relay use STREAM REGISTERS for credit-based flow control:
     //   - Each channel has a stream register (my_channel_free_slots_stream_id)
     //   - Local reads: get_ptr_val(stream_id) to check available slots locally
     //   - Local decrements: increment_local_update_ptr_val(stream_id, 1) when sending packet
     //   - Remote client increments: writes to stream register via NoC when consuming packet
-    // The flow_control_region_ is passed to constructors but never stored/used (legacy/reserved)
-    MemoryRegion flow_control_region_{};
+    // The flow_control_regions_ is passed to constructors but never stored/used (legacy/reserved)
+    std::map<ChannelTypes, MemoryRegion> flow_control_regions_{};
 
-    // Buffer index synchronization region (per channel) - used for connection lifecycle synchronization
+    // Buffer index synchronization region (per channel type) - used for connection lifecycle synchronization
     // This stores the write pointer (wrptr) for each channel's buffer slots, used ONLY during:
     //   1. CONNECTION OPEN (client → local): Remote client reads this address to get starting buffer slot
-    //      - Client performs NoC read from buffer_index_region_ to sync with local's wrptr
+    //      - Client performs NoC read from buffer_index_regions_ to sync with local's wrptr
     //      - This allows client to resume from correct slot (e.g., after reconnection)
     //   2. CONNECTION CLOSE (client → local): Remote client writes final wrptr back to this address
-    //      - Client performs NoC write of its buffer_slot_write_counter to buffer_index_region_
+    //      - Client performs NoC write of its buffer_slot_write_counter to buffer_index_regions_
     //      - This tells local where client stopped for proper teardown/cleanup
     // During normal operation: Local tracks wrptr/rdptr internally using local_write_counter/local_read_counter
-    //   - These are NOT stored in buffer_index_region_ during packet forwarding
-    //   - buffer_index_region_ is only accessed during connection establishment/teardown
-    MemoryRegion buffer_index_region_{};
+    //   - These are NOT stored in buffer_index_regions_ during packet forwarding
+    //   - buffer_index_regions_ is only accessed during connection establishment/teardown
+    std::map<ChannelTypes, MemoryRegion> buffer_index_regions_{};
 
-    // Full-size channel buffer storage (header + payload data)
-    // Each channel has num_buffers slots of buffer_size_bytes each
-    MemoryRegion full_size_channels_region_{};
-
-    // Header-only channel buffer storage (header without payload, for control/small messages)
-    // Each channel has num_buffers slots of sizeof(PacketHeader) each
-    MemoryRegion header_only_channels_region_{};
+    // Channel buffer storage regions (one per channel type, sorted by ChannelTypes enum)
+    // Each channel type has its own buffer region with type-specific configuration
+    std::map<ChannelTypes, MemoryRegion> channel_buffer_regions_;
 
     size_t memory_map_end_address_ = 0;
 };
@@ -266,15 +270,11 @@ protected:
  */
 class FabricTensixDatamoverMuxConfig : public FabricTensixDatamoverBaseConfig {
 public:
+    // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverMuxConfig(
-        uint8_t num_full_size_channels,
-        uint8_t num_header_only_channels,
-        uint8_t num_buffers_full_size_channel,
-        uint8_t num_buffers_header_only_channel,
-        size_t buffer_size_bytes_full_size_channel,
+        const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
-        size_t l1_end_address,
-        CoreType core_type = CoreType::WORKER);
+        size_t l1_end_address);
 
     std::vector<uint32_t> get_compile_time_args(
         const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
@@ -296,7 +296,8 @@ private:
         uint32_t stream_id) const;
 
     // Helper to collect all downstream mux connection infos
-    std::array<MuxConnectionInfo, NUM_DOWNSTREAM_MUX_CONNECTIONS> get_all_mux_connection_infos(
+    // Returns empty vector for legacy MUX mode (no downstream mux connections)
+    std::vector<MuxConnectionInfo> get_all_mux_connection_infos(
         const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
     // Flow control semaphores (mux → downstream mux direction) for each downstream mux connection
@@ -325,12 +326,11 @@ private:
  */
 class FabricTensixDatamoverRelayConfig : public FabricTensixDatamoverBaseConfig {
 public:
+    // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverRelayConfig(
-        uint8_t num_buffers_per_channel,
-        size_t buffer_size_bytes,
+        const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
-        size_t l1_end_address,
-        CoreType core_type = CoreType::WORKER);
+        size_t l1_end_address);
 
     // Get compile-time args with fabric node, link, and direction for downstream mux connection info
     std::vector<uint32_t> get_compile_time_args(
@@ -342,6 +342,11 @@ public:
     // Get UDM memory pool base address and size
     size_t get_udm_memory_pool_base_address() const { return udm_memory_pool_region_.get_address(); }
     size_t get_udm_memory_pool_size() const { return udm_memory_pool_region_.get_total_size(); }
+
+    // Override get_channel_credits_stream_id to add mux channel offset
+    // In UDM mode, relay stream IDs must come after mux stream IDs to avoid collisions
+    // since both mux and relay are on the same Tensix core sharing the same stream ID space
+    size_t get_channel_credits_stream_id(ChannelTypes channel_type, uint32_t channel_id) const override;
 
 private:
     // ==================================================================================
@@ -426,8 +431,8 @@ private:
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 
     // Helper methods for get_compile_time_args
-    std::vector<uint32_t> get_channel_stream_ids(uint8_t num_full_size_channels) const;
-    std::vector<uint32_t> get_persistent_channels_flags(uint8_t num_full_size_channels) const;
+    std::vector<uint32_t> get_channel_stream_ids(ChannelTypes channel_type) const;
+    std::vector<uint32_t> get_persistent_channels_flags(ChannelTypes channel_type) const;
 
     // Core and fabric configuration
     CoreCoord my_core_logical_;
