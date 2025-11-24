@@ -1268,6 +1268,7 @@ class ModelArgs:
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
             # EXAMPLE: "gemma-3-4b": {
             #     "N150": [128, 256, 512, 1024, 2048],
