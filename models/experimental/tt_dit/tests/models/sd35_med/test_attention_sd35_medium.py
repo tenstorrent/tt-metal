@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -7,12 +6,11 @@ import torch
 from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-from models.experimental.tt_dit.models.transformers.attention_sd35_medium import SD35JointAttention
+from models.experimental.tt_dit.models.transformers.attention_sd35_medium import SD35MediumSelfAttention
 
 
 class RMSNorm(torch.nn.Module):
-    """Reference RMSNorm matching MM-DiT implementation"""
+    """Reference RMSNorm matching MM-DiT"""
 
     def __init__(self, dim, elementwise_affine=True, eps=1e-6):
         super().__init__()
@@ -34,156 +32,103 @@ class RMSNorm(torch.nn.Module):
 
 
 class SelfAttention(torch.nn.Module):
-    """Reference PyTorch implementation matching MM-DiT SelfAttention"""
+    """Reference matching MM-DiT SelfAttention"""
 
-    def __init__(self, query_dim, head_dim, heads, out_dim, context_pre_only=False):
+    def __init__(self, dim, num_heads, qkv_bias=False, pre_only=False):
         super().__init__()
-        self.heads = heads
-        self.head_dim = head_dim
-        self.scale = head_dim**-0.5
-        self.context_pre_only = context_pre_only
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim**-0.5
+        self.pre_only = pre_only
 
-        inner_dim = heads * head_dim
+        # Fused QKV
+        self.qkv = torch.nn.Linear(dim, dim * 3, bias=qkv_bias, dtype=torch.bfloat16)
 
-        # Fused QKV projections
-        self.to_qkv = torch.nn.Linear(query_dim, 3 * inner_dim, bias=True, dtype=torch.bfloat16)
-        self.add_qkv_proj = torch.nn.Linear(query_dim, 3 * inner_dim, bias=True, dtype=torch.bfloat16)
+        # Output projection
+        if not pre_only:
+            self.proj = torch.nn.Linear(dim, dim, dtype=torch.bfloat16)
 
-        # RMSNorm for Q and K (matching reference with elementwise_affine=True)
-        self.norm_q = RMSNorm(head_dim, elementwise_affine=True, eps=1e-6)
-        self.norm_k = RMSNorm(head_dim, elementwise_affine=True, eps=1e-6)
-        self.norm_added_q = RMSNorm(head_dim, elementwise_affine=True, eps=1e-6)
-        self.norm_added_k = RMSNorm(head_dim, elementwise_affine=True, eps=1e-6)
+        # QK norm
+        self.ln_q = RMSNorm(self.head_dim, elementwise_affine=True, eps=1e-6)
+        self.ln_k = RMSNorm(self.head_dim, elementwise_affine=True, eps=1e-6)
 
-        # Output projections
-        self.to_out = torch.nn.Linear(inner_dim, out_dim, bias=True, dtype=torch.bfloat16)
-        if not context_pre_only:
-            self.to_add_out = torch.nn.Linear(inner_dim, out_dim, bias=True, dtype=torch.bfloat16)
+    def forward(self, x):
+        B, L, C = x.shape
 
-    def forward(self, spatial, prompt):
-        B, N, _ = spatial.shape
-        _, L, _ = prompt.shape
-
-        # Fused QKV projection and split
-        qkv = self.to_qkv(spatial).reshape(B, N, 3, self.heads, self.head_dim)
+        # Fused QKV projection
+        qkv = self.qkv(x).reshape(B, L, 3, self.num_heads, self.head_dim)
         q, k, v = qkv.unbind(2)
 
-        prompt_qkv = self.add_qkv_proj(prompt).reshape(B, L, 3, self.heads, self.head_dim)
-        prompt_q, prompt_k, prompt_v = prompt_qkv.unbind(2)
+        # Apply RMSNorm
+        q = self.ln_q(q)
+        k = self.ln_k(k)
 
-        # Apply RMSNorm to Q and K (matching reference pre_attention)
-        q = self.norm_q(q)
-        k = self.norm_k(k)
-        prompt_q = self.norm_added_q(prompt_q)
-        prompt_k = self.norm_added_k(prompt_k)
-
-        # Transpose to [B, heads, seq_len, head_dim]
+        # Transpose to [B, num_heads, L, head_dim]
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        prompt_q = prompt_q.transpose(1, 2)
-        prompt_k = prompt_k.transpose(1, 2)
-        prompt_v = prompt_v.transpose(1, 2)
 
-        # Concatenate for joint attention
-        joint_q = torch.cat([q, prompt_q], dim=2)
-        joint_k = torch.cat([k, prompt_k], dim=2)
-        joint_v = torch.cat([v, prompt_v], dim=2)
+        # Attention
+        attn_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
-        # Scaled dot-product attention
-        attn_output = torch.nn.functional.scaled_dot_product_attention(joint_q, joint_k, joint_v, scale=self.scale)
+        # Transpose back and reshape
+        attn_out = attn_out.transpose(1, 2).reshape(B, L, -1)
 
-        # Split back
-        spatial_out = attn_output[:, :, :N, :]
-        prompt_out = attn_output[:, :, N:, :]
+        # Output projection
+        if not self.pre_only:
+            attn_out = self.proj(attn_out)
 
-        # Transpose and reshape
-        spatial_out = spatial_out.transpose(1, 2).reshape(B, N, -1)
-        prompt_out = prompt_out.transpose(1, 2).reshape(B, L, -1)
-
-        # Project output (matching reference post_attention)
-        spatial_out = self.to_out(spatial_out)
-        if not self.context_pre_only:
-            prompt_out = self.to_add_out(prompt_out)
-        else:
-            prompt_out = None
-
-        return spatial_out, prompt_out
+        return attn_out
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "b, nh, seq_len, joint_seq_len, d",
+    "dim, num_heads, seq_len, batch_size",
     [
-        (1, 24, 1024, 77, 64),
-        (1, 24, 4096, 333, 64),
+        (1536, 24, 1024, 1),
+        (1536, 24, 512, 1),
     ],
-    ids=["sd35_med_1k", "sd35_med_4k"],
+    ids=["sd35_med_1k", "sd35_med_512"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_sd35_medium_joint_attention(device, b, nh, seq_len, joint_seq_len, d, dtype, reset_seeds):
-    """Test SD3.5 Medium joint attention matching MM-DiT reference"""
+def test_sd35_medium_self_attention(device, dim, num_heads, seq_len, batch_size, dtype, reset_seeds):
+    """Test SD3.5 Medium self-attention matching MM-DiT reference"""
     torch.manual_seed(1234)
 
-    query_dim = nh * d
-
     # Create reference model
-    reference_model = SelfAttention(
-        query_dim=query_dim,
-        head_dim=d,
-        heads=nh,
-        out_dim=query_dim,
-        context_pre_only=False,
-    )
+    reference_model = SelfAttention(dim=dim, num_heads=num_heads, qkv_bias=True, pre_only=False)
     reference_model.eval()
 
-    # Create parallel config for N150
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=1, mesh_axis=None),
-        sequence_parallel=ParallelFactor(factor=1, mesh_axis=None),
-    )
-
     # Create TTNN model
-    tt_model = SD35JointAttention(
-        query_dim=query_dim,
-        head_dim=d,
-        heads=nh,
-        out_dim=query_dim,
-        bias=True,
-        context_pre_only=False,
+    tt_model = SD35MediumSelfAttention(
+        dim=dim,
+        num_heads=num_heads,
+        qkv_bias=True,
+        pre_only=False,
+        qk_norm="rms",
         eps=1e-6,
         mesh_device=device,
-        ccl_manager=None,
-        parallel_config=parallel_config,
-        padding_config=None,
     )
 
-    # Load weights from reference
+    # Load weights
     state_dict = reference_model.state_dict()
     tt_model.load_state_dict(state_dict)
 
-    # Create inputs
-    spatial_input = torch.randn(1, b, seq_len, query_dim, dtype=torch.bfloat16)
-    prompt_input = torch.randn(1, b, joint_seq_len, query_dim, dtype=torch.bfloat16)
+    # Create input
+    x_input = torch.randn(1, batch_size, seq_len, dim, dtype=torch.bfloat16)
 
     # Reference forward
     with torch.no_grad():
-        ref_spatial_out, ref_prompt_out = reference_model(spatial_input.squeeze(0), prompt_input.squeeze(0))
+        ref_output = reference_model(x_input.squeeze(0))
 
     # TTNN forward
-    tt_spatial_input = ttnn.from_torch(spatial_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_prompt_input = ttnn.from_torch(prompt_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    tt_spatial_out, tt_prompt_out = tt_model(tt_spatial_input, tt_prompt_input, seq_len)
+    tt_x_input = ttnn.from_torch(x_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = tt_model(tt_x_input, seq_len)
 
     # Convert back and compare
-    tt_spatial_out_torch = ttnn.to_torch(tt_spatial_out)[0, :b, :seq_len, :query_dim]
-    tt_prompt_out_torch = ttnn.to_torch(tt_prompt_out)[0, :b, :joint_seq_len, :query_dim]
+    tt_output_torch = ttnn.to_torch(tt_output)[0, :batch_size, :seq_len, :dim]
 
-    spatial_passing, spatial_pcc = comp_pcc(ref_spatial_out, tt_spatial_out_torch, 0.99)
-    prompt_passing, prompt_pcc = comp_pcc(ref_prompt_out, tt_prompt_out_torch, 0.99)
+    passing, pcc = comp_pcc(ref_output, tt_output_torch, 0.99)
+    logger.info(f"Self-Attention PCC: {pcc}")
 
-    logger.info(f"Spatial PCC: {spatial_pcc}, Prompt PCC: {prompt_pcc}")
-
-    assert spatial_passing and prompt_passing, f"PCC check failed"
+    assert passing, f"PCC check failed: {pcc}"
