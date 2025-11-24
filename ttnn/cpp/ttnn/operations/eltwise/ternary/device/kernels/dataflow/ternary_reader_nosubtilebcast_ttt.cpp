@@ -7,14 +7,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // Standard first 5 arguments (same as ternary_reader_nobcast_ttt.cpp)
-    const uint32_t src0_addr = get_arg_val<uint32_t>(0);      // predicate address
-    const uint32_t src1_addr = get_arg_val<uint32_t>(1);      // true tensor address
-    const uint32_t src2_addr = get_arg_val<uint32_t>(2);      // false tensor address
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(4);  // start_tile_id
-
-    // Additional arguments for broadcast (args 5-26)
+    const uint32_t src0_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src1_addr = get_arg_val<uint32_t>(1);
+    const uint32_t src2_addr = get_arg_val<uint32_t>(2);
+    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(4);
+    // Strides and dimensions
     const uint32_t nD_stride = get_arg_val<uint32_t>(5);
     const uint32_t d_stride = get_arg_val<uint32_t>(6);
     const uint32_t n_stride = get_arg_val<uint32_t>(7);
@@ -24,52 +22,54 @@ void kernel_main() {
     const uint32_t C = get_arg_val<uint32_t>(11);
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
-    const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
+    const uint32_t cND = get_arg_val<uint32_t>(14);
     const uint32_t nD_stride_b = get_arg_val<uint32_t>(15);
     const uint32_t d_stride_b = get_arg_val<uint32_t>(16);
     const uint32_t n_stride_b = get_arg_val<uint32_t>(17);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(18);
-    const uint32_t srcB_num_tiles = get_arg_val<uint32_t>(19);
+    const uint32_t src1_num_tiles = get_arg_val<uint32_t>(19);
     const uint32_t nD_stride_c = get_arg_val<uint32_t>(20);
     const uint32_t d_stride_c = get_arg_val<uint32_t>(21);
     const uint32_t n_stride_c = get_arg_val<uint32_t>(22);
     const uint32_t c_stride_c = get_arg_val<uint32_t>(23);
-    const uint32_t srcC_num_tiles = get_arg_val<uint32_t>(24);
+    const uint32_t src2_num_tiles = get_arg_val<uint32_t>(24);
     const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
-    const uint32_t srcA_num_tiles = get_arg_val<uint32_t>(26);  // moved to end
+    const uint32_t src0_num_tiles = get_arg_val<uint32_t>(26);
 
-    constexpr auto predicate_cb = get_compile_time_arg_val(0);
-    constexpr auto true_cb = get_compile_time_arg_val(1);
-    constexpr auto false_cb = get_compile_time_arg_val(2);
+    // CB IDs from compile-time args (indices 0, 1, 2) - unified layout
+    constexpr auto cb_id_src0 = get_compile_time_arg_val(0);
+    constexpr auto cb_id_src1 = get_compile_time_arg_val(1);
+    constexpr auto cb_id_src2 = get_compile_time_arg_val(2);
 
-    // Compile-time args layout mirrors no-bcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
+    // TensorAccessorArgs start at index 3 (after CB IDs) - unified layout
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
 
-    // #if SRC_SHARDED_A
-    //     cb_reserve_back(predicate_cb, srcA_num_tiles);
-    //     cb_push_back(predicate_cb, srcA_num_tiles);
-    // #else
-    const auto s0 = TensorAccessor(src0_args, src0_addr, get_tile_size(predicate_cb));
-    // #endif
-    // #if SRC_SHARDED_B
-    //     cb_reserve_back(true_cb, srcB_num_tiles);
-    //     cb_push_back(true_cb, srcB_num_tiles);
-    // #else
-    const auto s1 = TensorAccessor(src1_args, src1_addr, get_tile_size(true_cb));
-    // #endif
-    // #if SRC_SHARDED_C
-    //     cb_reserve_back(false_cb, srcC_num_tiles);
-    //     cb_push_back(false_cb, srcC_num_tiles);
-    // #else
-    const auto s2 = TensorAccessor(src2_args, src2_addr, get_tile_size(false_cb));
-    // #endif
-
-    // #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
+#if SRC_SHARDED_A
+    cb_reserve_back(cb_id_src0, src0_num_tiles);
+    cb_push_back(cb_id_src0, src0_num_tiles);
+#else
+    const uint32_t src0_tile_bytes = get_tile_size(cb_id_src0);
+    const auto src0 = TensorAccessor(src0_args, src0_addr, src0_tile_bytes);
+#endif
+#if SRC_SHARDED_B
+    cb_reserve_back(cb_id_src1, src1_num_tiles);
+    cb_push_back(cb_id_src1, src1_num_tiles);
+#else
+    const uint32_t src1_tile_bytes = get_tile_size(cb_id_src1);
+    const auto src1 = TensorAccessor(src1_args, src1_addr, src1_tile_bytes);
+#endif
+#if SRC_SHARDED_C
+    cb_reserve_back(cb_id_src2, src2_num_tiles);
+    cb_push_back(cb_id_src2, src2_num_tiles);
+#else
+    const uint32_t src2_tile_bytes = get_tile_size(cb_id_src2);
+    const auto src2 = TensorAccessor(src2_args, src2_addr, src2_tile_bytes);
+#endif
+#if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = 0;  // TODO: remove this when sharding support is added
-    // constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src2_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -87,7 +87,7 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
-    // this is the INPUT_A tile offset
+    // Input tile offsets
     uint32_t tile_offset =
         start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
     uint32_t next_c_shift = c_stride - HtWt;
@@ -95,7 +95,6 @@ void kernel_main() {
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
 
-    // this is the INPUT_B tile offset
     uint32_t tile_offset_b =
         start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b + start_th * Wt;
     uint32_t next_c_shift_b = c_stride_b - HtWt;
@@ -103,7 +102,6 @@ void kernel_main() {
     uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
     uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
 
-    // this is the INPUT_C tile offset
     uint32_t tile_offset_c =
         start_nd * nD_stride_c + start_d * d_stride_c + start_n * n_stride_c + start_c * c_stride_c + start_th * Wt;
     uint32_t next_c_shift_c = c_stride_c - HtWt;
@@ -119,36 +117,33 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-                            // #if !SRC_SHARDED_A
-                            // read a tile from src_a
-                            cb_reserve_back(predicate_cb, onetile);
-                            uint32_t l1_write_addr_a = get_write_ptr(predicate_cb);
-                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_a);
-                            // #endif
-                            // #if !SRC_SHARDED_B
-                            // read a tile from src_b
-                            cb_reserve_back(true_cb, onetile);
-                            uint32_t l1_write_addr_b = get_write_ptr(true_cb);
-                            noc_async_read_page(tile_offset_b + tw, s1, l1_write_addr_b);
-                            // #endif
-                            // #if !SRC_SHARDED_C
-                            // read a tile from src_c
-                            cb_reserve_back(false_cb, onetile);
-                            uint32_t l1_write_addr_c = get_write_ptr(false_cb);
-                            noc_async_read_page(tile_offset_c + tw, s2, l1_write_addr_c);
-                            // #endif
-                            // #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
+#if !SRC_SHARDED_A
+                            cb_reserve_back(cb_id_src0, onetile);
+                            uint32_t l1_write_addr_src0 = get_write_ptr(cb_id_src0);
+                            noc_async_read_page(tile_offset + tw, src0, l1_write_addr_src0);
+#endif
+#if !SRC_SHARDED_B
+                            cb_reserve_back(cb_id_src1, onetile);
+                            uint32_t l1_write_addr_src1 = get_write_ptr(cb_id_src1);
+                            noc_async_read_page(tile_offset_b + tw, src1, l1_write_addr_src1);
+#endif
+#if !SRC_SHARDED_C
+                            cb_reserve_back(cb_id_src2, onetile);
+                            uint32_t l1_write_addr_src2 = get_write_ptr(cb_id_src2);
+                            noc_async_read_page(tile_offset_c + tw, src2, l1_write_addr_src2);
+#endif
+#if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
                             noc_async_read_barrier();
-                            // #endif
-                            // #if !SRC_SHARDED_A
-                            cb_push_back(predicate_cb, onetile);
-                            // #endif
-                            // #if !SRC_SHARDED_B
-                            cb_push_back(true_cb, onetile);
-                            // #endif
-                            // #if !SRC_SHARDED_C
-                            cb_push_back(false_cb, onetile);
-                            // #endif
+#endif
+#if !SRC_SHARDED_A
+                            cb_push_back(cb_id_src0, onetile);
+#endif
+#if !SRC_SHARDED_B
+                            cb_push_back(cb_id_src1, onetile);
+#endif
+#if !SRC_SHARDED_C
+                            cb_push_back(cb_id_src2, onetile);
+#endif
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column
@@ -174,5 +169,5 @@ void kernel_main() {
         tile_offset_b += next_nd_shift_b;
         tile_offset_c += next_nd_shift_c;
     }
-    // #endif
+#endif
 }

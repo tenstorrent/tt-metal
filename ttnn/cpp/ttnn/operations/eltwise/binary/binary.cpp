@@ -795,7 +795,8 @@ Tensor WhereOperationWithScalar<binary_op_type>::invoke(
     const Tensor& true_false_tensor,
     unary::ScalarVariant scalar_value,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
     return ttnn::prim::binary_ng(
         condition,
@@ -804,11 +805,12 @@ Tensor WhereOperationWithScalar<binary_op_type>::invoke(
         std::nullopt,
         memory_config,
         optional_output_tensor,
-        false,          // fast_and_approximate_mode
-        none,           // lhs_activations
-        none,           // rhs_activations
-        none,           // post_activations
-        scalar_value);  // scalar
+        false,            // fast_and_approximate_mode
+        none,             // lhs_activations
+        none,             // rhs_activations
+        none,             // post_activations
+        scalar_value,     // scalar
+        sub_core_grids);  // sub_core_grids
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;
