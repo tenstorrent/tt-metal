@@ -323,7 +323,7 @@ public:
                     }
                     // It's possible the writer_ptr wrapped and the expected pointer is at the very end of the buffer so
                     // it hasn't wrapped yet.
-                    ASSERT((adjusted_writer_ptr == expected) || (adjusted_writer_ptr == expected - buffer_size));
+                    ASSERT((adjusted_writer_ptr == expected) || ((expected == buffer_end) && (adjusted_writer_ptr == buffer_base)));
                     watch_released_ptr_ = expected;
                 }
             }
@@ -333,18 +333,12 @@ public:
             get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
     }
 
-    void initialize() {
-#if WATCHER_ASSERT_ENABLED
-        watch_released_ptr_ = buffer_base;
-#endif
-    }
-
     uint32_t additional_count{0};
 
 #if WATCHER_ASSERT_ENABLED
 private:
     // Pointer to the end of the last released page. Used for watcher assertions.
-    uint32_t watch_released_ptr_{0};
+    uint32_t watch_released_ptr_{buffer_base};
 #endif
 };
 

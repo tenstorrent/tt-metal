@@ -1985,9 +1985,6 @@ void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
 
-    DispatchRelayInlineState::cb_writer.initialize();
-    DispatchSRelayInlineState::cb_writer.initialize();
-
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
     } else if (is_h_variant) {
