@@ -41,6 +41,7 @@ constexpr uint32_t kComputeStepSizeIdx = 5U;
 constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 6U;
 constexpr uint32_t kComputeOneMinusBeta1Idx = 7U;
 constexpr uint32_t kComputeOneMinusBeta2Idx = 8U;
+constexpr uint32_t kComputeDecayFactorIdx = 9U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 constexpr uint32_t kExpAvgAddrIdxOut = 1U;
@@ -106,6 +107,7 @@ void assign_per_core_runtime_args(
     float bias_correction2 = 1.0f - beta2_pow;
     float step_size = lr / bias_correction1;
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+    float decay_factor = 1.0f - lr * weight_decay;
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
@@ -150,7 +152,8 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
-                 std::bit_cast<uint32_t>(one_minus_beta2)});
+                 std::bit_cast<uint32_t>(one_minus_beta2),
+                 std::bit_cast<uint32_t>(decay_factor)});
         } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(
                 program,
@@ -164,7 +167,8 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(step_size),
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
-                 std::bit_cast<uint32_t>(one_minus_beta2)});
+                 std::bit_cast<uint32_t>(one_minus_beta2),
+                 std::bit_cast<uint32_t>(decay_factor)});
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
@@ -424,6 +428,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
     float bias_correction2 = 1.0f - beta2_pow;
     float step_size = lr / bias_correction1;
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+    float decay_factor = 1.0f - lr * weight_decay;
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
@@ -450,6 +455,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
+            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
         } else if (core_group_2.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
@@ -461,6 +467,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeInvSqrtBiasCorrection2Idx] = std::bit_cast<uint32_t>(inv_sqrt_bc2);
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
+            runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
