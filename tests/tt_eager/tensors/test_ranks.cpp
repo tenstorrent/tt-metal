@@ -7,7 +7,6 @@
 #include <random>
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -16,7 +15,6 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::slice_write::program {
