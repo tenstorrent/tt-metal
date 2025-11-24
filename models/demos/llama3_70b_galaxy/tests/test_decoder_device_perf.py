@@ -422,18 +422,20 @@ def test_llama_TG_perf_device(
     df = merge_device_rows(df)
 
     num_runs = 2  # Compile and Trace Run
+    # Find the starting index of the first repeating sequence of ops
     first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
     adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
     first_run_end = first_run_start + adjusted_len
     last_run_start = len(df) - adjusted_len
-    df_model_compilation = df[first_run_start:first_run_end]
-    df_model_trace = df[last_run_start:]
+    df_model_compilation = df[0:first_run_start]  # Compile run
+    df_model_trace = df[last_run_start:]  # Trace run
 
-    # Find the head and tail of the repeating region in the model compilation/ trace region of ops
-    head_tail_ops = find_repeated_block(df_model_compilation["OP CODE"].tolist(), num_layers)
+    # Find the head and tail of the repeating region in the model compilation / trace region of ops
+    head_tail_ops = find_repeated_block(df_model_trace["OP CODE"].tolist(), num_layers)
 
     # [op_start_index:op_end_index] = all core layers region
     op_start_index = head_tail_ops["num_head_ops"]
+    num_tail_ops = head_tail_ops["num_tail_ops"]
     op_end_index = len(df_model_compilation) - head_tail_ops["num_tail_ops"]
     df_layers_compilation = df_model_compilation[op_start_index:op_end_index]
     df_layers_trace = df_model_trace[op_start_index:op_end_index]
@@ -448,7 +450,18 @@ def test_llama_TG_perf_device(
     df_mid_layers_compilation = df_layers_compilation[int(len(df_layers_compilation) / num_layers) :]
     df_mid_layers_trace = df_layers_trace[int(len(df_layers_trace) / num_layers) :]
     # model tail ops (lm head + sampling)
-    df_model_tail_compilation = df_model_compilation[op_end_index:]
+    df_model_tail_compilation_wo_plus_one = df_model_compilation[op_end_index : op_end_index + num_tail_ops - 2]
+    df_model_tail_compilation_plus_one = df_model_compilation[
+        op_end_index
+        + num_tail_ops
+        - 2
+        + NUM_OPS_IN_SAMPLING : op_end_index
+        + num_tail_ops
+        - 2
+        + NUM_OPS_IN_SAMPLING
+        + 2
+    ]
+    df_model_tail_compilation = pd.concat([df_model_tail_compilation_wo_plus_one, df_model_tail_compilation_plus_one])
     df_model_tail_trace = df_model_trace[op_end_index:]
 
     # Get first layer compilation and trace measurements
@@ -833,17 +846,29 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # Excluding compile run and capture trace entries
-    len_without_second_sampling_compile_run = (
-        len(df) - NUM_OPS_IN_SAMPLING
-    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
-    df_model = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
-    df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+    # Find the starting index of the first repeating sequence of ops
+    num_runs = 2  # Compile and Trace Run
+    first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
+    adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
+    first_run_end = first_run_start + adjusted_len
+    last_run_start = len(df) - adjusted_len
+    df_model_trace = df[last_run_start:]  # Trace run
+
+    # Find the head and tail of the repeating region in the model compilation / trace region of ops
+    head_tail_ops = find_repeated_block(df_model_trace["OP CODE"].tolist(), num_layers)
+
+    # [op_start_index:op_end_index] = all core layers region
+    op_start_index = head_tail_ops["num_head_ops"]
+    op_end_index = len(df_model_trace) - head_tail_ops["num_tail_ops"]
+
+    # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_layers = df_model_trace[op_start_index:op_end_index]
+
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
-    df_model_tail = df_model[DECODER_OP_END_INDEX:]
+    df_model_tail = df_model_trace[op_end_index:]
 
     (
         _,
