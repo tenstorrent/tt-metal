@@ -312,6 +312,11 @@ public:
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
     void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
+
+    // Set kernel source for specific workers (used by latency tests to override default kernels)
+    void set_sender_kernel_src(CoreCoord core, const std::string& kernel_src);
+    void set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src);
+
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
@@ -342,8 +347,9 @@ public:
         use_unified_connection_manager_ = use_unified_connection_manager;
     }
 
-    // Method to access sender configurations for traffic analysis
+    // Method to access sender and receiver configurations for traffic analysis
     const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
+    const std::unordered_map<CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
 
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
         return connection_manager_.get_used_fabric_links();

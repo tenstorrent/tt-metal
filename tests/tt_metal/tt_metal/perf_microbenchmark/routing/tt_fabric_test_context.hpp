@@ -163,11 +163,6 @@ public:
                 new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
             validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
         }
-
-        // Handle latency test mode setup (after policy management)
-        if (config.latency_test_mode) {
-            setup_latency_test_mode(config);
-        }
     }
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
@@ -191,12 +186,11 @@ public:
     }
 
     void process_traffic_config(TestConfig& config) {
-        // Latency test mode: skip normal resource allocation and traffic config setup
+        // Latency test mode: manually populate senders_ and receivers_ maps
+        // with latency-specific kernels and configurations
         if (config.latency_test_mode) {
-            log_debug(tt::LogTest, "Latency test mode: skipping normal traffic config processing");
-            // Latency mode uses specialized kernels set up in compile_programs()
-            // No need for allocator or traffic configs
-            return;
+            setup_latency_test_workers(config);
+            return;  // Skip normal resource allocation and traffic config setup
         }
 
         // Allocate resources
@@ -383,14 +377,29 @@ public:
 
             // Create kernels (latency or normal)
             if (latency_test_mode_) {
-                bool is_latency_sender = (device_id == latency_sender_device_);
-                bool is_latency_responder = (device_id == latency_responder_device_);
+                // For latency tests, check if this device has any senders or receivers
+                const auto& senders = test_device.get_senders();
+                const auto& receivers = test_device.get_receivers();
 
-                if (is_latency_sender) {
+                bool has_sender = !senders.empty();
+                bool has_receiver = !receivers.empty();
+
+                if (has_sender) {
+                    // This is the latency sender device
+                    // Get the sender core and config (there should be exactly one)
+                    TT_FATAL(senders.size() == 1, "Latency test should have exactly one sender per device");
+                    const auto& [sender_core, sender_worker] = *senders.begin();
+                    const auto& sender_configs = sender_worker.get_configs();
+                    TT_FATAL(!sender_configs.empty(), "Latency sender should have at least one config");
+
+                    // Extract parameters from the stored config
+                    const auto& sender_config = sender_configs[0].first;
+                    FabricNodeId responder_device_id = sender_config.dst_node_ids[0];
+
                     // Find the responder device to get its virtual core coordinates
                     TestDevice* responder_device = nullptr;
                     for (auto& [responder_coord, responder_test_device] : test_devices_) {
-                        if (responder_test_device.get_node_id() == latency_responder_device_) {
+                        if (responder_test_device.get_node_id() == responder_device_id) {
                             responder_device = &responder_test_device;
                             break;
                         }
@@ -398,54 +407,61 @@ public:
                     TT_FATAL(
                         responder_device != nullptr,
                         "Could not find responder device with node_id {}",
-                        latency_responder_device_.chip_id);
+                        responder_device_id.chip_id);
 
                     // Get responder's virtual core coordinates for correct NOC addressing
                     CoreCoord responder_virtual_core =
                         responder_device->get_device_info_provider()->get_virtual_core_from_logical_core(
-                            latency_worker_core_);
+                            sender_config.dst_logical_core);
 
                     // Create sender kernel - pass responder's actual coordinates
                     test_device.create_latency_sender_kernel(
-                        latency_worker_core_,
-                        latency_responder_device_,
-                        latency_payload_size_,
-                        latency_burst_size_,
-                        latency_num_bursts_,
-                        latency_noc_send_type_,
+                        sender_core,
+                        responder_device_id,
+                        sender_config.parameters.payload_size_bytes,
+                        latency_burst_size_,  // Still need this as it's not in TrafficParameters
+                        sender_config.parameters.num_packets,
+                        sender_config.parameters.noc_send_type,
                         responder_virtual_core);
-                } else if (is_latency_responder) {
-                    // Find the sender device to query its buffer addresses
-                    TestDevice* sender_device = nullptr;
-                    for (auto& [sender_coord, sender_test_device] : test_devices_) {
-                        if (sender_test_device.get_node_id() == latency_sender_device_) {
-                            sender_device = &sender_test_device;
-                            break;
-                        }
-                    }
-                    TT_FATAL(
-                        sender_device != nullptr,
-                        "Could not find sender device with node_id {}",
-                        latency_sender_device_.chip_id);
+                } else if (has_receiver) {
+                    // This is the latency responder device
+                    // Get the receiver core (there should be exactly one)
+                    TT_FATAL(receivers.size() == 1, "Latency test should have exactly one receiver per device");
+                    const auto& [receiver_core, receiver_worker] = *receivers.begin();
+
+                    // Find the sender device to query its parameters and buffer addresses
+                    auto sender_location = get_latency_sender_location();
+                    TestDevice* sender_device = sender_location.device;
+                    CoreCoord sender_core = sender_location.core;
+
+                    // Get sender's config to extract parameters
+                    const auto& sender_senders = sender_device->get_senders();
+                    const auto& sender_worker = sender_senders.at(sender_core);
+                    const auto& sender_configs = sender_worker.get_configs();
+                    const auto& sender_config = sender_configs[0].first;
+
+                    uint32_t payload_size = sender_config.parameters.payload_size_bytes;
+                    uint32_t num_bursts = sender_config.parameters.num_packets;
+                    NocSendType noc_send_type = sender_config.parameters.noc_send_type;
+                    FabricNodeId sender_device_id = sender_config.src_node_id;
 
                     // Get sender's actual buffer addresses (passing payload_size as parameter)
                     uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
                     uint32_t sender_receive_buffer_address =
-                        sender_device->get_latency_receive_buffer_address(latency_payload_size_);
+                        sender_device->get_latency_receive_buffer_address(payload_size);
 
                     // Get sender's virtual core coordinates for correct NOC addressing
                     CoreCoord sender_virtual_core =
-                        sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(
-                            latency_worker_core_);
+                        sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(sender_core);
 
                     // Create responder kernel - pass sender's actual addresses and coordinates
                     test_device.create_latency_responder_kernel(
-                        latency_worker_core_,
-                        latency_sender_device_,
-                        latency_payload_size_,
-                        latency_burst_size_,
-                        latency_num_bursts_,
-                        latency_noc_send_type_,
+                        receiver_core,
+                        sender_device_id,
+                        payload_size,
+                        latency_burst_size_,  // Still need this as it's not in TrafficParameters
+                        num_bursts,
+                        noc_send_type,
                         sender_send_buffer_address,
                         sender_receive_buffer_address,
                         sender_virtual_core);
@@ -631,26 +647,7 @@ public:
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
     }
 
-    void initialize_latency_results_csv_file() {
-        // Create output directory
-        std::filesystem::path tt_metal_home =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path latency_results_path = tt_metal_home / output_dir;
-
-        if (!std::filesystem::exists(latency_results_path)) {
-            std::filesystem::create_directories(latency_results_path);
-        }
-
-        // Generate CSV filename (similar to bandwidth summary)
-        // Note: The actual file will be created in generate_latency_results_csv() after golden is loaded,
-        // similar to how bandwidth_summary_results_*.csv is created in generate_bandwidth_summary_csv()
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        std::ostringstream oss;
-        oss << "latency_results_" << arch_name << ".csv";
-        latency_csv_file_path_ = latency_results_path / oss.str();
-
-        log_info(tt::LogTest, "Initialized latency CSV file path: {}", latency_csv_file_path_.string());
-    }
+    void initialize_latency_results_csv_file();
 
     void close_devices() { fixture_->close_devices(); }
 
@@ -677,12 +674,7 @@ public:
 
     bool has_test_failures() const { return has_test_failures_; }
 
-    std::vector<std::string> get_all_failed_tests() const {
-        std::vector<std::string> combined;
-        combined.insert(combined.end(), all_failed_bandwidth_tests_.begin(), all_failed_bandwidth_tests_.end());
-        combined.insert(combined.end(), all_failed_latency_tests_.begin(), all_failed_latency_tests_.end());
-        return combined;
-    }
+    std::vector<std::string> get_all_failed_tests() const;
 
     // Determine tolerance percentage by looking up from golden CSV entries
     double get_tolerance_percent(
@@ -771,6 +763,9 @@ public:
 
     void report_code_profiling_results();
 
+    // Configures latency test mode by extracting and storing parameters from the test config
+    void setup_latency_test_mode(const TestConfig& config);
+
 private:
     void reset_local_variables() {
         benchmark_mode_ = false;
@@ -788,45 +783,67 @@ private:
         // Note: latency_results_ is kept for golden comparison after all tests complete
     }
 
-    // Configures latency test mode by extracting and storing parameters from the test config
-    void setup_latency_test_mode(const TestConfig& config) {
-        this->set_latency_test_mode(true);
+    /**
+     * Setup latency test workers and configurations.
+     *
+     * Latency tests differ from bandwidth tests in several key ways:
+     * 1. Use specialized kernels (tt_fabric_latency_sender.cpp / tt_fabric_latency_responder.cpp)
+     *    that measure round-trip latency using hardware timestamps
+     * 2. Bypass the GlobalAllocator - latency tests use fixed memory layouts and don't need
+     *    dynamic allocation of send/receive buffers
+     * 3. Store latency samples in result buffers rather than throughput metrics
+     * 4. Use a single sender-responder pair rather than arbitrary traffic patterns
+     *
+     * This function manually populates the senders_ and receivers_ maps for latency test
+     * workers, sets their latency-specific kernel sources, and stores latency parameters
+     * (burst size, payload size, etc.) for later use during kernel compilation and result collection.
+     */
+    void setup_latency_test_workers(TestConfig& config);
 
-        // Validate that latency tests don't use multiple iterations
-        if (config.iteration_number > 0) {
-            log_warning(
-                tt::LogTest,
-                "Latency tests do not support multiple iterations. Use num_bursts in the test config instead to "
-                "collect multiple samples.");
+    // Helper struct for latency worker location information
+    struct LatencyWorkerLocation {
+        TestDevice* device = nullptr;
+        MeshCoordinate mesh_coord{0, 0};
+        CoreCoord core;
+        FabricNodeId node_id{MeshId{0}, 0};
+    };
+
+    /**
+     * Find a latency worker device by checking for non-empty workers map.
+     * Used internally by get_latency_sender_location() and get_latency_receiver_location().
+     */
+    template <typename GetWorkersMapFunc>
+    LatencyWorkerLocation find_latency_worker_device(
+        GetWorkersMapFunc get_workers_map, const std::string& worker_type) {
+        LatencyWorkerLocation info;
+        for (auto& [coord, device] : test_devices_) {
+            const auto& workers_map = get_workers_map(device);
+            if (!workers_map.empty()) {
+                info.device = &device;
+                info.mesh_coord = coord;
+                info.core = workers_map.begin()->first;
+                info.node_id = device.get_node_id();
+                break;
+            }
         }
+        TT_FATAL(info.device != nullptr, "Could not find latency {} device", worker_type);
+        return info;
+    }
 
-        // Identify sender and responder devices
-        TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
-        TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
+    /**
+     * Get the location of the latency sender device/core.
+     * Searches for the first device with a non-empty senders_ map.
+     */
+    LatencyWorkerLocation get_latency_sender_location() {
+        return find_latency_worker_device([](TestDevice& d) -> const auto& { return d.get_senders(); }, "sender");
+    }
 
-        const auto& sender = config.senders[0];
-        const auto& pattern = sender.patterns[0];
-        const auto& dest = pattern.destination.value();
-
-        latency_sender_device_ = sender.device;
-        latency_responder_device_ = dest.device.value();
-
-        // Store latency parameters for use in compile_programs()
-        latency_burst_size_ = sender.latency_burst_size;    // Extract from sender config
-        latency_num_bursts_ = pattern.num_packets.value();  // num_packets represents num_bursts
-        latency_payload_size_ = pattern.size.value();
-        latency_noc_send_type_ = pattern.ntype.value();
-        if (sender.core.has_value()) {
-            latency_worker_core_ = sender.core.value();
-        }
-
-        log_info(
-            tt::LogTest,
-            "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
-            latency_sender_device_.chip_id,
-            latency_responder_device_.chip_id,
-            latency_payload_size_,
-            latency_num_bursts_);
+    /**
+     * Get the location of the latency receiver/responder device/core.
+     * Searches for the first device with a non-empty receivers_ map.
+     */
+    LatencyWorkerLocation get_latency_receiver_location() {
+        return find_latency_worker_device([](TestDevice& d) -> const auto& { return d.get_receivers(); }, "receiver");
     }
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
@@ -1536,49 +1553,7 @@ private:
         log_info(tt::LogTest, "Bandwidth results appended to CSV file: {}", csv_file_path_.string());
     }
 
-    void generate_latency_results_csv() {
-        // Open CSV file in write mode (truncate existing file, similar to bandwidth)
-        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::trunc);
-        if (!csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to open latency CSV file for writing: {}", latency_csv_file_path_.string());
-            return;
-        }
-
-        // Write header
-        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
-                      "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
-                      "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
-                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
-                      "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
-
-        // Write all results
-        for (const auto& result : latency_results_) {
-            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                       << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
-                       << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
-                       << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
-                       << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns
-                       << "," << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
-                       << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.per_hop_min_ns << ","
-                       << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << ",";
-
-            // Find the corresponding golden entry for tolerance (like bandwidth does)
-            auto golden_it = fetch_corresponding_golden_latency_entry(result);
-            if (golden_it == golden_latency_entries_.end()) {
-                log_warning(
-                    tt::LogTest,
-                    "Golden latency entry not found for test {}, putting tolerance of 1.0 in CSV",
-                    result.test_name);
-                csv_stream << 1.0;
-            } else {
-                csv_stream << golden_it->tolerance_percent;
-            }
-            csv_stream << "\n";
-        }
-
-        csv_stream.close();
-        log_info(tt::LogTest, "Latency results written to CSV file: {}", latency_csv_file_path_.string());
-    }
+    void generate_latency_results_csv();
 
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
 
@@ -1782,188 +1757,11 @@ private:
         return true;
     }
 
-    std::string get_golden_latency_csv_filename() {
-        auto arch_name = tt::tt_metal::hal::get_arch_name();
-        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    std::string get_golden_latency_csv_filename();
 
-        // Convert cluster type enum to lowercase string
-        std::string cluster_name = std::string(enchantum::to_string(cluster_type));
-        std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
+    bool load_golden_latency_csv();
 
-        std::string file_name = "golden_latency_" + arch_name + "_" + cluster_name + ".csv";
-        return file_name;
-    }
-
-    bool load_golden_latency_csv() {
-        golden_latency_entries_.clear();
-
-        std::string golden_filename = get_golden_latency_csv_filename();
-        std::filesystem::path golden_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-            "tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden" / golden_filename;
-
-        if (!std::filesystem::exists(golden_path)) {
-            log_warning(tt::LogTest, "Golden latency CSV file not found: {}", golden_path.string());
-            return false;
-        }
-
-        std::ifstream golden_file(golden_path);
-        if (!golden_file.is_open()) {
-            log_error(tt::LogTest, "Failed to open golden latency CSV file: {}", golden_path.string());
-            return false;
-        }
-
-        std::string line;
-        bool is_header = true;
-        while (std::getline(golden_file, line)) {
-            if (is_header) {
-                is_header = false;
-                continue;  // Skip header
-            }
-
-            std::istringstream ss(line);
-            std::string token;
-            std::vector<std::string> tokens;
-
-            // Parse CSV line
-            while (std::getline(ss, token, ',')) {
-                tokens.push_back(token);
-            }
-
-            // Expected format: test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,
-            //                  net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,
-            //                  responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,
-            //                  raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,
-            //                  per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns[,tolerance_percent]
-            // Note: per_hop fields and tolerance_percent are optional for backward compatibility
-            if (tokens.size() < 20) {
-                log_error(tt::LogTest, "Invalid CSV format in golden latency file. Expected at least 20 fields, got {}", tokens.size());
-                continue;
-            }
-
-            GoldenLatencyEntry entry;
-            entry.test_name = tokens[0];
-            entry.ftype = tokens[1];
-            entry.ntype = tokens[2];
-            entry.topology = tokens[3];
-            entry.num_devices = std::stoul(tokens[4]);
-            entry.num_links = std::stoul(tokens[5]);
-            entry.num_samples = std::stoul(tokens[6]);
-            entry.payload_size = std::stoul(tokens[7]);
-
-            entry.net_min_ns = std::stod(tokens[8]);
-            entry.net_max_ns = std::stod(tokens[9]);
-            entry.net_avg_ns = std::stod(tokens[10]);
-            entry.net_p99_ns = std::stod(tokens[11]);
-
-            entry.responder_min_ns = std::stod(tokens[12]);
-            entry.responder_max_ns = std::stod(tokens[13]);
-            entry.responder_avg_ns = std::stod(tokens[14]);
-            entry.responder_p99_ns = std::stod(tokens[15]);
-
-            entry.raw_min_ns = std::stod(tokens[16]);
-            entry.raw_max_ns = std::stod(tokens[17]);
-            entry.raw_avg_ns = std::stod(tokens[18]);
-            entry.raw_p99_ns = std::stod(tokens[19]);
-
-            // Per-hop fields are optional for backward compatibility
-            if (tokens.size() >= 24) {
-                entry.per_hop_min_ns = std::stod(tokens[20]);
-                entry.per_hop_max_ns = std::stod(tokens[21]);
-                entry.per_hop_avg_ns = std::stod(tokens[22]);
-                entry.per_hop_p99_ns = std::stod(tokens[23]);
-            } else {
-                // If per-hop fields are missing, set to 0
-                entry.per_hop_min_ns = 0.0;
-                entry.per_hop_max_ns = 0.0;
-                entry.per_hop_avg_ns = 0.0;
-                entry.per_hop_p99_ns = 0.0;
-            }
-
-            // Tolerance is optional for backward compatibility
-            if (tokens.size() >= 25) {
-                entry.tolerance_percent = std::stod(tokens[24]);
-            } else if (tokens.size() >= 21 && tokens.size() < 24) {
-                // Old format: tolerance is at position 20
-                entry.tolerance_percent = std::stod(tokens[20]);
-            } else {
-                entry.tolerance_percent = 10.0;  // Default tolerance if not specified
-            }
-            golden_latency_entries_.push_back(entry);
-        }
-
-        golden_file.close();
-        log_info(tt::LogTest, "Loaded {} golden latency entries from: {}", golden_latency_entries_.size(), golden_path.string());
-        return true;
-    }
-
-    void compare_latency_results_with_golden() {
-        if (golden_latency_entries_.empty()) {
-            log_warning(tt::LogTest, "Skipping golden latency comparison - no golden file found");
-            return;
-        }
-        if (latency_results_.size() != golden_latency_entries_.size()) {
-            log_warning(
-                tt::LogTest,
-                "Number of latency results ({}) does not match number of golden entries ({})",
-                latency_results_.size(),
-                golden_latency_entries_.size());
-        }
-
-        for (const auto& test_result : latency_results_) {
-            auto golden_it = fetch_corresponding_golden_latency_entry(test_result);
-
-            // Create comparison result
-            LatencyComparisonResult comp_result;
-            comp_result.test_name = test_result.test_name;
-            comp_result.ftype = test_result.ftype;
-            comp_result.ntype = test_result.ntype;
-            comp_result.topology = test_result.topology;
-            comp_result.num_devices = test_result.num_devices;
-            comp_result.num_links = test_result.num_links;
-            comp_result.num_samples = test_result.num_samples;
-            comp_result.payload_size = test_result.payload_size;
-            comp_result.current_per_hop_avg_ns = test_result.per_hop_avg_ns;
-
-            // Populate golden value and tolerance/status using common helper
-            if (golden_it != golden_latency_entries_.end()) {
-                comp_result.golden_per_hop_avg_ns = golden_it->per_hop_avg_ns;
-            } else {
-                comp_result.golden_per_hop_avg_ns = 0.0;
-            }
-            populate_comparison_tolerance_and_status(comp_result, golden_it, golden_latency_entries_.end());
-
-            latency_comparison_results_.push_back(comp_result);
-
-            // Only count as failure if golden entry exists and test failed
-            // NO_GOLDEN status is just a warning, not a failure
-            if (!comp_result.within_tolerance && comp_result.status != "NO_GOLDEN") {
-                std::ostringstream oss;
-                oss << comp_result.test_name << " [" << comp_result.status << "]";
-                all_failed_latency_tests_.push_back(oss.str());
-            }
-        }
-
-        // Initialize diff CSV file using common helper
-        auto diff_csv_stream = init_diff_csv_file(
-            latency_diff_csv_file_path_,
-            "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
-            "current_per_hop_avg_ns,golden_per_hop_avg_ns,difference_percent,status",
-            "latency");
-
-        if (diff_csv_stream.is_open()) {
-            for (const auto& result : latency_comparison_results_) {
-                diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
-                                << result.topology << "," << result.num_devices << "," << result.num_links << ","
-                                << result.num_samples << "," << result.payload_size << "," << std::fixed
-                                << std::setprecision(2) << result.current_per_hop_avg_ns << ","
-                                << result.golden_per_hop_avg_ns << "," << result.difference_percent() << ","
-                                << result.status << "\n";
-            }
-            diff_csv_stream.close();
-            log_info(tt::LogTest, "Latency comparison diff CSV results written to: {}", latency_diff_csv_file_path_.string());
-        }
-    }
+    void compare_latency_results_with_golden();
 
     // Common helper to populate tolerance and status fields
     template <typename CompResultType, typename GoldenIterType>
@@ -2093,110 +1891,7 @@ private:
         log_info(tt::LogTest, "Bandwidth comparison diff CSV results written to: {}", diff_csv_file_path_.string());
     }
 
-    void validate_against_golden() {
-        // Handle both bandwidth and latency comparisons
-        bool has_bandwidth_results = !comparison_results_.empty();
-        bool has_latency_results = !latency_comparison_results_.empty();
-
-        if (!has_bandwidth_results && !has_latency_results) {
-            log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
-            return;
-        }
-
-        // Report bandwidth failures separately
-        if (has_bandwidth_results) {
-            if (!all_failed_bandwidth_tests_.empty()) {
-                has_test_failures_ = true;
-                log_error(tt::LogTest, "=== BANDWIDTH TEST FAILURES ===");
-                log_error(
-                    tt::LogTest,
-                    "{} bandwidth test(s) failed golden comparison (using per-test tolerance):",
-                    all_failed_bandwidth_tests_.size());
-
-                // Print detailed failure information
-                for (const auto& result : comparison_results_) {
-                    if (!result.within_tolerance && result.status != "NO_GOLDEN") {
-                        // Look up tolerance from golden entry by searching directly
-                        double tolerance = 1.0;
-                        for (const auto& golden : golden_csv_entries_) {
-                            if (golden.test_name == result.test_name && golden.ftype == result.ftype &&
-                                golden.ntype == result.ntype && golden.topology == result.topology &&
-                                golden.num_links == result.num_links && golden.packet_size == result.packet_size) {
-                                tolerance = golden.tolerance_percent;
-                                break;
-                            }
-                        }
-
-                        log_error(tt::LogTest, "  - {} [{}]:", result.test_name, result.status);
-                        log_error(tt::LogTest, "      Expected: {:.6f} GB/s", result.golden_bandwidth_GB_s);
-                        log_error(tt::LogTest, "      Actual:   {:.6f} GB/s", result.current_bandwidth_GB_s);
-                        log_error(
-                            tt::LogTest,
-                            "      Diff:     {:.2f}% (tolerance: {:.2f}%)",
-                            result.difference_percent(),
-                            tolerance);
-                    }
-                }
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "All {} bandwidth tests passed golden comparison using per-test tolerance values",
-                    comparison_results_.size());
-            }
-        }
-
-        // Report latency failures separately
-        if (has_latency_results) {
-            if (!all_failed_latency_tests_.empty()) {
-                has_test_failures_ = true;
-                log_error(tt::LogTest, "=== LATENCY TEST FAILURES ===");
-                log_error(
-                    tt::LogTest,
-                    "{} latency test(s) failed golden comparison (using per-test tolerance):",
-                    all_failed_latency_tests_.size());
-
-                // Print detailed failure information
-                for (const auto& result : latency_comparison_results_) {
-                    if (!result.within_tolerance && result.status != "NO_GOLDEN") {
-                        // Look up tolerance from golden entry by searching directly
-                        double tolerance = 1.0;
-                        for (const auto& golden : golden_latency_entries_) {
-                            if (golden.test_name == result.test_name && golden.ftype == result.ftype &&
-                                golden.ntype == result.ntype && golden.topology == result.topology &&
-                                golden.num_devices == result.num_devices && golden.num_links == result.num_links &&
-                                golden.payload_size == result.payload_size) {
-                                tolerance = golden.tolerance_percent;
-                                break;
-                            }
-                        }
-
-                        log_error(tt::LogTest, "  - {} [{}]:", result.test_name, result.status);
-                        log_error(
-                            tt::LogTest,
-                            "      Test config: {} {} {} {} devs {} links payload={}B",
-                            result.ftype,
-                            result.ntype,
-                            result.topology,
-                            result.num_devices,
-                            result.num_links,
-                            result.payload_size);
-                        log_error(tt::LogTest, "      Expected per-hop: {:.2f} ns", result.golden_per_hop_avg_ns);
-                        log_error(tt::LogTest, "      Actual per-hop:   {:.2f} ns", result.current_per_hop_avg_ns);
-                        log_error(
-                            tt::LogTest,
-                            "      Diff:     {:.2f}% (tolerance: {:.2f}%)",
-                            result.difference_percent(),
-                            tolerance);
-                    }
-                }
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "All {} latency tests passed golden comparison using per-test tolerance values",
-                    latency_comparison_results_.size());
-            }
-        }
-    }
+    void validate_against_golden();
 
     void set_comparison_statistics_csv_file_path();
 
@@ -2221,13 +1916,7 @@ private:
     bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
     bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
-    FabricNodeId latency_sender_device_{MeshId{0}, 0};
-    FabricNodeId latency_responder_device_{MeshId{0}, 0};
-    uint32_t latency_burst_size_ = 1;
-    uint32_t latency_num_bursts_ = 100;
-    uint32_t latency_payload_size_ = 0;
-    NocSendType latency_noc_send_type_ = NocSendType::NOC_UNICAST_WRITE;
-    CoreCoord latency_worker_core_{0, 0};
+    uint32_t latency_burst_size_ = 1;  // Latency-specific parameter (not in TrafficParameters)
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 

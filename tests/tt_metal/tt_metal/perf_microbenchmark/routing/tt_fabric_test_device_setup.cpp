@@ -1283,13 +1283,6 @@ void TestDevice::create_latency_sender_kernel(
         dest_node);
     uint32_t link_idx = available_links[0];  // Use first available link
 
-    register_fabric_connection(
-        core,
-        TestWorkerType::SENDER,
-        connection_manager_,
-        outgoing_direction,
-        link_idx);
-
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
@@ -1336,22 +1329,10 @@ void TestDevice::create_latency_sender_kernel(
     tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_node_id_, dest_node, link_idx, program_handle_, {core}, rt_args);
 
-    // Create kernel
-    auto kernel_handle = tt::tt_metal::CreateKernel(
-        program_handle_,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_sender.cpp",
-        {core},
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
+        {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
-
-    // Zero out semaphore from host before test (same as bandwidth tests)
-    device_info_provider_->zero_out_buffer_on_cores(
-        coord_, {core}, semaphore_address, sender_memory_map_->get_local_sync_region_size());
+    senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, addresses_and_size_to_clear);
 
     log_debug(
         tt::LogTest,
@@ -1403,13 +1384,6 @@ void TestDevice::create_latency_responder_kernel(
         sender_node);
     uint32_t link_idx = available_links[0];  // Use first available link
 
-    register_fabric_connection(
-        core,
-        TestWorkerType::RECEIVER,
-        connection_manager_,
-        outgoing_direction,
-        link_idx);
-
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, use_dynamic_routing
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
@@ -1458,28 +1432,31 @@ void TestDevice::create_latency_responder_kernel(
     tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_node_id_, sender_node, link_idx, program_handle_, {core}, rt_args);
 
-    // Create kernel
-    auto kernel_handle = tt::tt_metal::CreateKernel(
-        program_handle_,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_latency_responder.cpp",
-        {core},
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = ct_args,
-            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+    const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
+        {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    tt::tt_metal::SetRuntimeArgs(program_handle_, kernel_handle, core, rt_args);
-
-    // Zero out semaphore from host before test (same as bandwidth tests)
-    device_info_provider_->zero_out_buffer_on_cores(
-        coord_, {core}, semaphore_address, sender_memory_map_->get_local_sync_region_size());
+    receivers_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, addresses_and_size_to_clear);
 
     log_debug(
         tt::LogTest,
         "Created latency responder kernel on core {} with shared semaphore address 0x{:x}",
         core,
         semaphore_address);
+}
+
+// Set kernel source for specific workers (used by latency tests to override default kernels)
+void TestDevice::set_sender_kernel_src(CoreCoord core, const std::string& kernel_src) {
+    auto it = senders_.find(core);
+    if (it != senders_.end()) {
+        it->second.set_kernel_src(kernel_src);
+    }
+}
+
+void TestDevice::set_receiver_kernel_src(CoreCoord core, const std::string& kernel_src) {
+    auto it = receivers_.find(core);
+    if (it != receivers_.end()) {
+        it->second.set_kernel_src(kernel_src);
+    }
 }
 
 // TestSender accessor implementations (need complete TestDevice)

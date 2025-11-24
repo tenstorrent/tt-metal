@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.benchmark_mode) {
+        if (test_config.benchmark_mode || test_config.latency_test_mode) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
         }
 
@@ -210,6 +210,11 @@ int main(int argc, char** argv) {
 
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
+
+                // Setup latency test mode AFTER process_traffic_config so that senders_/receivers_ maps are populated
+                if (built_test.latency_test_mode) {
+                    test_context.setup_latency_test_mode(built_test);
+                }
 
                 // Clear code profiling buffers before test execution
                 if (test_context.get_code_profiling_enabled()) {
