@@ -415,27 +415,37 @@ public:
 
             // Set up latency test mode if enabled
             if (latency_test_mode_) {
-                bool is_sender = (device_id == latency_sender_device_);
-                bool is_responder = (device_id == latency_responder_device_);
+                bool is_latency_sender = (device_id == latency_sender_device_);
+                bool is_latency_responder = (device_id == latency_responder_device_);
 
-                if (is_sender || is_responder) {
-                    FabricNodeId peer_node = is_sender ? latency_responder_device_ : latency_sender_device_;
-
-                    test_device.set_latency_test_mode(
-                        true,
-                        is_sender,
-                        is_responder,
+                if (is_latency_sender) {
+                    // Create latency sender kernel directly
+                    test_device.create_latency_sender_kernel(
+                        latency_worker_core_,
+                        latency_responder_device_,
+                        latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
                         latency_semaphore_addresses_[device_id],
+                        latency_noc_send_type_);
+                } else if (is_latency_responder) {
+                    // Create latency responder kernel directly
+                    test_device.create_latency_responder_kernel(
+                        latency_worker_core_,
+                        latency_sender_device_,
                         latency_payload_size_,
-                        latency_noc_send_type_,
-                        peer_node,
-                        latency_worker_core_);
+                        latency_burst_size_,
+                        latency_num_bursts_,
+                        latency_semaphore_addresses_[device_id],
+                        latency_noc_send_type_);
+                } else {
+                    // For non-latency devices in a latency test, create normal kernels
+                    test_device.create_kernels();
                 }
+            } else {
+                // Normal mode: create standard kernels
+                test_device.create_kernels();
             }
-
-            test_device.create_kernels();
             auto& program_handle = test_device.get_program_handle();
             if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
