@@ -796,14 +796,35 @@ class MasterConfigLoader:
                                     if "MemoryConfig" in element_info:
                                         try:
                                             import json
+                                            import re
 
-                                            parsed = json.loads(element_info)
+                                            # Apply regex fixes for C++ style formats (same as extract_tensor_config)
+                                            fixed_json_str = element_info
+                                            # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
+                                            fixed_json_str = re.sub(
+                                                r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str
+                                            )
+                                            # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
+                                            fixed_json_str = re.sub(
+                                                r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}',
+                                                r'"grid":[\1]',
+                                                fixed_json_str,
+                                            )
+                                            # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
+                                            fixed_json_str = re.sub(
+                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
+                                                r"\1, \2",
+                                                fixed_json_str,
+                                            )
+
+                                            parsed = json.loads(fixed_json_str)
                                             if "arg1" in parsed and "MemoryConfig" in parsed["arg1"]:
                                                 output_mem_config = self.parse_memory_config(
                                                     parsed["arg1"]["MemoryConfig"], tensor_config.shape
                                                 )
                                                 break
-                                        except Exception:
+                                        except Exception as e:
+                                            # If parsing fails, continue to next arg or use default
                                             pass
 
                         # If not extracted from arg1, use operation-specific defaults
