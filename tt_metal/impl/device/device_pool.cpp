@@ -659,7 +659,7 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-            // If the read value mathces expected status, then we can break out of the loop
+            // If the read value matches expected status, then we can break out of the loop
             // No need to check for timeout in this case.
             if (master_router_status[0] == expected_status) {
                 break;
