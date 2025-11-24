@@ -505,24 +505,11 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     TT_FATAL(initialized_all_gather && initialized_fused_op, "MinimalMatmulFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
+    out_rt_args.push_back(static_cast<uint32_t>(k_num_blocks));
     out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt));
-    out_rt_args.push_back(static_cast<uint32_t>(k_num_blocks));
     out_rt_args.push_back(static_cast<uint32_t>(k_block_tiles));
     out_rt_args.push_back(static_cast<uint32_t>(this->topology));
-
-    for (uint32_t k = 0; k < k_num_blocks; k++) {
-        out_rt_args.push_back(static_cast<uint32_t>(0));
-    }
-    for (uint32_t k = 0; k < k_num_blocks; k++) {
-        out_rt_args.push_back(static_cast<uint32_t>(0));
-    }
-    for (uint32_t k = 0; k < this->ring_size; k++) {
-        out_rt_args.push_back(static_cast<uint32_t>(0));
-    }
-    for (uint32_t k = 0; k < this->ring_size; k++) {
-        out_rt_args.push_back(static_cast<uint32_t>(0));
-    }
 
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));

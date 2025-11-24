@@ -39,23 +39,29 @@ struct MinimalMatmulOpReceiver {
 
     MinimalMatmulOpReceiver() {}
 
-    MinimalMatmulOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) : wait_for_op_signal(wait_for_op_signal) {
+    MinimalMatmulOpReceiver(
+        bool wait_for_op_signal,
+        uint32_t& rt_args_idx,
+        uint32_t* k_block_device_expected,
+        uint32_t* k_block_device_received,
+        uint32_t* device_k_block_counts,
+        uint32_t* device_k_block_start_ids) :
+        wait_for_op_signal(wait_for_op_signal),
+        k_block_device_expected(k_block_device_expected),
+        k_block_device_received(k_block_device_received),
+        device_k_block_counts(device_k_block_counts),
+        device_k_block_start_ids(device_k_block_start_ids) {
         sem_targets[0] = 0;  // backward
         sem_targets[1] = 0;  // forward
         sem_targets[2] = 0;  // self
 
         // Runtime args
         num_devices = get_arg_val<uint32_t>(rt_args_idx++);
+        num_k_blocks = get_arg_val<uint32_t>(rt_args_idx++);
         my_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
         input_tensor_Wt = get_arg_val<uint32_t>(rt_args_idx++);
-        num_k_blocks = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t k_block_tiles = get_arg_val<uint32_t>(rt_args_idx++);
         topology = static_cast<ttnn::ccl::Topology>(get_arg_val<uint32_t>(rt_args_idx++));
-
-        this->k_block_device_expected = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_k_blocks));
-        this->k_block_device_received = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_k_blocks));
-        this->device_k_block_counts = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_devices));
-        this->device_k_block_start_ids = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_devices));
 
         if (this->wait_for_op_signal) {
             this->signal_op_semaphore_addr_ptrs[0] =

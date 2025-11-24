@@ -70,8 +70,20 @@ void kernel_main() {
 #ifdef FUSE_AG
     // Receiver for ccl fusing
     MinimalMatmulOpReceiver fused_op_receiver;
+    uint32_t num_devices = get_arg_val<uint32_t>(argidx);
+    uint32_t num_k_blocks = get_arg_val<uint32_t>(argidx + 1);
+    uint32_t k_block_device_expected[num_k_blocks]{};
+    uint32_t k_block_device_received[num_k_blocks]{};
+    uint32_t device_k_block_counts[num_devices]{};
+    uint32_t device_k_block_start_ids[num_devices]{};
     if constexpr (is_injector_core) {
-        fused_op_receiver = MinimalMatmulOpReceiver(false, argidx);
+        fused_op_receiver = MinimalMatmulOpReceiver(
+            false,
+            argidx,
+            k_block_device_expected,
+            k_block_device_received,
+            device_k_block_counts,
+            device_k_block_start_ids);
     }
 #endif
 
