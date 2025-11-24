@@ -16,8 +16,8 @@ on:
         required: true
         type: choice
         options:
-          - opencode/gpt-5.1-codex-mini
           - opencode/gpt-5.1-codex
+          - opencode/gpt-5-codex
           - opencode/grok-code
 
 jobs:
