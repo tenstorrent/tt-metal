@@ -838,3 +838,73 @@ def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant
     result = ttnn.to_torch(ttnn_result)
 
     assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize(
+    "shape_a, shape_b, sub_core_grid",
+    [
+        (
+            (torch.Size([1, 1, 32, 16384])),
+            (torch.Size([1, 1, 32, 1])),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        torch.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        1.0,
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+# @pytest.mark.parametrize("variant", ["TTS",])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_where_subcore_grid_bcast(device, shape_a, shape_b, sub_core_grid, dtype, scalar, variant, condition):
+    torch.manual_seed(0)
+    tor_dtype = dtype
+
+    ttnn_dtype = ttnn.bfloat16
+    if dtype == torch.float32:
+        ttnn_dtype = ttnn.float32
+    if dtype == torch.int32:
+        ttnn_dtype = ttnn.int32
+
+    C = make_condition_tensor(shape_a, torch.int32, condition)
+
+    if variant == "TTS":
+        T = torch.randn(shape_b, dtype=tor_dtype)
+        F = scalar
+    elif variant == "TST":
+        T = scalar
+        F = torch.randn(shape_b, dtype=tor_dtype)
+    elif variant == "TTT":
+        T = torch.randn(shape_b, dtype=tor_dtype)
+        F = torch.ones(shape_b, dtype=tor_dtype) * scalar
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = scalar
+    elif variant == "TST":
+        ttnn_T = scalar
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F, sub_core_grids=sub_core_grid)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)

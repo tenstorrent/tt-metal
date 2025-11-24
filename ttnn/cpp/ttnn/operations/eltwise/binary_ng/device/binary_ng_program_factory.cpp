@@ -361,6 +361,15 @@ void set_or_update_runtime_arguments(
         cores = corerange_to_cores(all_device_cores, {}, row_major);
     }
 
+    // std::cout << "\n num_cores_total: " << num_cores_total << std::endl;
+    // std::cout << "\n cores: " << cores.size() << std::endl;
+    // log_info(tt::LogOp, "core_group_1 {}", core_group_1);
+    // log_info(tt::LogOp, "core_group_2 {}", core_group_2);
+    // std::cout << "\n core_group_1: " << core_group_1.size() << std::endl;
+    // std::cout << "\n core_group_2: " << core_group_2.size() << std::endl;
+    // std::cout << "\n num_tiles_per_core_group_1: " << num_tiles_per_core_group_1 << std::endl;
+    // std::cout << "\n num_tiles_per_core_group_2: " << num_tiles_per_core_group_2 << std::endl;
+
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 

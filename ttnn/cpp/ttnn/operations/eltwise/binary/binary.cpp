@@ -798,6 +798,7 @@ Tensor WhereOperationWithScalar<binary_op_type>::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    std::cout << "\nWhereOperationWithScalar: \n" << std::endl;
     return ttnn::prim::binary_ng(
         condition,
         true_false_tensor,

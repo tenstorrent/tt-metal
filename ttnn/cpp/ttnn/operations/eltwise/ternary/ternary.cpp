@@ -103,7 +103,7 @@ Tensor invoke_impl(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype());
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     if (is_invalid_bcast(broadcast_type)) {
@@ -139,7 +139,7 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype());
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
@@ -162,7 +162,7 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_false.dtype());
+        condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
