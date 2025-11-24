@@ -40,27 +40,31 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       process_decode_output_host(tt_out : ttnn.Tensor, is_tokens : bool)
       ```
-3. **(Multi-modal and encoder-decoder models only)** Currently, the only multi-modal models we support in our Tenstorrent vLLM fork are image+text encoder-decoder models such as Llama3.2-11B-Vision. An example generation class is `MllamaForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). These models have the same interface requirements as the text-only models, as well as the following:
-   - `max_cross_attn_tokens`: class property which returns the max number of tokens in cross attention. In vLLM, this property is used in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) for padding cross page tables to `max_cross_blocks`.
+3. **(Multi-modal models only)** Currently, we only support image+text input modalities. An example generation class is `Gemma3ForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). For more info only multi-modal models see also [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)). These models have the same interface requirements as the text-only models, as well as the following:
+   - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`images` for V0, `pixel_values` for V1) for the image inputs.
+  
+4. **(V0 encoder-decoder multi-modal models only)** An example generation class is `MllamaForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). These models have the same interface requirements as the text-only models, as well as the following:
+   - `max_cross_attn_tokens`: class property which returns the max number of tokens in cross attention. In vLLM, this property is used in [tt_model_runner.py (V0)](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) for padding cross page tables to `max_cross_blocks`.
    - `prefill_forward` (**image+text models**): returns `logits, cross_attention_masks, full_text_row_masked_out_mask`. The input arguments are the same as the text-only models with the addition of `images` and `cross_page_table` (the page table for paged cross attention which accesses the same `kv_cache` as self attention). `cross_page_table` has shape `(batch_size, num_vision_blocks)`.
      ```python
-      prefill_forward(tokens : torch.Tensor, images : List[PIL.Image.Image], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor, sampling_params : TTSamplingParams)
+      prefill_forward(tokens : torch.Tensor, images : List[List[PIL.Image.Image]], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor, sampling_params : TTSamplingParams, empty_slots : list))
       ```
    - `decode_forward` (**image+text models**): same as the text-only models with the additional input arguments `cross_attention_masks` (output from prefill), `full_text_row_mask_out_mask` (output from prefill), and `cross_page_table`. `cross_page_table` has shape `(max_batch_size, max_cross_blocks)`.
      ```python
       decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, cross_attention_masks : list, full_text_row_masked_out_mask : list, page_table : torch.Tensor, kv_cache : list, cross_page_table : torch.Tensor, enable_trace : bool, read_from_device : bool, sampling_params : TTSamplingParams)
       ```
-   - A custom vLLM input processor for preprocessing encoder/decoder tokens may also be required (for an example, see `input_processor_for_mllama` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py) and for more info see [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)).
+   - A custom vLLM input processor for preprocessing encoder/decoder tokens may also be required (for an example, see `MllamaMultiModalProcessor` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py).
 
 ## Testing the Model in vLLM
 Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be tested in vLLM by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) and doing the following:
-1. The model needs to be registered using `ModelRegistry.register_model` and added to the list of supported models in [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
-2. Testing offline inference, continuous batching, and performance (see [Running the offline inference example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-offline-inference-example)).
+1. The model needs to be registered using `ModelRegistry.register_model` and added to the list of supported models in [vllm/platforms/tt.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/platforms/tt.py).
+2. Testing offline inference, continuous batching, and performance (see [Running the Offline Inference Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-offline-inference-example)).
 3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
-4. Testing model serving of asynchronous requests with the server example (see [Running the server example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-server-example)).
+4. Testing model serving of asynchronous requests with the server example (see [Running the Server Example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-server-example)).
 
 ## vLLM Modifications
 Occasionally, additional changes may be needed on the vLLM side to support a new model (e.g. supporting a new type of model, inputs of a different modality, or customizing the KV cache initialization). If this is the case, please make a pull request to the [dev branch](https://github.com/tenstorrent/vllm/tree/dev) (which acts as our main branch, and is not permitted to be committed to directly). The main files for our TT vLLM backend are the following:
+- [`tt.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/platforms/tt.py): handles platform definition and model registration.
 - [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py): handles model initialization.
-- [`tt_worker.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py): handles device initialization and kv cache management.
-- [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py): handles input preparation and model execution.
+- [`tt_worker.py (V0)`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py) / [`tt_worker.py (V1)`](https://github.com/tenstorrent/vllm/blob/dev/vllm/v1/worker/tt_worker.py): handles device initialization and kv cache management.
+- [`tt_model_runner.py (V0)`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) / [`tt_model_runner.py (V1)`](https://github.com/tenstorrent/vllm/blob/dev/vllm/v1/worker/tt_model_runner.py): handles input preparation and model execution.
