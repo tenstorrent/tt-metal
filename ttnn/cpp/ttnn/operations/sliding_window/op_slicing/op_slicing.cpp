@@ -157,7 +157,7 @@ void run_sliced_op(
 
         ttnn::Tensor sliced_output_tensor = sliced_input_tensor;
 
-        for (int op_index = 0; op_index < op_slice_attr.size(); op_index++) {
+        for (size_t op_index = 0; op_index < op_slice_attr.size(); op_index++) {
             auto this_op_slice_attr = op_slice_attr[op_index];
             auto [output_slice_start, output_slice_end] = output_slice_coords[op_index];
             bool pad_output_width = (op_index == (op_slice_attr.size() - 1));
