@@ -55,7 +55,7 @@ class TtSDXLPipeline(LightweightModule):
     # Compile and trace methods are also included for model optimization.
     # The class will fallback on the CPU implementetion for the non critical components.
 
-    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig):
+    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig, tt_scheduler=None):
         super().__init__()
 
         assert isinstance(
@@ -97,7 +97,7 @@ class TtSDXLPipeline(LightweightModule):
             ), "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is not set to 7,7, and it needs to be set for Galaxy"
 
         logger.info("Loading TT components...")
-        self.__load_tt_components(pipeline_config)
+        self.__load_tt_components(pipeline_config, tt_scheduler)
         logger.info("TT components loaded")
 
         self.scaling_factor = ttnn.from_torch(
@@ -323,7 +323,7 @@ class TtSDXLPipeline(LightweightModule):
 
             self.encoders_compiled = True
 
-    def compile_image_processing(self):
+    def compile_image_processing(self, force_no_trace=False):
         # Compile/trace run for denoising loop and vae decoder.
         if not self.image_processing_compiled:
             assert self.allocated_device_tensors, "Input tensors are not allocated"
@@ -356,7 +356,7 @@ class TtSDXLPipeline(LightweightModule):
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
 
-            if self.pipeline_config.capture_trace:
+            if self.pipeline_config.capture_trace and not force_no_trace:
                 self.__trace_image_processing()
 
             self._reset_num_inference_steps()
@@ -513,6 +513,7 @@ class TtSDXLPipeline(LightweightModule):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
+        # Generate random latents
         latents_list = []
         for index in range(self.batch_size):
             if start_latent_seed is not None:
@@ -581,17 +582,24 @@ class TtSDXLPipeline(LightweightModule):
         device_tensors = [self.tt_latents_device, self.tt_prompt_embeds_device, self.tt_text_embeds_device]
 
         for host_tensor, device_tensor in zip(host_tensors, device_tensors):
-            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            if host_tensor.device() is None:
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            else:
+                ttnn.copy(host_tensor, device_tensor)
 
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
-    def generate_images(self):
+    def generate_images(self, return_latents=False):
         # SDXL inference run.
+        # If return_latents=True, skip VAE decoding and return latents instead of images
         assert self.image_processing_compiled, "Image processing is not compiled"
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
-        logger.info("Generating images...")
+        if return_latents:
+            logger.info("Generating latents (skipping VAE decoding)...")
+        else:
+            logger.info("Generating images...")
         imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
             self.ttnn_device,
             self.tt_unet,
@@ -616,6 +624,7 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,
             one_minus_guidance_rescale=self.one_minus_guidance_rescale,
+            return_latents=return_latents,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -627,7 +636,7 @@ class TtSDXLPipeline(LightweightModule):
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
         )
 
-    def __load_tt_components(self, pipeline_config):
+    def __load_tt_components(self, pipeline_config, tt_scheduler=None):
         # Method for instantiating TT components based on the torch pipeline.
         # Included components are TtUNet2DConditionModel, TtAutoencoderKL, and TtEulerDiscreteScheduler.
         # TODO: move encoder here
@@ -648,6 +657,7 @@ class TtSDXLPipeline(LightweightModule):
                 model_config=self.tt_unet_model_config,
                 debug_mode=pipeline_config._debug_mode,
             )
+            # Skip VAE for refiner pipelines
             self.tt_vae = (
                 TtAutoencoderKL(
                     self.ttnn_device,
@@ -658,26 +668,29 @@ class TtSDXLPipeline(LightweightModule):
                 if pipeline_config.vae_on_device
                 else None
             )
-            self.tt_scheduler = TtEulerDiscreteScheduler(
-                self.ttnn_device,
-                self.torch_pipeline.scheduler.config.num_train_timesteps,
-                self.torch_pipeline.scheduler.config.beta_start,
-                self.torch_pipeline.scheduler.config.beta_end,
-                self.torch_pipeline.scheduler.config.beta_schedule,
-                self.torch_pipeline.scheduler.config.trained_betas,
-                self.torch_pipeline.scheduler.config.prediction_type,
-                self.torch_pipeline.scheduler.config.interpolation_type,
-                self.torch_pipeline.scheduler.config.use_karras_sigmas,
-                self.torch_pipeline.scheduler.config.use_exponential_sigmas,
-                self.torch_pipeline.scheduler.config.use_beta_sigmas,
-                self.torch_pipeline.scheduler.config.sigma_min,
-                self.torch_pipeline.scheduler.config.sigma_max,
-                self.torch_pipeline.scheduler.config.timestep_spacing,
-                self.torch_pipeline.scheduler.config.timestep_type,
-                self.torch_pipeline.scheduler.config.steps_offset,
-                self.torch_pipeline.scheduler.config.rescale_betas_zero_snr,
-                self.torch_pipeline.scheduler.config.final_sigmas_type,
-            )
+            if tt_scheduler is not None:
+                self.tt_scheduler = tt_scheduler
+            else:
+                self.tt_scheduler = TtEulerDiscreteScheduler(
+                    self.ttnn_device,
+                    self.torch_pipeline.scheduler.config.num_train_timesteps,
+                    self.torch_pipeline.scheduler.config.beta_start,
+                    self.torch_pipeline.scheduler.config.beta_end,
+                    self.torch_pipeline.scheduler.config.beta_schedule,
+                    self.torch_pipeline.scheduler.config.trained_betas,
+                    self.torch_pipeline.scheduler.config.prediction_type,
+                    self.torch_pipeline.scheduler.config.interpolation_type,
+                    self.torch_pipeline.scheduler.config.use_karras_sigmas,
+                    self.torch_pipeline.scheduler.config.use_exponential_sigmas,
+                    self.torch_pipeline.scheduler.config.use_beta_sigmas,
+                    self.torch_pipeline.scheduler.config.sigma_min,
+                    self.torch_pipeline.scheduler.config.sigma_max,
+                    self.torch_pipeline.scheduler.config.timestep_spacing,
+                    self.torch_pipeline.scheduler.config.timestep_type,
+                    self.torch_pipeline.scheduler.config.steps_offset,
+                    self.torch_pipeline.scheduler.config.rescale_betas_zero_snr,
+                    self.torch_pipeline.scheduler.config.final_sigmas_type,
+                )
         self.torch_pipeline.scheduler = self.tt_scheduler
 
         if pipeline_config.encoders_on_device:
@@ -747,12 +760,15 @@ class TtSDXLPipeline(LightweightModule):
         # Instantiation of user host input tensors for the TT model.
 
         profiler.start("create_user_tensors")
-        tt_latents = ttnn.from_torch(
-            latents,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
-        )
+        if not isinstance(latents, ttnn.Tensor):
+            tt_latents = ttnn.from_torch(
+                latents,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
+            )
+        else:
+            tt_latents = latents
 
         tt_prompt_embeds = ttnn.from_torch(
             all_prompt_embeds_torch,
