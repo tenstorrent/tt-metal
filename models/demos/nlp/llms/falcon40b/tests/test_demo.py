@@ -17,7 +17,7 @@ def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, t3k_mesh
     if is_ci_env:
         pytest.skip("Skip generating reference output in CI")
 
-    input_file = "models/demos/nlp/llmsfalcon40b/demo/input_data.json"
+    input_file = "models/demos/nlp/llms/falcon40b/demo/input_data.json"
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,
@@ -35,7 +35,7 @@ def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, t3k_mesh
     )
 
     # Save generated_text to file as new expected output
-    with open("models/demos/nlp/llmsfalcon40b/demo/expected_output_data.json", "w") as f:
+    with open("models/demos/nlp/llms/falcon40b/demo/expected_output_data.json", "w") as f:
         json.dump(generated_text, f)
 
 
@@ -43,7 +43,7 @@ def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, t3k_mesh
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("perf_mode", (True, False))
 def test_demo(max_seq_len, get_tt_cache_path, t3k_mesh_device, perf_mode):
-    input_file = "models/demos/nlp/llmsfalcon40b/demo/input_data.json"
+    input_file = "models/demos/nlp/llms/falcon40b/demo/input_data.json"
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,
@@ -62,6 +62,6 @@ def test_demo(max_seq_len, get_tt_cache_path, t3k_mesh_device, perf_mode):
 
     if not perf_mode:
         # Validate generated_text against expected output
-        with open("models/demos/nlp/llmsfalcon40b/demo/expected_output_data.json", "r") as f:
+        with open("models/demos/nlp/llms/falcon40b/demo/expected_output_data.json", "r") as f:
             expected_output_data = json.load(f)
             assert expected_output_data == generated_text

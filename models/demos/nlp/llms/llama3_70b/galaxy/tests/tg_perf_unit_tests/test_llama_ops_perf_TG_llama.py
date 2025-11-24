@@ -39,7 +39,7 @@ def test_llama_tg_ops_perf_device(
     step_name = f"Llama_TG_{op_name}"
 
     command = (
-        f"pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/unit_tests/test_llama_ops.py::test_llama_tg_{op_name}"
+        f"pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/unit_tests/test_llama_ops.py::test_llama_tg_{op_name}"
     )
     cols = ["DEVICE KERNEL"]
     inference_time_key = "DEVICE KERNEL DURATION [ns]"

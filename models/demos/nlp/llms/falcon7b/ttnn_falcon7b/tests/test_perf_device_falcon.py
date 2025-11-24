@@ -20,7 +20,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     num_iterations = 3
     margin = 0.03
     command = (
-        f"pytest models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/test_metal_falcon.py::test_perf_bare_metal[{test}]"
+        f"pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/test_metal_falcon.py::test_perf_bare_metal[{test}]"
     )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

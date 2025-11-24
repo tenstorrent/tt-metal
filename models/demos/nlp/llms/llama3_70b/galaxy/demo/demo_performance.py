@@ -372,7 +372,7 @@ def run_llama3_decode_performance(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, benchmark_token_range, warmup_iters, inner_iters, paged_attention, page_params",
     [
         (
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,
@@ -384,7 +384,7 @@ def run_llama3_decode_performance(
             None,
         ),
         (
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,

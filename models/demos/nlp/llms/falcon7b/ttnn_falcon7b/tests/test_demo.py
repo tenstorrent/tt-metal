@@ -11,13 +11,13 @@ from models.demos.nlp.llms.falcon7b.ttnn_falcon7b.demo.demo import test_demo as 
 
 @pytest.mark.parametrize(
     "input_path",
-    (("models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/demo/input_data.json"),),
+    (("models/demos/nlp/llms/falcon7b/ttnn_falcon7b/demo/input_data.json"),),
     ids=["default_input"],
 )
 def test_demo(input_path, model_location_generator, device):
     generated_text, _ = demo(input_path, model_location_generator, device)
 
-    with open("models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/expected_output.json") as handle:
+    with open("models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/expected_output.json") as handle:
         expected_generated_text = json.loads(handle.read())
 
     for i, (user_id, output) in enumerate(expected_generated_text.items()):

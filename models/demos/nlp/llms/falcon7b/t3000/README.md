@@ -16,21 +16,21 @@ Read more about it at [huggingface.co/tiiuae/falcon-7b-instruct](https://hugging
 ### Token Generation (Default) Mode
 - To run the demo using prewritten prompts for a batch of 256 users split evenly on 8 devices (currently only supports same token-length inputs):
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsfalcon7b/t3000/input_data_t3000.json' models/demos/nlp/llmsfalcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -8-"
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/t3000/input_data_t3000.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -8-"
 ```
 The default decoding method is top-k/top-p (stochastic) sampling, however greedy decoding can also be used by replacing `stochastic` with `greedy` in the command above.
 
 ### Performance Measurement Mode
 - To measure the performance of generating the `i`'th token while the KV cache is filled with `i-1` rows (where `i` is 128 in the command below):
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsfalcon7b/t3000/input_data_t3000.json' models/demos/nlp/llmsfalcon7b/t3000/demo_t3000.py::test_demo_multichip -k "perf_mode_128_stochastic and not verify and -8-"
+pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/t3000/input_data_t3000.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py::test_demo_multichip -k "perf_mode_128_stochastic and not verify and -8-"
 ```
 Supported sequence lengths: Currently `i` can only be set to 128, 1024, or 2048 for performance measurement mode.
 
 ### Inputs
 - A sample of input prompts for 256 users is provided in `input_data_t3000.json` in demo directory. If you wish you to run the model using a different set of input prompts you can provide a different path, e.g.:
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/nlp/llmsfalcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -8-"
+pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -8-"
 ```
 
 ### Running on a different number of devices
@@ -38,7 +38,7 @@ pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_
 - Then, the command above can be modified to replace '8' with the desired number of devices.
 - For example, to run with 4 devices:
 ```sh
-pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/nlp/llmsfalcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -4-"
+pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py::test_demo_multichip -k "default_mode_1024_stochastic and -4-"
 ```
 
 ## Details

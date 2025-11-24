@@ -103,7 +103,7 @@ def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, s
         test_id = f"{llm_mode}_seq{seq_len}_{model_config}"
     else:
         test_id = f"{llm_mode}_seq{kv_cache_len}_{model_config}"
-    command = f"pytest models/demos/nlp/llmsfalcon7b/common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k {test_id}"
+    command = f"pytest models/demos/nlp/llms/falcon7b/common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k {test_id}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 

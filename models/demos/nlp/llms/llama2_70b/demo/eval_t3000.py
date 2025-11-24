@@ -79,7 +79,7 @@ def main(args, eval_data_args):
         max_batch_size,
     )
 
-    base_path = "models/demos/nlp/llmsllama2_70b/scripts/llama_perplexity_runs/"
+    base_path = "models/demos/nlp/llms/llama2_70b/scripts/llama_perplexity_runs/"
     os.makedirs(base_path, exist_ok=True)
 
     # Get current timestamp

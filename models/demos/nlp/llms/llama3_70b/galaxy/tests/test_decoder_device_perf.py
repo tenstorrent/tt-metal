@@ -38,7 +38,7 @@ MAX_TYPE = "max"
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -346,9 +346,9 @@ def add_benchmark_measurement(profiler, benchmark_data, step_name, op_name, valu
 
 def load_perf_targets(galaxy_type):
     if galaxy_type == "4U":
-        perf_target_json_filename = "models/demos/nlp/llmsllama3_70b/galaxy/tests/decoder_perf_targets_4u.json"
+        perf_target_json_filename = "models/demos/nlp/llms/llama3_70b/galaxy/tests/decoder_perf_targets_4u.json"
     elif galaxy_type == "6U":
-        perf_target_json_filename = "models/demos/nlp/llmsllama3_70b/galaxy/tests/decoder_perf_targets_6u.json"
+        perf_target_json_filename = "models/demos/nlp/llms/llama3_70b/galaxy/tests/decoder_perf_targets_6u.json"
     else:
         raise Exception(f"Unsupported galaxy type: {galaxy_type}. It must be either '4U' or '6U'.")
 
@@ -372,7 +372,7 @@ def load_perf_targets(galaxy_type):
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run FAKE_DEVICE=TG pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -392,7 +392,7 @@ def test_llama_TG_perf_device(
     num_iterations = 1
     num_layers = 10
 
-    command = f"pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
+    command = f"pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
@@ -780,7 +780,7 @@ def test_llama_TG_perf_device(
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run FAKE_DEVICE=TG TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -800,7 +800,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     num_iterations = 1
     num_layers = 10
 
-    command = f"pytest models/demos/nlp/llmsllama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
+    command = f"pytest models/demos/nlp/llms/llama3_70b/galaxy/tests/test_decoder_device_perf.py::test_llama_demo"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)

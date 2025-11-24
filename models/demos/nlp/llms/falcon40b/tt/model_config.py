@@ -184,7 +184,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 1,
-        "DEFAULT_CACHE_PATH": Path(f"models/demos/nlp/llmsfalcon40b/datasets/"),
+        "DEFAULT_CACHE_PATH": Path(f"models/demos/nlp/llms/falcon40b/datasets/"),
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -657,7 +657,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
         "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 4),
         "ALL_GATHER_NUM_LINKS": 2 if num_devices == 4 else 1,
-        "DEFAULT_CACHE_PATH": Path(f"models/demos/nlp/llmsfalcon40b/datasets/"),
+        "DEFAULT_CACHE_PATH": Path(f"models/demos/nlp/llms/falcon40b/datasets/"),
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,

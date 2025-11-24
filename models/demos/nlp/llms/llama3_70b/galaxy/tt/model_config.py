@@ -439,8 +439,8 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_70B_PARAMS": "models/demos/nlp/llmsllama3_70b/galaxy/model_params/Llama-3.1-70B-Instruct",
-        "LLAMA3_3_70B_PARAMS": "models/demos/nlp/llmsllama3_70b/galaxy/model_params/Llama-3.3-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/nlp/llms/llama3_70b/galaxy/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/nlp/llms/llama3_70b/galaxy/model_params/Llama-3.3-70B-Instruct",
     }
 
     def __init__(

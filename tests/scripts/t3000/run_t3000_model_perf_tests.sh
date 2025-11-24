@@ -10,7 +10,7 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest -n auto models/demos/nlp/llmsfalcon7b/common/tests -m "model_perf_t3000" ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon7b/common/tests -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -48,7 +48,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  pytest -n auto models/demos/nlp/llmsfalcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

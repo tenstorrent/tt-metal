@@ -50,7 +50,7 @@ class TTArgs:
 @dataclass
 class DataArgs:
     max_output_tokens: int = 128
-    prompts_file: str = "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt.json"
+    prompts_file: str = "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"
     output_at_end: bool = True
     top_p: float = 1
     top_k: int = 1
@@ -118,7 +118,7 @@ def main(args):
 
         if data_args.output_at_end:
             with open(
-                f"models/demos/nlp/llmsllama2_70b/demo/data/{model_args.llama_version}_demo_user_output.json", "w"
+                f"models/demos/nlp/llms/llama2_70b/demo/data/{model_args.llama_version}_demo_user_output.json", "w"
             ) as f:  # Open a file for writing
                 output_json = json.dumps(all_text, indent=4)
                 f.write(output_json)
@@ -377,9 +377,9 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.parametrize(
     "chat, prompts_file",
     (
-        (True, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt.json"),
-        (False, "models/demos/nlp/llmsllama2_70b/demo/data/a_tale_of_two_cities.txt"),
+        (True, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
     ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
@@ -413,7 +413,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 )
 @pytest.mark.parametrize(
     "ground_truth",
-    ("models/demos/nlp/llmsllama2_70b/demo/data/llama2_ground_truth.json", None),
+    ("models/demos/nlp/llms/llama2_70b/demo/data/llama2_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
 @pytest.mark.parametrize(

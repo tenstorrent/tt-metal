@@ -24,7 +24,7 @@ Read more about Mixtral-8x7B at the Huggingface page for [mistralai/Mixtral-8x7B
 `<repacked_output_dir>` with the directory for the repacked weigths to be stored.
 
 ```
-python models/demos/nlp/llmsmixtral8x7b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
+python models/demos/nlp/llms/mixtral8x7b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir>
 ```
 
 ### Set up environment
@@ -48,30 +48,30 @@ export MIXTRAL_CACHE_PATH=<weights_cache_dir>
 4. Cache the weights (first-time setup):
 ```bash
 # Build a full 32 layer model to cache the weights. This will take some time.
-pytest -svv models/demos/nlp/llmsmixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-32]
+pytest -svv models/demos/nlp/llms/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-32]
 ```
 
 ### Run the demo
 #### For general weights:
 - Prefill & Decode demo
 ```bash
-pytest -svv models/demos/nlp/llmsmixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-general]
+pytest -svv models/demos/nlp/llms/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-general]
 ```
 
 - Decode-only demo
 ```bash
-pytest -svv models/demos/nlp/llmsmixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general]
+pytest -svv models/demos/nlp/llms/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general]
 ```
 
 #### For instruct weights (don't forget to update your weight flags):
 - Prefill & Decode demo
 ```bash
-pytest -svv models/demos/nlp/llmsmixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-instruct]
+pytest -svv models/demos/nlp/llms/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-instruct]
 ```
 
 - Decode-only demo
 ```bash
-pytest -svv models/demos/nlp/llmsmixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct]
+pytest -svv models/demos/nlp/llms/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct]
 ```
 
 ## Details
@@ -86,7 +86,7 @@ To facilitate this, we provide a very large input with over 100k tokens (the maj
 - For context lengths higher than 4k tokens, we support a maximum batch size of 16.
 - For context lengths below 4k tokens, we support a maximum batch size of 32.
 
-All input files are provided inside `models/demos/nlp/llmsmixtral8x7b/demo/`.
+All input files are provided inside `models/demos/nlp/llms/mixtral8x7b/demo/`.
 
 If you wish you to run the model using a different set of input prompts you can provide a different path to pytest inside the demo code. Keep in mind that for the instruct-mode, the prompts are automatically prefixed and suffixed by `[INST]` and `[/INST]`, respectively, so there's no need to add them to your file.
 

@@ -18,9 +18,9 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 @pytest.mark.parametrize(
     "chat, prompts_file",
     (
-        (True, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt.json"),
-        (False, "models/demos/nlp/llmsllama2_70b/demo/data/a_tale_of_two_cities.txt"),
+        (True, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
     ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
@@ -54,7 +54,7 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 )
 @pytest.mark.parametrize(
     "ground_truth",
-    ("models/demos/nlp/llmsllama2_70b/demo/data/llama3_ground_truth.json", None),
+    ("models/demos/nlp/llms/llama2_70b/demo/data/llama3_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
 @pytest.mark.parametrize(

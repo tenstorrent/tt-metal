@@ -141,7 +141,7 @@ def test_mamba_perf_e2e(
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
     margin = 0.020
-    command = f"pytest models/demos/nlp/llmsmamba/tests/test_mamba_model.py::test_device_perf[1]"
+    command = f"pytest models/demos/nlp/llms/mamba/tests/test_mamba_model.py::test_device_perf[1]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # Convert expected perf (ms) to samples/s

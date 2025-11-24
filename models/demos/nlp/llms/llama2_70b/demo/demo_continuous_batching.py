@@ -43,7 +43,7 @@ class TTArgs:
 @dataclass
 class DataArgs:
     max_output_tokens: int = 128
-    prompts_file: str = "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt.json"
+    prompts_file: str = "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt.json"
     output_at_end: bool = True
     top_p: float = 1
     top_k: int = 1
@@ -299,8 +299,8 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.parametrize(
     "chat, prompts_file",
     (
-        (True, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/nlp/llmsllama2_70b/demo/data/multi_prompt_large.json"),
+        (True, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_chat.json"),
+        (False, "models/demos/nlp/llms/llama2_70b/demo/data/multi_prompt_large.json"),
     ),
     ids=("chat_completion", "text_completion"),
 )

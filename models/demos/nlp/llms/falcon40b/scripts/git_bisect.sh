@@ -32,7 +32,7 @@ deactivate
 
 # Run the test
 echo "Running test on $REV"
-source python_env/bin/activate; pytest ${TT_METAL_HOME}/models/demos/nlp/llmsfalcon40b/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips] &>../run-${REV}.log
+source python_env/bin/activate; pytest ${TT_METAL_HOME}/models/demos/nlp/llms/falcon40b/tests/test_falcon_causallm.py::test_FalconCausalLM_inference[BFLOAT8_B-DRAM-falcon_40b-layers_1-prefill_seq32-8chips] &>../run-${REV}.log
 
 if [ $? -eq 0 ]; then  # Test passed
     deactivate

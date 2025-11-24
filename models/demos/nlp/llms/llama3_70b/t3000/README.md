@@ -17,14 +17,14 @@ Read more about llama3 at [llama.com/llama3](https://www.llama.com/models/llama-
 ## How to Run
 ### Run in one command:
 ```bash
-chmod +x ./models/demos/nlp/llmsllama3_70b/t3000/setup_llama.sh && ./models/demos/nlp/llmsllama3_70b/t3000/setup_llama.sh <MODEL_TYPE> <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
+chmod +x ./models/demos/nlp/llms/llama3_70b/t3000/setup_llama.sh && ./models/demos/nlp/llms/llama3_70b/t3000/setup_llama.sh <MODEL_TYPE> <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
 ```
 
 Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in the root [README](/README.md#llms) under "Release" version, respectively.
 
 - Example:
 ```bash
-./models/demos/nlp/llmsllama3_70b/t3000/setup_llama.sh llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
+./models/demos/nlp/llms/llama3_70b/t3000/setup_llama.sh llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
 ```
 
 - Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
@@ -33,7 +33,7 @@ Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in
 1. Download the Llama3/3.1-70B weights from Meta at [llama.meta.com](https://llama.meta.com/)
 2. Repack the weights:
 ```bash
-python models/demos/nlp/llmsllama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
+python models/demos/nlp/llms/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
 ```
 
 Note: Use `5` for `chunk_size`.
@@ -55,7 +55,7 @@ export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>/tokenizer.model  # Path ne
 export LLAMA3_CACHE_PATH=<weight_cache_dir>
 export TIKTOKEN_CACHE_DIR=""
 
-pip install -r models/demos/nlp/llmsllama2_70b/reference/llama/requirements.txt
+pip install -r models/demos/nlp/llms/llama2_70b/reference/llama/requirements.txt
 
 # Example:
 # export LLAMA3_CKPT_DIR="/home/llama-data-repacked/llama-3-70b/"
@@ -71,7 +71,7 @@ Note: Run the following command twice.
 
 ```bash
 # Run the demo using sampling decode
-pytest -svv models/demos/nlp/llmsllama3_70b/t3000/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
+pytest -svv models/demos/nlp/llms/llama3_70b/t3000/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
 ```
 
 ## Testing
@@ -82,7 +82,7 @@ For best performance, ensure that tt-metal is built in release mode (default), a
 This performance test runs with sequence length 128 and batch size 32.
 
 ```bash
-pytest -svv models/demos/nlp/llmsllama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
+pytest -svv models/demos/nlp/llms/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
 ```
 
 ## Details

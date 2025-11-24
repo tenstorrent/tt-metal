@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-# Only for prefill, check tt-metal/models/demos/nlp/llmsllama3_70b/galaxy/README.md
+# Only for prefill, check tt-metal/models/demos/nlp/llms/llama3_70b/galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 

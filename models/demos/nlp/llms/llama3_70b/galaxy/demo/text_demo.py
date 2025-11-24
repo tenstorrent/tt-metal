@@ -175,7 +175,7 @@ def create_tt_model(
 
 # List of supported Parameters for demo.py
 #
-# input_prompts (string): input json file with prompts to process. See models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/*.json for list of input files
+# input_prompts (string): input json file with prompts to process. See models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
@@ -194,7 +194,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -213,7 +213,7 @@ def create_tt_model(
             True,  # is_page_table_sharded
         ),
         (  # Batch-32 with non-uniform sampling
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -236,7 +236,7 @@ def create_tt_model(
             True,  # is_page_table_sharded
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -255,7 +255,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
             16,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -274,7 +274,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
             True,  # instruct mode
             16,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -293,7 +293,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
             True,  # instruct mode
             6,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -312,7 +312,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             2,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -331,7 +331,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -350,7 +350,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -369,7 +369,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-16k-b1 - 1 user, 16K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -388,7 +388,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -407,7 +407,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -426,7 +426,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -445,7 +445,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -464,7 +464,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -483,7 +483,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -587,7 +587,7 @@ def test_demo_text(
         raise ValueError("APC test requires PCC check to be enabled")
     if apc_test:
         demo_targets = load_demo_targets(
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo_targets.json", galaxy_type
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo_targets.json", galaxy_type
         )
 
     if prefill_profile:  # Special mode where we only run prefill with tracy
@@ -634,7 +634,7 @@ def test_demo_text(
     benchmark_data = BenchmarkData()
     profiler_step_name = "tg-llama-demo-prefill-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_directory = "models/demos/nlp/llmsllama3_70b/galaxy/demo/output"
+    output_directory = "models/demos/nlp/llms/llama3_70b/galaxy/demo/output"
     os.makedirs(output_directory, exist_ok=True)
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
@@ -645,7 +645,7 @@ def test_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/demos/nlp/llmsllama3_70b/galaxy/demo/output"
+        output_directory = "models/demos/nlp/llms/llama3_70b/galaxy/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
@@ -667,7 +667,7 @@ def test_demo_text(
     # Load expected outputs for comparison
     expected_outputs_data = []
     # Always use this specific path for the expected outputs.
-    expected_outputs_file_path_to_load = "models/demos/nlp/llmsllama3_70b/galaxy/demo/outputs_batch_1.json"
+    expected_outputs_file_path_to_load = "models/demos/nlp/llms/llama3_70b/galaxy/demo/outputs_batch_1.json"
 
     if os.path.exists(expected_outputs_file_path_to_load):
         logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
@@ -868,7 +868,7 @@ def test_demo_text(
             )
             assert pcc_message == demo_targets["prefill_pcc"], assert_message
             # A 'Prefill PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
-            # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo_targets.json.
+            # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo_targets.json.
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
@@ -1003,7 +1003,7 @@ def test_demo_text(
                     )
                     assert pcc_message == demo_targets["decode_pcc"], assert_message
                     # A 'Decode PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo_targets.json.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo_targets.json.
                     # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
                     # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
@@ -1067,7 +1067,7 @@ def test_demo_text(
                     )
                     assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
                     # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo_targets.json.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo_targets.json.
                     # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
                     # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 

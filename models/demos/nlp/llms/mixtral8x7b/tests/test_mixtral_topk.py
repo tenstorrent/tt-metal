@@ -49,7 +49,7 @@ def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, iterations, expec
     generation_start_pos = 0
     running_top1 = 0
     running_top5 = 0
-    inputs_file = "models/demos/nlp/llmsmixtral8x7b/demo/input_data.json"
+    inputs_file = "models/demos/nlp/llms/mixtral8x7b/demo/input_data.json"
 
     model_args = TtModelArgs(t3k_mesh_device, max_batch_size=batch, max_seq_len=max_seq_len)
     state_dict = model_args.load_state_dict()

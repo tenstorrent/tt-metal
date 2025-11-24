@@ -49,7 +49,7 @@ export HF_MODEL=<PATH_TO_HF_WEIGHTS>
 ### Running the Demo
 The full Llama-3.3-70B demo can be run with the following command:
 ```
-pytest tt-metal/models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo.py -k "performance-batch-32"
+pytest tt-metal/models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k "performance-batch-32"
 ```
 - The above run command will execute a short prompt file with 32 users each with up to 128 tokens in length. It will prefill said users and execute 128 decode iterations, i.e. it will generate 128 new tokens.
 
@@ -61,7 +61,7 @@ To run different input prompt files, try these parametrized demo pre-configs:
 - `performance-long-64k-b1`, # 64k input prompt context for 1 user
 - `performance-long-128k-b1`, # 64k input prompt context for 1 user
 
-We also provide other input prompt files with longer sequence lengths. They can be found at `models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/`.
+We also provide other input prompt files with longer sequence lengths. They can be found at `models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/`.
 
 #### Note regarding precision
 
@@ -78,7 +78,7 @@ This is not necessarily a bug, and thus will not be treated as such. For further
 #### Decode-only Demo
 We also provide a decode-only demo. This demo will run prefill as decode and is intended for developers actively working on the decode side of the model. It can be run with the command:
 ```
-pytest models/demos/nlp/llmsllama3_70b/galaxy/demo/demo_decode.py -k "full"
+pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/demo_decode.py -k "full"
 ```
 
 It supports the following parameters:
@@ -122,7 +122,7 @@ Please note that when using line CCL implementations the maximum sequence length
 
 **Example**: If you want to run text_demo.py -k performance-long-64k-b1 but with a 128K input instead, you would run:
 ```
-text_demo.py -k performance-long-64k-b1 --input_prompts "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_128k.json"
+text_demo.py -k performance-long-64k-b1 --input_prompts "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_128k.json"
 ```
 This would run the same test as 64K but with a 128K input prompt instead.
 
@@ -143,7 +143,7 @@ This would run the same test as 64K but with a 128K input prompt instead.
 - **print_outputs**: [Debug Flag] Prints each user's tokens at every decode iteration. Leave False for accurate e2e performance numbers.
 
 ### Input Prompts
-Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length (equivalent to the number of characters in the prompt, not tokens!). Please refer to the ones already provided in `models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/`.
+Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length (equivalent to the number of characters in the prompt, not tokens!). Please refer to the ones already provided in `models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/`.
 
 You can try and change the `max_length` parameter on the provided prompt files to test different input sequence lengths, as long as they don't surpass 128K tokens.
 ```
@@ -182,4 +182,4 @@ cd tt-inference-server/vllm-tt-metal-llama3/src
 python example_requests_client.py --num_concurrent 32 --prompt_json_path "vllm_server_prompts.json"
 ```
 
-You can find an example server_prompts file in tt-metal at `models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/vllm_server_prompts.json`.
+You can find an example server_prompts file in tt-metal at `models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/vllm_server_prompts.json`.

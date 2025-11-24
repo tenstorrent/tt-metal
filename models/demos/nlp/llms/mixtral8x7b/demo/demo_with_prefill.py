@@ -360,9 +360,9 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     # if is_ci_env:
     #     # When running in CI, check the output against the expected output to avoid accuracy regressions
     #     if test_prefill_len == 128:
-    #         expected_output = "models/demos/nlp/llmsmixtral8x7b/demo/expected_outputs_prefill_128.json"
+    #         expected_output = "models/demos/nlp/llms/mixtral8x7b/demo/expected_outputs_prefill_128.json"
     #     else:  # test_prefill_len == 32k
-    #         expected_output = "models/demos/nlp/llmsmixtral8x7b/demo/expected_outputs_prefill_32k.json"
+    #         expected_output = "models/demos/nlp/llms/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
 
     #     with open(expected_output, "r") as f:
     #         expected_out = json.load(f)
@@ -466,17 +466,17 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     "input_prompts, prefill_len, instruct_weights",
     [
         # General weights
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data_prefill_128.json", 128, False),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, False),
         # Instruct weights
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, True),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, True),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, True),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, True),
     ],
     ids=[
         "128-general",

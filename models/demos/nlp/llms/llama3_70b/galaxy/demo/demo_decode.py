@@ -644,7 +644,7 @@ def run_llama3_demo(
         (  # full demo, batch 32
             "instruct",
             80,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -661,7 +661,7 @@ def run_llama3_demo(
         (  # quick 1L demo
             "random",
             1,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -678,7 +678,7 @@ def run_llama3_demo(
         (  # Stress test: 4*128k generation length
             "instruct",
             80,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -695,7 +695,7 @@ def run_llama3_demo(
         (  # mini stress test
             "instruct",
             80,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -712,7 +712,7 @@ def run_llama3_demo(
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -729,7 +729,7 @@ def run_llama3_demo(
         (  # ND hang test
             "instruct",
             80,
-            "models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len

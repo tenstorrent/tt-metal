@@ -5,7 +5,7 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
 run_falcon7b_func() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/nlp/llmsfalcon7b/wormhole/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
+  pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
 }
 
@@ -29,7 +29,7 @@ run_qwen25_vl_perfunc() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/nlp/llmsqwen25_vl/requirements.txt
+  pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -40,13 +40,13 @@ run_qwen25_vl_perfunc() {
   qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/nlp/llmsqwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/nlp/llms/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
   for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
-    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/nlp/llmsqwen25_vl/demo/demo.py --timeout 900 || fail=1
+    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 900 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 
@@ -272,13 +272,13 @@ run_llama3_perf() {
 run_falcon7b_perf() {
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsfalcon7b/common/demo/input_data.json' models/demos/nlp/llmsfalcon7b/wormhole/demo_wormhole.py
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/common/demo/input_data.json' models/demos/nlp/llms/falcon7b/wormhole/demo_wormhole.py
 
 }
 
 run_mamba_perf() {
 
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsmamba/demo/prompts.json' models/demos/nlp/llmsmamba/demo/demo.py --timeout 420
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/mamba/demo/prompts.json' models/demos/nlp/llms/mamba/demo/demo.py --timeout 420
 
 }
 

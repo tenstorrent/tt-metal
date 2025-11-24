@@ -13,5 +13,5 @@ All original license and copyright information has been retained.
 
 To install the required Python dependencies, use the following requirements file:
 ```
-pip install -r models/demos/nlp/llmsdeepseek_v3/reference/deepseek/requirements.txt
+pip install -r models/demos/nlp/llms/deepseek_v3/reference/deepseek/requirements.txt
 ```

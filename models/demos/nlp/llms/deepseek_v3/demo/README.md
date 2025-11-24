@@ -15,7 +15,7 @@ The script supports two practical modes:
   - Random‑weights mode: requires config; tokenizer is optional (dummy tokenization is used if missing)
 
 Common environment variables:
-- `DEEPSEEK_V3_HF_MODEL`: Path to a local Hugging Face model directory that contains config (and tokenizer + safetensors for full‑model mode). Defaults to `models/demos/nlp/llmsdeepseek_v3/reference`.
+- `DEEPSEEK_V3_HF_MODEL`: Path to a local Hugging Face model directory that contains config (and tokenizer + safetensors for full‑model mode). Defaults to `models/demos/nlp/llms/deepseek_v3/reference`.
 - `DEEPSEEK_V3_CACHE`: Optional path where converted TTNN weights and caches are written. Defaults to `generated/deepseek_v3`.
 
 Tokenizer (full‑model mode): expect one of `tokenizer.model`, `tokenizer.json`, `spiece.model`, or `tokenizer_config.json`.
@@ -31,7 +31,7 @@ export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
 # Optional: where to store converted TTNN weights
 export DEEPSEEK_V3_CACHE=/proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers
 
-python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
+python models/demos/nlp/llms/deepseek_v3/demo/demo.py \
   "Explain quantum tunneling in one paragraph." \
   --max-new-tokens 64
 ```
@@ -39,7 +39,7 @@ python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
 You can also pass `--model-path` instead of setting the env var:
 
 ```bash
-python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
+python models/demos/nlp/llms/deepseek_v3/demo/demo.py \
   "Write a haiku about compilers." \
   --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
   --max-new-tokens 32
@@ -49,9 +49,9 @@ python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
 Runs a minimal single‑layer pipeline with randomly initialized weights. This does not require `.safetensors`, and the tokenizer is optional. If no tokenizer is found, the demo synthesizes simple token IDs. The prompt is not used in this mode, so you don’t need to provide one.
 
 ```bash
-# Model path only needs config (tokenizer optional) and defaults to models/demos/nlp/llmsdeepseek_v3/reference
+# Model path only needs config (tokenizer optional) and defaults to models/demos/nlp/llms/deepseek_v3/reference
 
-python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
+python models/demos/nlp/llms/deepseek_v3/demo/demo.py \
   --random-weights --single-layer mlp \
   --max-new-tokens 16
 ```
@@ -69,7 +69,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 ```
 
 - `prompt`: Text prompt to generate from (required in full‑model mode; ignored in `--random-weights`).
-- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/nlp/llmsdeepseek_v3/reference`.
+- `--model-path PATH`: Local HF model directory. Defaults to `$DEEPSEEK_V3_HF_MODEL` or `models/demos/nlp/llms/deepseek_v3/reference`.
   - Full‑model mode requires tokenizer files and at least one `.safetensors` shard.
   - Random‑weights mode only requires `config.json`; tokenizer is optional.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32). Greedy decoding only.
@@ -81,7 +81,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 
 - Explicit model and cache paths:
   ```bash
-  python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
+  python models/demos/nlp/llms/deepseek_v3/demo/demo.py \
     "Summarize the history of RISC architectures." \
     --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
     --cache-dir /proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers \
@@ -90,7 +90,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 
 - Fast pipeline check, no safetensors, no prompt:
   ```bash
-  python models/demos/nlp/llmsdeepseek_v3/demo/demo.py \
+  python models/demos/nlp/llms/deepseek_v3/demo/demo.py \
     --model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
     --random-weights --single-layer mlp \
     --max-new-tokens 8

@@ -11,10 +11,10 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  pytest -n auto models/demos/nlp/llmsfalcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
-  pytest -n auto models/demos/nlp/llmsfalcon40b/tests/test_demo.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/test_demo.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -112,7 +112,7 @@ run_t3000_qwen25_vl_tests() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/nlp/llmsqwen25_vl/requirements.txt
+  pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -120,12 +120,12 @@ run_t3000_qwen25_vl_tests() {
   # Qwen2.5-VL-32B
   qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
   tt_cache_32b=$TT_CACHE_HOME/$qwen25_vl_32b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llmsqwen25_vl/demo/demo.py --timeout 600 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 600 || fail=1
 
   # Qwen2.5-VL-72B
   qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llmsqwen25_vl/demo/demo.py --timeout 900 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/demo/demo.py --timeout 900 || fail=1
 
   echo "LOG_METAL: Tests for Qwen2.5-VL-32B and Qwen2.5-VL-72B on T3K completed"
 
@@ -219,7 +219,7 @@ run_t3000_falcon7b_tests(){
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # Falcon7B demo (perf verification for 128/1024/2048 seq lens and output token verification)
-  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llmsfalcon7b/t3000/input_data_t3000.json' models/demos/nlp/llmsfalcon7b/t3000/demo_t3000.py ; fail+=$?
+  pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/nlp/llms/falcon7b/t3000/input_data_t3000.json' models/demos/nlp/llms/falcon7b/t3000/demo_t3000.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -248,8 +248,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  # pytest -n auto models/demos/nlp/llmsmixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  # pytest -n auto models/demos/nlp/llmsmixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/nlp/llms/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/nlp/llms/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
   mixtral8x7=mistralai/Mixtral-8x7B-v0.1
   tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
 

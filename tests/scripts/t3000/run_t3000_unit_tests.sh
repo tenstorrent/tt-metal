@@ -159,10 +159,10 @@ run_t3000_falcon7b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
-  pytest -n auto models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
-  pytest -n auto models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
-  pytest -n auto models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
-  #pytest models/demos/nlp/llmsfalcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_attention.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_decoder.py ; fail+=$?
+  #pytest models/demos/nlp/llms/falcon7b/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py
 
   # Record the end time
   end_time=$(date +%s)
@@ -180,7 +180,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  pytest -n auto models/demos/nlp/llmsfalcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
+  pytest -n auto models/demos/nlp/llms/falcon40b/tests/ci/test_falcon_end_to_end_1_layer_t3000.py ; fail+=$?
 
 
   # Record the end time
@@ -501,7 +501,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/nlp/llmsqwen25_vl/requirements.txt
+  pip install -r models/demos/nlp/llms/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -511,7 +511,7 @@ run_t3000_qwen25_vl_unit_tests() {
   tt_cache_72b=$TT_CACHE_HOME/$qwen25_vl_72b
 
   # run unit tests
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llmsqwen25_vl/tests/ --ignore=models/demos/nlp/llmsqwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llmsqwen25_vl/tests/conftest.py
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b pytest models/demos/nlp/llms/qwen25_vl/tests/ --ignore=models/demos/nlp/llms/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/nlp/llms/qwen25_vl/tests/conftest.py
 
   # Record the end time
   end_time=$(date +%s)

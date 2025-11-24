@@ -15,7 +15,7 @@ Please note that using more recent versions of the software stack (TT-Metal and 
 ### TT-Metal runs
 
 ```
-pytest models/demos/nlp/llmsllama3_70b/galaxy/demo/text_demo.py -k performance-batch-1
+pytest models/demos/nlp/llms/llama3_70b/galaxy/demo/text_demo.py -k performance-batch-1
 ```
 To run different sequence lengths you can use the following configurations:
 - performance-long-4k-b1
@@ -26,7 +26,7 @@ To run different sequence lengths you can use the following configurations:
 
 All of the above will run for batch 1. To run a different batch size just add the override flag to the run command `--batch_size <NUMBER>`.
 
-Similarly, if you want to run a different input prompt file with different length you can use the override `--input_prompts “models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/input_data_long_1k.json”` (this example will run the 1K prompts instead).
+Similarly, if you want to run a different input prompt file with different length you can use the override `--input_prompts “models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/input_data_long_1k.json”` (this example will run the 1K prompts instead).
 
 | Input length | Output length | Batch  | TTFT (per user)   | Token/s/u (avg of all decoded tokens)                                        |
 |--------------|---------------|--------|-------------------|------------------------------------------------------------------------------|
@@ -64,7 +64,7 @@ python example_requests_client.py --num_concurrent 32 --prompt_json_path "vllm_s
 ```
 
 **Note:** Please send the request twice, to warmup the cache and get accurate performance numbers.
-**Note:** The file containing server prompts can be found in tt-metal at `models/demos/nlp/llmsllama3_70b/galaxy/demo/sample_prompts/vllm_server_prompts.json `.
+**Note:** The file containing server prompts can be found in tt-metal at `models/demos/nlp/llms/llama3_70b/galaxy/demo/sample_prompts/vllm_server_prompts.json `.
 
 | Command      | Input length | Output length | Batch  | TTFT (per user)   | Token/s/u (avg of all decoded tokens) |
 |--------------|--------------|---------------|--------|-------------------|---------------------------------------|

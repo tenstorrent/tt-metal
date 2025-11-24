@@ -239,7 +239,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
     #     # When running in CI, check the output against the expected output to avoid accuracy regressions
-    #     expected_output = "models/demos/nlp/llmsmixtral8x7b/demo/expected_outputs.json"
+    #     expected_output = "models/demos/nlp/llms/mixtral8x7b/demo/expected_outputs.json"
     #     with open(expected_output, "r") as f:
     #         expected_out = json.load(f)
     #     assert (
@@ -260,8 +260,8 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data.json", False),
-        ("models/demos/nlp/llmsmixtral8x7b/demo/input_data_questions.json", True),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_data.json", False),
+        ("models/demos/nlp/llms/mixtral8x7b/demo/input_data_questions.json", True),
     ],
     ids=["general", "instruct"],
 )
