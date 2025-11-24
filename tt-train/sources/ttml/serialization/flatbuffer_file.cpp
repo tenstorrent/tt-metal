@@ -419,23 +419,74 @@ public:
 
     // Serialization method - non-tarball version
     void serialize_non_tarball(
-        std::string_view filename, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
-        // Write individual files
-        std::string base_filename = get_base_filename(filename);
+        std::string_view dirname, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
+        // Extract directory from the command-line dirname
+        std::filesystem::path dirname_path(dirname);
+        if (dirname_path.empty()) {
+            dirname_path = std::filesystem::current_path();
+        }
 
+        // Write individual files
+        std::string base_filename = get_base_filename(dirname);
+        // Remove .flatbuffer or .flatbuffers extension if present
+        if (base_filename.size() >= 10 && base_filename.substr(base_filename.size() - 10) == ".flatbuffer") {
+            base_filename = base_filename.substr(0, base_filename.size() - 10);
+        } else if (base_filename.size() >= 11 && base_filename.substr(base_filename.size() - 11) == ".flatbuffers") {
+            base_filename = base_filename.substr(0, base_filename.size() - 11);
+        }
+        std::filesystem::path base_path(base_filename);
+        std::filesystem::path base_dir = base_path.parent_path();
+        if (base_dir.empty()) {
+            base_dir = std::filesystem::current_path();
+        }
+
+        // Write flatbuffer metadata files
         for (const auto& [file_name, flatbuffer_data] : flatbuffer_files) {
             // Construct individual filename: base_filename_prefix.flatbuffer
             std::string individual_filename = base_filename + "_" + file_name;
 
-            std::ofstream file(individual_filename, std::ios::binary);
-            if (!file.is_open()) {
-                throw std::runtime_error(fmt::format("Failed to open file for writing: {}", individual_filename));
+            {
+                std::ofstream file(individual_filename, std::ios::binary);
+                if (!file.is_open()) {
+                    throw std::runtime_error(fmt::format("Failed to open file for writing: {}", individual_filename));
+                }
+
+                file.write(reinterpret_cast<const char*>(flatbuffer_data.data()), flatbuffer_data.size());
+                if (!file.good()) {
+                    throw std::runtime_error(
+                        fmt::format("Failed to write flatbuffer data to file: {}", individual_filename));
+                }
+            }  // File automatically flushed and closed here
+        }
+
+        for (const auto& [tensor_filename, tensor_data] : m_tensor_files) {
+            std::string clean_filename = tensor_filename;
+            if (clean_filename.size() >= 2 && clean_filename.substr(0, 2) == "./") {
+                clean_filename = clean_filename.substr(2);
             }
 
-            file.write(reinterpret_cast<const char*>(flatbuffer_data.data()), flatbuffer_data.size());
-            if (!file.good()) {
-                throw std::runtime_error(
-                    fmt::format("Failed to write flatbuffer data to file: {}", individual_filename));
+            std::filesystem::path normalized_path(clean_filename);
+            normalized_path = normalized_path.lexically_normal();
+
+            std::filesystem::path tensor_path = dirname_path / normalized_path;
+
+            std::filesystem::path tensor_parent = tensor_path.parent_path();
+            if (!tensor_parent.empty() && tensor_parent != dirname_path) {
+                std::filesystem::create_directories(tensor_parent);
+            }
+
+            {
+                std::ofstream file(tensor_path, std::ios::binary);
+                if (!file.is_open()) {
+                    throw std::runtime_error(
+                        fmt::format("Failed to open tensor file for writing: {}", tensor_path.string()));
+                }
+
+                file.write(reinterpret_cast<const char*>(tensor_data.data()), tensor_data.size());
+                if (!file.good()) {
+                    throw std::runtime_error(
+                        fmt::format("Failed to write tensor data to file: {}", tensor_path.string()));
+                }
             }
         }
     }

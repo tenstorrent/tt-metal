@@ -28,7 +28,7 @@ public:
     // Write files to disk
     // If use_tarball is true, creates a tarball (compressed if compress is true, uncompressed otherwise)
     // If use_tarball is false, writes individual files to a directory (filename is treated as directory path)
-    void write_to_file(std::string_view filename, bool use_tarball = true, bool compress = true) const;
+    void write_to_file(std::string_view filename, bool use_tarball = false, bool compress = false) const;
 
 private:
     struct FileEntry {
