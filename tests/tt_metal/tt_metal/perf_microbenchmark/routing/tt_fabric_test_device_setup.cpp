@@ -1255,13 +1255,19 @@ void TestDevice::create_latency_sender_kernel() {
     std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
 
     // Runtime args
+    // Calculate scratch buffer address after timestamp storage (256 samples * 16 bytes = 4KB)
+    constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    uint32_t scratch_buffer_address =
+        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
         latency_semaphore_address_,                       // semaphore for ack
         latency_payload_size_,                            // payload size
         latency_burst_size_,                              // burst size (typically 1)
         num_bursts_,                                      // num bursts
-        num_hops                                          // hops to responder
+        num_hops,                                         // hops to responder
+        scratch_buffer_address                            // scratch buffer for payload echo
     };
 
     // Add fabric connection args
@@ -1300,13 +1306,19 @@ void TestDevice::create_latency_responder_kernel() {
     std::vector<uint32_t> ct_args = {enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u};
 
     // Runtime args
+    // Calculate sender's scratch buffer address (where responder writes echo back to)
+    constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    uint32_t sender_scratch_buffer_address =
+        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+
     std::vector<uint32_t> rt_args = {
-        sender_memory_map_->get_result_buffer_address(),  // buffer for receiving payload
+        sender_memory_map_->get_result_buffer_address(),  // local buffer for receiving payload
         latency_semaphore_address_,                       // semaphore for incoming packets
         latency_payload_size_,                            // payload size
         latency_burst_size_,                              // burst size (typically 1)
         num_bursts_,                                      // num bursts
-        num_hops_back                                     // hops back to sender
+        num_hops_back,                                    // hops back to sender
+        sender_scratch_buffer_address                     // sender's scratch buffer (for echo back)
     };
 
     // Add fabric connection args (back to sender)

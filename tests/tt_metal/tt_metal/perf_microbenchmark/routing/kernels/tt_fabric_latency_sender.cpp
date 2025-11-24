@@ -31,6 +31,7 @@ void kernel_main() {
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_hops_to_responder = get_arg_val<uint32_t>(arg_idx++);
+    const size_t scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "SENDER: Config - payload_size=" << (uint32_t)payload_size_bytes << " burst_size=" << (uint32_t)burst_size
            << " num_bursts=" << (uint32_t)num_bursts << " hops=" << (uint32_t)num_hops_to_responder << "\n";
@@ -49,7 +50,8 @@ void kernel_main() {
     fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_responder);
     fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_responder);
 
-    // Setup NOC addresses for destination
+    // Setup NOC addresses for destination (responder device)
+    // responder and sender use same memory layout, so result_buffer_address is responder's local receive buffer
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
     auto dest_payload_noc_addr =
@@ -73,11 +75,11 @@ void kernel_main() {
     };
 
     auto send_payload_packet =
-        [&fabric_connection, payload_packet_header, result_buffer_address, payload_size_bytes]() {
+        [&fabric_connection, payload_packet_header, scratch_buffer_address, payload_size_bytes]() {
             fabric_connection.wait_for_empty_write_slot();
             if (payload_size_bytes > 0) {
                 fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    result_buffer_address, payload_size_bytes);
+                    scratch_buffer_address, payload_size_bytes);
             }
             fabric_connection.send_payload_flush_non_blocking_from_address(
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -107,7 +109,8 @@ void kernel_main() {
     volatile uint64_t* result_ptr = reinterpret_cast<volatile uint64_t*>(result_buffer_address);
 
     DPRINT << "SENDER: Starting measurement loop for " << (uint32_t)num_bursts << " bursts\n";
-    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(result_buffer_address);
+    // Use separate scratch buffer for payload echo to avoid corrupting timestamp data
+    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(scratch_buffer_address);
     for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
         // Record start timestamp
 
