@@ -33,7 +33,8 @@ UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     }
 }
 
-void validate(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+void UpsampleOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
@@ -73,14 +74,9 @@ void validate(const operation_attributes_t& args, const tensor_args_t& tensor_ar
     }
 }
 
-void UpsampleOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
-}
-
 void UpsampleOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
 UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
