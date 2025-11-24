@@ -23,14 +23,15 @@ void kernel_main() {
 
     DPRINT << "RESPONDER: Starting latency responder kernel\n";
 
-    // Buffer for receiving payload data (if any)
-    const size_t local_payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    // Buffer addresses
+    const size_t timestamp_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // For storing response timestamps
     const size_t semaphore_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_hops_back_to_sender = get_arg_val<uint32_t>(arg_idx++);
-    const size_t sender_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t sender_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);     // For echoing back to sender
+    const size_t responder_scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // For receiving payload
 
     DPRINT << "RESPONDER: Config - payload_size=" << (uint32_t)payload_size_bytes
            << " burst_size=" << (uint32_t)burst_size << " num_bursts=" << (uint32_t)num_bursts
@@ -80,11 +81,11 @@ void kernel_main() {
     };
 
     auto send_payload_packet =
-        [&fabric_connection, payload_packet_header, local_payload_buffer_address, payload_size_bytes]() {
+        [&fabric_connection, payload_packet_header, responder_scratch_buffer_address, payload_size_bytes]() {
             fabric_connection.wait_for_empty_write_slot();
             if (payload_size_bytes > 0) {
                 fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    local_payload_buffer_address, payload_size_bytes);
+                    responder_scratch_buffer_address, payload_size_bytes);
             }
             fabric_connection.send_payload_flush_non_blocking_from_address(
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -96,12 +97,10 @@ void kernel_main() {
     };
 
     // Warmup: respond to flush packet
-    DPRINT << "RESPONDER: Starting warmup\n";
     {
         wait_for_semaphore_then_reset(1);
         send_seminc_packet();
     }
-    DPRINT << "RESPONDER: Warmup complete\n";
 
     // Validate burst size
     if (burst_size > 1) {
@@ -111,45 +110,112 @@ void kernel_main() {
 
     // Main response loop
     // Wait for incoming packets and immediately send ack back
-    DPRINT << "RESPONDER: Starting response loop for " << (uint32_t)num_bursts << " bursts\n";
-    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(local_payload_buffer_address);
-    for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
-        // Wait for incoming packet from sender
-        // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
-        if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-            noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
-        } else {
-            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
-        }
+    // Use scratch buffer for receiving payloads to avoid overwriting timestamps
+    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(responder_scratch_buffer_address);
 
-        if constexpr (enable_fused_payload_with_sync) {
-            fabric_connection.wait_for_empty_write_slot();
-            if (payload_size_bytes > 0) {
-                fabric_connection.send_payload_without_header_non_blocking_from_address(
-                    local_payload_buffer_address, payload_size_bytes);
-            }
-            fabric_connection.send_payload_flush_non_blocking_from_address(
-                (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            if constexpr (sem_inc_only) {
-                fabric_connection.wait_for_empty_write_slot();
-                fabric_connection.send_payload_flush_non_blocking_from_address(
-                    (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+    // Store response timestamps in timestamp buffer
+    volatile uint64_t* result_ptr = reinterpret_cast<volatile uint64_t*>(timestamp_buffer_address);
+
+    if (burst_size == 1) {
+        // for burst size one, we can safely assume we don't need to wait for space because
+        // we are only sending 1 packet at a time, and the fact that we received a packet
+        // indicates our previous response packet was flushed through the system
+        for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
+            // Wait for incoming packet from sender
+            // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
+
+            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
             } else {
-                fabric_connection.wait_for_empty_write_slot();
+                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+            }
+
+            // Capture start timestamp after receiving packet
+            uint64_t start_timestamp = get_timestamp();
+
+            if constexpr (enable_fused_payload_with_sync) {
                 if (payload_size_bytes > 0) {
                     fabric_connection.send_payload_without_header_non_blocking_from_address(
-                        local_payload_buffer_address, payload_size_bytes);
+                        responder_scratch_buffer_address, payload_size_bytes);
                 }
                 fabric_connection.send_payload_flush_non_blocking_from_address(
                     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                if constexpr (sem_inc_only) {
+                    fabric_connection.send_payload_flush_non_blocking_from_address(
+                        (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+                } else {
+                    if (payload_size_bytes > 0) {
+                        fabric_connection.send_payload_without_header_non_blocking_from_address(
+                            responder_scratch_buffer_address, payload_size_bytes);
+                    }
+                    fabric_connection.send_payload_flush_non_blocking_from_address(
+                        (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+                }
             }
+
+            // Capture end timestamp after sending response
+            uint64_t end_timestamp = get_timestamp();
+
+            // Store timestamp pair in result buffer
+            result_ptr[burst_idx * 2] = start_timestamp;
+            result_ptr[burst_idx * 2 + 1] = end_timestamp;
+        }
+    } else {
+        for (size_t burst_idx = 0; burst_idx < num_bursts; burst_idx++) {
+            // Wait for incoming packet from sender
+            // wait_for_semaphore_then_reset(burst_idx + 1);  // +2 because warmup used 1
+            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+            } else {
+                noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+            }
+
+            // Capture start timestamp after receiving packet
+            uint64_t start_timestamp = get_timestamp();
+
+            for (size_t i = 0; i < burst_size; i++) {
+                if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                    noc_semaphore_wait(payload_l1_ptr, burst_idx + 1);
+                } else {
+                    noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(semaphore_address), burst_idx + 1);
+                }
+
+                if constexpr (enable_fused_payload_with_sync) {
+                    fabric_connection.wait_for_empty_write_slot();
+                    if (payload_size_bytes > 0) {
+                        fabric_connection.send_payload_without_header_non_blocking_from_address(
+                            responder_scratch_buffer_address, payload_size_bytes);
+                    }
+                    fabric_connection.send_payload_flush_non_blocking_from_address(
+                        (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+                } else {
+                    if constexpr (sem_inc_only) {
+                        fabric_connection.wait_for_empty_write_slot();
+                        fabric_connection.send_payload_flush_non_blocking_from_address(
+                            (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+                    } else {
+                        fabric_connection.wait_for_empty_write_slot();
+                        if (payload_size_bytes > 0) {
+                            fabric_connection.send_payload_without_header_non_blocking_from_address(
+                                responder_scratch_buffer_address, payload_size_bytes);
+                        }
+                        fabric_connection.send_payload_flush_non_blocking_from_address(
+                            (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+                    }
+                }
+            }
+
+            // Capture end timestamp after sending response
+            uint64_t end_timestamp = get_timestamp();
+
+            // Store timestamp pair in result buffer
+            result_ptr[burst_idx * 2] = start_timestamp;
+            result_ptr[burst_idx * 2 + 1] = end_timestamp;
         }
     }
 
-    DPRINT << "RESPONDER: All bursts complete, closing connection\n";
     fabric_connection.close();
 
     noc_async_full_barrier();
-    DPRINT << "RESPONDER: Done\n";
 }

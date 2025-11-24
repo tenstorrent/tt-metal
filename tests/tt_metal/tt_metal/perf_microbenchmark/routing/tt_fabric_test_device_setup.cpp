@@ -1257,7 +1257,18 @@ void TestDevice::create_latency_sender_kernel() {
     // Runtime args
     // Calculate scratch buffer address after timestamp storage (256 samples * 16 bytes = 4KB)
     constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    TT_FATAL(
+        num_bursts_ <= MAX_LATENCY_SAMPLES,
+        "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
+        "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
+        num_bursts_,
+        MAX_LATENCY_SAMPLES);
+
     uint32_t scratch_buffer_address =
+        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+
+    // Responder also uses same memory layout, so its scratch buffer is at same offset
+    uint32_t responder_scratch_buffer_address =
         sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
 
     std::vector<uint32_t> rt_args = {
@@ -1267,7 +1278,8 @@ void TestDevice::create_latency_sender_kernel() {
         latency_burst_size_,                              // burst size (typically 1)
         num_bursts_,                                      // num bursts
         num_hops,                                         // hops to responder
-        scratch_buffer_address                            // scratch buffer for payload echo
+        scratch_buffer_address,                           // sender's scratch buffer for receiving echo
+        responder_scratch_buffer_address                  // responder's scratch buffer for sending payload TO
     };
 
     // Add fabric connection args
@@ -1308,17 +1320,29 @@ void TestDevice::create_latency_responder_kernel() {
     // Runtime args
     // Calculate sender's scratch buffer address (where responder writes echo back to)
     constexpr uint32_t MAX_LATENCY_SAMPLES = 256;
+    TT_FATAL(
+        num_bursts_ <= MAX_LATENCY_SAMPLES,
+        "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
+        "Increase RESULT_BUFFER_SIZE or reduce num_bursts.",
+        num_bursts_,
+        MAX_LATENCY_SAMPLES);
+
     uint32_t sender_scratch_buffer_address =
         sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
 
+    // Responder also needs scratch buffer to avoid overwriting timestamp storage
+    uint32_t responder_scratch_buffer_address =
+        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * 2 * sizeof(uint64_t));
+
     std::vector<uint32_t> rt_args = {
-        sender_memory_map_->get_result_buffer_address(),  // local buffer for receiving payload
+        sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
         latency_semaphore_address_,                       // semaphore for incoming packets
         latency_payload_size_,                            // payload size
         latency_burst_size_,                              // burst size (typically 1)
         num_bursts_,                                      // num bursts
         num_hops_back,                                    // hops back to sender
-        sender_scratch_buffer_address                     // sender's scratch buffer (for echo back)
+        sender_scratch_buffer_address,                    // sender's scratch buffer (for echo back)
+        responder_scratch_buffer_address                  // responder's scratch buffer (for receiving payload)
     };
 
     // Add fabric connection args (back to sender)

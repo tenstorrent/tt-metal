@@ -31,7 +31,9 @@ void kernel_main() {
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_hops_to_responder = get_arg_val<uint32_t>(arg_idx++);
-    const size_t scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t scratch_buffer_address = get_arg_val<uint32_t>(arg_idx++);  // Sender's scratch (for receiving echo)
+    const size_t responder_scratch_buffer_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Responder's scratch (for sending TO)
 
     DPRINT << "SENDER: Config - payload_size=" << (uint32_t)payload_size_bytes << " burst_size=" << (uint32_t)burst_size
            << " num_bursts=" << (uint32_t)num_bursts << " hops=" << (uint32_t)num_hops_to_responder << "\n";
@@ -51,11 +53,11 @@ void kernel_main() {
     fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_responder);
 
     // Setup NOC addresses for destination (responder device)
-    // responder and sender use same memory layout, so result_buffer_address is responder's local receive buffer
+    // Send payload to responder's scratch buffer (not its timestamp buffer)
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
-    auto dest_payload_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), result_buffer_address, 0);
+    auto dest_payload_noc_addr = safe_get_noc_addr(
+        static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), responder_scratch_buffer_address, 0);
 
     // Setup NOC command headers
     if constexpr (enable_fused_payload_with_sync) {
