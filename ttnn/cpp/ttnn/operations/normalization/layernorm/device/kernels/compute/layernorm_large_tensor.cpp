@@ -19,11 +19,16 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
+#include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "dprint_pages.h"
 #include "dprint_tensix.h"
 namespace NAMESPACE {
 
 void MAIN {
+    namespace kutil = norm::kernel_util;
+    namespace numeric = kutil::compute::numeric;
+    namespace policies = kutil::generic::policies;
+
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
@@ -51,7 +56,7 @@ void MAIN {
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
+    uint32_t cb_fusion = tt::CBIndex::c_22;        // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_fp32 = tt::CBIndex::c_29;
 #ifdef FUSE_PRE_ADD
@@ -81,50 +86,13 @@ void MAIN {
         //  aka   ∑(x)
         //      --------
         //         n
-        tile_regs_acquire();
-        tile_regs_wait();
-
-        reconfig_data_format(cb_in, cb_scaler);
-        pack_reconfig_data_format(cb_ex);
-        cb_reserve_back(cb_ex, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_in, blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                // if (wt + blk >= Wt) {
-                //     tt::compute::common::print_full_tile(cb_in, j, true);
-                // }
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, j, scaler0, dst0);
-            }
-            cb_pop_front(cb_in, blk);
-        }
-        // Divide by W
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst0, one_over_W);
 #ifdef FUSE_PRE_ADD
-        reconfig_data_format_srca(cb_in, cb_inb);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inb, cb_scaler, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inb, blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inb, cb_scaler, j, scaler0, dst0);
-            }
-            cb_pop_front(cb_inb, blk);
-        }
+        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+            cb_in, cb_inb, cb_scaler, cb_x, cb_ex, one_over_W, Wt, blk);
+#else
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+            cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #endif
-        tile_regs_commit();
-        pack_tile(dst0, cb_ex);
-        reduce_uninit<FLOAT32_REDUCTION>();
-        tile_regs_release();
-        cb_push_back(cb_ex, onetile);
-
-        // End of
-        // E[x]
-        // aka   ∑(x)
-        //     --------
-        //        n
-
-        cb_wait_front(cb_ex, onetile);
 #endif  // !RMS ifdef end
         // Start of
         // Var Calculation
@@ -158,15 +126,15 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_xmm, blk);
-            pack_reconfig_data_format(cb_xmm);
-            for (uint32_t j = 0; j < blk; j++) {
-                pack_tile(j, cb_xmm);
-            }
-            cb_push_back(cb_xmm, blk);
-            tile_regs_release();
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // cb_reserve_back(cb_xmm, blk);
+            // pack_reconfig_data_format(cb_xmm);
+            // for (uint32_t j = 0; j < blk; j++) {
+            //     pack_tile(j, cb_xmm);
+            // }
+            // cb_push_back(cb_xmm, blk);
+            // tile_regs_release();
 #endif
             cb_pop_front(cb_in, blk);
 #ifdef FUSE_PRE_ADD
@@ -187,16 +155,16 @@ void MAIN {
             //     dprint_tensix_dest_reg<true>(dst0);
             // }
 
-            // square_tile_init();
-            // for (uint32_t j = 0; j < blk; j++) {
-            //     square_tile(j);
-            // }
-            cb_wait_front(cb_xmm, blk);
-            tile_regs_acquire();
-            mul_tiles_init(cb_xmm, cb_xmm);
+            square_tile_init();
             for (uint32_t j = 0; j < blk; j++) {
-                mul_tiles(cb_xmm, cb_xmm, j, j, j);
+                square_tile(j);
             }
+            // cb_wait_front(cb_xmm, blk);
+            // tile_regs_acquire();
+            // mul_tiles_init(cb_xmm, cb_xmm);
+            // for (uint32_t j = 0; j < blk; j++) {
+            //     mul_tiles(cb_xmm, cb_xmm, j, j, j);
+            // }
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_xmm2, blk);
@@ -206,12 +174,12 @@ void MAIN {
             }
             tile_regs_release();
             cb_push_back(cb_xmm2, blk);
-            cb_pop_front(cb_xmm, blk);
 
             tile_regs_acquire();
             if (wt > 0) {
                 // reconfig_data_format_srca(cb_ex2);
                 cb_wait_front(cb_fp32, onetile);
+                reconfig_data_format_srca(cb_fp32);
 
                 // DPRINT << "Before copy " << wt << ENDL();
                 // tt::compute::common::print_full_tile(cb_ex2, 0, true);
@@ -235,6 +203,9 @@ void MAIN {
                 cb_pop_front(cb_fp32, onetile);
             }
             cb_wait_front(cb_xmm2, blk);
+            // if (wt == 0) {
+            //     UNPACK(tt::compute::common::print_full_tile(cb_xmm2, 0, true));
+            // }
             // if (wt == 0) {
             //     DPRINT << "large first xmm2 tile with mul_tiles" << ENDL();
             //     tt::compute::common::print_full_tile(cb_xmm2, 0, true);
@@ -283,9 +254,9 @@ void MAIN {
 
             cb_pop_front(cb_xmm2, blk);
 
-            cb_reserve_back(cb_fp32, onetile);
-
-            if (wt == Wt - blk) {
+            const auto final_iter = wt == Wt - blk;
+            const auto pack_cb = final_iter ? cb_ex2 : cb_fp32;
+            if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
                 mul_unary_tile(dst0, one_over_W);
@@ -297,10 +268,11 @@ void MAIN {
 
             // DPRINT << "After reduce: " << wt << ENDL();
             // dprint_tensix_dest_reg<true>(dst0);
-            pack_reconfig_data_format(cb_fp32);
-            pack_tile(dst0, cb_fp32);
+            cb_reserve_back(pack_cb, onetile);
+            pack_reconfig_data_format(pack_cb);
+            pack_tile(dst0, pack_cb);
             tile_regs_release();
-            cb_push_back(cb_fp32, onetile);
+            cb_push_back(pack_cb, onetile);
             // if (wt == 0) {
             //     cb_wait_front(cb_ex2, onetile);
             //     DPRINT << "large after first block " << ENDL();
@@ -310,20 +282,19 @@ void MAIN {
             // tt::compute::common::print_full_tile(cb_scaler, 0, true);
         }
 
-        cb_wait_front(cb_fp32, onetile);
-        // tt::compute::common::print_full_tile(cb_fp32, 0, true);
-        tile_regs_acquire();
-        tile_regs_wait();
-        copy_tile_init(cb_fp32);
-        copy_tile(cb_fp32, 0, dst0);
-        tile_regs_commit();
-        cb_reserve_back(cb_ex2, onetile);
-        pack_reconfig_data_format(cb_ex2);
-        pack_tile(dst0, cb_ex2);
-        tile_regs_release();
-        cb_push_back(cb_ex2, onetile);
-        cb_pop_front(cb_fp32, onetile);
-        cb_wait_front(cb_ex2, onetile);
+        // cb_wait_front(cb_fp32, onetile);
+        // // tt::compute::common::print_full_tile(cb_fp32, 0, true);
+        // tile_regs_acquire();
+        // tile_regs_wait();
+        // copy_tile_init(cb_fp32);
+        // copy_tile(cb_fp32, 0, dst0);
+        // tile_regs_commit();
+        // cb_reserve_back(cb_ex2, onetile);
+        // pack_reconfig_data_format(cb_ex2);
+        // pack_tile(dst0, cb_ex2);
+        // tile_regs_release();
+        // cb_push_back(cb_ex2, onetile);
+        // cb_pop_front(cb_fp32, onetile);
         // DPRINT << "large cb_ex2" << ENDL();
         // tt::compute::common::print_full_tile(cb_ex2, 0, true);
 
@@ -360,6 +331,7 @@ void MAIN {
 
         cb_pop_front(cb_ex2, onetile);
         cb_wait_front(cb_ex2pe, onetile);
+
         // tt::compute::common::print_full_tile(cb_ex2pe, 0, true);
 
         // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
@@ -375,6 +347,7 @@ void MAIN {
         tile_regs_release();
         cb_push_back(cb_ex2pe, onetile);
         cb_wait_front(cb_ex2pe, onetile);
+
         // End of
         // Calculation
         //                     1
@@ -404,8 +377,20 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
+#endif
+            cb_pop_front(cb_in, blk);
+#ifdef FUSE_PRE_ADD
+            cb_wait_front(cb_inb, blk);
+            reconfig_data_format_srca(cb_inb);
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            for (uint32_t j = 0; j < blk; j++) {
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
+            }
+            cb_pop_front(cb_inb, blk);
+#endif
             tile_regs_commit();
             cb_reserve_back(cb_xmm, blk);
+            pack_reconfig_data_format(cb_xmm);
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_xmm);
             }
@@ -415,21 +400,26 @@ void MAIN {
             tile_regs_acquire();
             tile_regs_wait();
             cb_wait_front(cb_xmm, blk);
+            // UNPACK(tt::compute::common::print_full_tile(cb_xmm, 0, true));
+
+            reconfig_data_format(cb_xmm, cb_ex2pe);
             mul_tiles_init(cb_xmm, cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
                 mul_tiles(cb_xmm, cb_ex2pe, j, 0, j);
             }
             tile_regs_commit();
-            cb_reserve_back(cb_out, blk);
-            pack_reconfig_data_format(cb_out);
-            for (uint32_t j = 0; j < blk; j++) {
-                pack_tile(j, cb_out);
+
+            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
+                cb_fusion = cb_out;
             }
-            cb_push_back(cb_out, blk);
+            cb_reserve_back(cb_fusion, blk);
+            pack_reconfig_data_format(cb_fusion);
+            for (uint32_t j = 0; j < blk; j++) {
+                pack_tile(j, cb_fusion);
+            }
             tile_regs_release();
+            cb_push_back(cb_fusion, blk);
             cb_pop_front(cb_xmm, blk);
-#endif
-            cb_pop_front(cb_in, blk);
             //             reconfig_data_format_srca(cb_in, cb_ex2pe);
             // #ifdef FUSE_PRE_ADD
             //             cb_wait_front(cb_inb, blk);
@@ -466,19 +456,19 @@ void MAIN {
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();
                 tile_regs_wait();
-                reconfig_data_format(cb_xmm, cb_gamma);
+                reconfig_data_format(cb_fusion, cb_gamma);
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_wait_front(cb_gamma, blk);
-                cb_wait_front(cb_xmm, blk);
-                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
+                cb_wait_front(cb_fusion, blk);
+                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
-                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, j, j, j);
+                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, j, j, j);
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_gamma, blk);
-                cb_pop_front(cb_xmm, blk);
+                cb_pop_front(cb_fusion, blk);
                 if constexpr (!do_beta) {
                     cb_reserve_back(cb_out, blk);
                     for (uint32_t j = 0; j < blk; j++) {
@@ -486,11 +476,11 @@ void MAIN {
                     }
                     cb_push_back(cb_out, blk);
                 } else {
-                    cb_reserve_back(cb_xmm, blk);
+                    cb_reserve_back(cb_fusion, blk);
                     for (uint32_t j = 0; j < blk; j++) {
-                        pack_tile(j, cb_xmm);
+                        pack_tile(j, cb_fusion);
                     }
-                    cb_push_back(cb_xmm, blk);
+                    cb_push_back(cb_fusion, blk);
                 }
 
                 tile_regs_release();
@@ -498,17 +488,17 @@ void MAIN {
             if constexpr (do_beta == 1) {
                 tile_regs_acquire();
                 tile_regs_wait();
-                reconfig_data_format(cb_xmm, cb_beta);
+                reconfig_data_format(cb_fusion, cb_beta);
                 pack_reconfig_data_format(cb_out);
                 cb_wait_front(cb_beta, blk);
-                cb_wait_front(cb_xmm, blk);
-                add_bcast_rows_init_short(cb_xmm, cb_beta);
+                cb_wait_front(cb_fusion, blk);
+                add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (uint32_t j = 0; j < blk; j++) {
-                    add_tiles_bcast_rows(cb_xmm, cb_beta, j, j, j);
+                    add_tiles_bcast_rows(cb_fusion, cb_beta, j, j, j);
                 }
                 tile_regs_commit();
                 cb_pop_front(cb_beta, blk);
-                cb_pop_front(cb_xmm, blk);
+                cb_pop_front(cb_fusion, blk);
                 cb_reserve_back(cb_out, blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     pack_tile(j, cb_out);
@@ -522,8 +512,6 @@ void MAIN {
         //    x-E[X]
         //(---------------*𝛄)+ß
         //  √(Var(X)+ε)
-
-        cb_xmm = tt::CBIndex::c_24;  // x minus mean
         cb_pop_front(cb_ex, onetile);
         cb_pop_front(cb_ex2pe, onetile);
     }  // NCHt loop
