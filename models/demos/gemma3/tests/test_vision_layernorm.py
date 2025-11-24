@@ -15,6 +15,11 @@ from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # 
 
 
 @pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -24,10 +29,10 @@ from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # 
     indirect=True,
 )
 @pytest.mark.parametrize("layer_name", [("layer_norm1"), ("layer_norm2")])
-def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
+def test_layernorm_inference(mesh_device, reset_seeds, layer_name, dummy_weights):
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     width = model_args.vision_dim
     num_chunks = 4
     seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks

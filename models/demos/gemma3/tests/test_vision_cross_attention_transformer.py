@@ -15,6 +15,11 @@ from models.demos.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
+@pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -30,10 +35,11 @@ def test_gemma_vision(
     mesh_device,
     reset_seeds,
     bsz,
+    dummy_weights,
 ):
     pcc_required = 0.95
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     vision_first_layer_prefix = "model.vision_tower.vision_model."

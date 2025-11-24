@@ -16,6 +16,11 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
+@pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
 )
@@ -29,9 +34,9 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
+def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, dummy_weights):
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

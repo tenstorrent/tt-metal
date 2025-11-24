@@ -23,6 +23,11 @@ TARGETS_JSON_FILENAME = (
 )
 
 
+@pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -31,7 +36,7 @@ TARGETS_JSON_FILENAME = (
 )
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("nr_forward_iterations", [15])
-def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
+def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, dummy_weights):
     profiler = BenchmarkProfiler()
 
     logger.info("Started profiling")
@@ -41,6 +46,7 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
         batch_size=batch_size,
         profiler=profiler,
         nr_forward_iterations=nr_forward_iterations,
+        dummy_weights=dummy_weights,
     )
     profiler.end("total_run")
     logger.info("Ended profiling")
@@ -92,9 +98,9 @@ def helper_write_to_json(device_type, measurements, output_filename, model_name)
         json.dump(file_dict, f, indent=4)
 
 
-def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
+def run_model(mesh_device, batch_size, profiler, nr_forward_iterations, dummy_weights):
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     profiler.start("weight_loading")
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
