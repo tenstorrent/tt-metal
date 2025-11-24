@@ -325,13 +325,16 @@ void DevicePool::initialize(
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
-                tt::tt_fabric::FabricConfig::FABRIC_1D,
-                tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-                1);
+                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
+            log_info(
+                tt::LogMetal,
+                "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
+                "accordingly.",
+                fabric_config);
         } else {
             // Use the same mode
             tt::tt_fabric::SetFabricConfig(
