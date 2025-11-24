@@ -158,7 +158,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             sticks_per_core,
             input_and_output_chunk_size,
             index_chunk_size,
-            source_chunk_size};
+            source_chunk_size,
+            static_cast<uint32_t>(args.opt_reduction)};
         std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(reader_runtime_args));
         std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(reader_runtime_args));
 
