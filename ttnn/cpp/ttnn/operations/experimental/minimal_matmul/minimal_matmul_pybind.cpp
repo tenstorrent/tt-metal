@@ -13,8 +13,6 @@
 #include "minimal_matmul.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 
 void py_bind_minimal_matmul(py::module& module) {

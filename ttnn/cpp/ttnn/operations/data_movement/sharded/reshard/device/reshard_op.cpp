@@ -7,14 +7,12 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "reshard_program_factory.hpp"
 #include "nd_reshard_program_factory.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {

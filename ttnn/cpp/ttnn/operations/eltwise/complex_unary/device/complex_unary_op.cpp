@@ -4,7 +4,6 @@
 
 #include "complex_unary_op.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"

@@ -5,8 +5,6 @@
 #include "concatenate_heads_device_operation.hpp"
 
 #include "concatenate_heads_program_factory.hpp"
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::transformer {
