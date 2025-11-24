@@ -370,8 +370,8 @@ void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_args.cache_tensor.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_args.cache_tensor.buffer();
 
     auto index_tensor_addr =
         shared_vars.use_index_tensor ? tensor_args.update_idxs_tensor.value().buffer()->address() : 0;
