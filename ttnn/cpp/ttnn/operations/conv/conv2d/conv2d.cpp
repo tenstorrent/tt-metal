@@ -679,8 +679,24 @@ Result conv2d_L1(
             }
         }
 
+        TT_FATAL(
+            weight_tensor_on_device.layout() == Layout::TILE,
+            "Weights should be in TILE layout.");  // Weights should already be formatted
+        const auto& ashape = std::array<std::uint32_t, 4>({batch_size, input_height, input_width, in_channels});
+        auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+        experimental::auto_format::FormatParams input_a_format_params = {
+            .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+        experimental::auto_format::FormatParams input_b_format_params = {
+            .pad_shape = weight_tensor_on_device.padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+        experimental::auto_format::FormatParams input_bias_format_params = {};
+        if (bias_tensor_on_device.has_value()) {
+            input_bias_format_params = {
+                .pad_shape = bias_tensor_on_device.value().padded_shape(),
+                .pad_value = 0,
+                .target_layout = Layout::TILE};
+        }
         // call conv micro op
-        auto conv_output = conv2d(
+        auto conv_output = ttnn::prim::conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
@@ -688,12 +704,13 @@ Result conv2d_L1(
             out_channels,
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
+            bias_tensor_on_device.has_value(),
             conv_config.activation,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
             output_dtype,
-            {batch_size, input_height, input_width, in_channels},
+            ashape,
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
@@ -701,6 +718,29 @@ Result conv2d_L1(
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);
+
+        // // call conv micro op
+        // auto conv_output = conv2d(
+        //     input_tensor_post_tm,                       // a
+        //     weight_tensor_on_device,                    // b
+        //     bias_tensor_on_device,                      // bias
+        //     sliding_window_config,                      // sliding_window_config
+        //     out_channels,                               // output_channels
+        //     groups,                                     // groups
+        //     conv_config.output_layout == Layout::ROW_MAJOR,  // untilize_out
+        //     conv_config.activation,                     // activation
+        //     opt_conv_op_parallel_config,                // parallelization_config
+        //     opt_conv_op_block_config,                   // block_config
+        //     conv_out_memory_config,                     // memory_config
+        //     output_dtype,                               // dtype
+        //     {batch_size, input_height, input_width, in_channels},  // input_tensor_shape
+        //     compute_config,                             // compute_kernel_config
+        //     conv_config.enable_act_double_buffer,       // enable_act_double_buffer
+        //     conv_config.enable_weights_double_buffer,   // enable_weights_double_buffer
+        //     conv_config.full_inner_dim,                 // full_inner_dim
+        //     conv_config.enable_activation_reuse,        // enable_activation_reuse
+        //     conv_config.config_tensors_in_dram,         // config_tensors_in_dram
+        //     conv_config.force_split_reader);            // force_split_reader
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

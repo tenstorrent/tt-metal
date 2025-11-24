@@ -23,7 +23,6 @@
 #include <utility>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "conv2d_op_sharded_program_factory.hpp"
-#include "conv2d_program_factory_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d::program {
 
@@ -196,7 +195,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
     std::optional<bool> force_split_reader = operation_attributes.force_split_reader;
 
-    distributed::MeshDevice* device = a.device();
+    auto device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -1358,7 +1357,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
     }
-    post_conv2d_op_checks(program, operation_attributes, tensor_args, output_tensor);
+    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
     // Capture conv_reader_indices_storage to cache this with the program
     return cached_program_t{
         std::move(program),

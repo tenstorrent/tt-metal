@@ -15,7 +15,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "conv2d_op_width_sharded_program_factory.hpp"
-#include "conv2d_program_factory_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d::program {
 
@@ -74,7 +73,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
     // std::optional<bool> force_split_reader = operation_attributes.force_split_reader;
 
-    tt::tt_metal::IDevice* device = a.device();
+    auto device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -608,7 +607,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         }
     }
 
-    post_conv2d_op_checks(program, operation_attributes, tensor_args, output_tensor);
+    post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
 
     return cached_program_t{
         std::move(program),

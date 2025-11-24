@@ -34,12 +34,12 @@ struct Conv2dDeviceOperation {
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 
@@ -67,27 +67,27 @@ struct Conv2dDeviceOperation {
         std::optional<bool> force_split_reader);
 };
 
-Tensor conv2d(
-    const Tensor& a,
-    const Tensor& b,
-    std::optional<const Tensor> bias,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const Conv2dParallelizationConfig& parallelization_config,
-    const Conv2dBlockConfig& block_config,
-    const tt::tt_metal::MemoryConfig& memory_config,
-    tt::tt_metal::DataType dtype,
-    std::array<std::uint32_t, 4> input_tensor_shape,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    bool enable_act_double_buffer = false,
-    bool enable_weights_double_buffer = false,
-    bool full_inner_dim = false,
-    bool enable_activation_reuse = false,
-    bool config_tensors_in_dram = false,
-    std::optional<bool> force_split_reader = std::nullopt);
+// Tensor conv2d(
+//     const Tensor& a,
+//     const Tensor& b,
+//     std::optional<const Tensor> bias,
+//     const sliding_window::SlidingWindowConfig& sliding_window_config,
+//     uint32_t output_channels,
+//     uint32_t groups,
+//     bool untilize_out,
+//     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
+//     const Conv2dParallelizationConfig& parallelization_config,
+//     const Conv2dBlockConfig& block_config,
+//     const tt::tt_metal::MemoryConfig& memory_config,
+//     tt::tt_metal::DataType dtype,
+//     std::array<std::uint32_t, 4> input_tensor_shape,
+//     const DeviceComputeKernelConfig& compute_kernel_config,
+//     bool enable_act_double_buffer = false,
+//     bool enable_weights_double_buffer = false,
+//     bool full_inner_dim = false,
+//     bool enable_activation_reuse = false,
+//     bool config_tensors_in_dram = false,
+//     std::optional<bool> force_split_reader = std::nullopt);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation

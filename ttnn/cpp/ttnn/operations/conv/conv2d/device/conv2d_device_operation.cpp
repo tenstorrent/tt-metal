@@ -95,7 +95,13 @@ spec_return_value_t Conv2dDeviceOperation::compute_output_specs(
             padded_output_shape));
 }
 
-void validate(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+tensor_return_value_t Conv2dDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
+}
+
+void Conv2dDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.a;
     const auto& input_tensor_b = tensor_args.b;
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
@@ -137,19 +143,9 @@ void validate(const operation_attributes_t& args, const tensor_args_t& tensor_ar
     }
 }
 
-void Conv2dDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
-}
-
 void Conv2dDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
-}
-
-tensor_return_value_t Conv2dDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.a.device());
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
@@ -262,70 +258,70 @@ std::tuple<operation_attributes_t, tensor_args_t> Conv2dDeviceOperation::invoke(
         .bias = bias,
     };
 
-    IDevice* device = a.device();
+    auto device = a.device();
 
     args.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     return std::make_tuple(args, tensor_args);
 }
 
-Tensor conv2d(
-    const Tensor& a,
-    const Tensor& b,
-    std::optional<const Tensor> bias,
-    const sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const Conv2dParallelizationConfig& parallelization_config,
-    const Conv2dBlockConfig& block_config,
-    const MemoryConfig& memory_config,
-    DataType dtype,
-    std::array<std::uint32_t, 4> input_tensor_shape,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    bool enable_act_double_buffer,
-    bool enable_weights_double_buffer,
-    bool full_inner_dim,
-    bool enable_activation_reuse,
-    bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
-    TT_FATAL(b.layout() == Layout::TILE,
-             "Weights should be in TILE layout.");  // Weights should already be formatted
-    const auto& ashape = input_tensor_shape;
-    auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
-    experimental::auto_format::FormatParams input_a_format_params = {
-        .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
-    experimental::auto_format::FormatParams input_b_format_params = {
-        .pad_shape = b.padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
-    experimental::auto_format::FormatParams input_bias_format_params = {};
-    if (bias.has_value()) {
-        input_bias_format_params = {
-            .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
-    }
+// Tensor conv2d(
+//     const Tensor& a,
+//     const Tensor& b,
+//     std::optional<const Tensor> bias,
+//     const sliding_window::SlidingWindowConfig& sliding_window_config,
+//     uint32_t output_channels,
+//     uint32_t groups,
+//     bool untilize_out,
+//     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
+//     const Conv2dParallelizationConfig& parallelization_config,
+//     const Conv2dBlockConfig& block_config,
+//     const MemoryConfig& memory_config,
+//     DataType dtype,
+//     std::array<std::uint32_t, 4> input_tensor_shape,
+//     const DeviceComputeKernelConfig& compute_kernel_config,
+//     bool enable_act_double_buffer,
+//     bool enable_weights_double_buffer,
+//     bool full_inner_dim,
+//     bool enable_activation_reuse,
+//     bool config_tensors_in_dram,
+//     std::optional<bool> force_split_reader) {
+//     TT_FATAL(b.layout() == Layout::TILE,
+//              "Weights should be in TILE layout.");  // Weights should already be formatted
+//     const auto& ashape = input_tensor_shape;
+//     auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+//     experimental::auto_format::FormatParams input_a_format_params = {
+//         .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+//     experimental::auto_format::FormatParams input_b_format_params = {
+//         .pad_shape = b.padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+//     experimental::auto_format::FormatParams input_bias_format_params = {};
+//     if (bias.has_value()) {
+//         input_bias_format_params = {
+//             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+//     }
 
-    return ttnn::prim::conv2d(
-        a,
-        b,
-        bias,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        bias.has_value(),
-        activation,
-        parallelization_config,
-        block_config,
-        memory_config,
-        dtype,
-        input_tensor_shape,
-        compute_kernel_config,
-        enable_act_double_buffer,
-        enable_weights_double_buffer,
-        full_inner_dim,
-        enable_activation_reuse,
-        config_tensors_in_dram,
-        force_split_reader);
-}
+//     return ttnn::prim::conv2d(
+//         a,
+//         b,
+//         bias,
+//         sliding_window_config,
+//         output_channels,
+//         groups,
+//         untilize_out,
+//         bias.has_value(),
+//         activation,
+//         parallelization_config,
+//         block_config,
+//         memory_config,
+//         dtype,
+//         input_tensor_shape,
+//         compute_kernel_config,
+//         enable_act_double_buffer,
+//         enable_weights_double_buffer,
+//         full_inner_dim,
+//         enable_activation_reuse,
+//         config_tensors_in_dram,
+//         force_split_reader);
+// }
 
 }  // namespace ttnn::operations::conv::conv2d

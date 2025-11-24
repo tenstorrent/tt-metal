@@ -110,5 +110,11 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled);
+
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor);
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv
