@@ -786,26 +786,48 @@ class MasterConfigLoader:
                                     parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # Determine output memory config based on operation
-                        if operation_name == "sharded_to_interleaved":
-                            # This operation converts sharded to interleaved, so output must be INTERLEAVED
-                            output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
-                        elif operation_name in ["upsample", "ttnn::upsample"]:
-                            # upsample output also needs INTERLEAVED
-                            output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-                        elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
-                            # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
-                            # (see untilize_with_unpadding_op.cpp:37)
-                            if parsed_mem_config.memory_layout in [
-                                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                            ]:
-                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                        # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
+                        output_mem_config = None
+                        if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
+                            # interleaved_to_sharded has output memory config in arg1
+                            for arg in config:
+                                if isinstance(arg, dict) and "UnparsedElement" in arg:
+                                    element_info = arg["UnparsedElement"].get("element_info", "")
+                                    if "MemoryConfig" in element_info:
+                                        try:
+                                            import json
+
+                                            parsed = json.loads(element_info)
+                                            if "arg1" in parsed and "MemoryConfig" in parsed["arg1"]:
+                                                output_mem_config = self.parse_memory_config(
+                                                    parsed["arg1"]["MemoryConfig"], tensor_config.shape
+                                                )
+                                                break
+                                        except Exception:
+                                            pass
+
+                        # If not extracted from arg1, use operation-specific defaults
+                        if output_mem_config is None:
+                            if operation_name == "sharded_to_interleaved":
+                                # This operation converts sharded to interleaved, so output must be INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
+                            elif operation_name in ["upsample", "ttnn::upsample"]:
+                                # upsample output also needs INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+                            elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
+                                # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
+                                # (see untilize_with_unpadding_op.cpp:37)
+                                if parsed_mem_config.memory_layout in [
+                                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                                ]:
+                                    output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                                else:
+                                    output_mem_config = parsed_mem_config
                             else:
+                                # For most unary ops, output matches input
                                 output_mem_config = parsed_mem_config
-                        else:
-                            # For most unary ops, output matches input
-                            output_mem_config = parsed_mem_config
 
                         # Extract storage_type from tensor_config
                         storage_type_str = (
