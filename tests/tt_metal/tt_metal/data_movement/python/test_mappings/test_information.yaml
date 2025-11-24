@@ -317,6 +317,39 @@ tests:
   157:
     name: "One from All Custom"
 
+  170:
+    name: "One to All Unicast 2x2 Packet Sizes 2.0"
+
+  171:
+    name: "One to All Unicast 5x5 Packet Sizes 2.0"
+
+  172:
+    name: "One to All Unicast Packet Sizes 2.0"
+
+  173:
+    name: "One to All Multicast 2x2 Packet Sizes 2.0"
+
+  174:
+    name: "One to All Multicast 5x5 Packet Sizes 2.0"
+
+  175:
+    name: "One to All Multicast Packet Sizes 2.0"
+
+  176:
+    name: "One to All Multicast Linked 2x2 Packet Sizes 2.0"
+
+  177:
+    name: "One to All Multicast Linked 5x5 Packet Sizes 2.0"
+
+  178:
+    name: "One to All Multicast Linked Packet Sizes 2.0"
+
+  179:
+    name: "One to All Multicast Linked Loopback Directed Ideal 2.0"
+
+  180:
+    name: "Multicast Schemes (Loopback Disabled)"
+
   200:
     name: "Deinterleave Single Core"
     comment: |
