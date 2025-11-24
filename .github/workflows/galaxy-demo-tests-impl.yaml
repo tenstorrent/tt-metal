@@ -223,7 +223,7 @@ jobs:
           pytest -n auto \
             models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching \
             -k "wh_4x8sp1tp0"
-          
+
           # Test 2: Run the full pipeline demo with performance throttling
           pytest -n auto \
             models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
