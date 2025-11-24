@@ -24,11 +24,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
-    const auto& intermediate_tensor_l = output_tensors.at(1)[0];
-    const auto& intermediate_tensor_sm = output_tensors.at(1)[1];
+    const auto& intermediate_tensor_l = output_tensors.at(0)[0];
+    // const auto& intermediate_tensor_sm = output_tensors.at(1)[1];
     const auto& output_tensor_l = output_tensors.at(1)[0];
     const auto& output_tensor_s = output_tensors.at(1)[1];
     const auto& output_tensor_m = output_tensors.at(1)[2];
+
+    printf("page size of intermediate tensor l: %zu\n", intermediate_tensor_l.tensor_spec().compute_page_size_bytes());
 
     printf("output tensors len: %zu\n", output_tensors.size());
     printf("len of output tensor [0]: %zu\n", output_tensors.at(0).size());
@@ -101,10 +103,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // figure out packets
-    const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
+    const auto [packet_size_bytes_initial, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(
             input_tensor_l.dtype(), input_page_size_bytes, input_l_num_pages, l1_alignment);
+    printf("packet size bytes initial: %u \n", packet_size_bytes_initial);
 
+    // HERE TODO TO DO MAKE SURE THIS IS CORRECT FOR BLACKHOLE CHANGE IT TO 8192
+    uint32_t packet_size_bytes = 2048;  // 8192 = (8 * 512 * 2)
     // eventually add more cores for multi-link
     const CoreCoord use_cores = {1, 1};
     const auto
@@ -116,7 +121,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // program!
     tt::tt_metal::Program program{};
 
-    constexpr uint32_t input_num_tiles = 8;  // 2  // to be modified with tiny tiles HERE
+    constexpr uint32_t input_num_tiles = 4;  // 2  // to be modified with tiny tiles HERE
 
     // TODO allocate buffers only on needed devices
 
@@ -465,6 +470,34 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::vector<uint32_t> reader_ct_args;
     std::vector<uint32_t> writer_ct_args;
     std::vector<uint32_t> compute_ct_args;
+    /*
+    const CoreCoord mux_core = {2, 1}; //change based on mega kernel divisions and add an extra one for 2 links
+
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const size_t mux_base_l1_address = l1_unreserved_base_address;
+    const auto num_full_size_channels = num_workers_per_direction;
+    constexpr auto num_header_only_channels = 0;
+    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        0,
+        buffer_size_bytes_full_size_channel,
+        mux_base_l1_address);
+
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+            */
     if (is_sender_device) {
         printf("is sender device satrt\n");
         reader_ct_args = {data_core_coord.x, data_core_coord.y};
@@ -486,7 +519,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             core_noc_y};
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(writer_ct_args);
         writer_ct_args[0] = writer_ct_args.size();
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
+        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
 
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -513,7 +546,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             core_noc_y};
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
         reader_ct_args[0] = reader_ct_args.size();
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
+        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
 
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -551,7 +584,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             core_noc_y};
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
         reader_ct_args[0] = reader_ct_args.size();
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
+        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root2_receive_reader_kernel.cpp",
@@ -570,7 +603,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             core_noc_y};
         tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(writer_ct_args);
         writer_ct_args[0] = writer_ct_args.size();
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
+        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root2_writer_kernel.cpp",
@@ -655,7 +688,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             writer_runtime_args = {
                 intermediate_tensor_l.buffer()->address(),
-                intermediate_tensor_sm.buffer()->address(),
+                // intermediate_tensor_sm.buffer()->address(),
                 0,                  // page_idx_start,
                 input_l_num_pages,  // page_idx_end,
                 input_page_size_bytes,
@@ -703,7 +736,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 input_l_num_pages,  // page_idx_end,
                 num_pages_per_packet,
                 intermediate_tensor_l.buffer()->address(),
-                intermediate_tensor_sm.buffer()->address(),
+                // intermediate_tensor_sm.buffer()->address(),
                 packet_size_bytes,
                 input_page_size_bytes,
                 num_page_segments,
@@ -773,7 +806,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 input_l_num_pages,
                 num_pages_per_packet,
                 intermediate_tensor_l.buffer()->address(),
-                intermediate_tensor_sm.buffer()->address(),
+                // intermediate_tensor_sm.buffer()->address(),
                 packet_size_bytes,
                 input_page_size_bytes,
                 num_page_segments,
@@ -801,7 +834,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             writer_runtime_args = {
                 intermediate_tensor_l.buffer()->address(),
-                intermediate_tensor_sm.buffer()->address(),
+                // intermediate_tensor_sm.buffer()->address(),
                 0,                  // page_idx_start,
                 input_l_num_pages,  // page_idx_end,
                 input_page_size_bytes,
