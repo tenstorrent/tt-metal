@@ -29,15 +29,20 @@ def _get_tensors(
     assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
 
     num_devices = math.prod(mesh_shape)
+    axis_devices = num_devices if cluster_axis is None else mesh_shape[cluster_axis]
 
     elems = math.prod(input_shape)
-
     torch_inputs = [
-        torch.linspace(i * elems, (i + 1) * elems, elems).reshape(input_shape).bfloat16() for i in range(num_devices)
+        torch.linspace(i * elems, (i + 1) * elems, elems).reshape(input_shape).bfloat16() for i in range(axis_devices)
     ]
     torch_input = torch.concat(torch_inputs, dim=0)
 
-    torch_reference = torch.reshape(torch_input, tuple(list(mesh_shape) + input_shape))
+    if cluster_axis == 1:
+        torch_reference = torch_input.reshape([1, axis_devices] + input_shape)
+        torch_reference = torch_reference.repeat([num_devices // axis_devices, 1] + [1, 1, 1, 1])
+    else:
+        torch_reference = torch_input.reshape([axis_devices, 1] + input_shape)
+        torch_reference = torch_reference.repeat([1, num_devices // axis_devices] + [1, 1, 1, 1])
     torch_reference = torch.sum(torch_reference, dim=cluster_axis)
 
     dim_per_device = input_shape[dim] // mesh_shape[cluster_axis]
