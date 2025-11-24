@@ -11,7 +11,7 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     get_profiler_folder,
 )
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_watcher_enabled
 from tracy.compare_ops_logs import compare_ops_logs
 from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT, PROFILER_DEFAULT_OP_SUPPORT_COUNT
 import numpy
@@ -40,8 +40,14 @@ def run_test(request):
 
 @pytest.fixture(scope="class")
 def do_postproc(request, run_test):
-    columns = post_process_ops_log(run_test["name"])
-    return columns, run_test
+    try:
+        columns = post_process_ops_log(run_test["name"])
+        return columns, run_test
+    except FileNotFoundError as e:
+        if is_watcher_enabled():
+            pytest.skip("Skipping post-processing because CSV file was not generated due to watcher being enabled")
+        else:
+            raise e
 
 
 @pytest.fixture(scope="class")
