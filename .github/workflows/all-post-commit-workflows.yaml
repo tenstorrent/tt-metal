@@ -203,6 +203,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
+      timeout: 90
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, find-changed-files]

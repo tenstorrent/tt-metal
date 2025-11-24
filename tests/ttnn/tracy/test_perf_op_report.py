@@ -10,7 +10,7 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     get_profiler_folder,
 )
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_watcher_enabled
 from tracy.compare_ops_logs import compare_ops_logs
 from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT
 
@@ -25,8 +25,14 @@ def run_test(request):
 
 @pytest.fixture(scope="class")
 def do_postproc(request, run_test):
-    columns = post_process_ops_log(run_test["name"])
-    return columns, run_test
+    try:
+        columns = post_process_ops_log(run_test["name"])
+        return columns, run_test
+    except FileNotFoundError as e:
+        if is_watcher_enabled():
+            pytest.skip("Skipping post-processing because CSV file was not generated due to watcher being enabled")
+        else:
+            raise e
 
 
 @pytest.fixture(scope="class")
@@ -132,9 +138,17 @@ cpp_post_proc_test = {
 )
 class TestCppPostProc:
     def test_cpp_post_proc(self, run_test_do_cpp_post_proc):
-        request = run_test_do_cpp_post_proc
-        python_ops_perf_report = get_latest_ops_log_filename(request.param["name"])
-        cpp_ops_perf_report = (
-            generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
-        )
-        compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
+        try:
+            request = run_test_do_cpp_post_proc
+            python_ops_perf_report = get_latest_ops_log_filename(request.param["name"])
+            cpp_ops_perf_report = (
+                generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
+            )
+            compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
+        except FileNotFoundError as e:
+            if is_watcher_enabled():
+                pytest.skip(
+                    "Skipping C++ post-processing comparison because CSV file was not generated due to watcher being enabled"
+                )
+            else:
+                raise e

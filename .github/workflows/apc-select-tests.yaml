@@ -202,6 +202,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout: 90
 
   run-profiler-regression:
     needs: [parse-tests-json, build-artifact]
