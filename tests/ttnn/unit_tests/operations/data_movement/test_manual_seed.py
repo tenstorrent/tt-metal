@@ -114,7 +114,7 @@ def test_manual_seed_mapping_functionality(device):
         device=device,
     )
     temp_tensor = ttnn.ones([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    # Set all cores RPNG
+    # Set all cores PRNG
     ttnn.manual_seed(seeds=42, device=device)
 
     # Prepare seed and user_id tensors for mapping
