@@ -104,7 +104,8 @@ template <uint32_t BUF_DESC_ID_0, uint32_t BUF_DESC_ID_1, std::uint8_t CT_DIM, s
 inline void _llk_unpack_matmul_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {
     // Reset Dest counters for Unpacker to 0
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A | p_unpacr::UNP_B, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
     constexpr bool reuse_a        = CT_DIM >= RT_DIM;
     constexpr std::uint32_t t_dim = reuse_a ? RT_DIM : CT_DIM;
