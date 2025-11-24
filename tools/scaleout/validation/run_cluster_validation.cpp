@@ -382,13 +382,10 @@ int main(int argc, char* argv[]) {
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
-        reset_ethernet_links(
-            physical_system_descriptor,
-            physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
+        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-
-        physical_system_descriptor.run_discovery();
+        physical_system_descriptor.run_discovery(true, true);
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
