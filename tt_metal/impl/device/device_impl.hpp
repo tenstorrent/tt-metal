@@ -17,6 +17,7 @@
 #include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
@@ -224,7 +225,6 @@ private:
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<CommandQueue>> command_queues_;
 
-    std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
@@ -238,6 +238,10 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+
+    // Friend declaration for experimental API
+    friend uint32_t experimental::Device::get_worker_noc_hop_distance(
+        IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 };
 
 }  // namespace tt::tt_metal

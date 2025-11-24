@@ -198,6 +198,9 @@ DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =
@@ -254,14 +257,15 @@ void DevicePool::initialize(
     _inst->worker_thread_to_cpu_core_map =
         device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs, _inst->completion_queue_reader_to_cpu_core_map);
 
+    _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
     _inst->worker_l1_size = worker_l1_size;
-    _inst->num_hw_cqs = num_hw_cqs;
-    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
+    _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
 
     std::vector<ChipId> device_ids_to_open = device_ids;
     // Never skip for TG Cluster
@@ -340,7 +344,6 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool
@@ -356,7 +359,9 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
     this->initialize_active_devices();
-    this->wait_for_fabric_router_sync();
+
+    this->wait_for_fabric_router_sync(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 5000);
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 

@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from tracy.process_model_log import get_samples_per_s
 
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
@@ -54,9 +54,6 @@ def test_mamba_perf_e2e(
     logger.info(
         f"Testing end-to-end performance in {'PREFILL' if mode == ModelMode.PREFILL else 'DECODE'} mode with sequence length {sequence_length}"
     )
-
-    logger.warning(f"Disabling persistent kernel cache due to hang on CI (#8606)")
-    disable_persistent_kernel_cache()
 
     profiler.start(f"initialize_ref_model")
     reference_model = Mamba.from_pretrained(model_version, batch_size=batch_size)
