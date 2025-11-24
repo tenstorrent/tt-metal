@@ -15,12 +15,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    nearest_32,
-    tt_tensors_to_torch_tensors,
-)
+from models.common.utility_functions import nearest_32, tt_tensors_to_torch_tensors
 from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
@@ -157,8 +152,6 @@ def run_falcon_demo_kv(
         N_warmup_iter = {"inference_prefill": 5, "inference_decode": 10}  # Number of warmup iterations for perf mode
     else:
         N_warmup_iter = {}
-
-    disable_persistent_kernel_cache()
 
     num_devices = get_num_devices(mesh_device)
     global_batch = batch_size * num_devices
@@ -334,7 +327,6 @@ def run_falcon_demo_kv(
     profiler.end(f"moving_to_device")
 
     ### Second prefill run without compile ###
-    enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)

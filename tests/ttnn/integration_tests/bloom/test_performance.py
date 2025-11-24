@@ -13,8 +13,6 @@ from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional
 from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -41,8 +39,6 @@ def get_expected_times_causal_lm(functional_bloom):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
 def test_performance_of_bloom_for_question_answering(device, functional_bloom, batch_size=8, max_length=384):
-    disable_persistent_kernel_cache()
-
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
@@ -91,7 +87,6 @@ def test_performance_of_bloom_for_question_answering(device, functional_bloom, b
         end = time.time()
 
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
@@ -120,8 +115,6 @@ def test_performance_of_bloom_for_question_answering(device, functional_bloom, b
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
 def test_performance_of_causal_lm(device, functional_bloom, batch_size=8, max_length=128):
-    disable_persistent_kernel_cache()
-
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
@@ -167,7 +160,6 @@ def test_performance_of_causal_lm(device, functional_bloom, batch_size=8, max_le
         end = time.time()
 
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
