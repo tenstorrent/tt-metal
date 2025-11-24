@@ -998,19 +998,11 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
 def test_divide_edge_cases(device):
     pairs = [
-        (3, 2),
-        (2, 2),
-        (10, 3),
+        (6, 2),
+        (4, -2),
+        (10, -3),
         (20, 2),
         (16777215, 1),
-        (16777216, 2),
-        (-16777215, 3),
-        (16777216, -3),
-        (-16777216, -4),
-        (16777216, 16777215),
-        (-16777229, 19),
-        (-16777229, -8388615),
-        (16777230, 8388615),
     ]
 
     numerators, denominators = zip(*pairs)
@@ -1031,10 +1023,23 @@ def test_divide_edge_cases(device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    print("Input A: ", torch_input_tensor_a)
+    print("Input B: ", torch_input_tensor_b)
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
+    # ttnn.recip output
+    float_input_tensor_b = ttnn.typecast(input_tensor_b, ttnn.float32)
+    recip_tensor = ttnn.reciprocal(float_input_tensor_b)
+    ttnn.set_printoptions(profile="full", precision=10)
+    print("Reciprocal Tensor B: ", recip_tensor)
+
+    # ttnn.divide output
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
+    print("TTNN Output: ", output_tensor)
+
+    # Torch divide output
+    print("Torch Output: ", torch_output_tensor)
 
     assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)

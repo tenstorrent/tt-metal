@@ -15,17 +15,41 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::vInt in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vInt in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vInt result;
+        constexpr uint dst_tile_size_sfpu = 64;
 
-        sfpi::vFloat float_in0 = sfpi::int32_to_float(in0, 0);
-        sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
-        sfpi::vFloat float_result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<3>(float_in1), float_in1);
-        result = sfpu::_float_to_int32_(float_result);
+        // Typecast input A
+        TT_SFPLOAD(0, INT32_2S_COMP, ADDR_MOD_7, dst_index_in0 * dst_tile_size_sfpu);
+        TT_SFPCAST(0, 2, INT_SIGN_MAGN_TO_INT32_2S_COMP);
+        // Required after cast due to a bug in Blackhole RTL.
+        TT_SFPSETSGN(0, 2, 0, 0);
+        TT_SFPCAST(0, 1, 0);
+        TT_SFPSTORE(1, 3, ADDR_MOD_7, 0);
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::vFloat float_in0 = sfpi::dst_reg[0];
+
+        // Typecast input B
+        TT_SFPLOAD(0, INT32_2S_COMP, ADDR_MOD_7, dst_index_in1 * dst_tile_size_sfpu);
+        TT_SFPCAST(0, 2, INT_SIGN_MAGN_TO_INT32_2S_COMP);
+        // Required after cast due to a bug in Blackhole RTL.
+        TT_SFPSETSGN(0, 2, 0, 0);
+        TT_SFPCAST(0, 1, 0);
+        TT_SFPSTORE(1, 3, ADDR_MOD_7, 0);
+
+        sfpi::vFloat float_in1 = sfpi::dst_reg[0];
+
+        sfpi::vFloat result = _sfpu_reciprocal_<2>(float_in1);
+
+        // sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
+
+        sfpi::dst_reg[0] = result;
+
         sfpi::dst_reg++;
     }
 }
+
+template <bool APPROXIMATION_MODE>
+inline void init_div() {
+    _init_reciprocal_<false>();
+}
+
 }  // namespace ckernel::sfpu
