@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"

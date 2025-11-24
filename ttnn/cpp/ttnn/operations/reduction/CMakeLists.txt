@@ -20,6 +20,7 @@ file(
     prod/device/kernels/*
     sampling/device/kernels/*
     topk/device/kernels/*
+    manual_seed/device/kernels/*
 )
 target_sources(
     ttnn_op_reduction
@@ -65,6 +66,9 @@ target_sources(
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
         reduction_common/reduction_common.cpp
+        manual_seed/manual_seed.cpp
+        manual_seed/device/manual_seed_operation.cpp
+        manual_seed/device/manual_seed_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
