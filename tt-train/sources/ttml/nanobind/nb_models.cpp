@@ -19,8 +19,12 @@
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
 #include "models/mlp.hpp"
+#include "models/qwen3.hpp"
 #include "modules/module_base.hpp"
 #include "modules/multi_layer_perceptron.hpp"
+#include "modules/qwen3_attention.hpp"
+#include "modules/qwen3_block.hpp"
+#include "modules/rms_norm_module.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "nb_modules.hpp"
@@ -72,6 +76,18 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
         py_llama_module.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
             return models::llama::create(config);
+        });
+    }
+
+    {
+        auto py_qwen3_module = m.def_submodule("qwen3");
+        nb::class_<models::qwen3::Qwen3Config>(py_qwen3_module, "Qwen3Config");
+        nb::class_<models::qwen3::Qwen3, models::BaseTransformer>(py_qwen3_module, "Qwen3");
+        nb::class_<ttml::modules::Qwen3Block, ttml::modules::ModuleBase>(py_qwen3_module, "Qwen3Block");
+        nb::class_<ttml::modules::Qwen3Attention, ttml::modules::ModuleBase>(py_qwen3_module, "Qwen3Attention");
+        nb::class_<ttml::modules::Qwen3MLP, ttml::modules::ModuleBase>(py_qwen3_module, "Qwen3MLP");
+        py_qwen3_module.def("create_qwen3_model", [](const models::qwen3::Qwen3Config& config) {
+            return models::qwen3::create(config);
         });
     }
 
@@ -215,6 +231,68 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
+    }
+
+    {
+        auto py_qwen3_module = static_cast<nb::module_>(m.attr("qwen3"));
+
+        auto py_qwen3_config = static_cast<nb::class_<models::qwen3::Qwen3Config>>(py_qwen3_module.attr("Qwen3Config"));
+        py_qwen3_config.def(nb::init<>());
+        py_qwen3_config.def_rw("num_heads", &models::qwen3::Qwen3Config::num_heads, "Number of heads");
+        py_qwen3_config.def_rw("num_groups", &models::qwen3::Qwen3Config::num_groups, "Number of groups (KV heads)");
+        py_qwen3_config.def_rw("embedding_dim", &models::qwen3::Qwen3Config::embedding_dim, "Embedding dimensions");
+        py_qwen3_config.def_rw("head_dim", &models::qwen3::Qwen3Config::head_dim, "Head dimensions (explicit)");
+        py_qwen3_config.def_rw(
+            "intermediate_dim", &models::qwen3::Qwen3Config::intermediate_dim, "Intermediate dimensions");
+        py_qwen3_config.def_rw("dropout_prob", &models::qwen3::Qwen3Config::dropout_prob, "Dropout probability");
+        py_qwen3_config.def_rw("theta", &models::qwen3::Qwen3Config::theta, "RoPE Theta");
+        py_qwen3_config.def_rw("rms_norm_eps", &models::qwen3::Qwen3Config::rms_norm_eps, "RMSNorm epsilon");
+        py_qwen3_config.def_rw("num_blocks", &models::qwen3::Qwen3Config::num_blocks, "Number of blocks");
+        py_qwen3_config.def_rw("vocab_size", &models::qwen3::Qwen3Config::vocab_size, "Vocabulary size");
+        py_qwen3_config.def_rw(
+            "max_sequence_length", &models::qwen3::Qwen3Config::max_sequence_length, "Max sequence length");
+        py_qwen3_config.def_rw("runner_type", &models::qwen3::Qwen3Config::runner_type, "Runner type");
+        py_qwen3_config.def_rw("weight_tying", &models::qwen3::Qwen3Config::weight_tying, "Weight tying");
+        py_qwen3_config.def_rw("scaling_factor", &models::qwen3::Qwen3Config::scaling_factor, "RoPE scaling factor");
+        py_qwen3_config.def_rw(
+            "high_freq_factor", &models::qwen3::Qwen3Config::high_freq_factor, "High frequency factor");
+        py_qwen3_config.def_rw("low_freq_factor", &models::qwen3::Qwen3Config::low_freq_factor, "Low frequency factor");
+        py_qwen3_config.def_rw(
+            "original_context_length", &models::qwen3::Qwen3Config::original_context_length, "Original context length");
+
+        auto py_qwen3 = static_cast<nb::class_<models::qwen3::Qwen3>>(py_qwen3_module.attr("Qwen3"));
+        py_qwen3.def(nb::init<models::qwen3::Qwen3Config>());
+        py_qwen3.def("get_block", &models::qwen3::Qwen3::get_block, nb::arg("index"), "Get a specific block");
+        py_qwen3.def("num_blocks", &models::qwen3::Qwen3::num_blocks, "Get number of blocks");
+
+        // Expose Qwen3Block methods
+        auto py_qwen3_block = static_cast<nb::class_<ttml::modules::Qwen3Block>>(py_qwen3_module.attr("Qwen3Block"));
+        py_qwen3_block.def("get_attention", &ttml::modules::Qwen3Block::get_attention, "Get attention module");
+        py_qwen3_block.def(
+            "get_input_layernorm", &ttml::modules::Qwen3Block::get_input_layernorm, "Get input layer norm");
+        py_qwen3_block.def(
+            "get_post_attention_layernorm",
+            &ttml::modules::Qwen3Block::get_post_attention_layernorm,
+            "Get post-attention layer norm");
+        py_qwen3_block.def("get_mlp", &ttml::modules::Qwen3Block::get_mlp, "Get MLP module");
+
+        // Expose Qwen3Attention methods
+        auto py_qwen3_attention =
+            static_cast<nb::class_<ttml::modules::Qwen3Attention>>(py_qwen3_module.attr("Qwen3Attention"));
+        py_qwen3_attention.def("get_q_linear", &ttml::modules::Qwen3Attention::get_q_linear, "Get Q projection");
+        py_qwen3_attention.def("get_k_linear", &ttml::modules::Qwen3Attention::get_k_linear, "Get K projection");
+        py_qwen3_attention.def("get_v_linear", &ttml::modules::Qwen3Attention::get_v_linear, "Get V projection");
+        py_qwen3_attention.def(
+            "get_out_linear", &ttml::modules::Qwen3Attention::get_out_linear, "Get output projection");
+        py_qwen3_attention.def("get_q_norm", &ttml::modules::Qwen3Attention::get_q_norm, "Get Q normalization");
+        py_qwen3_attention.def("get_k_norm", &ttml::modules::Qwen3Attention::get_k_norm, "Get K normalization");
+
+        // Expose Qwen3MLP methods
+        auto py_qwen3_mlp = static_cast<nb::class_<ttml::modules::Qwen3MLP>>(py_qwen3_module.attr("Qwen3MLP"));
+        py_qwen3_mlp.def("get_w1", &ttml::modules::Qwen3MLP::get_w1, "Get gate projection");
+        py_qwen3_mlp.def("get_w2", &ttml::modules::Qwen3MLP::get_w2, "Get down projection");
+        py_qwen3_mlp.def("get_w3", &ttml::modules::Qwen3MLP::get_w3, "Get up projection");
+        py_qwen3_mlp.def("get_dropout", &ttml::modules::Qwen3MLP::get_dropout, "Get dropout layer");
     }
 
     {

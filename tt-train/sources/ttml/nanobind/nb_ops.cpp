@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/concat_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
@@ -21,6 +25,7 @@
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -51,6 +56,8 @@ void py_module_types(nb::module_& m) {
 }
 
 void py_module(nb::module_& m) {
+    m.def("concat", &concat, nb::arg("tensors"), nb::arg("dim"));
+
     {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
         py_binary.def(
@@ -127,7 +134,8 @@ void py_module(nb::module_& m) {
 
     {
         auto py_linear = static_cast<nb::module_>(m.attr("linear"));
-        py_linear.def("linear_op", &ttml::ops::linear_op, nb::arg("tensor"), nb::arg("weight"), nb::arg("bias"));
+        py_linear.def(
+            "linear_op", &ttml::ops::linear_op, nb::arg("tensor"), nb::arg("weight"), nb::arg("bias") = nb::none());
         py_linear.def(
             "ttnn_linear_backward",
             &ttml::ops::ttnn_linear_backward,
@@ -188,6 +196,16 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+
+        // Add scaled_dot_product_attention
+        py_multi_head_utils.def(
+            "scaled_dot_product_attention",
+            &ttml::ops::scaled_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt,
+            "Scaled dot product attention");
     }
 
     {

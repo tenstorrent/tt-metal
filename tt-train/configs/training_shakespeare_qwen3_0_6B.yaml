@@ -1,0 +1,43 @@
+training_config:
+  project_name: "tt_train_qwen3"
+  model_type: "qwen3"  # Use dedicated Qwen3 model with explicit head_dim
+  seed: 5489
+  model_save_interval: 1
+  batch_size: 1
+  num_epochs: 1
+  max_steps: 5000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
+  tokenizer_path: "data/qwen-tokenizer.json"  # Qwen3 uses its own tokenizer
+  tokenizer_type: "bpe"
+
+  transformer_config:
+    # Qwen3-0.6B architecture parameters
+    # KEY DIFFERENCE: Qwen3 explicitly specifies head_dim = 128
+    # This means attention_dim = num_heads * head_dim = 16 * 128 = 2048 (not 1024!)
+    num_heads: 16                    # num_attention_heads
+    num_groups: 8                    # num_key_value_heads (GQA)
+    embedding_dim: 1024              # hidden_size (input/output dimension)
+    head_dim: 128                    # ← CRITICAL: explicit head dimension
+    intermediate_dim: 3072           # intermediate_size for MLP
+    dropout_prob: 0.0                # attention_dropout
+    num_blocks: 28                   # num_hidden_layers
+    weight_tying: "disabled"          # tie_word_embeddings: true
+    vocab_size: 151936               # Qwen3's vocabulary size
+    max_sequence_length: 2048        # Training context (can be extended to 40960)
+    runner_type: memory_efficient    # Use memory efficient runner for training
+    theta: 1000000.0                 # rope_theta (2x larger than Llama3)
+    rms_norm_eps: 1.0e-6             # Qwen3 uses 1e-6 (vs Llama's 1e-5)
+
+    # Note: rope_scaling is null for Qwen3-0.6B by default
+    # No rope_scaling configuration needed at base context length
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

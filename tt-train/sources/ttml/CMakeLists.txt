@@ -66,6 +66,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen3.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/qwen3.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
@@ -92,6 +94,10 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_block.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_block.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_attention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/qwen3_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
@@ -110,6 +116,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/concat_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/concat_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp

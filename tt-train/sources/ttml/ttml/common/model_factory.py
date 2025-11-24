@@ -154,6 +154,66 @@ class TransformerModelFactory:
             return ttml.models.distributed.llama.create_llama_model(lcfg)
         return ttml.models.llama.create_llama_model(lcfg)
 
+    def _create_qwen3(self):
+        """Create Qwen3 model from configuration.
+
+        Qwen3 requires explicit head_dim specification.
+        Key difference: attention_dim (num_heads * head_dim) != embedding_dim
+
+        Returns:
+            Qwen3 model instance
+        """
+        qcfg = ttml.models.qwen3.Qwen3Config()
+
+        # Core fields
+        qcfg.num_heads = self.transformer_config.num_heads
+        qcfg.num_groups = self.transformer_config.num_groups
+        qcfg.embedding_dim = self.transformer_config.embedding_dim
+        qcfg.head_dim = getattr(
+            self.transformer_config, "head_dim", 128
+        )  # Explicit for Qwen3
+        qcfg.num_blocks = self.transformer_config.num_blocks
+        vs = self.transformer_config.vocab_size
+        qcfg.vocab_size = adjust_vocab_size(
+            vs, self.device_config.enable_tp, self.device_config.total_devices()
+        )
+        qcfg.max_sequence_length = self.transformer_config.max_sequence_length
+        qcfg.dropout_prob = self.transformer_config.dropout_prob
+
+        # Optional fields
+        if self.transformer_config.intermediate_dim is not None:
+            qcfg.intermediate_dim = int(self.transformer_config.intermediate_dim)
+        if self.transformer_config.theta is not None:
+            qcfg.theta = float(self.transformer_config.theta)
+        if self.transformer_config.rms_norm_eps is not None:
+            qcfg.rms_norm_eps = float(self.transformer_config.rms_norm_eps)
+
+        # Runner type
+        qcfg.runner_type = map_runner_type(self.transformer_config.runner_type)
+
+        if self.transformer_config.weight_tying:
+            qcfg.weight_tying = (
+                ttml.models.WeightTyingType.Enabled
+                if "enabled" in self.transformer_config.weight_tying
+                else ttml.models.WeightTyingType.Disabled
+            )
+
+        # Optional RoPE scaling
+        rope = self.transformer_config.rope
+        if rope:
+            if self.transformer_config.scaling_factor:
+                qcfg.scaling_factor = self.transformer_config.scaling_factor
+            if self.transformer_config.high_freq_factor:
+                qcfg.high_freq_factor = self.transformer_config.high_freq_factor
+            if self.transformer_config.low_freq_factor:
+                qcfg.low_freq_factor = self.transformer_config.low_freq_factor
+            if self.transformer_config.original_context_length:
+                qcfg.original_context_length = (
+                    self.transformer_config.original_context_length
+                )
+
+        return ttml.models.qwen3.create_qwen3_model(qcfg)
+
     def create_model(self):
         """Create model based on model_type configuration.
 
@@ -167,5 +227,7 @@ class TransformerModelFactory:
             return self._create_gpt2()
         elif self.model_type == "llama":
             return self._create_llama()
+        elif self.model_type == "qwen3":
+            return self._create_qwen3()
         else:
             raise ValueError(f"Model type {self.model_type} not supported")

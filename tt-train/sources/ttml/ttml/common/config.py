@@ -130,6 +130,16 @@ class TransformerConfig:
         self.theta = float(theta_val) if theta_val is not None else None
         self.num_groups = int(yaml_config.get("num_groups", 3))
 
+        # Qwen3-specific: explicit head dimension (optional, defaults to 128 if not specified)
+        head_dim_val = yaml_config.get("head_dim", None)
+        self.head_dim = int(head_dim_val) if head_dim_val is not None else None
+
+        # RMSNorm epsilon (Qwen3 uses 1e-6, others typically 1e-5)
+        rms_norm_eps_val = yaml_config.get("rms_norm_eps", None)
+        self.rms_norm_eps = (
+            float(rms_norm_eps_val) if rms_norm_eps_val is not None else None
+        )
+
         # RoPE
         self.rope = yaml_config.get("rope_scaling", None)
         if self.rope:
