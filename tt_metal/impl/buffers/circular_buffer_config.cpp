@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unordered_set>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "impl/buffers/circular_buffer_config.hpp"
-
-#include <unordered_map>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
@@ -268,6 +268,12 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
     impl_->set_tile_dims(buffer_index, tile);
     return *this;
+}
+
+uint32_t CircularBufferConfig::total_size() const { return impl_->total_size(); }
+
+const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
+    return impl_->page_sizes();
 }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
