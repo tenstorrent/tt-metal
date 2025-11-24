@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <vector>
 #include <simde/x86/avx2.h>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"

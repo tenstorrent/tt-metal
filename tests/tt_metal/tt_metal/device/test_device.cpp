@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -32,8 +33,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/utils.hpp>
+#include "math.hpp"
 
 namespace tt::tt_metal {
 
@@ -49,7 +51,7 @@ namespace unit_tests::basic::device {
 /// @param grid_size - grid size. will ping all cores from {0,0} to grid_size (non-inclusive)
 /// @return
 bool l1_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
@@ -84,7 +86,7 @@ bool l1_ping(
 /// @param num_channels - num_channels. will ping all channels from {0} to num_channels (non-inclusive)
 /// @return
 bool dram_ping(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
@@ -125,7 +127,7 @@ TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -168,7 +170,7 @@ TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
@@ -223,15 +225,13 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-        auto& program_ = workload.get_programs().at(device_range);
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::CreateKernel(
-            program_,
+            program,
             kernel_name,
             logical_target_core,
             tt_metal::DataMovementConfig{
@@ -239,6 +239,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
+        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> output;
@@ -258,11 +259,11 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 
 // For a given collection of MMIO device and remote devices, ensure that channels are unique
 TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> mmio_device_to_device_group;
+    std::unordered_map<ChipId, std::set<ChipId>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
-        chip_id_t assoc_mmio_dev_id =
+        ChipId assoc_mmio_dev_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
-        std::set<chip_id_t>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
+        std::set<ChipId>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
@@ -271,7 +272,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
             tt::tt_metal::MetalContext::instance().get_cluster().get_num_host_channels(mmio_dev_id),
             device_group.size());
         std::unordered_set<uint16_t> channels;
-        for (const chip_id_t& device_id : device_group) {
+        for (const ChipId& device_id : device_group) {
             channels.insert(
                 tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id));
         }
@@ -288,7 +289,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(device->is_mmio_capable());
@@ -320,7 +321,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -337,41 +338,133 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 // 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
+    const auto& mesh_device = devices_.at(0);
+    const auto device = mesh_device->get_devices()[0];
 
-    uint32_t l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
-    tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, random_vec);
+    tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, random_vec);
 
     uint32_t value_to_write = 39;
     bool invalidate_cache =
         true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
 
-    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);
 
     tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
-        program, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+        program_, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
 
     tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
 
-    tt_metal::SetRuntimeArgs(program, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
+    tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
-    tt_metal::detail::LaunchProgram(device_, program);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
-    tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
+    tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
+}
+
+// Test to verify that logical to virtual coordinate mapping is correct.
+// Reads mapping from L1 memory and compares it to the host mapping.
+TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
+    std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
+
+    auto mesh_device = this->devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    auto logical_grid_size = device->logical_grid_size();
+    for (int r = 0; r < logical_grid_size.y; r++) {
+        for (int c = 0; c < logical_grid_size.x; c++) {
+            CoreCoord logical_coord(c, r);
+            auto virtual_coord = device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
+            logical_to_virtual_map[logical_coord] = virtual_coord;
+        }
+    }
+
+    CoreRange logical_core_range(CoreCoord(0, 0), CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1));
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    std::array<std::vector<uint32_t>, 2> host_buffers;
+    uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
+
+    auto kernel0_l1_address = l1_unreserved_base;
+    tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+        logical_core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
+                              (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
+    tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+        logical_core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::NOC_1,
+            .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    for (size_t x = 0; x < logical_grid_size.x; x++) {
+        for (size_t y = 0; y < logical_grid_size.y; y++) {
+            CoreCoord logical_core(x, y);
+            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel0_l1_address, read_size, host_buffers[0]);
+            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel1_l1_address, read_size, host_buffers[1]);
+
+            for (size_t index = 0; index < host_buffers.size(); index++) {
+                std::vector<uint32_t> logical_col_to_virtual_col(logical_grid_size.x);
+                std::vector<uint32_t> logical_row_to_virtual_row(logical_grid_size.y);
+                size_t host_buffer_offset = 0;
+
+                for (size_t i = 0; i < logical_grid_size.x; i++) {
+                    logical_col_to_virtual_col[i] = host_buffers[index][host_buffer_offset++];
+                }
+                for (size_t i = 0; i < logical_grid_size.y; i++) {
+                    logical_row_to_virtual_row[i] = host_buffers[index][host_buffer_offset++];
+                }
+
+                for (auto test_coords : logical_to_virtual_map) {
+                    auto virtual_coord = tt_xy_pair{
+                        logical_col_to_virtual_col[test_coords.first.x],
+                        logical_row_to_virtual_row[test_coords.first.y]};
+                    EXPECT_EQ(test_coords.second, virtual_coord)
+                        << "At logical core X,Y " << x << "," << y << " on RISCV_" << index
+                        << " logical coord: " << test_coords.first.str()
+                        << " does not match expected virtual coord: " << test_coords.second.str()
+                        << " instead found virtual coord: " << virtual_coord.str();
+                }
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

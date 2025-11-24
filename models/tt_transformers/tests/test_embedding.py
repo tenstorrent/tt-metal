@@ -8,13 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("use_scaled_embedding", (False, True))
 @pytest.mark.parametrize(
     "mesh_device",
@@ -48,11 +47,17 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
 
     reference_emb = model_args.reference_embedding()
 
-    if model_args.is_vision():
-        layer_name = "text_model.tok_embeddings.weight"
+    if model_args.is_llama_vision():
+        weight = torch.cat(
+            [
+                state_dict["text_model.tok_embeddings.weight"],
+                state_dict["text_model.learnable_embedding.weight"],
+            ],
+            dim=0,
+        )
     else:
-        layer_name = "tok_embeddings.weight"
-    reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})
+        weight = state_dict["tok_embeddings.weight"]
+    reference_emb.load_state_dict({"emb.weight": weight})
 
     emb_kwargs = {
         "mesh_device": mesh_device,

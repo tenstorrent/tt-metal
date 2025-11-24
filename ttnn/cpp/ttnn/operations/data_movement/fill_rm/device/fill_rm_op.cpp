@@ -6,7 +6,6 @@
 #include <tt-metalium/tilize_utils.hpp>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -31,7 +30,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(any.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -68,8 +67,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(
          uint32_t(W),
          uint32_t(hFill),
          uint32_t(wFill),
-         uint32_t(bfloat16(val_hi).to_uint16()),
-         uint32_t(bfloat16(val_lo).to_uint16())});
+         uint32_t(std::bit_cast<uint16_t>(bfloat16(val_hi))),
+         uint32_t(std::bit_cast<uint16_t>(bfloat16(val_lo)))});
 
     auto override_runtime_args_callback = [kernel_id = binary_reader_kernel_id](
                                               const void* operation,
@@ -92,9 +91,24 @@ operation::ProgramWithCallbacks fill_rm_single_core(
 
 void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL((this->N > 0 && this->C > 0 && this->H > 0 && this->W > 0), "Error");
-    TT_FATAL((this->hFill <= this->H && this->wFill <= this->W), "Error");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(
+        (this->N > 0 && this->C > 0 && this->H > 0 && this->W > 0),
+        "All dimensions must be positive: N={}, C={}, H={}, W={}",
+        this->N,
+        this->C,
+        this->H,
+        this->W);
+    TT_FATAL(
+        (this->hFill <= this->H && this->wFill <= this->W),
+        "Fill dimensions must be <= tensor dimensions: hFill={} <= H={}, wFill={} <= W={}",
+        this->hFill,
+        this->H,
+        this->wFill,
+        this->W);
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16,
+        "Input tensor dtype must be BFLOAT16 but got {}",
+        input_tensor_a.dtype());
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");

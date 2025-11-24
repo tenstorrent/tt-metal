@@ -14,14 +14,12 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.deit.tests.demo_utils import get_data
 
 
@@ -36,7 +34,6 @@ def run_perf_deit(
     iterations,
     model_location_generator,
 ):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_iter"
@@ -62,8 +59,6 @@ def run_perf_deit(
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model_with_teacher(tt_input)[0]

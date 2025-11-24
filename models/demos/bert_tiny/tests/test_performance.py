@@ -11,10 +11,10 @@ from transformers import BertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_wormhole_b0
 
 
 def get_expected_times(bert_tiny):
@@ -35,7 +35,6 @@ def test_perf_bert_tiny(
     model_location_generator,
     reset_seeds,
 ):
-    disable_persistent_kernel_cache()
     model_name = str(model_location_generator(model_name, model_subdir="Bert"))
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     tokenizer_name = str(model_location_generator(model_name, model_subdir="Bert"))
@@ -74,7 +73,6 @@ def test_perf_bert_tiny(
 
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

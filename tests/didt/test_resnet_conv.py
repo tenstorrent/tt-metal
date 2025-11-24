@@ -9,7 +9,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
 MESH_X = NUM_DEVICES if NUM_DEVICES <= 8 else 8
@@ -141,6 +141,7 @@ class ResnetConvTest(OpTestBase):
             input_height=self.input_height,
             input_width=self.input_width,
             conv_config=self.program_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=self.compute_config,
             groups=self.groups,
             dtype=self.out_dtype,
@@ -206,7 +207,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         shard_layout=shard_layout,
         deallocate_activation=False,
         enable_act_double_buffer=True,
-        enable_split_reader=True,
     )
     # This sets subblocks to [2, 4] in underlying matmul
     conv_config.act_block_h_override = 40 * 32

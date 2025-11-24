@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -80,7 +80,6 @@ class VisionBlock(LightweightModule):
         cu_seqlens,
         rot_mats,
     ) -> ttnn.Tensor:
-        TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         assert (
@@ -97,7 +96,7 @@ class VisionBlock(LightweightModule):
         )
 
         # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=None)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(x)
 
@@ -111,7 +110,7 @@ class VisionBlock(LightweightModule):
             h,
             ff_out,
             memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode="prefill") else ttnn.bfloat16,
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(h)
         ttnn.deallocate(ff_out)

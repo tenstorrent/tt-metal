@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,6 +43,8 @@ void MAIN {
     constexpr uint32_t use_padded_mask = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(29) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -51,7 +53,13 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    const uint32_t num_phases = get_arg_val<uint32_t>(7);
+    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
+    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -64,6 +72,7 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
@@ -78,12 +87,20 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        if (phase == 0) {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+        } else {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+        }
+
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
@@ -152,9 +169,11 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if constexpr (is_causal) {
-                        if (!(q_low_idx >= k_high_idx)) {
-                            /* QK += MASK */
+                    if constexpr (is_causal || sliding_window_size > 0) {
+                        /* QK += MASK */
+                        if (!(q_low_idx >= k_high_idx) || sliding_window_size > 0) {
+                            // If no sliding window - simple causal case - only apply along the diagonal
+                            // Otherwise, apply mask for all chunks
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
@@ -186,7 +205,6 @@ void MAIN {
                         cb_identity_scale_in,
                         Sq_chunk_t,
                         Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
-
                     /**
                      * sub_exp fuses a few operations.
                      * In-place it performs `QK = exp((QK - cur_max) * scale)`
@@ -197,7 +215,7 @@ void MAIN {
                      * Partial reduce_sum is used to push the final row_reduction within a tile
                      * outside of the loop over K chunks.
                      */
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
                         alias_cur_max, alias_cur_sum);
 
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
@@ -252,11 +270,63 @@ void MAIN {
                     std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
                     std::swap(alias_prev_max, alias_cur_max);
                 }
-
                 /**
                  * Performs final row-reduction on the partial sum.
                  */
                 matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+
+                /**
+                 * Process attention sink as a virtual K chunk.
+                 * The attention sink provides additional logits that are included in the softmax
+                 * denominator but don't contribute to the output (no S @ V computation).
+                 * This effectively allows some attention probability to be "absorbed" by the sink,
+                 * reducing attention weights on actual tokens.
+                 *
+                 * Shape of attention_sink: [Sq_chunk_t, 1] tiles
+                 * Each head has one sink logit value that is broadcast to all query positions in the chunk.
+                 * The reader kernel replicates the per-head value across all Sq_chunk_t positions.
+                 */
+                if constexpr (use_attention_sink) {
+                    // Treat attention_sink as scores (already scaled)
+                    // Shape: [Sq_chunk_t, 1] tiles - same per-head sink value broadcast to all query positions
+
+                    // 1. Update running max: cur_max = max(prev_max, attention_sink)
+                    //    This compares the previous max with the sink logit
+                    reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
+
+                    reduce_c<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_attention_sink,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        1>(alias_cur_max, alias_prev_max, true);
+
+                    // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    cb_pop_front(alias_prev_max, Sq_chunk_t);
+
+                    // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
+                    //    This adds the attention sink's contribution to the softmax denominator
+                    sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32, false>(
+                        alias_cur_max, alias_cur_sum);
+
+                    // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+
+                    // 6. Update running statistics for final normalization
+                    std::swap(alias_prev_sum, alias_cur_sum);
+                    std::swap(alias_prev_max, alias_cur_max);
+
+                    // 7. Rescale accumulated output: mm2_prev_out *= exp(prev_max - cur_max)
+                    //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
+                    //    But we need to rescale it due to the updated max
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt>(
+                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, false);
+                    std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
+                }
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
@@ -267,6 +337,10 @@ void MAIN {
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
+                }
+                if constexpr (use_attention_sink) {
+                    cb_pop_front(cb_attention_sink, Sq_chunk_t);
+                }
             }
         }
     }

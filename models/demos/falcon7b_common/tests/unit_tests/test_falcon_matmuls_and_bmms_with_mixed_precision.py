@@ -10,10 +10,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 from models.demos.falcon7b_common.tt.falcon_causallm import falcon_lm_head_matmul
 from models.demos.falcon7b_common.tt.falcon_mlp import falcon_dense_4h_to_h_matmul, falcon_dense_h_to_4h_matmul
 from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
-from models.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 
 
 class MatmulOpEnum(Enum):

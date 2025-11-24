@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_op.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -191,7 +191,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
                     MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, output_mem_config.buffer_type(), shard_spec);
             }
         } else if (this->dim == TransposeOpDim::HC) {
-            output_mem_config = output_mem_config.with_shard_spec(input_tensor.shard_spec().value());
+            output_mem_config = output_mem_config.with_shard_spec(input_tensor.shard_spec());
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks Transpose::create_program(
 
     switch (parallelization_strategy) {
         case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
-            if (input_tensor.is_sharded()) {
+            if (input_tensor.is_sharded() && input_tensor.buffer()->is_l1()) {
                 if (input_tensor.layout() == Layout::ROW_MAJOR) {
                     return detail::transpose_wh_multi_core_sharded_rm(input_tensor, output_tensor);
                 } else {
@@ -226,7 +226,7 @@ operation::ProgramWithCallbacks Transpose::create_program(
             }
             break;
         case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
-            if (input_tensor.is_sharded()) {
+            if (input_tensor.is_sharded() && input_tensor.buffer()->is_l1()) {
                 return detail::transpose_hc_multi_core_sharded(input_tensor, output_tensor);
             } else {
                 return detail::transpose_hc_multi_core(input_tensor, output_tensor, pad_value);

@@ -134,19 +134,19 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
-          wget -O /tmp/sfpi-version.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version.sh
-          sfpi_arch_os=$(uname -m)_$(uname -s)
-          source /tmp/sfpi-version.sh
-          wget ${sfpi_url}/${sfpi_version}/sfpi-${sfpi_arch_os}.rpm
-          dnf -y install ./sfpi-${sfpi_arch_os}.rpm
-          rm -f sfpi-${sfpi_arch_os}.rpm /tmp/sfpi-version.sh
+          wget -O /tmp/sfpi-info.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-info.sh
+          wget -O /tmp/sfpi-version https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version
+          eval $(/tmp/sfpi-info.sh SHELL rpm)
+          wget $sfpi_url/$sfpi_filename
+          dnf -y install ./$sfpi_filename
+          rm -f $sfpi_filename /tmp/sfpi-info.sh /tmp/sfpi-version
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U07J3K6KS1K # Bryan Lozano
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

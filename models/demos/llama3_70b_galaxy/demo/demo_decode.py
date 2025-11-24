@@ -22,7 +22,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.tt_sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
@@ -268,6 +268,7 @@ def run_llama3_demo(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=enable_prefetcher_performance_mode,
+        decode_mode_only=True,
     )
     tt_embd = TtLlamaEmbedding(
         mesh_device=mesh_device,
@@ -380,10 +381,7 @@ def run_llama3_demo(
         logger.info(f"Sampling done")
 
     if not stress_test:
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
@@ -416,10 +414,7 @@ def run_llama3_demo(
     _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),

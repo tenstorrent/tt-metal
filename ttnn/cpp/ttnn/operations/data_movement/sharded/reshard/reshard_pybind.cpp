@@ -24,15 +24,12 @@ void bind_reshard(pybind11::module& module, const data_movement_sharded_operatio
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const MemoryConfig& output_memory_config,
-               const std::optional<Tensor>& output_tensor,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, output_memory_config, output_tensor);
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, output_memory_config, output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("output_memory_config"),
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::kw_only(),
-            py::arg("queue_id") = DefaultQueueId,
 
         });
 }
@@ -44,16 +41,12 @@ void py_bind_reshard(pybind11::module& module) {
     detail::bind_reshard(
         module,
         ttnn::reshard,
-        R"doc(reshard(input_tensor: ttnn.Tensor,  output_memory_config: MemoryConfig *, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from one sharded layout to another sharded layout
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor
             * :attr:`output_memory_config` (MemoryConfig): Memory config with shard spec of output tensor
-
-        Keyword Args:
-            * :attr:`queue_id`: command queue id
 
         Example:
             >>> sharded_memory_config_dict = dict(

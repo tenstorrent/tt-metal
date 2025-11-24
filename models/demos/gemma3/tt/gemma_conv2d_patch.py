@@ -4,7 +4,7 @@ We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modificati
 We have added a check for weight to convert 4D to 2D
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 
 class TtGemmaConv2dPatch(LightweightModule):

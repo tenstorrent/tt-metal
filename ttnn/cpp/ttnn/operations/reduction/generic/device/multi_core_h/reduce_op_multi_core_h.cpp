@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -36,11 +35,11 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt_metal::IDevice* device = a.device();
 
@@ -230,7 +229,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 reader_kernel_id,
                 core,
                 {a.buffer()->address(),
-                 num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
                  num_cols_read % Wt,
                  num_cols_per_core});
 

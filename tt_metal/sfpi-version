@@ -1,0 +1,9 @@
+# sfpi version information
+sfpi_repo=https://github.com/tenstorrent/sfpi
+sfpi_version=7.9.0
+sfpi_aarch64_debian_deb_md5=bb6c081982746d74e37548cdad652ad1
+sfpi_aarch64_debian_txz_md5=290be668656a9caa5d4fba9c8b70985a
+sfpi_x86_64_debian_deb_md5=5ef4f904611fdef71fe187279a03614c
+sfpi_x86_64_debian_txz_md5=1812c63d1284692621889cca2916359a
+sfpi_x86_64_fedora_rpm_md5=826126d608590d574ad646f0aca6c45f
+sfpi_x86_64_fedora_txz_md5=864df377953f36658eb5a30750c6ea4b

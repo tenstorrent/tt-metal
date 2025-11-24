@@ -6,14 +6,13 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
 )
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
@@ -72,7 +71,6 @@ def test_rotary_embedding_llama_fused_qk(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (

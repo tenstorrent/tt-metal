@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -47,7 +47,6 @@
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"

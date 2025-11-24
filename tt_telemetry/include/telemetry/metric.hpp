@@ -10,11 +10,13 @@
  * Metric (i.e., telemetry point) types that we track. Various telemetry values derive from these.
  */
 
- #include <vector>
+#include <vector>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
+#include <fmt/ranges.h>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
@@ -41,15 +43,16 @@ std::unordered_map<uint16_t, std::string> create_metric_unit_full_label_map();
 
 class Metric {
 public:
-    const size_t id = 0;
     const MetricUnit units;
 
-    Metric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        id(metric_unique_id), units(metric_units) {}
+    Metric(MetricUnit metric_units = MetricUnit::UNITLESS) : units(metric_units) {}
 
     virtual const std::vector<std::string> telemetry_path() const {
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
+
+    // Get telemetry path as a slash-separated string
+    std::string telemetry_path_string() const { return fmt::format("{}", fmt::join(telemetry_path(), "/")); }
 
     virtual void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
@@ -71,17 +74,28 @@ public:
     }
 
 protected:
+    void set_timestamp_now() {
+        timestamp_ =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    }
+
     bool changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
 };
 
 class BoolMetric: public Metric {
 public:
-    BoolMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    BoolMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     bool value() const {
         return value_;
+    }
+
+    void set_value(bool value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
     }
 
 protected:
@@ -90,11 +104,16 @@ protected:
 
 class UIntMetric: public Metric {
 public:
-    UIntMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    UIntMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     uint64_t value() const {
         return value_;
+    }
+
+    void set_value(uint64_t value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
     }
 
 protected:
@@ -103,11 +122,32 @@ protected:
 
 class DoubleMetric : public Metric {
 public:
-    DoubleMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(metric_unique_id, metric_units) {}
+    DoubleMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     double value() const { return value_; }
 
+    void set_value(double value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
+    }
+
 protected:
     double value_ = 0.0;
+};
+
+class StringMetric : public Metric {
+public:
+    StringMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
+
+    std::string_view value() const { return value_; }
+
+    void set_value(std::string value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = std::move(value);
+        set_timestamp_now();
+    }
+
+protected:
+    std::string value_;
 };

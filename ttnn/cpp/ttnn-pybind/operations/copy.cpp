@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,12 +16,9 @@
 
 namespace ttnn::operations::copy {
 
-namespace {
-
 void bind_global_typecast(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None, queue_id : Optional[int]) -> ttnn.Tensor
-
+        R"doc(
 Applies {0} to :attr:`input_tensor`.
 
 Args:
@@ -52,17 +49,15 @@ Example::
                const DataType dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, dtype, memory_config, output_tensor, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, dtype, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("dtype"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("sub_core_grids") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId},
+            py::arg("sub_core_grids") = std::nullopt},
 
         ttnn::pybind_overload_t{
             [](const TypecastType& self,
@@ -71,10 +66,8 @@ Example::
                const DataType output_dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
-                    queue_id, input_tensor, input_dtype, output_dtype, memory_config, output_tensor, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, input_dtype, output_dtype, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("input_dtype"),
@@ -82,13 +75,8 @@ Example::
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("sub_core_grids") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId}
-
-    );
+            py::arg("sub_core_grids") = std::nullopt});
 }
-
-}  // namespace
 
 void py_module(py::module& module) { bind_global_typecast(module); }
 

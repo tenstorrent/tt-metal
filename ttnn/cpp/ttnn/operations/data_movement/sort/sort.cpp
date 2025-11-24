@@ -5,7 +5,6 @@
 #include "sort.hpp"
 #include "device/sort_device_operation.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -152,7 +151,6 @@ void convert_tensor_dtype(Tensor& tensor, const DataType& target_dtype, MeshDevi
 }  // namespace
 
 std::vector<Tensor> ExecuteSort::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const int8_t dim,
     const bool descending,
@@ -203,7 +201,7 @@ std::vector<Tensor> ExecuteSort::invoke(
     }
 
     auto sorted_tensors =
-        ttnn::prim::sort(queue_id, padded_input_tensor, dim, descending, stable, memory_config_value, output_tensors);
+        ttnn::prim::sort(padded_input_tensor, dim, descending, stable, memory_config_value, output_tensors);
 
     auto post_transform_output_tensors = CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, memory_config_value);

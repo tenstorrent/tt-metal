@@ -4,34 +4,37 @@
 
 #include "hc_sum_reduce_program_factory.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm::detail {
+namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
-    const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
+HCSumReduceProgramFactory::cached_program_t HCSumReduceProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto* input_buffer = a.buffer();
-
+    auto* input_buffer = tensor_args.input.buffer();
     tt::tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const auto& ashape = a.padded_shape();
-    auto num_output_blocks_total = a.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
+    const auto& ashape = tensor_args.input.padded_shape();
+    auto num_output_blocks_total = tensor_args.input.padded_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
 
     const bool row_major = false;
+    auto device_compute_with_storage_grid_size = tensor_args.input.device()->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
+            tt::tt_metal::split_work_to_cores(
+                device_compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
@@ -44,13 +47,13 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
 
-    TT_ASSERT(a.dtype() == output.dtype(), "Input and output tensors must be of same type");
+    TT_ASSERT(tensor_args.input.dtype() == output.dtype(), "Input and output tensors must be of same type");
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input.dtype());
+    const uint32_t input_tile_size = tt::tile_size(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_size = 2;
 
@@ -115,82 +118,130 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
+            .math_fidelity = operation_attributes.math_fidelity,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
-    std::vector<CoreCoord> cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
-    auto set_runtime_args = [reader_kernel_id,
-                             writer_kernel_id,
-                             compute_kernel_id,
-                             num_cores = num_cores,
-                             all_cores = all_cores,
-                             cores = cores,
-                             g1_numcores = g1_numcores,
-                             g2_numcores = g2_numcores,
-                             num_blocks_per_core_group_1 = num_blocks_per_core_group_1,
-                             num_blocks_per_core_group_2 = num_blocks_per_core_group_2,
-                             ashape = ashape](Program& program, const Tensor& a, const Tensor& output) {
-        tt::tt_metal::Buffer* input_buffer = a.buffer();
-        tt::tt_metal::Buffer* output_buffer = output.buffer();
+    std::vector<CoreCoord> cores = grid_to_cores(
+        num_cores, device_compute_with_storage_grid_size.x, device_compute_with_storage_grid_size.y, row_major);
 
-        uint32_t num_blocks_per_core = 0;
+    // Set initial runtime args
+    tt::tt_metal::Buffer* input_buffer_mutable = input_buffer;
+    tt::tt_metal::Buffer* output_buffer_mutable = out_buffer;
 
-        std::vector<std::vector<uint32_t>> reader_runtime_args = {
-            cores.size(), {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
+    uint32_t num_blocks_per_core = 0;
 
-        std::vector<std::vector<uint32_t>> writer_runtime_args = {
-            cores.size(), {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
+    std::vector<std::vector<uint32_t>> reader_runtime_args = {
+        cores.size(), {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
 
-        std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
+    std::vector<std::vector<uint32_t>> writer_runtime_args = {
+        cores.size(), {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
 
-        for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            if (i < g1_numcores) {
-                num_blocks_per_core = num_blocks_per_core_group_1;
-            } else {
-                num_blocks_per_core = num_blocks_per_core_group_2;
-            }
+    std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
 
-            reader_runtime_args[i][0] = input_buffer->address();
-            reader_runtime_args[i][1] = num_blocks_per_core * LATENT_DIM;
-            reader_runtime_args[i][2] = num_blocks_written * LATENT_DIM;
-            reader_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
-            reader_runtime_args[i][4] = ashape[-1] / TILE_WIDTH;
-
-            writer_runtime_args[i][0] = output_buffer->address();
-            writer_runtime_args[i][1] = num_blocks_per_core;
-            writer_runtime_args[i][2] = num_blocks_written;
-            writer_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
-            writer_runtime_args[i][4] = ashape[-1] / (LATENT_DIM * TILE_WIDTH);
-
-            compute_runtime_args[i][0] = num_blocks_per_core;
-            compute_runtime_args[i][1] = ashape[2] / TILE_HEIGHT;
-
-            num_blocks_written += num_blocks_per_core;
+    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        if (i < g1_numcores) {
+            num_blocks_per_core = num_blocks_per_core_group_1;
+        } else {
+            num_blocks_per_core = num_blocks_per_core_group_2;
         }
 
-        SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
-        SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
-        SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+        reader_runtime_args[i][0] = input_buffer_mutable->address();
+        reader_runtime_args[i][1] = num_blocks_per_core * LATENT_DIM;
+        reader_runtime_args[i][2] = num_blocks_written * LATENT_DIM;
+        reader_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+        reader_runtime_args[i][4] = ashape[-1] / TILE_WIDTH;
+
+        writer_runtime_args[i][0] = output_buffer_mutable->address();
+        writer_runtime_args[i][1] = num_blocks_per_core;
+        writer_runtime_args[i][2] = num_blocks_written;
+        writer_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+        writer_runtime_args[i][4] = ashape[-1] / (LATENT_DIM * TILE_WIDTH);
+
+        compute_runtime_args[i][0] = num_blocks_per_core;
+        compute_runtime_args[i][1] = ashape[2] / TILE_HEIGHT;
+
+        num_blocks_written += num_blocks_per_core;
+    }
+
+    SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
+    SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+
+    // Store shared variables
+    HCSumReduceSharedVariables shared_variables{
+        reader_kernel_id,
+        writer_kernel_id,
+        compute_kernel_id,
+        num_cores,
+        all_cores,
+        cores,
+        g1_numcores,
+        g2_numcores,
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
     };
 
-    set_runtime_args(program, a, output);
-
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto& output_tensor = output_tensors.at(0);
-        set_runtime_args(program, input_tensors.at(0), output_tensor);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{std::move(program), std::move(shared_variables)};
 }
 
-}  // namespace ttnn::operations::experimental::ssm::detail
+void HCSumReduceProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t LATENT_DIM = TILE_WIDTH;
+
+    auto& program = cached_program.program;
+    const auto& shared_variables = cached_program.shared_variables;
+
+    tt::tt_metal::Buffer* input_buffer = tensor_args.input.buffer();
+    tt::tt_metal::Buffer* output_buffer = tensor_return_value.buffer();
+
+    const auto& ashape = tensor_args.input.padded_shape();
+
+    uint32_t num_blocks_per_core = 0;
+
+    std::vector<std::vector<uint32_t>> reader_runtime_args = {
+        shared_variables.cores.size(), {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
+
+    std::vector<std::vector<uint32_t>> writer_runtime_args = {
+        shared_variables.cores.size(), {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
+
+    std::vector<std::vector<uint32_t>> compute_runtime_args = {shared_variables.cores.size(), {0, 0}};
+
+    for (uint32_t i = 0, num_blocks_written = 0; i < shared_variables.num_cores; i++) {
+        if (i < shared_variables.g1_numcores) {
+            num_blocks_per_core = shared_variables.num_blocks_per_core_group_1;
+        } else {
+            num_blocks_per_core = shared_variables.num_blocks_per_core_group_2;
+        }
+
+        reader_runtime_args[i][0] = input_buffer->address();
+        reader_runtime_args[i][1] = num_blocks_per_core * LATENT_DIM;
+        reader_runtime_args[i][2] = num_blocks_written * LATENT_DIM;
+        reader_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+        reader_runtime_args[i][4] = ashape[-1] / TILE_WIDTH;
+
+        writer_runtime_args[i][0] = output_buffer->address();
+        writer_runtime_args[i][1] = num_blocks_per_core;
+        writer_runtime_args[i][2] = num_blocks_written;
+        writer_runtime_args[i][3] = ashape[2] / TILE_HEIGHT;
+        writer_runtime_args[i][4] = ashape[-1] / (LATENT_DIM * TILE_WIDTH);
+
+        compute_runtime_args[i][0] = num_blocks_per_core;
+        compute_runtime_args[i][1] = ashape[2] / TILE_HEIGHT;
+
+        num_blocks_written += num_blocks_per_core;
+    }
+
+    SetRuntimeArgs(program, shared_variables.reader_kernel_id, shared_variables.cores, reader_runtime_args);
+    SetRuntimeArgs(program, shared_variables.writer_kernel_id, shared_variables.cores, writer_runtime_args);
+    SetRuntimeArgs(program, shared_variables.compute_kernel_id, shared_variables.cores, compute_runtime_args);
+}
+
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce::program

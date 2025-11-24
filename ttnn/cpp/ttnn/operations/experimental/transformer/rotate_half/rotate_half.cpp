@@ -5,6 +5,8 @@
 #include "rotate_half.hpp"
 
 #include "device/rotate_half_device_operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

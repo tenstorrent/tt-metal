@@ -7,10 +7,26 @@ on:
         required: false
         default: false
         type: boolean
-  # schedule:
-  #   # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
-  #   # dev testing and builds for beginning of work week
-  #   - cron: "0 0 * * *"
+      release-type:
+        description: "Type of release to create. One of 'dev', 'rc', or 'prod'. If not provided, the type will be inferred from the git ref."
+        required: false
+        default: "dev"
+        type: string
+      force-bump-type:
+        description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'."
+        required: false
+        default: ""
+        type: string
+      ignore-commits:
+        description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
+        required: false
+        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9" # Ignore the commit that bumps to v0.65.0
+        type: string
+
+  schedule:
+    # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
+    # dev testing and builds for beginning of work week
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -35,22 +51,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Set default release-type for cron job
+        id: set-release-type
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "Cron job detected, setting default release-type to 'dev'"
+            echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            echo "Using release-type: dev"
+          else
+            echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
+            echo "Using release-type: ${{ inputs.release-type }}"
+          fi
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-
-          # Set tag-type
-          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]]; then
-            if [[ "$isReleaseCandidate" == "true" ]]; then
+          if [[ "$RELEASE_TYPE" != "" && "$RELEASE_TYPE" != "null" ]]; then
+            if [[ "$RELEASE_TYPE" != "dev" && "$RELEASE_TYPE" != "rc" && "$RELEASE_TYPE" != "prod" ]]; then
+              echo "Invalid release-type: $RELEASE_TYPE. Must be one of 'dev', 'rc', or 'prod'."
+              exit 1
+            fi
+            echo "Processing release-type: $RELEASE_TYPE"
+            if [[ "$RELEASE_TYPE" == "prod" ]]; then
+              echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
+              echo "tag-type=" >> "$GITHUB_OUTPUT"
+            elif [[ "$RELEASE_TYPE" == "rc" ]]; then
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
-              echo "tag-type=" >> "$GITHUB_OUTPUT"
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
+              echo "tag-type=dev" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "tag-type=dev" >> "$GITHUB_OUTPUT"
+            echo "ERROR: RELEASE_TYPE is empty or null - this should not happen!"
+            echo "This indicates a problem with the 'Set default release-type for cron job' step."
+            exit 1
           fi
 
       - name: Get should-create-release
@@ -67,14 +101,16 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: ./.github/workflows/release-verify-or-create-tag.yaml
+    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
     secrets: inherit
     with:
       fetch_depth: 0
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      dry-run: ${{ inputs.dry-run }}
+      force-bump-type: ${{ inputs.force-bump-type }}
+      ignore-commits: ${{ inputs.ignore-commits }}
+      dry-run: ${{ inputs.dry-run || false }}
 
 
   build-test-publish:
@@ -86,13 +122,48 @@ jobs:
         version: [22.04, 24.04]
     with:
       version: ${{ matrix.version }}
-      dry-run: ${{ inputs.dry-run }}
+      dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
 
+  publish-to-pypi:
+    needs: [build-test-publish, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ttnn/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download ALL wheels (separate folders)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: eager-dist-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Remove profiler artifacts
+        run: |
+          find artifacts -maxdepth 1 -type d -name '*profiler*' -print -exec rm -rf {} +
+
+      - name: Flatten into dist/
+        run: |
+          mkdir -p dist
+          # copy wheel/sdist files from remaining artifact dirs
+          find artifacts -type f -name '*.whl' -exec cp {} dist/ \;
+          find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -l dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: ${{ !inputs.dry-run }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+
 
   create-changelog:
-    needs: [create-tag, build-test-publish]
+    needs: [create-tag]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -121,7 +192,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
       - name: Create note about generating pipeline
@@ -149,7 +220,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -162,21 +233,60 @@ jobs:
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: release-notes
       - name : Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
-      - name: Release (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+      - name: Download Debian packages (all Ubuntu versions)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: packages-*
+          path: debian-packages
+          merge-multiple: true
+      - name: Verify files for release (dry-run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "=== Verifying files that would be included in the release ==="
+          echo ""
+          echo "Checking for required files:"
+          required_files=(
+            "VERSION"
+            "CHANGELOG.txt"
+            "README.md"
+            "INSTALLING.md"
+            "models/docs/MODEL_UPDATES.md"
+            "tt-metalium.tar.gz"
+          )
+          for file in "${required_files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✓ $file ($(du -h "$file" | cut -f1))"
+            else
+              echo "✗ $file (MISSING)"
+            fi
+          done
+          echo ""
+          echo "Checking for Debian packages:"
+          if [ -d "debian-packages" ]; then
+            deb_count=$(find debian-packages -name "*.deb" | wc -l)
+            echo "Found $deb_count Debian package(s):"
+            find debian-packages -name "*.deb" -exec bash -c 'for f in "$@"; do size=$(du -h "$f" | cut -f1); echo "  ✓ $f ($size)"; done' _ {} +
+          else
+            echo "✗ debian-packages directory not found"
+          fi
+          echo ""
+          echo "=== All files that would be uploaded to release ==="
+          ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
+      - name: Create draft release with assets (skipped for dry run)
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
+          draft: true
+          prerelease: false
           body_path: RELEASE_NOTES.txt
           files: |
             VERSION
@@ -185,4 +295,174 @@ jobs:
             INSTALLING.md
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
+            debian-packages/*.deb
           fail_on_unmatched_files: true
+
+  convert-draft-to-prerelease:
+    needs: [create-and-upload-draft-release, create-tag]
+    concurrency: create_upload_draft_release
+    runs-on: ubuntu-latest
+    if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Convert draft to prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Verify the draft release exists before attempting to edit it
+          echo "Checking if release ${{ needs.create-tag.outputs.version }} exists..."
+          if ! gh release view "${{ needs.create-tag.outputs.version }}" >/dev/null 2>&1; then
+            echo "ERROR: Release ${{ needs.create-tag.outputs.version }} not found"
+            echo "This could indicate a timing issue or failure in the create-and-upload-draft-release job"
+            exit 1
+          fi
+
+          # Use GitHub CLI to edit the existing release and convert it from draft to prerelease
+          # This preserves all existing assets and metadata while only changing the release status
+          echo "Converting draft release to prerelease..."
+          gh release edit "${{ needs.create-tag.outputs.version }}" \
+            --draft=false \
+            --prerelease
+
+          echo "Successfully converted release ${{ needs.create-tag.outputs.version }} to prerelease"
+
+  check-stable-for-new-commits:
+    runs-on: ubuntu-latest
+    #Only run on schedule or main branch pushes
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Checkout stable branch
+        uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+      - name: Fetch all tags
+        run: git fetch --tags --force origin
+      - name: Get latest release candidate version
+        id: get-latest-release
+        run: |
+          # Get the latest release candidate (pre-release with -rc suffix)
+          # Sort by published_at in descending order to ensure we get the most recent
+          latestRCVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases | jq -r 'sort_by(.published_at) | reverse | .[] | select(.prerelease == true and (.tag_name | contains("-rc"))) | .tag_name' | head -1)
+
+          # Get the latest production release
+          latestProdVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+
+          echo "Latest RC version: $latestRCVersion"
+          echo "Latest production version: $latestProdVersion"
+
+          # Function to compare semantic versions
+          # Returns: 0 if v1 > v2, 1 if v1 < v2, 2 if v1 == v2
+          compare_versions() {
+            v1="${1#v}"; v1="${v1%%-*}"
+            v2="${2#v}"; v2="${v2%%-*}"
+
+            if [[ "$v1" == "$v2" ]]; then
+              echo 2; return 0
+            fi
+            if printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null; then
+              # v1 < v2
+              echo 1; return 0
+            else
+              # v1 > v2
+              echo 0; return 0
+            fi
+          }
+
+          if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
+            echo "No release candidate found, using latest production release"
+            latestReleaseVersion="$latestProdVersion"
+          else
+            comparison_result="$(compare_versions "$latestRCVersion" "$latestProdVersion")"
+            case "$comparison_result" in
+              2)
+                echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+              0)
+                echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
+                latestReleaseVersion="$latestRCVersion"
+                ;;
+              1)
+                echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+            esac
+          fi
+
+          echo "Selected version for comparison: $latestReleaseVersion"
+          echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
+      - name: Check for new commits since latest release
+        id: check-new-commits
+        run: |
+          latestReleaseVersion="${{ steps.get-latest-release.outputs.latest-release-version }}"
+          echo "Latest release version: $latestReleaseVersion"
+
+          # Get the commit hash of the latest release tag
+          latestReleaseCommit=$(git rev-list -n 1 "$latestReleaseVersion" 2>/dev/null || echo "")
+
+          if [ -z "$latestReleaseCommit" ]; then
+            echo "Could not find commit for latest release tag: $latestReleaseVersion"
+            echo "Assuming there are new commits to be safe"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Get the latest commit on stable branch
+          stableLatestCommit=$(git rev-parse HEAD)
+
+          echo "Latest release commit: $latestReleaseCommit"
+          echo "Stable branch latest commit: $stableLatestCommit"
+
+          # Check if there are any commits on stable since the latest release
+          newCommitsCount=$(git rev-list --count "$latestReleaseCommit..HEAD" 2>/dev/null || echo "0")
+          echo "Number of new commits since latest release: $newCommitsCount"
+
+          if [ "$newCommitsCount" -gt 0 ]; then
+            echo "Found $newCommitsCount new commits since latest release"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits found since latest release"
+            echo "has-new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger RC release workflow
+        #This is only run if there are new commits on stable
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: stable
+          inputs: |
+            {
+              "release-type": "rc",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }
+      - name: Log no action needed
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
+        run: |
+          echo "No new commits found since latest release. No RC release needed."
+
+  trigger-prod-after-rc-success:
+    needs: [build-test-publish, release-precheck, create-tag]
+    runs-on: ubuntu-latest
+    # Only trigger if we are on an RC and the RC build-test-publish succeeded
+    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    steps:
+      - name: Wait for RC workflow completion
+        run: |
+          echo "RC build-test-publish completed successfully"
+          echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
+          echo "Preparing to trigger prod release workflow on the same commit"
+      - name: Trigger prod release workflow on same commit
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.create-tag.outputs.version }}
+          inputs: |
+            {
+              "release-type": "prod",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }

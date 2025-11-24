@@ -18,7 +18,7 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNorm, TtRMSNormSharded
 from models.experimental.grok.reference.model import RMSNorm
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

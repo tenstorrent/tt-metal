@@ -36,7 +36,6 @@ ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding/device/embedding_device_operation.hpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.cpp
 ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp
-ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_program.cpp
 ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/compute/transformer_group_attn_matmul.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.cpp
 ttnn/cpp/ttnn/operations/uniform/device/uniform_device_operation.hpp

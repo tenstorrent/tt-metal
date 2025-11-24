@@ -6,6 +6,9 @@ import os
 
 import torch
 
+MOBILENETV2_L1_SMALL_SIZE = 8 * 1024  # 8 KiB
+MOBILENETV2_BATCH_SIZE = 10
+
 
 def load_torch_model(torch_model, model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:

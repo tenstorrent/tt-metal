@@ -9,12 +9,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.demos.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
-from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

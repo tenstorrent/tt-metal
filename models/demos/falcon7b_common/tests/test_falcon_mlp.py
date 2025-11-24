@@ -2,15 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, load_hf_model, tt_from_torch
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.utility_functions import tt_tensors_to_torch_tensors
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from ttnn import ShardTensorToMesh
 
@@ -37,12 +40,11 @@ def run_test_FalconMLP_inference(
     pcc,
     model_config,
     tt_cache_path,
-    model_location_generator,
     max_seq_len=2048,
 ):
     num_devices = get_num_devices(mesh_device)
 
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
     # Prepare input
@@ -142,14 +144,10 @@ def test_FalconMLP_inference(
     seq_len,
     pcc,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     run_test_FalconMLP_inference(
         mesh_device,
@@ -160,6 +158,5 @@ def test_FalconMLP_inference(
         pcc,
         model_config,
         tt_cache_path,
-        model_location_generator,
         max_seq_len=2048,
     )

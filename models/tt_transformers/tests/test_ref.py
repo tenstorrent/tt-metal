@@ -8,11 +8,9 @@ import torch
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

@@ -7,14 +7,12 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "reshard_program_factory.hpp"
 #include "nd_reshard_program_factory.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -65,9 +63,21 @@ void ReshardDeviceOperation::validate_with_output_tensors(
     bool has_output_tensor = output_tensors.size() == 1 && output_tensors[0].has_value();
     if (has_output_tensor) {
         const auto& output_tensor = output_tensors[0].value();
-        TT_FATAL(input_tensor.logical_shape() == output_tensor.logical_shape(), "Error");
-        TT_FATAL(input_tensor.dtype() == output_tensor.dtype(), "Error");
-        TT_FATAL(input_tensor.layout() == output_tensor.layout(), "Error");
+        TT_FATAL(
+            input_tensor.logical_shape() == output_tensor.logical_shape(),
+            "Input tensor logical shape ({}) must equal output tensor logical shape ({})",
+            input_tensor.logical_shape(),
+            output_tensor.logical_shape());
+        TT_FATAL(
+            input_tensor.dtype() == output_tensor.dtype(),
+            "Input tensor dtype ({}) must equal output tensor dtype ({})",
+            input_tensor.dtype(),
+            output_tensor.dtype());
+        TT_FATAL(
+            input_tensor.layout() == output_tensor.layout(),
+            "Input tensor layout ({}) must equal output tensor layout ({})",
+            input_tensor.layout(),
+            output_tensor.layout());
     }
     const auto& out_mem_config =
         has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;

@@ -1,9 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 from typing import List
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
@@ -132,6 +133,46 @@ class TtGemmaModel(Transformer):
 
         return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
-    def compute_vision_token(self, pixel_values):
-        vision_output = self.vision_model(pixel_values)
-        return vision_output
+    def compute_vision_token(self, pixel_values, batch_size=3):
+        """
+        Process vision tokens in batches to avoid OOM for large number of images.
+
+        Args:
+            pixel_values: torch.Tensor of shape (B, C, H, W) where B is number of images
+            batch_size: Number of images to process in one batch (max 3, or else device runs OOM)
+
+        Returns:
+            Combined vision output tensor
+        """
+
+        assert 0 < batch_size <= 3, "Device runs OOM with batch size > 3"
+
+        if not isinstance(pixel_values, list):
+            pixel_values = [pixel_values]
+
+        pixel_values_batches = []
+        total_num_images = 0
+        for image in pixel_values:
+            num_images = image.shape[0]
+            total_num_images += num_images
+            if num_images < batch_size:
+                pixel_values_batches.append(image)
+            else:
+                # If image was too big it was split into several, but still in one tensor
+                for i in range(0, num_images, batch_size):
+                    end_idx = min(i + batch_size, num_images)
+                    pixel_values_batches.append(image[i:end_idx])
+
+        logger.info(f"Starting vision encoder for {total_num_images} image(s) in {len(pixel_values_batches)} batch(es)")
+
+        # Process images in batches
+        vision_outputs = []
+        for batch_idx, batch_pixel_values in enumerate(pixel_values_batches):
+            logger.info(f"Processing batch {batch_idx + 1}/{len(pixel_values_batches)}")
+            batch_vision_output = self.vision_model(batch_pixel_values)
+            vision_outputs.append(batch_vision_output)
+
+        # Combine all vision outputs along the batch dimension
+        combined_vision_output = ttnn.concat(vision_outputs, dim=1)
+        logger.info(f"Vision encoder done")
+        return combined_vision_output

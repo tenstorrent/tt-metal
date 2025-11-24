@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,6 +149,15 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         "{}, global sequence length: {}",
         this->logical_n,
         N_global);
+
+    TT_FATAL(
+        (N_global - this->logical_n) < N_local,
+        "Delta between global (padded) and logical (unpadded) sequence length must be less than local (per device) "
+        "sequence length. Got delta: {}, local sequence length: {} "
+        "This implies at least one device will have only padded tokens and no real tokens to process. Either "
+        "reduce the ring size or reduce padding by reducing the chunk size.",
+        N_global - this->logical_n,
+        N_local);
 
     TT_FATAL(
         joint_k_shape[2] == L && joint_v_shape[2] == L,
@@ -336,6 +345,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto ring_joint_sdpa_program = detail::ring_joint_sdpa(
         program,
         input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
         persistent_output_buffer_k,
         persistent_output_buffer_v,
         joint_tensor_q,
@@ -421,6 +432,8 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
             operation,
             program,
             {input_tensor_q,
+             input_tensor_k,
+             input_tensor_v,
              persistent_output_buffer_k,
              persistent_output_buffer_v,
              joint_tensor_q,

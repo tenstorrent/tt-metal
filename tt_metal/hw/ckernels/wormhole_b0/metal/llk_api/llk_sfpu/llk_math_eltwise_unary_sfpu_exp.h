@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <
     bool APPROXIMATE,
     bool FAST_APPROX,

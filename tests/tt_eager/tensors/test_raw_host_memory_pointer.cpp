@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <functional>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -20,6 +20,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/to_string.hpp"
 
 // NOLINTBEGIN(cppcoreguidelines-no-malloc)
 
@@ -116,12 +117,12 @@ void test_raw_host_memory_pointer() {
     tt::tt_metal::memcpy(tensor_for_printing, c_dev);
 
     // Check that cpu tensor has correct data
-    bfloat16 output_value = 1.99219f;  // Not exactly 2.0f because of rounding errors
+    bfloat16 output_value = 2.0f;
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
-    tensor_for_printing.print();
+    std::cout << ttnn::to_string(tensor_for_printing) << "\n";
     /*  Run and Print End   */
 
     /* Alternative Way to Print Start */
@@ -136,7 +137,7 @@ void test_raw_host_memory_pointer() {
 
     Tensor alternative_tensor_for_printing =
         Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
-    alternative_tensor_for_printing.print();
+    std::cout << ttnn::to_string(alternative_tensor_for_printing) << "\n";
 
     for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);

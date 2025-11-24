@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ namespace ttnn {
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     tt::stl::Span<std::byte> tensor_data,
-    tt::tt_metal::MemoryPin memory_pin);
+    const tt::tt_metal::MemoryPin& memory_pin);
 
 // Converts Tensor object to FlatBuffer representation, writing the serialized flatbuffer object to `builder` and
 // recording tensor buffers that need to be serialized in-order to `buffers` vector. Replicated buffers are

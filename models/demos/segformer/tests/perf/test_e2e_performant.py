@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_segformer_trace_2cqs_inference(
@@ -22,16 +22,14 @@ def run_segformer_trace_2cqs_inference(
     input_shape = (batch_size, channels, resolution[0], resolution[1])
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
     inference_iter_count = 10
-    inference_time_iter = []
+    t0 = time.time()
     for iter in range(0, inference_iter_count):
-        t0 = time.time()
-        output = segformer_trace_2cq.run(torch_input_tensor)
-        if iter + 1 == inference_iter_count:
-            ttnn.synchronize_device(device)
-        t1 = time.time()
-        inference_time_iter.append(t1 - t0)
+        _ = segformer_trace_2cq.run(torch_input_tensor)
+    ttnn.synchronize_device(device)
+    t1 = time.time()
+
     segformer_trace_2cq.release_segformer_trace_2cqs_inference()
-    inference_time_avg = round(sum(inference_time_iter) / len(inference_time_iter), 6)
+    inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(
         f"ttnn_segformer_512x512_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )
@@ -58,5 +56,6 @@ def test_segformer_e2e(device, batch_size, model_location_generator):
     ((1),),
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_segformer_e2e_dp(mesh_device, device_batch_size, model_location_generator):
     run_segformer_trace_2cqs_inference(mesh_device, device_batch_size, model_location_generator)

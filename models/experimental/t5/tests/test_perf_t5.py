@@ -9,10 +9,8 @@ import pytest
 import ttnn
 from loguru import logger
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 from models.experimental.t5.tt.t5_model import TtT5Model
@@ -22,7 +20,6 @@ BATCH_SIZE = 1
 
 def run_perf_t5(expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     comments = "small"
     first_key = "first_iter"
     second_key = "second_iter"
@@ -77,8 +74,6 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_model_outputs
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_model_outputs = tt_model(

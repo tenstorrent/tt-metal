@@ -119,7 +119,6 @@ void validate_tensors(const Shape& input_shape, const Shape& index_shape, const 
 }  // namespace
 
 Tensor TOSAScatterOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
@@ -153,8 +152,7 @@ Tensor TOSAScatterOperation::invoke(
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
-        std::nullopt,
-        queue_id);
+        std::nullopt);
     return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }
 

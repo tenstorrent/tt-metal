@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,15 +13,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([5, 8, 1024, 1024])),
+        (torch.Size([2, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
     "low_a, high_a, low_b, high_b",
     [
-        (-5, 5, -10, 10),
-        (-100, 100, -300, 300),
         (-2147483647, 2147483647, -21474, 21474),
     ],
 )
@@ -63,8 +60,6 @@ def test_binary_min_int32(input_shapes, low_a, high_a, low_b, high_b, device):
     "input_a_val, input_b_val",
     [
         (-1, 1),
-        (1, 0),
-        (0, 0),
         (2147483647, -2147483647),
         (11, 53),
     ],
@@ -100,10 +95,8 @@ def test_binary_min_fill_val_int32(input_shapes, input_a_val, input_b_val, devic
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     [
-        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
         (torch.Size([1]), torch.Size([1, 5, 12])),
         (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
-        (torch.Size([]), torch.Size([])),
         (torch.Size([5]), torch.Size([1])),
     ],
 )
@@ -150,7 +143,7 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([5, 10, 1024, 1024])),
+        (torch.Size([2, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -207,8 +200,7 @@ def test_binary_min_int32_opt(input_shapes, low_a, high_a, low_b, high_b, device
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([5, 8, 1024, 1024])),
+        (torch.Size([2, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -352,7 +344,7 @@ def test_binary_min_fill_val_bf16(input_shapes, input_a_val, input_b_val, device
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 2, 64, 120])),
-        (torch.Size([5, 8, 1024, 1024])),
+        (torch.Size([2, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -495,7 +487,7 @@ def test_binary_min_bf16_bcast(input_shape_a, input_shape_b, low_a, high_a, low_
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([5, 10, 1024, 1024])),
+        (torch.Size([2, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(

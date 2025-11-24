@@ -6,7 +6,7 @@ import math
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 from loguru import logger
 
 
@@ -33,7 +33,7 @@ def test_pow_fractional_composite(device):
     yt = y
     yt_floor = math.floor(yt)
     yt_trunc = yt - yt_floor
-    pow_trunc_log = ttnn.multiply(ttnn.log(xt), yt_trunc)
+    pow_trunc_log = ttnn.multiply(ttnn.log(xt, fast_and_approximate_mode=True), yt_trunc)
     pow_frac = ttnn.exp(pow_trunc_log)
     xtt = ttnn.mul(ttnn.pow(xt, yt_floor), pow_frac)
     assert list(xtt.padded_shape) == [N, C, H, W]

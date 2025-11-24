@@ -8,7 +8,6 @@
 namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,               // mm0 used
     const ttnn::Tensor& weight_tensor,              // mm1 used
     ttnn::Tensor& intermediate_packet_buffer,       // rs2
@@ -38,6 +37,7 @@ std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+    topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::prim::llama_rs_matmul(
         input_tensor,
         weight_tensor,

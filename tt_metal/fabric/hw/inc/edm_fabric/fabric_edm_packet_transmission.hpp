@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -135,6 +135,8 @@ FORCE_INLINE
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
+    constexpr bool update_counter = false;
+
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
@@ -142,7 +144,7 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -179,7 +181,7 @@ FORCE_INLINE
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
-            noc_async_write_one_packet_with_trid<false, false>(
+            noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
@@ -210,7 +212,7 @@ FORCE_INLINE
                     chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
                 }
                 const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
-                noc_async_write_one_packet_with_trid<false, false>(
+                noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
                     dest_address,
                     chunk_size,
@@ -247,40 +249,23 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         packet_header->routing_fields.value = cached_routing_fields.value + 1;
     }
-    // Intentionally empty - mesh routing updates the header on sender channel side
 }
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
-    // Clear north/south when turning from trunk->branch
-    downstream_edm_interface.template update_edm_buffer_slot_word<false>(
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
-        0,
-        tt::tt_fabric::edm_to_downstream_noc);
-    std::uintptr_t offset =
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::EAST]));
-    downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
-#else
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::LowLatencyMeshPacketHeader* packet_base = nullptr;
+        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
         std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
         downstream_edm_interface.template update_edm_buffer_slot_word(
             offset, value, tt::tt_fabric::edm_to_downstream_noc);
     }
-#endif
 }
-
-FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* /*packet_header*/,
-    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
@@ -298,7 +283,7 @@ template <
     bool stateful_api,
     bool increment_pointers = true,
     uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void

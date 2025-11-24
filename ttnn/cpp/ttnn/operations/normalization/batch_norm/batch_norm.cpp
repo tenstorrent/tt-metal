@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,8 @@ inline Tensor mean_NHW(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     ttnn::SmallVector<int> dims = {2, 3};
-    Tensor mean_hw = ttnn::mean(input_tensor, dims, true, std::nullopt, compute_kernel_config);
-    return ttnn::mean(mean_hw, 0, true, std::nullopt, compute_kernel_config);
+    Tensor mean_hw = ttnn::mean(input_tensor, dims, true, output_mem_config, compute_kernel_config);
+    return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
 }
 
 Tensor BatchNorm::invoke(
@@ -36,8 +36,7 @@ Tensor BatchNorm::invoke(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    QueueId queue_id) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",
@@ -58,7 +57,7 @@ Tensor BatchNorm::invoke(
         batch_mean = mean_NHW(input, memory_config, compute_kernel_config);
         auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config, compute_kernel_config);
         batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
-        Tensor stats = ttnn::prim::running_statistics(
+        ttnn::prim::running_statistics(
             batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     } else {
         TT_FATAL(

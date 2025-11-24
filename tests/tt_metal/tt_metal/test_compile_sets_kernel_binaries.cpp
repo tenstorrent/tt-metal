@@ -7,9 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstring>
 #include <exception>
@@ -21,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -36,7 +34,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -44,7 +42,6 @@
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -146,9 +143,9 @@ int main(int argc, char** argv) {
         auto devices = tt::tt_metal::detail::CreateDevices(ids);
         std::vector<tt_metal::Program> programs;
         // kernel->binaries() returns 32B aligned binaries
-        std::map<uint32_t, std::vector<const ll_api::memory*>> compute_binaries;
-        std::map<uint32_t, std::vector<const ll_api::memory*>> brisc_binaries;
-        std::map<uint32_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> compute_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> brisc_binaries;
+        std::map<uint64_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
 
         for (int i = 0; i < num_devices; i++) {
             auto device = devices[i];
@@ -190,14 +187,13 @@ int main(int argc, char** argv) {
             TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
             // Run iteration to get golden
-            uint32_t mask =
-                tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+            auto mask = tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
             tt_metal::detail::CompileProgram(device, program);
-            compute_binaries.insert({mask, tt_metal::KernelImpl::from(*compute_kernel).binaries(mask)});
+            compute_binaries.insert({mask, compute_kernel->binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
-            brisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask)});
+            brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
             TT_FATAL(brisc_binaries.at(mask).size() == 1, "Expected 1 BRISC binary!");
-            ncrisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask)});
+            ncrisc_binaries.insert({mask, riscv1_kernel->binaries(mask)});
             TT_FATAL(ncrisc_binaries.at(mask).size() == 1, "Expected 1 NCRISC binary!");
         }
 
@@ -231,9 +227,9 @@ int main(int argc, char** argv) {
                 auto& program = new_programs[i];
                 ths.emplace_back([&] {
                     for (int j = 0; j < num_compiles; j++) {
-                        uint32_t mask = tt_metal::BuildEnvManager::get_instance()
-                                            .get_device_build_env(device->build_id())
-                                            .build_key;
+                        auto mask = tt_metal::BuildEnvManager::get_instance()
+                                        .get_device_build_env(device->build_id())
+                                        .build_key();
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index =
                             tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
@@ -259,15 +255,9 @@ int main(int argc, char** argv) {
                         }
                         TT_FATAL(
                             compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
-                            "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask) == brisc_binaries.at(mask),
-                            "Error");
-                        TT_FATAL(
-                            tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask) == ncrisc_binaries.at(mask),
-                            "Error");
+                        TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask), "Error");
+                        TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
+                        TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                         std::string kernel_name = get_latest_kernel_binary_path(
                             tt_metal::BuildEnvManager::get_instance()

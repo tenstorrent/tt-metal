@@ -10,7 +10,6 @@
 #include <vector>
 #include <map>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -164,7 +163,7 @@ void create_mux_kernel(
 
     auto memory_regions_to_clear = mux_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
@@ -231,7 +230,7 @@ void create_drainer_kernel(
 
     auto memory_regions_to_clear = drainer_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
@@ -370,7 +369,7 @@ int main(int argc, char** argv) {
     tt::tt_fabric::SetFabricConfig(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    std::vector<chip_id_t> all_device_ids;
+    std::vector<tt::ChipId> all_device_ids;
     all_device_ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         all_device_ids.push_back(id);
@@ -489,7 +488,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Launching programs");
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");

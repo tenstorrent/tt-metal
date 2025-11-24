@@ -32,8 +32,9 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto src_args = TensorAccessorArgs<0, 0>();
+    constexpr auto src_b_args =
+        TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
@@ -99,13 +100,13 @@ void kernel_main() {
 #if !SRC_SHARDED
                             cb_reserve_back(cb_id_src, onetile);
                             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
+                            noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
 #endif
 #if !SRC_SHARDED_B
                             // read a tile from src_b
                             cb_reserve_back(cb_id_src_b, onetile);
                             uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
+                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
                             noc_async_read_barrier();

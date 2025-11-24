@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/group_attn_matmul_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "group_attn_matmul.hpp"
 
@@ -12,7 +11,6 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -57,21 +55,18 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         },
         kernel_config_val);
 
-    return tt::tt_metal::operation::run(
-               GroupAttnMatmulDeviceOperation{
-                   std::nullopt,
-                   std::nullopt,
-                   out_subblock_w,
-                   compute_with_storage_grid_size,
-                   mem_config,
-                   output_dtype.value_or(input_tensor_a.dtype()),
-                   row_major,
-                   kernel_config_val},
-               {input_tensor_a, input_tensor_b},
-               {},
-               {std::move(optional_output_tensor)},
-               queue_id)
-        .at(0);
+    return ttnn::prim::group_attn_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        compute_with_storage_grid_size,
+        mem_config,
+        output_dtype,
+        std::make_optional(kernel_config_val),
+        std::nullopt,  // num_tokens
+        std::nullopt,  // transpose_hw
+        out_subblock_w,
+        row_major,
+        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::experimental::matmul

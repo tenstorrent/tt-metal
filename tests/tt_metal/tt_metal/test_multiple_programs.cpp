@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -71,8 +71,8 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
             break;
         default: TT_THROW("Undefined op type");
     }
-    defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
+    defines["ELTWISE_OP"] = op_name;
+    defines["ELTWISE_OP_TYPE"] = op_binary_type;
     return defines;
 }
 

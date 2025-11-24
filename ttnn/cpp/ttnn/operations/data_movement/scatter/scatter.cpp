@@ -11,6 +11,7 @@
 
 #include "slice/slice.hpp"
 #include "tt_stl/small_vector.hpp"
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -76,8 +77,6 @@ void validate_inputs(
 }
 
 bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
-
-bool is_last_dim(const Shape& shape, const uint32_t& dim) { return (dim == shape.rank() - 1) || (dim == -1); }
 
 void check_support(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
@@ -235,7 +234,6 @@ Tensor post_scatter_transform_tensor(
 // number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
 Tensor ScatterOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -281,8 +279,7 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt,
-        queue_id);
+        opt_reduction);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,

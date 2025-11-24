@@ -12,7 +12,7 @@ from tt_lib.utils import (
     is_close,
 )
 
-from models.utility_functions import comp_pcc, pad_by_zero
+from models.common.utility_functions import comp_pcc, pad_by_zero
 
 shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128]]
 

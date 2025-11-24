@@ -12,7 +12,6 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
-from models.utility_functions import disable_persistent_kernel_cache
 
 
 def run_demo_dataset(device, batch_size, iterations, model_location_generator):
@@ -68,8 +67,6 @@ def test_demo_dataset(
     iterations,
     model_location_generator,
 ):
-    disable_persistent_kernel_cache()
-
     return run_demo_dataset(
         device=device,
         batch_size=batch_size,

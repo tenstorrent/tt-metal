@@ -13,19 +13,17 @@ namespace operations::experimental::transformer {
 
 struct SplitFusedQKVAndSplitHeadsOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const uint32_t num_heads = 16,
-        std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors = std::nullopt) {
+        const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors = std::nullopt) {
         auto result = tt::tt_metal::operation::run(
             SplitFusedQKVAndSplitHeadsDeviceOperation{
                 compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config()), num_heads},
             {input_tensor},
             {},
-            optional_output_tensors.value_or(std::vector<std::optional<ttnn::Tensor>>{}),
-            queue_id);
+            optional_output_tensors.value_or(std::vector<std::optional<ttnn::Tensor>>{}));
         return {result.at(0), result.at(1), result.at(2)};
     }
 };

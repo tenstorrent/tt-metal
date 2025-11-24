@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -58,4 +58,18 @@ def pytest_addoption(parser):
         default=None,
         type=bool,
         help="Whether to enable tracing",
+    )
+    parser.addoption(
+        "--num_layers",
+        action="store",
+        default=None,
+        type=int,
+        help="Number of layers to use",
+    )
+    parser.addoption(
+        "--mode",
+        action="store",
+        default="full",
+        type=str,
+        help="Mode to use for full model demo tests (values can be 'prefill','decode','full')",
     )

@@ -58,7 +58,7 @@ def test_linear(
     torch_model.eval()
 
     tt_model = Linear(K, N, bias=bias, mesh_device=mesh_device)
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, M, K), dtype=torch_dtype)
 
@@ -168,7 +168,7 @@ def test_col_parallel_linear(
         )
     else:
         tt_model = ColParallelLinear(K, N, bias=bias, mesh_device=mesh_device, mesh_axis=tp_mesh_axis)
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, M, K), dtype=torch_dtype)
 
@@ -255,7 +255,7 @@ def test_row_parallel_linear(
         fsdp_mesh_axis=fsdp_mesh_axis,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, M, K), dtype=torch_dtype)
 

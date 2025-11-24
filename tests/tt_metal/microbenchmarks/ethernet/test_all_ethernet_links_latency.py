@@ -11,9 +11,9 @@ from tests.tt_metal.microbenchmarks.ethernet.test_all_ethernet_links_common impo
     write_results_to_csv,
 )
 
-from models.utility_functions import is_single_chip
+from models.common.utility_functions import is_single_chip
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 

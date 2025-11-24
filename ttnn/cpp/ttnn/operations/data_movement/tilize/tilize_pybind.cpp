@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,27 +14,24 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_tilize(py::module& module) {
-    auto doc =
-        R"doc(
-            Changes data layout of input tensor to TILE.
+    auto doc = R"doc(
+        Changes data layout of input tensor to TILE.
 
-            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
-            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
-                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
+            use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
-
-        )doc";
+        Returns:
+            ttnn.Tensor: the output tensor.
+    )doc";
 
     using OperationType = decltype(ttnn::tilize);
     ttnn::bind_registered_operation(
@@ -46,14 +43,11 @@ void bind_tilize(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
-               bool use_multicore,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
+               bool use_multicore) { return self(input_tensor, memory_config, output_dtype, use_multicore); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = true,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("use_multicore") = true});
 }
 }  // namespace ttnn::operations::data_movement::detail

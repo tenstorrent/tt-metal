@@ -1,0 +1,159 @@
+compute_node_specs:
+  sjc1-tt-qb-04:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000804096
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238001602656
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238001595264
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238001601888
+  sjc1-tt-qb-03:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000416192
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000420992
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000418336
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000417408
+  sjc1-tt-qb-02:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 140874927308800
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000422848
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000422304
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000414944
+  sjc1-tt-qb-01:
+    motherboard: SIENAD8-2L2T
+    asic_info:
+      - tray_id: 1
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000417728
+      - tray_id: 2
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000420960
+      - tray_id: 3
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000419456
+      - tray_id: 4
+        board_type: P150
+        asics:
+          - asic_location: 0
+            asic_id: 143238000422752
+local_eth_connections:
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 5}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 10}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 10}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 8}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 8}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 7}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 7}]
+  - [{host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 5}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 5}]
+global_eth_connections:
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 3, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 4, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 2, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-04, tray_id: 1, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 3, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 4, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 2, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 6}, {host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 6}]
+  - [{host_name: sjc1-tt-qb-03, tray_id: 1, asic_location: 0, chan_id: 4}, {host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 4}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 3, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-01, tray_id: 3, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 4, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-01, tray_id: 4, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 2, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-01, tray_id: 2, asic_location: 0, chan_id: 9}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 11}, {host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 11}]
+  - [{host_name: sjc1-tt-qb-02, tray_id: 1, asic_location: 0, chan_id: 9}, {host_name: sjc1-tt-qb-01, tray_id: 1, asic_location: 0, chan_id: 9}]

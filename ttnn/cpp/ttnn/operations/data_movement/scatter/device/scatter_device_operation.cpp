@@ -84,10 +84,9 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
-    const std::optional<ScatterReductionType>& opt_reduction,
-    const QueueId& queue_id) {
+    const std::optional<ScatterReductionType>& opt_reduction) {
     return {
-        operation_attributes_t{dim, output_memory_config, opt_reduction},
+        operation_attributes_t{dim, output_memory_config, opt_reduction.has_value() ? *opt_reduction : ScatterReductionType::INVALID},
         tensor_args_t{input_tensor, index_tensor, source_tensor}};
 }
 

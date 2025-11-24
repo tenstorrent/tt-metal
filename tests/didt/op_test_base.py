@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import os
 
-from models.utility_functions import comp_pcc, is_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole
 import ttnn
 
 

@@ -5,7 +5,7 @@
 import torch
 from loguru import logger
 import ttnn
-from models.utility_functions import torch_to_tt_tensor_rm
+from models.common.utility_functions import torch_to_tt_tensor_rm
 
 from models.experimental.ssd.tt.ssd_lite import *
 import torchvision.transforms as transforms

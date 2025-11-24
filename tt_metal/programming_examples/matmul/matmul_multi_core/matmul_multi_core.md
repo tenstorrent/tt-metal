@@ -18,12 +18,19 @@ Then run the following:
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_matmul_multi_core
 ```
-## Accessing all the cores
+## Mesh setup and accessing cores
 
 We first must get information on the layout of the entire chip. This means the grid of cores and its x/y dimensions in number of cores.
 
 ``` cpp
-auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+constexpr int device_id = 0;
+auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+Program program = CreateProgram();
+
+auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
 uint32_t num_cores_x = compute_with_storage_grid_size.x;
 uint32_t num_cores_y = compute_with_storage_grid_size.y;
 ```
@@ -58,13 +65,13 @@ These kernels will use banking and interleaving techniques to ensure consistent 
 ``` cpp
 auto reader_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+    "tt_metal/programming_examples/matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
     all_cores,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
 auto writer_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+    "tt_metal/programming_examples/matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
     all_cores,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 ```

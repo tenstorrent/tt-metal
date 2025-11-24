@@ -13,25 +13,17 @@ The sweep test framework runs parameterized tests across large parameter spaces 
 
 #### 1. First Generate Test Vectors
 
+**NOTE: Elasticsearch support has been removed. Vectors are now always exported to disk in JSON format.**
+
 ```bash
-# Generate vectors for all sweep modules and export to Elasticsearch
+# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
 python tests/sweep_framework/sweeps_parameter_generator.py
 
-# Generate vectors for all sweep modules and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --dump-file
-
-# Generate vectors for a specific module and export to Elasticsearch
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
-
 # Generate vectors for a specific module and export to drive -> tests/sweep_framework/vectors_export
-python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu --dump-file
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise.unary.relu.relu
 ```
 
-- **If exporting to Elasticsearch:** (requires credentials):
-  ```bash
-  export ELASTIC_USERNAME="your-elastic-username"
-  export ELASTIC_PASSWORD="your-elastic-password"
-  ```
+**Note:** The `--dump-file` flag is deprecated and no longer needed. Vectors are always dumped to disk by default.
 
 #### 2. Run Tests
 
@@ -82,6 +74,7 @@ python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.
 - `--tag`: Tag to filter vectors in Elasticsearch (defaults to `$USER`)
 - `--skip-modules`: Comma-separated modules to skip when running all modules
 - `--skip-on-timeout`: Skip remaining tests in a suite if a test times out
+- `--keep-invalid`: Include invalid vectors in results with NOT_RUN status (default: exclude invalid vectors from results entirely)
 - `--watcher`: Enable watcher
 - `--perf`: Measure end-to-end perf for ops that support it
 - `--device-perf`: Measure device perf (requires profiler build)
@@ -129,10 +122,10 @@ export POSTGRES_USER="your-username"
 export POSTGRES_PASSWORD="your-password"
 
 # Run a single test file
-python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/test_concat.py
+python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/data_movement/test_concat.py
 
 # Run multiple test files
-python tests/ttnn/unit_test_runner.py "tests/ttnn/unit_tests/operations/test_concat.py,tests/ttnn/unit_tests/operations/test_add.py"
+python tests/ttnn/unit_test_runner.py "tests/ttnn/unit_tests/operations/data_movement/test_concat.py,tests/ttnn/unit_tests/operations/eltwise/test_add.py"
 
 # Run all tests in a directory
 python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/

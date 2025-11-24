@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,9 @@ flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
 }
 
 // For page sizes, keep lambda usage consistent across types.
-static inline uint32_t to_flatbuffer(const uint32_t& value) { return value; }
+namespace {
+uint32_t to_flatbuffer(const uint32_t& value) { return value; }
+}  // namespace
 
 // Original type defined in circular_buffer_config.hpp
 flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
@@ -93,29 +95,10 @@ flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {
     TT_THROW("Unsupported ShardOrientation to flatbuffer.");
 }
 
-flatbuffer::ShardMode to_flatbuffer(ShardMode shard_mode) {
-    switch (shard_mode) {
-        case ShardMode::LOGICAL: return flatbuffer::ShardMode::Logical;
-        case ShardMode::PHYSICAL: return flatbuffer::ShardMode::Physical;
-    }
-    TT_THROW("Unsupported ShardMode to flatbuffer.");
-}
-
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
     const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
-    flatbuffers::Offset<flatbuffer::ShardShape> physical_shard_shape = 0;
-    if (spec.physical_shard_shape.has_value()) {
-        const auto& phys_shape = *spec.physical_shard_shape;
-        physical_shard_shape = flatbuffer::CreateShardShape(builder, phys_shape[0], phys_shape[1]);
-    }
     return flatbuffer::CreateShardSpec(
-        builder,
-        to_flatbuffer(builder, spec.grid),
-        spec.shape[0],
-        spec.shape[1],
-        to_flatbuffer(spec.orientation),
-        to_flatbuffer(spec.mode),
-        physical_shard_shape);
+        builder, to_flatbuffer(builder, spec.grid), spec.shape[0], spec.shape[1], to_flatbuffer(spec.orientation));
 }
 
 flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(

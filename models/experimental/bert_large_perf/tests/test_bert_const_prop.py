@@ -15,13 +15,11 @@ from models.experimental.bert_large_perf.fused_ops.layernorm import (
     create_var_scaler,
 )
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
-    disable_persistent_kernel_cache,
 )
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 
 class TtBertBatchDram(torch.nn.Module):
@@ -240,7 +238,6 @@ def run_bert_question_and_answering_inference(
 
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -320,8 +317,6 @@ def test_bert_constant_prop(model_location_generator, device):
     token_type_ids = True
     pcc = 0.98
     PERF_CNT = 2
-
-    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(
         model_version,

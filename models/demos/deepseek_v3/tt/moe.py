@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
@@ -18,9 +17,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllToAllDispatchConfig,
     MeshDeviceStub,
     MulConfig,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
+from models.demos.deepseek_v3.utils.config_helpers import SPARSITY_BLOCK_SIZE
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -48,11 +48,16 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
         ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
-        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
+        (state_dict,) = state_dicts
+        assert state_dict is not None
 
         return {
-            "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
-            "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),
+            "moe_gate": MoEGate.convert_weights(
+                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
+            ),
+            "moe_experts": MoEExperts.convert_weights(
+                hf_config, (state_dict,), output_path / "moe_experts", mesh_device
+            ),
         }
 
     @classmethod
@@ -60,20 +65,21 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        ccl: CCL1D,
+        ccl: CCL,
     ) -> ModelState:
         """Create model state containing CCL-related communication configurations.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL1D instance for communication configuration
+            ccl: CCL instance for communication configuration
         Returns:
             ModelState containing CCL configurations
         """
 
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        num_dispatch_device_rows = mesh_device.shape[0]
 
         expert_mapping_tensors = ttnn.from_torch(
             torch.eye(num_devices, dtype=torch.int32)
@@ -87,8 +93,19 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        remap_topk_mask = ttnn.from_torch(
+            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # Store CCL object for runtime semaphore initialization
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
+            "remap_topk_mask": remap_topk_mask,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "num_links": 1,
@@ -96,15 +113,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "all_to_all_combine": {
                 "num_links": 1,
             },
-            "final_output_reduce_scatter": {
-                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "revert_tp": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -113,6 +122,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
+        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -132,16 +142,17 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Construct the config
         return {
-            "device": MeshDeviceStub(mesh_device.shape),
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "num_devices": mesh_device.get_num_devices(),
             "num_experts_per_device": num_experts_per_device,
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
+            "sparsity_block_size": SPARSITY_BLOCK_SIZE,
             "moe_experts": MoEExperts._create_model_config(hf_config, mesh_device, mode),
             "all_to_all_combine_output_memory_config": memory_config,
             "topk_weights_repeat": RepeatConfig(repeat_dims=ttnn.Shape((hf_config.hidden_size, 1, 1, 1))),
@@ -149,12 +160,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-            "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
-            "final_output_reduce_scatter": ReduceScatterAsyncConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
+            "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+            "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
-                math_op=ttnn.ReduceType.Sum,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
             ),
@@ -168,16 +177,23 @@ class MoE(SharedStateAddOn, AbstractModule):
         }
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode")
+    def decode_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+    ) -> ModelDecodeConfig:
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill")
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+    ) -> ModelPrefillConfig:
+        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        x = ttnn.experimental.all_gather_async(x, **cfg["revert_tp"])
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
@@ -203,9 +219,16 @@ class MoE(SharedStateAddOn, AbstractModule):
         post_all_to_all_dispatch_output = ttnn.reshape(
             all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
         )
-        post_all_to_all_dispatch_output = ttnn.repeat(post_all_to_all_dispatch_output, **cfg["activations_repeat"])
         post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, cfg["moe_experts"])
+        # repeat remap_topk_mask for the num_tokens known at runtime
+        remap_topk_mask = ttnn.repeat(cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            remap_topk_mask,
+            cfg["expert_mapping_tensors"],
+            all_to_all_dispatch_metadata_tensors,
+            reduction_size=cfg["sparsity_block_size"],
+        )
+        experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
         ttnn.deallocate(post_all_to_all_dispatch_output)
         experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
         experts_output = ttnn.reshape(
@@ -213,8 +236,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
-            cfg["expert_mapping_tensors"],
             all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
             **cfg["all_to_all_combine"],
         )
         post_combine_output_tensor = ttnn.reshape(
@@ -231,8 +254,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-        post_combine_output_tensor = ttnn.experimental.reduce_scatter_async(
-            post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
+        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
         )
 
         return post_combine_output_tensor

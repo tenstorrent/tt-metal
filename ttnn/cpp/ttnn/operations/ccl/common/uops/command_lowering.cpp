@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -75,7 +75,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
 }
 
 void validate_lowered_noc_commands(const ttnn::ccl::cmd::HostCclCommandNocTransferBurst& noc_transfer_burst) {
-    TT_FATAL(noc_transfer_burst.transfer_burst_groupings.size() > 0, "Internal error: No transfer burst groupings");
+    TT_FATAL(!noc_transfer_burst.transfer_burst_groupings.empty(), "Internal error: No transfer burst groupings");
     for (auto& transfer_burst_grouping : noc_transfer_burst.transfer_burst_groupings) {
         TT_FATAL(transfer_burst_grouping.num_transfers_per_packet > 0, "Internal error: No transfers per packet");
         for (auto& transfer_info : transfer_burst_grouping.transfer_infos) {

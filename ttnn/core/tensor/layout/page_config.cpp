@@ -98,12 +98,6 @@ Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) cons
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment TilePageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-    if (memory_config.shard_spec().has_value()) {
-        const auto& shard_spec = memory_config.shard_spec().value();
-        if (shard_spec.physical_shard_shape.has_value()) {
-            return Alignment(shard_spec.physical_shard_shape.value());
-        }
-    }
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
@@ -154,10 +148,6 @@ RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
-        if (shard_spec.mode == ShardMode::LOGICAL) {
-            return shard_spec.physical_shard_shape.has_value() ? Alignment(shard_spec.physical_shard_shape.value())
-                                                               : Alignment({shard_spec.shape[1]});
-        }
         return Alignment({shard_spec.shape[1]});
     } else if (memory_config.nd_shard_spec().has_value()) {
         const auto& nd_shard_spec = *memory_config.nd_shard_spec();
@@ -173,8 +163,7 @@ void RowMajorPageConfig::validate_alignment(
 
     // TODO: Do we need to validate sharded width here if wee are guaranteed that physical_shard_width is set as
     // width_alignment
-    if (memory_config.shard_spec().has_value() && memory_config.shard_spec().value().mode == ShardMode::PHYSICAL &&
-        memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (memory_config.shard_spec().has_value() && memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& physical_shard_shape = memory_config.shard_spec().value().shape;
         const auto physical_shard_width = physical_shard_shape[1];
         TT_FATAL(

@@ -11,8 +11,8 @@ from torch import nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
-from models.utility_functions import nearest_32
 from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 
@@ -503,8 +503,8 @@ class RotarySetup(LightweightModule):
         else:
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
-
         # Send the idxs to device
+
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -44,9 +43,9 @@ std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back(datum.to_float());
+            converted_data.push_back(static_cast<float>(datum));
         } else if constexpr (std::is_same_v<OutputDataType, uint32_t> and std::is_same_v<InputDataType, bfloat16>) {
-            converted_data.push_back((uint32_t)datum.to_uint16());
+            converted_data.push_back((uint32_t)std::bit_cast<uint16_t>(datum));
         } else {
             converted_data.push_back(static_cast<OutputDataType>(datum));
         }
@@ -179,45 +178,41 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 //                                         .to_host() and .to_device()
 // ======================================================================================
 
-template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
 void copy_to_host(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<QueueId> cq_id = std::nullopt);
 
-template <typename T>
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
 
-template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
 
-template <typename T>
 Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================
-template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-template <typename T>
-Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
+Tensor unpad(
+    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print
@@ -231,12 +226,48 @@ enum class TensorPrintProfile {
     Full,
 };
 
-extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
+enum class SciMode {
+    Enable,
+    Disable,
+    Default,
+};
 
-template <typename T>
+struct PrintOptions {
+    TensorPrintProfile profile = TensorPrintProfile::Short;
+    SciMode sci_mode = SciMode::Default;
+    int precision = 4;
+};
+
+extern PrintOptions TTNN_PRINT_OPTIONS;
+
 std::string to_string(const Tensor& tensor);
 
-template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);
+
+Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
+
+// Utility to convert runtime DataType to compile-time constant and dispatch the function call
+template <typename Func, typename... Args>
+auto dispatch(DataType dtype, Func&& func, Args&&... args) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            return (std::forward<Func>(func)).template operator()<bfloat16>(std::forward<Args>(args)...);
+        case DataType::FLOAT32:
+            return (std::forward<Func>(func)).template operator()<float>(std::forward<Args>(args)...);
+        case DataType::INT32:
+            return (std::forward<Func>(func)).template operator()<int32_t>(std::forward<Args>(args)...);
+        case DataType::UINT32:
+            return (std::forward<Func>(func)).template operator()<uint32_t>(std::forward<Args>(args)...);
+        case DataType::UINT16:
+            return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
+        case DataType::UINT8:
+            return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
+        case DataType::BFLOAT8_B:
+            return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
+        case DataType::BFLOAT4_B:
+            return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
+        default: TT_THROW("Unsupported data type");
+    }
+}
 
 }  // namespace tt::tt_metal::tensor_impl

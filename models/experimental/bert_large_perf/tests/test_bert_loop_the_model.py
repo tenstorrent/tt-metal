@@ -12,13 +12,11 @@ from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import profiler
 
 
 class TtBertForQuestionAnswering(torch.nn.Module):
@@ -204,7 +202,6 @@ def run_bert_question_and_answering_inference(
 
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
@@ -283,8 +280,6 @@ def test_bert_large_loop_the_model(device, model_location_generator):
     token_type_ids = True
     pcc = 0.98
     PERF_CNT = 20
-
-    disable_persistent_kernel_cache()
 
     run_bert_question_and_answering_inference(
         device,

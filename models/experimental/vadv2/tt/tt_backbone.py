@@ -12,7 +12,13 @@ class TtResnet50:
         self.maxpool_args = conv_args.maxpool
         self.device = device
 
-        self.conv1 = TtConv2D(conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu", act_block_h=32)
+        self.conv1 = TtConv2D(
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=self.device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            act_block_h=32,
+        )
 
         # Layer 1
         self.layer1_0 = TtBottleneck(
@@ -70,21 +76,60 @@ class TtResnet50:
 
         x = ttnn.sharded_to_interleaved(x)
 
-        # Note: Using in_place_halo is not performant, as discussed in Issue https://github.com/tenstorrent/tt-metal/issues/23184
-        x = ttnn.max_pool2d(
-            input_tensor=x,
-            batch_size=self.maxpool_args.batch_size,
-            input_h=self.maxpool_args.input_height,
-            input_w=self.maxpool_args.input_width,
-            channels=x.shape[3],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ceil_mode=False,
-            in_place_halo=True,
-        )
+        if self.maxpool_args.batch_size > 1:
+            current_batch_size = self.maxpool_args.batch_size
+            split_point = current_batch_size // 2
+            x0 = ttnn.slice(
+                x,
+                [0, 0, 0, 0],
+                [1, 1, split_point * self.maxpool_args.input_height * self.maxpool_args.input_width, x.shape[3]],
+            )
+            x1 = ttnn.slice(
+                x,
+                [0, 0, split_point * self.maxpool_args.input_height * self.maxpool_args.input_width, 0],
+                [1, 1, current_batch_size * self.maxpool_args.input_height * self.maxpool_args.input_width, x.shape[3]],
+            )
+            x0 = ttnn.max_pool2d(
+                input_tensor=x0,
+                batch_size=split_point,
+                input_h=self.maxpool_args.input_height,
+                input_w=self.maxpool_args.input_width,
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ceil_mode=False,
+            )
+            x1 = ttnn.max_pool2d(
+                input_tensor=x1,
+                batch_size=current_batch_size - split_point,
+                input_h=self.maxpool_args.input_height,
+                input_w=self.maxpool_args.input_width,
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ceil_mode=False,
+            )
+            x = ttnn.concat((x0, x1), dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = ttnn.max_pool2d(
+                input_tensor=x,
+                batch_size=self.maxpool_args.batch_size,
+                input_h=self.maxpool_args.input_height,
+                input_w=self.maxpool_args.input_width,
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ceil_mode=False,
+            )
         outputs = []
         # Layer 1
         x = self.layer1_0(x)

@@ -7,14 +7,12 @@
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
-#include "dispatch_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "system_mesh.hpp"
 #include <umd/device/types/arch.hpp>
@@ -22,24 +20,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_metal {
-
-class TwoDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices != 2) {
-            GTEST_SKIP() << "TwoDeviceFixture can only be run on machines with two devices";
-        }
-
-        DispatchFixture::SetUp();
-    }
-};
 
 class TwoMeshDeviceFixture : public MeshDispatchFixture {
 protected:
@@ -56,26 +36,6 @@ protected:
         }
 
         MeshDispatchFixture::SetUp();
-    }
-};
-
-class N300DeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-
-        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
-            DispatchFixture::SetUp();
-        } else {
-            GTEST_SKIP() << "This suite can only be run on N300";
-        }
     }
 };
 
@@ -99,7 +59,7 @@ protected:
     }
 };
 
-class TwoDeviceBlackholeFixture : public DispatchFixture {
+class TwoDeviceBlackholeFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
@@ -112,7 +72,7 @@ protected:
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ == tt::ARCH::BLACKHOLE && num_devices == 2 && num_pci_devices >= 1) {
-            DispatchFixture::SetUp();
+            MeshDispatchFixture::SetUp();
         } else {
             GTEST_SKIP() << "This suite can only be run on two chip Blackhole systems";
         }
@@ -252,15 +212,14 @@ protected:
 class GenericMeshDeviceFabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMeshDeviceFabric2DFixture() :
-        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {}
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 class MeshDevice2x4Fabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric2DFixture() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {
-    }
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 }  // namespace tt::tt_metal

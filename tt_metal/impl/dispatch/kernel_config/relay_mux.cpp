@@ -80,7 +80,8 @@ void RelayMux::GenerateStaticConfigs() {
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
         mux_config_core);
-    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
+
+    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux();
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
@@ -167,7 +168,7 @@ void assemble_fabric_mux_client_config_args(
         fabric_mux->GetMuxKernelConfig()->get_channel_credits_stream_id(ch_type, ch_index);
 }
 
-int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id) {
+int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
     const auto dev_mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_dev_id);
 

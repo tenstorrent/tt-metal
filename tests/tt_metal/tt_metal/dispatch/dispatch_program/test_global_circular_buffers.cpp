@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,16 +33,15 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     auto all_cores = sender_cores.merge(receiver_cores);
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
     auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t remote_cb_index = 31;
@@ -93,7 +92,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
                 receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
             }
         }
-        std::vector<uint32_t> sender_runtime_args(11 + receiver_noc_coords.size() * 2);
+        std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
         sender_runtime_args[sender_args_idx++] = global_cb.config_address();  // config_addr
         sender_runtime_args[sender_args_idx++] = 1;                           // is_sender

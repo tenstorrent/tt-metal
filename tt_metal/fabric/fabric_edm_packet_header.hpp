@@ -15,9 +15,15 @@
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #else
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #endif
 
+// These functions have different behavior on host or device.
+// This causes problems trying to detect unused parameters.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+
+// NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -57,6 +63,7 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_UNICAST_READ = 7,
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
@@ -101,23 +108,21 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
+    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
-    uint16_t wrap;
-    uint8_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
+        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
-    uint16_t wrap;
-    uint8_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocMulticastCommandHeader {
@@ -129,8 +134,7 @@ struct NocMulticastCommandHeader {
 };
 struct NocMulticastAtomicIncCommandHeader {
     uint32_t address;
-    uint16_t val;
-    uint16_t wrap;
+    uint32_t val;
     uint8_t noc_x_start;
     uint8_t noc_y_start;
     uint8_t size_x;
@@ -138,11 +142,13 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
-static_assert(sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocMulticastCommandHeader size is not 16 bytes");
-static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastCommandHeader size is not 16 bytes");
+static_assert(
+    sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocUnicastInlineWriteCommandHeader size is not 16 bytes");
+static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastAtomicIncCommandHeader size is not 16 bytes");
 static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
-static_assert(sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocAtomicIncCommandHeader size is not 12 bytes");
+static_assert(
+    sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
@@ -153,6 +159,37 @@ union NocCommandFields {
     NocUnicastScatterCommandHeader unicast_scatter_write;
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
+
+struct UDMWriteControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
+    uint8_t risc_id;
+    uint8_t transaction_id;
+    uint8_t posted;
+} __attribute__((packed));
+
+struct UDMReadControlHeader {
+    uint8_t src_chip_id;
+    uint16_t src_mesh_id;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
+    uint32_t src_l1_address;
+    uint32_t size_bytes;
+    uint8_t risc_id;
+    uint8_t transaction_id;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+
+union UDMControlFields {
+    UDMWriteControlHeader write;
+    UDMReadControlHeader read;
+} __attribute__((packed));
+
+static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -172,7 +209,7 @@ struct PacketHeaderBase {
     // Returns size of payload in bytes - TODO: convert to words (4B)
     size_t get_payload_size_excluding_header() volatile const { return this->payload_size_bytes; }
 
-    inline size_t get_payload_size_including_header() volatile const {
+    size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(Derived);
     }
 
@@ -180,20 +217,20 @@ struct PacketHeaderBase {
     NocSendType get_noc_send_type() volatile const { return this->noc_send_type; }
 
     // Setters for noc_send_type, routing_fields, and command_fields
-    inline void set_noc_send_type(NocSendType& type) { this->noc_send_type = type; }
-    inline void set_command_fields(NocCommandFields& fields) { this->command_fields = fields; }
+    void set_noc_send_type(NocSendType& type) { this->noc_send_type = type; }
+    void set_command_fields(NocCommandFields& fields) { this->command_fields = fields; }
 
-    inline Derived& to_chip_unicast(uint8_t distance_in_hops) {
+    Derived& to_chip_unicast(uint8_t distance_in_hops) {
         static_cast<Derived*>(this)->to_chip_unicast_impl(distance_in_hops);
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_chip_multicast(const MulticastRoutingCommandHeader& mcast_routing_command_header) {
+    Derived& to_chip_multicast(const MulticastRoutingCommandHeader& mcast_routing_command_header) {
         static_cast<Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_noc_unicast_write(
+    Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
@@ -214,7 +251,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
+    Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
@@ -234,7 +271,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_noc_multicast(
+    Derived& to_noc_multicast(
         const NocMulticastCommandHeader& noc_multicast_command_header, size_t payload_size_bytes) {
         this->noc_send_type = NOC_MULTICAST_WRITE;
         this->command_fields.mcast_write = noc_multicast_command_header;
@@ -242,8 +279,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_noc_unicast_atomic_inc(
-        const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
+    Derived& to_noc_unicast_atomic_inc(const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
         auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
@@ -263,7 +299,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline Derived& to_noc_multicast_atomic_inc(
+    Derived& to_noc_multicast_atomic_inc(
         const NocMulticastAtomicIncCommandHeader& noc_multicast_atomic_inc_command_header, size_t payload_size_bytes) {
         this->noc_send_type = NOC_MULTICAST_ATOMIC_INC;
         this->command_fields.mcast_seminc = noc_multicast_atomic_inc_command_header;
@@ -271,18 +307,17 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    inline volatile Derived* to_chip_unicast(uint8_t distance_in_hops) volatile {
+    volatile Derived* to_chip_unicast(uint8_t distance_in_hops) volatile {
         static_cast<volatile Derived*>(this)->to_chip_unicast_impl(distance_in_hops);
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_chip_multicast(
-        const MulticastRoutingCommandHeader& mcast_routing_command_header) volatile {
+    volatile Derived* to_chip_multicast(const MulticastRoutingCommandHeader& mcast_routing_command_header) volatile {
         static_cast<volatile Derived*>(this)->to_chip_multicast_impl(mcast_routing_command_header);
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_unicast_write(
+    volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
@@ -301,7 +336,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_unicast_scatter_write(
+    volatile Derived* to_noc_unicast_scatter_write(
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
@@ -325,7 +360,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_unicast_inline_write(
+    volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
@@ -345,7 +380,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_multicast(
+    volatile Derived* to_noc_multicast(
         const NocMulticastCommandHeader& noc_multicast_command_header, size_t payload_size_bytes) volatile {
         this->noc_send_type = NOC_MULTICAST_WRITE;
         this->command_fields.mcast_write.mcast_rect_size_x = noc_multicast_command_header.mcast_rect_size_x;
@@ -357,7 +392,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_fused_unicast_write_atomic_inc(
+    volatile Derived* to_noc_fused_unicast_write_atomic_inc(
         const NocUnicastAtomicIncFusedCommandHeader& noc_fused_unicast_write_atomic_inc_command_header,
         size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -381,7 +416,6 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc_fused.noc_address = noc_addr;
         this->command_fields.unicast_seminc_fused.semaphore_noc_address = semaphore_noc_addr;
         this->command_fields.unicast_seminc_fused.val = noc_fused_unicast_write_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc_fused.wrap = noc_fused_unicast_write_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc_fused.flush = noc_fused_unicast_write_atomic_inc_command_header.flush;
 
         this->payload_size_bytes = payload_size_bytes;
@@ -391,7 +425,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_unicast_atomic_inc(
+    volatile Derived* to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
@@ -404,7 +438,6 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc.flush = noc_unicast_atomic_inc_command_header.flush;
         this->payload_size_bytes = 0;
 #else
@@ -413,7 +446,7 @@ struct PacketHeaderBase {
         return static_cast<volatile Derived*>(this);
     }
 
-    inline volatile Derived* to_noc_multicast_atomic_inc(
+    volatile Derived* to_noc_multicast_atomic_inc(
         const NocMulticastAtomicIncCommandHeader& noc_multicast_atomic_inc_command_header,
         size_t payload_size_bytes) volatile {
         this->noc_send_type = NOC_MULTICAST_ATOMIC_INC;
@@ -423,12 +456,11 @@ struct PacketHeaderBase {
         this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
         this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
         this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
-        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = payload_size_bytes;
         return static_cast<volatile Derived*>(this);
     }
 
-    inline void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
+    void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
@@ -444,10 +476,10 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // manage this complexity.
     uint8_t padding0[2];
 
-    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
     }
-    inline static uint32_t calculate_chip_multicast_routing_fields_value(
+    static uint32_t calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         return ((static_cast<uint8_t>(chip_multicast_command_header.range_hops)
                  << RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)) |
@@ -456,25 +488,25 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
 
 public:
     // Setters for PacketHeader-specific fields
-    inline void set_chip_send_type(ChipSendType& type) { this->chip_send_type = type; }
+    void set_chip_send_type(ChipSendType& type) { this->chip_send_type = type; }
 
-    inline void set_routing_fields(RoutingFields& fields) { this->routing_fields = fields; }
+    void set_routing_fields(RoutingFields& fields) { this->routing_fields = fields; }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {
         this->chip_send_type = CHIP_UNICAST;
         this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         this->chip_send_type = CHIP_MULTICAST;
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         this->chip_send_type = CHIP_UNICAST;
         this->routing_fields.value = PacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
         this->chip_send_type = CHIP_MULTICAST;
         this->routing_fields.value =
             PacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
@@ -498,7 +530,7 @@ struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> 
     LowLatencyRoutingFields routing_fields;
 
 private:
-    inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
+    static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         // Example of unicast 3 hops away
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
         // (forward to neighbor is not encoded in the field) Last line will do 0b01 << 4 = 0b010000. This means that on
@@ -510,7 +542,7 @@ private:
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
                (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
-    inline static uint32_t calculate_chip_multicast_routing_fields_value(
+    static uint32_t calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         // Example of starting 3 hops away mcasting to 2 chips
         // First line will do 0xAAAAAAAA & 0b1111 = 0b1010. This means starting from our neighbor, we will forward twice
@@ -536,22 +568,22 @@ private:
 
 public:
     // Specialized implementations for LowLatencyPacketHeader
-    inline void set_routing_fields(LowLatencyRoutingFields& fields) { this->routing_fields = fields; }
+    void set_routing_fields(LowLatencyRoutingFields& fields) { this->routing_fields = fields; }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {
         this->routing_fields.value =
             LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {
         this->routing_fields.value =
             LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
 
-    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {
         this->routing_fields.value =
             LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value(distance_in_hops);
     }
-    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {
         this->routing_fields.value =
             LowLatencyPacketHeader::calculate_chip_multicast_routing_fields_value(chip_multicast_command_header);
     }
@@ -589,17 +621,13 @@ struct LowLatencyMeshRoutingFields {
     };
 };
 
-struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
+// WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
+#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 32
+
+// TODO: https://github.com/tenstorrent/tt-metal/issues/32237
+struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
     LowLatencyMeshRoutingFields routing_fields;
-    uint8_t route_buffer[32];
-    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
-
-    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
-};
-
-struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
+    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
     union {
         struct {
             uint16_t dst_start_chip_id;
@@ -612,21 +640,31 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
         uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
     uint8_t is_mcast_active;
-    uint8_t reserved[7];
+
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
-};
+} __attribute__((packed));
+static_assert(sizeof(HybridMeshPacketHeader) == 80, "sizeof(HybridMeshPacketHeader) is not equal to 80B");
+
+struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
+    UDMControlFields udm_control;
+    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
+
+    // Override to return correct size for UDMHybridMeshPacketHeader
+    size_t get_payload_size_including_header() volatile const {
+        return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
+    }
+} __attribute__((packed));
+static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
-static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -636,14 +674,36 @@ static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not e
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
 
+// Check if UDM_MODE is defined
+#ifdef UDM_MODE
+
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
-// Dynamic Routing with 1D Fabric is not supported
-#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
+// 1D routing with UDM is not supported
+static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 
-#elif ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
+// 2D routing with UDM
+#if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#else
+static_assert(false, "UDM mode requires LOW_LATENCY routing for 2D fabric");
+#endif
+
+#else
+static_assert(false, "non supported ROUTING_MODE with UDM: " TOSTRING(ROUTING_MODE));
+#endif
+
+#else  // UDM_MODE not defined - use default non-UDM headers
+
+#if (                                                                \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 
@@ -656,11 +716,7 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
-#elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-#define DYNAMIC_ROUTING_ENABLED 1
-#define PACKET_HEADER_TYPE tt::tt_fabric::MeshPacketHeader
+#define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
@@ -668,6 +724,12 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #else
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif
+
+#endif  // UDM_MODE
+
 #endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric
+
+#pragma GCC diagnostic pop
+// NOLINTEND(misc-unused-parameters)

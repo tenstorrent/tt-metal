@@ -7,10 +7,8 @@ from loguru import logger
 import timm
 
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
     Profiler,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -31,7 +29,6 @@ BATCH_SIZE = 1
 )
 def test_perf(device, expected_inference_time, expected_compile_time, imagenet_sample_input):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -50,8 +47,6 @@ def test_perf(device, expected_inference_time, expected_compile_time, imagenet_s
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)

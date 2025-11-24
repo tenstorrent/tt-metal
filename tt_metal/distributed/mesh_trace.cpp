@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
@@ -19,8 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -97,7 +96,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                 }
             }
         }
-        if (intermed_trace_data.size()) {
+        if (!intermed_trace_data.empty()) {
             // Invalidate programs with partial intersections with current programs.
             for (auto& program : trace_data) {
                 if (std::find(
@@ -196,6 +195,13 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
         mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
+    }
+}
+
+MeshTraceBuffer::~MeshTraceBuffer() {
+    if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
+        auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
+        this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
     }
 }
 

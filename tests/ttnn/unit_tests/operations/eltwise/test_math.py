@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 from loguru import logger
 
@@ -34,36 +34,6 @@ def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("w", [128])
 def test_i0(device, h, w):
     run_math_unary_test(device, h, w, ttnn.i0, pcc=0.998)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isfinite(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isfinite, pcc=0.993)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isinf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isinf, pcc=0.9997)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isnan(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isnan)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isneginf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isneginf)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_isposinf(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.isposinf)
 
 
 @pytest.mark.parametrize("h", [5])

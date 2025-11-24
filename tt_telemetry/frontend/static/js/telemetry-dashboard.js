@@ -4,7 +4,6 @@
 
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
 import { HierarchicalTelemetryStore } from './hierarchical_telemetry_store.js';
-import { arrayOfPairsToObject } from './utils.js';
 import './status-grid.js';
 import './metric-sidebar.js';
 
@@ -93,160 +92,16 @@ export class TelemetryDashboard extends LitElement {
             this._eventSource = new EventSource('/api/stream');
 
             this._eventSource.onmessage = (event) => {
-                let didUpdate = false;
-
                 // Handle message
                 try {
-                    const data = JSON.parse(event.data);
+                    const snapshot = JSON.parse(event.data);
+                    const didUpdate = this._telemetryStore.processSnapshot(snapshot);
 
-                    const boolMetricIds = data["bool_metric_ids"];
-                    const boolMetricNames = data["bool_metric_names"];    // optional, and indicates new telemetry metrics if present
-                    const boolMetricValues = data["bool_metric_values"];
-                    const boolMetricTimestamps = data["bool_metric_timestamps"] || [];
-
-                    if (boolMetricIds.length != boolMetricValues.length) {
-                        console.log(`SSE error: Received differing id and value counts (${boolMetricIds.length} vs. ${boolMetricValues.length})`);
-                        return;
-                    }
-
-                    if (boolMetricTimestamps.length > 0 && boolMetricTimestamps.length != boolMetricIds.length) {
-                        console.log(`SSE error: Received differing id and timestamp counts (${boolMetricIds.length} vs. ${boolMetricTimestamps.length})`);
-                        return;
-                    }
-
-                    if (boolMetricNames.length > 0 && boolMetricNames.length != boolMetricIds.length) {
-                        console.log(`SSE error: Received differing name and id counts (${boolMetricNames.length} vs. ${boolMetricIds.length})`);
-                        return;
-                    }
-
-                    if (boolMetricNames.length > 0) {
-                        // Adding new
-                        for (let i = 0; i < boolMetricIds.length; i++) {
-                            const path = boolMetricNames[i];
-                            const id = boolMetricIds[i];
-                            const value = boolMetricValues[i];
-                            const timestamp = boolMetricTimestamps[i];
-                            this._telemetryStore.addPath(path, id, value, true, timestamp);
-                            didUpdate = true;
-                        }
-                    } else {
-                        // Delta updates
-                        for (let i = 0; i < boolMetricIds.length; i++) {
-                            const id = boolMetricIds[i];
-                            const value = boolMetricValues[i];
-                            const timestamp = boolMetricTimestamps[i];
-                            this._telemetryStore.updateBoolValue(id, value, timestamp);
-                            didUpdate = true;
-                        }
-                    }
-
-                    const uintMetricIds = data["uint_metric_ids"];
-                    const uintMetricNames = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
-                    const uintMetricUnits = data["uint_metric_units"] || [];
-                    const uintMetricValues = data["uint_metric_values"];
-                    const uintMetricTimestamps = data["uint_metric_timestamps"] || [];
-                    const unitDisplayLabels = arrayOfPairsToObject(data["metric_unit_display_label_by_code"]);
-                    const unitFullLabels = arrayOfPairsToObject(data["metric_unit_full_label_by_code"]);
-
-                    if (uintMetricIds.length != uintMetricValues.length) {
-                        console.log(`SSE error: Received differing id and value counts (${uintMetricIds.length} vs. ${uintMetricValues.length})`);
-                        return;
-                    }
-
-                    if (uintMetricTimestamps.length > 0 && uintMetricTimestamps.length != uintMetricIds.length) {
-                        console.log(`SSE error: Received differing id and timestamp counts (${uintMetricIds.length} vs. ${uintMetricTimestamps.length})`);
-                        return;
-                    }
-
-                    if (uintMetricNames.length > 0 && uintMetricNames.length != uintMetricIds.length) {
-                        console.log(`SSE error: Received differing name and id counts (${uintMetricNames.length} vs. ${uintMetricIds.length})`);
-                        return;
-                    }
-
-                    if (uintMetricUnits.length > 0 && uintMetricUnits.length != uintMetricIds.length) {
-                        console.log(`SSE error: Received differing units and id counts (${uintMetricUnits.length} vs. ${uintMetricIds.length})`);
-                        return;
-                    }
-
-                    // Update unit label maps if present
-                    this._telemetryStore.updateUnitLabelMaps(unitDisplayLabels, unitFullLabels);
-
-                    if (uintMetricNames.length > 0) {
-                        // Adding new metrics with unit information
-                        for (let i = 0; i < uintMetricIds.length; i++) {
-                            const path = uintMetricNames[i];
-                            const id = uintMetricIds[i];
-                            const value = uintMetricValues[i];
-                            const timestamp = uintMetricTimestamps.length > 0 ? uintMetricTimestamps[i] : null;
-                            const unitCode = uintMetricUnits.length > 0 ? uintMetricUnits[i] : null;
-                            this._telemetryStore.addPath(path, id, value, false, timestamp, unitCode);
-                            didUpdate = true;
-                        }
-                    } else {
-                        // Delta updates
-                        for (let i = 0; i < uintMetricIds.length; i++) {
-                            const id = uintMetricIds[i];
-                            const value = uintMetricValues[i];
-                            const timestamp = uintMetricTimestamps.length > 0 ? uintMetricTimestamps[i] : null;
-                            this._telemetryStore.updateUIntValue(id, value, timestamp);
-                            didUpdate = true;
-                        }
-                    }
-
-                    const doubleMetricIds = data["double_metric_ids"];
-                    const doubleMetricNames = data["double_metric_names"];    // optional, and indicates new telemetry metrics if present
-                    const doubleMetricUnits = data["double_metric_units"] || [];
-                    const doubleMetricValues = data["double_metric_values"];
-                    const doubleMetricTimestamps = data["double_metric_timestamps"] || [];
-
-                    if (doubleMetricIds.length != doubleMetricValues.length) {
-                        console.log(`SSE error: Received differing id and value counts (${doubleMetricIds.length} vs. ${doubleMetricValues.length})`);
-                        return;
-                    }
-
-                    if (doubleMetricTimestamps.length > 0 && doubleMetricTimestamps.length != doubleMetricIds.length) {
-                        console.log(`SSE error: Received differing id and timestamp counts (${doubleMetricIds.length} vs. ${doubleMetricTimestamps.length})`);
-                        return;
-                    }
-
-                    if (doubleMetricNames.length > 0 && doubleMetricNames.length != doubleMetricIds.length) {
-                        console.log(`SSE error: Received differing name and id counts (${doubleMetricNames.length} vs. ${doubleMetricIds.length})`);
-                        return;
-                    }
-
-                    if (doubleMetricUnits.length > 0 && doubleMetricUnits.length != doubleMetricIds.length) {
-                        console.log(`SSE error: Received differing units and id counts (${doubleMetricUnits.length} vs. ${doubleMetricIds.length})`);
-                        return;
-                    }
-
-                    if (doubleMetricNames.length > 0) {
-                        // Adding new metrics with unit information
-                        for (let i = 0; i < doubleMetricIds.length; i++) {
-                            const path = doubleMetricNames[i];
-                            const id = doubleMetricIds[i];
-                            const value = doubleMetricValues[i];
-                            const timestamp = doubleMetricTimestamps.length > 0 ? doubleMetricTimestamps[i] : null;
-                            const unitCode = doubleMetricUnits.length > 0 ? doubleMetricUnits[i] : null;
-                            this._telemetryStore.addPath(path, id, value, false, timestamp, unitCode);
-                            didUpdate = true;
-                        }
-                    } else {
-                        // Delta updates
-                        for (let i = 0; i < doubleMetricIds.length; i++) {
-                            const id = doubleMetricIds[i];
-                            const value = doubleMetricValues[i];
-                            const timestamp = doubleMetricTimestamps.length > 0 ? doubleMetricTimestamps[i] : null;
-                            this._telemetryStore.updateDoubleValue(id, value, timestamp);
-                            didUpdate = true;
-                        }
+                    if (didUpdate) {
+                        this.requestUpdate();
                     }
                 } catch (error) {
-                    // If it's not JSON, append as-is
                     console.error(`SSE error: Error processing data: ${error}`);
-                }
-
-                if (didUpdate) {
-                    this.requestUpdate();
                 }
             };
 

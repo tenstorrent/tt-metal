@@ -1,40 +1,57 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
+#include <variant>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::matmul {
+#include "attn_matmul_device_operation_types.hpp"
+#include "attn_matmul_program_factory.hpp"
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_attn_matmul(
-    const Tensor& a,
-    const Tensor& b,
-    Tensor& output,
-    std::optional<const uint32_t> num_tokens,
-    std::optional<const bool> transpose_hw,
-    CoreCoord compute_with_storage_grid_size,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config);
+namespace ttnn::operations::experimental::matmul::attn_matmul {
 
 struct AttnMatmulDeviceOperation {
-    std::optional<const uint32_t> num_tokens;
-    std::optional<const bool> transpose_hw;
-    CoreCoord compute_with_storage_grid_size;
-    tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype;
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    using operation_attributes_t = attn_matmul::operation_attributes_t;
+    using tensor_args_t = attn_matmul::tensor_args_t;
+    using spec_return_value_t = attn_matmul::spec_return_value_t;
+    using tensor_return_value_t = attn_matmul::tensor_return_value_t;
+    using program_factory_t = std::variant<program::AttnMatmulProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const CoreCoord& compute_with_storage_grid_size,
+        std::optional<const DataType> output_dtype,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<const uint32_t> num_tokens,
+        std::optional<const bool> transpose_hw,
+        std::optional<Tensor> optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul
+
+namespace ttnn::prim {
+constexpr auto attn_matmul = ttnn::register_operation<
+    "ttnn::prim::attn_matmul",
+    ttnn::operations::experimental::matmul::attn_matmul::AttnMatmulDeviceOperation>();
+}  // namespace ttnn::prim

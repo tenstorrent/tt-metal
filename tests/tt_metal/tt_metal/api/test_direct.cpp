@@ -46,7 +46,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
@@ -59,7 +59,7 @@ bool reader_only(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -115,7 +115,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
@@ -128,7 +128,7 @@ bool writer_only(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -183,13 +183,13 @@ struct ReaderWriterConfig {
     size_t num_tiles = 0;
     size_t tile_byte_size = 0;
     tt::DataFormat l1_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
 };
 /// @brief Does Dram --> Reader --> CB --> Writer --> Dram on a single core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderWriterConfig& test_config) {
+bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -202,7 +202,7 @@ bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const R
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -241,7 +241,7 @@ bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const R
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -279,14 +279,14 @@ struct ReaderDatacopyWriterConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreCoord core = {};
+    CoreCoord core;
 };
 /// @brief Does Dram --> Reader --> CB --> Datacopy --> CB --> Writer --> Dram on a single core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_datacopy_writer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderDatacopyWriterConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -300,7 +300,7 @@ bool reader_datacopy_writer(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     tt::tt_metal::InterleavedBufferConfig dram_config{
@@ -351,7 +351,7 @@ bool reader_datacopy_writer(
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////

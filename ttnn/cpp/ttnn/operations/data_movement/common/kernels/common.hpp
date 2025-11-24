@@ -65,6 +65,7 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
                     noc_async_read_barrier();
                 }
             } else {
+                invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }
@@ -81,6 +82,7 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
                     noc_async_write_barrier();
                 }
             } else {
+                invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }
@@ -204,5 +206,20 @@ inline void spin(uint32_t cycles) {
         wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
+
+template <uint32_t Size, class Enable = void>
+struct ByteSizeAddressType {
+    typedef uint8_t type;
+};
+
+template <uint32_t Size>
+struct ByteSizeAddressType<Size, typename std::enable_if<Size == 2>::type> {
+    typedef uint16_t type;
+};
+
+template <uint32_t Size>
+struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
+    typedef uint32_t type;
+};
 
 }  // namespace tt::data_movement::common

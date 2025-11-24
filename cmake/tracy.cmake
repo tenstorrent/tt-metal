@@ -7,12 +7,18 @@ if(ENABLE_TRACY)
     set(TRACY_ENABLE ON)
 else()
     set(TRACY_ENABLE OFF)
-    set(TRACY_TIMER_FALLBACK ON)
 endif()
+
+# Tracy will always be built with fallback timing enabled
+# avoiding hard failures on systems without invariant TSC and using OS clocks when needed.
+set(TRACY_TIMER_FALLBACK ON)
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
+set(_saved_clang_tidy "${CMAKE_CXX_CLANG_TIDY}")
+set(CMAKE_CXX_CLANG_TIDY "")
 add_subdirectory(${TRACY_HOME})
+set(CMAKE_CXX_CLANG_TIDY "${_saved_clang_tidy}")
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 set_target_properties(

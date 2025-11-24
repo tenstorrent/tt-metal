@@ -1,16 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
@@ -20,23 +21,28 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_states, shard_layout, shard_end_core, shard_shape", (DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,)
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_cross_attention_midblock_512x512(
-    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb
+    reset_seeds,
+    device,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    temb,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     # Initialize PyTorch component
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_midblock = unet.mid_block
 
     # Initialize ttnn component

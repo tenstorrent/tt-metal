@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtR
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -43,6 +43,7 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -71,6 +72,8 @@ def test_resnetblock2d(
         model_config,
         conv_shortcut,
         split_in,
+        debug_mode=debug_mode,
+        use_negative_mask=block == "up_blocks" and down_block_id == 2,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

@@ -6,38 +6,33 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_ternary)
 set_target_properties(
     ttnn_op_eltwise_ternary
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels where/device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_ternary
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES where/where.hpp
+        FILES common/ternary_op_types.hpp ternary.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
         ternary_composite_op.cpp
-        where/where.cpp
-        where/device/where_device_operation.cpp
-        where/device/where_program_factory.cpp
-        where/device/where_utils.cpp
+        ternary.cpp
+        device/ternary_device_operation.cpp
+        device/ternary_program_factory.cpp
+        device/ternary_op_utils.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_ternary PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_ternary
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_ternary PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

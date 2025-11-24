@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -46,8 +46,6 @@ def test_demo_multichip(
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
     is_ci_env,
     ensure_devices_tg,
@@ -76,9 +74,9 @@ def test_demo_multichip(
                 2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
             },
             "6U": {
-                128: {"prefill_t/s": 32900, "decode_t/s/u": 12.19},
-                1024: {"prefill_t/s": 33800, "decode_t/s/u": 11.60},
-                2048: {"prefill_t/s": 31100, "decode_t/s/u": 10.97},
+                128: {"prefill_t/s": 63160, "decode_t/s/u": 11.60},
+                1024: {"prefill_t/s": 98900, "decode_t/s/u": 11.50},
+                2048: {"prefill_t/s": 80370, "decode_t/s/u": 10.97},
             },
         }
         expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
@@ -100,8 +98,6 @@ def test_demo_multichip(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
-        model_location_generator=model_location_generator,
-        get_tt_cache_path=get_tt_cache_path,
         mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,

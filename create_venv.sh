@@ -31,7 +31,7 @@ detect_os
 
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
-    pip install --force-reinstall pip==21.2.4
+    pip install --force-reinstall pip==25.1.1
     python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
     python3 -m pip install setuptools wheel==0.45.1
 else

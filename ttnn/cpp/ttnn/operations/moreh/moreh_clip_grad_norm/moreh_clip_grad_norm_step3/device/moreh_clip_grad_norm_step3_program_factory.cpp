@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"

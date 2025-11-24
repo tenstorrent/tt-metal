@@ -4,7 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
 
@@ -29,7 +29,7 @@ uint32_t get_bf16_pool_scalar(
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed() << 16;
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value)) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -41,7 +41,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed();
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value));
 }
 
 bool is_pool_op_one_scalar_per_core(
@@ -118,6 +118,7 @@ FactoryParameters get_factory_parameters(
     const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
+    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
     auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
@@ -205,7 +206,15 @@ uint32_t calculate_L1_usage(
     }
 
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, input.dtype(), output_dtype, kernel_h, kernel_w, in_channels, pool_type, return_indices, output_layout);
+        num_shards_c,
+        input.dtype(),
+        output_dtype,
+        kernel_h,
+        kernel_w,
+        in_channels,
+        pool_type,
+        return_indices,
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -243,21 +252,15 @@ uint32_t calculate_L1_usage(
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
-    uint32_t in_idx_cb_config_0_size = 0;
-    uint32_t in_idx_cb_config_1_size = 0;
-    uint32_t tile_tmp_cb_size = 0;
-    uint32_t tile_idx_tmp_cb_size = 0;
+    uint32_t total_mpwi_cb_size = 0;
     if (return_indices) {
-        uint32_t in_idx_cb_pagesize = params.index_nbytes * in_cb_page_padded;
-        in_idx_cb_config_0_size = in_cb_npages * in_idx_cb_pagesize;
-        if (params.split_reader) {
-            in_idx_cb_config_1_size = in_cb_npages * in_idx_cb_pagesize;
-        }
-
         // Add tile temporary CBs for return_indices
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
-        tile_tmp_cb_size = params.nbytes * tile_elems * 1;            // 1 page
-        tile_idx_tmp_cb_size = params.index_nbytes * tile_elems * 1;  // 1 page
+        uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
+        uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
+        // 1 data sized tile (pack_tmp_cb) and 5 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
+        // up_left_wrap_inc)
+        total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
     }
 
     uint32_t out_cb_pagesize;
@@ -293,8 +296,7 @@ uint32_t calculate_L1_usage(
     }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           in_idx_cb_config_0_size + in_idx_cb_config_1_size + tile_tmp_cb_size + tile_idx_tmp_cb_size +
-           pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
+           total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
            sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
@@ -415,14 +417,29 @@ void validate_input_params(
     // tensor shape validation against provided NHWC dimensions
     const uint32_t nhw = batch_size * input_h * input_w;
     const auto& input_shape = input_tensor.logical_shape();
+
+    // Support both (1, 1, nhw, c) and (n, h, w, c) formats
+    bool is_flattened_format =
+        (input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels);
+    bool is_nhwc_format =
+        (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
+         input_shape[3] == channels);
+
+    // Unflattened tesnor currently supported for non_block formats only.
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels,
-        "Input tensor shape {} does not match expected shape (1, 1, {}, {})",
+        is_flattened_format || (is_nhwc_format && !is_block_float(input_tensor.dtype())),
+        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
+        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
+        "format inputs.",
         input_shape,
         nhw,
+        channels,
+        batch_size,
+        input_h,
+        input_w,
         channels);
 
-    if (is_in_tiled) {
+    if (is_in_tiled && is_flattened_format) {
         const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
         const uint32_t padded_nhw = tt::round_up(nhw, tt::constants::TILE_HEIGHT);
         const auto& padded_input_shape = input_tensor.padded_shape();
@@ -469,8 +486,8 @@ void validate_input_params(
         kernel_size[1]);
 
     // ensure effective kernel size (with dilation) doesn't exceed padded input
-    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
-    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
+    uint32_t effective_kernel_h = (dilation_h * (kernel_size[0] - 1)) + 1;
+    uint32_t effective_kernel_w = (dilation_w * (kernel_size[1] - 1)) + 1;
     uint32_t padded_input_h = input_h + pad_top + pad_bottom;
     uint32_t padded_input_w = input_w + pad_left + pad_right;
     TT_FATAL(

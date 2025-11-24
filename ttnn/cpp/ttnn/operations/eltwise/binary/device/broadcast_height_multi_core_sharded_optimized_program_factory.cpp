@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 // #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "ttnn/device_operation.hpp"
@@ -77,9 +76,9 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t input1_tile_size = tt::tile_size(b_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
     uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();

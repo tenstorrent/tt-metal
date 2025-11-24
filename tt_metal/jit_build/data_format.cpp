@@ -4,7 +4,7 @@
 
 #include "data_format.hpp"
 
-#include <assert.hpp>      // for tt_throw, TT_FATAL
+#include <tt_stl/assert.hpp>      // for tt_throw, TT_FATAL
 #include <base_types.hpp>  // for UnpackToDestMode
 #include <circular_buffer_constants.h>
 #include <functional>
@@ -49,12 +49,6 @@ bool is_exp_b_format(DataFormat data_format) {
 
 ExpPrecision get_exp_precision(DataFormat data_format) {
     return (is_exp_b_format(data_format) ? ExpPrecision::B : ExpPrecision::A);
-}
-
-void dump_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
-    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-        std::cout << "Operand idx " << i << ": " << data_format[i] << "," << std::endl;
-    }
 }
 
 DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {

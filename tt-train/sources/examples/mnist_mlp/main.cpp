@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -169,10 +170,14 @@ int main(int argc, char **argv) {
     ttml::datasets::InMemoryDataset<std::vector<uint8_t>, uint8_t> test_dataset(
         dataset.test_images, dataset.test_labels);
 
+    if (enable_tp) {
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+    }
+
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
+        [device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
             std::vector<float> data;
             std::vector<uint32_t> targets;
@@ -238,7 +243,7 @@ int main(int argc, char **argv) {
     LossAverageMeter loss_meter;
     int training_step = 0;
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =

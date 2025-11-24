@@ -12,8 +12,11 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
-    constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
+    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
+    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+
+    // constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
+    // constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
 
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
 

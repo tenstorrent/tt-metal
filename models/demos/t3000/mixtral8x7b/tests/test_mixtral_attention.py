@@ -6,12 +6,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
 from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 

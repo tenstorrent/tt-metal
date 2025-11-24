@@ -14,100 +14,51 @@ Then run the following:
     ./build/programming_examples/metal_example_hello_world_datamovement_kernel
 ```
 
-## Device setup
+## Mesh setup
 
-``` cpp
-int device_id = 0;
-Device *device = CreateDevice(device_id);
-```
+Create a 1x1 mesh device, get the mesh command queue, construct a workload and device range, and create a program.
 
-The initial setup for this example follows the same pattern for the compute kernel example. We instantiate a device object to utilize the hardware on the `grayskull` accelerator. For this example, we will be using a single core to focus solely on the data movement kernel setup.
-
-## Program pre-compilation setup
-
-``` cpp
-CommandQueue& cq = device->command_queue();
+```cpp
+constexpr CoreCoord core = {0, 0};
+auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 ```
 
-Then, we obtain the device's `CommandQueue` in order to allow commands to be dispatched for execution. The `Program` is initialized to encapsulate the kernels and data.
+## Data movement kernels
 
-## Building data movement kernels
+There are two Data Movement cores per Tensix. For this example, we launch two identical kernels, one on each DM core (RISCV_0 on NOC 0 and RISCV_1 on NOC 1).
 
-We will declare two data movement kernels, one for each of the two RISC-V processors involved in data movement (`RISCV_0` for RISC-V 1 and `RISCV_1` for RISC-V 5). The `DataMovementConfig` parameter specifies the configuration for data movement.
-
-``` cpp
-constexpr CoreCoord core = {0, 0};
+```cpp
 KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
     program,
     "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default });
 
 KernelHandle void_dataflow_kernel_noc1_id = CreateKernel(
     program,
     "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default });
 ```
 
-Since this example focuses on data movement kernel setup, we do not need to specify any compile-time arguments.
+Set runtime arguments (none needed here), enqueue the program in a mesh workload (non-blocking), and wait for completion.
 
-## Data movement kernel function
-
-``` cpp
-void kernel_main() {
-
-    // Nothing to move. Print respond message.
-    // Make sure to export TT_METAL_DPRINT_CORES=0,0 before runtime.
-
-    DPRINT_DATA0(DPRINT << "Hello, Master, I am running a void data movement kernel on NOC 0." << ENDL());
-    DPRINT_DATA1(DPRINT << "Hello, Master, I am running a void data movement kernel on NOC 1." << ENDL());
-
-}
-```
-
-The kernel function, defined in
-[void_dataflow_kernel.cpp](../../../tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp),
-simply prints two statements from each of the RISC-V processors involved with data movement. This kernel is designed to be basic in order to focus on the data movement kernel setup itself.
-
-## Configure and execute program on device
-
-We set the runtime arguments for each kernel separately, before dispatching the program to the `CommandQueue` for execution on the device using `EnqueueProgram()`. Both kernels will run on core `{0, 0}`, each utilizing different NoC systems.
-
-``` cpp
+```cpp
 SetRuntimeArgs(program, void_dataflow_kernel_noc0_id, core, {});
 SetRuntimeArgs(program, void_dataflow_kernel_noc1_id, core, {});
-EnqueueProgram(cq, program, false);
-printf("Hello, Core {0, 0} on Device 0, I am sending you some data. Standby awaiting communication.\n");
+std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication." << std::endl;
+
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::Finish(cq);
 ```
 
-We then wait for the program to finish execution with `Finish()`.
-
-``` cpp
-Finish(cq);
-printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
-CloseDevice(device);
-```
-
-If the output includes a message from each kernel, then it has been executed correctly. Make sure to run the command `export TT_METAL_DPRINT_CORES=0,0` in order to view the second output statement.
+Finally, close the device after the expected prints from both DM cores.
 
 ## Expected output
 
-    Hello, Core {0, 0} on Device 0, I am sending you some data. Standby awaiting communication.
-    Hello, Master, I am running a void data movement kernel on NOC 0.
-    Hello, Master, I am running a void data movement kernel on NOC 1.
-    Thank you, Core {0, 0} on Device 0, for the completed task.
-
-As shown in the kernel function, there will be two statements printed from the kernel if the example code is executed correctly. Note that `DPRINT_DATA0()` is used to print messages from RISC-V processor 1 and `DPRINT_DATA1()` is used to print messages from RISC-V processor 5.
-
-## Summary
-
-The following lays out the general workflow for setting up a host program that runs a basic data movement kernel.
-
-1. Specify the device and the coordinates of the cores that will be utilized.
-2. Configure and create the collaboration mechanisms (e.g. command queue).
-3. Create the program that will contain the kernels.
-4. Specify the data movement kernel configuration and create the kernels.
-5. Set up the runtime arguments for the data movement kernel and launch the program.
-6. Wait for the program to finish execution before closing the device.
+The program prints NC and BR messages from DM cores 1 and 0 on core `{0,0}`, followed by the host closing message as shown in the C++ example.

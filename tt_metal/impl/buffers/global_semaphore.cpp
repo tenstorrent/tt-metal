@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
@@ -61,20 +61,13 @@ IDevice* GlobalSemaphore::device() const { return device_; }
 DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
-    // Write the initial value to the semaphore to the device
-    // Only block for the slow dispatch case
-
+    // Blocking write here to ensure that Global Semaphore reset value lands on
+    // each physical device before the next program runs.
+    // This is to ensure that cross-chip writes to the Global Semaphore are not
+    // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        detail::WriteToBuffer(*buffer_.get_buffer(), host_buffer);
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
-    } else {
-        if (auto mesh_buffer = buffer_.get_mesh_buffer()) {
-            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
-        } else {
-            EnqueueWriteBuffer(device_->command_queue(), *buffer_.get_buffer(), host_buffer, false);
-        }
-    }
+    auto mesh_buffer = buffer_.get_mesh_buffer();
+    distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
 }
 
 }  // namespace tt::tt_metal

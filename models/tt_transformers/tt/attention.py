@@ -97,6 +97,7 @@ class Attention(LightweightModule):
         self.is_sliding = (
             configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
+        self.sliding_window = configuration.sliding_window if self.is_sliding else None
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -381,14 +382,7 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    def forward_decode(
-        self,
-        x: ttnn.Tensor,
-        current_pos,
-        rot_mats=None,
-        page_table=None,
-        kv_cache=None,
-    ) -> ttnn.Tensor:
+    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
@@ -513,6 +507,7 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
+                sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -524,6 +519,7 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
+                sliding_window_size=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
@@ -809,7 +805,6 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
-
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
@@ -819,12 +814,14 @@ class Attention(LightweightModule):
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
+            if self.sliding_window is not None:
+                raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
+                input_tensor_q=q_heads_1QSD_8b,
+                input_tensor_k=keys_BKSD,
+                input_tensor_v=values_BKSD,
+                page_table_tensor=page_table,
+                chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
@@ -834,6 +831,7 @@ class Attention(LightweightModule):
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
                 is_causal=True,
+                sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),

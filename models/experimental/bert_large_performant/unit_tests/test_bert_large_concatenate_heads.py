@@ -6,7 +6,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
 )
 import torch

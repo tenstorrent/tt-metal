@@ -15,9 +15,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from loguru import logger
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported parallelizations for WH B0 or BH")

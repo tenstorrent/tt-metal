@@ -13,8 +13,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <sstream>
 #include <type_traits>
@@ -22,8 +20,6 @@
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-
-using namespace tt::constants;
 
 namespace ttnn {
 
@@ -41,8 +37,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     /* All Gather Params */
     IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -152,9 +149,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
-            target_device,
-            forward_device,
-            backward_device,
+            target_device_coord,
+            forward_coord,
+            backward_coord,
             all_gather_output_tensor,
             dim,
             num_links,
@@ -169,7 +166,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             chunks_per_sync,
             num_workers_per_direction_opt,
             num_buffers_per_channel,
-            core_grid_offset);
+            core_grid_offset,
+            false);  // reverse_order = false by default
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;
 

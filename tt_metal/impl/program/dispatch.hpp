@@ -6,7 +6,6 @@
 
 #include <circular_buffer.hpp>
 #include <device.hpp>
-#include <kernel.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
@@ -17,7 +16,6 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"

@@ -4,14 +4,15 @@
 
 #pragma once
 
+#include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct NLPKVCacheLoadSliceOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t seq_len_start,
         uint32_t seq_len_end,

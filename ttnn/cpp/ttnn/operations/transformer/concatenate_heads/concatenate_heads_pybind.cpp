@@ -18,7 +18,6 @@ void py_bind_concatenate_heads(pybind11::module& module) {
         module,
         ttnn::transformer::concatenate_heads,
         R"doc(
-
             Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
             Args:

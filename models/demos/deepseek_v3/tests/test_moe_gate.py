@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -11,16 +13,10 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
-
-
-@pytest.fixture
-def reference_model(hf_config, use_bitonic_sort):
-    """Get the actual DeepSeek MLP model using local implementation."""
-    torch.use_deterministic_algorithms(True)
-    return ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
 
 
 @pytest.mark.parametrize(
@@ -39,22 +35,32 @@ def reference_model(hf_config, use_bitonic_sort):
 def test_forward_pass(
     mode,
     seq_len,
-    set_deterministic_env,
-    reference_model,
     hf_config,
     topk_fallback,
     use_bitonic_sort,
-    tmp_path,
+    cache_path,
     mesh_device,
+    set_deterministic_env,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
+    torch.use_deterministic_algorithms(True)
+    reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoEGate.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_cache_path = (
+        cache_path
+        / "tests_cache"
+        / os.environ.get("PYTEST_CURRENT_TEST")
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
+
+    weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), weight_cache_path, mesh_device)
+    _check_weights_exist_and_convert(weight_cache_path, weight_config)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(

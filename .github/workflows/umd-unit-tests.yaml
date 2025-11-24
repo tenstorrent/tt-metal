@@ -25,8 +25,8 @@ jobs:
     name: UMD tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a') && fromJSON(format('["in-service", "cloud-virtual-machine", "P100"]'))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}
@@ -45,10 +45,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: build/test/umd/${{ inputs.arch }}/unit_tests
+        run: |
+          ./build/test/umd/${{ inputs.arch }}/unit_tests
+          ./build/test/umd/api/api_tests

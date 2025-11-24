@@ -7,7 +7,6 @@
 #include "create_qkv_heads_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -24,7 +23,11 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_heads_combine
     // groups = kv_heads usually
     // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
     TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
-    TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3, "Error");
+    TT_FATAL(
+        heads_per_group.size() == output.size() && output.size() == 3,
+        "heads_per_group size ({}) and output size ({}) must both equal 3",
+        heads_per_group.size(),
+        output.size());
 
     const uint32_t total_heads_per_group =
         std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0u);  // num q heads + 2 * num_kv_heads

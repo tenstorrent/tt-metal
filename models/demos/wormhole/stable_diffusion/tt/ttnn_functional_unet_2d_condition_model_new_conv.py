@@ -10,6 +10,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_grayskull
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
@@ -29,7 +30,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     get_default_compute_config,
     pre_process_input,
 )
-from models.utility_functions import is_grayskull
 
 fp32_accum = True
 
@@ -231,16 +231,10 @@ class UNet2DConditionModel:
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel
+            self.norm_input_mask = ttnn.create_group_norm_input_mask(
+                self.conv_out_in_channels, self.norm_num_groups, num_cores_across_channel, ttnn.bfloat8_b
             )
-            self.norm_input_mask = ttnn.from_torch(
-                self.norm_input_mask_torch_tensor,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.norm_input_mask = ttnn.to_device(self.norm_input_mask, device)
 
         # breakpoint()
         # self.gn_expected_input_sharded_memory_config = update_gn_expected_input_sharded_memory_config_and_grid_size(self.gn_expected_input_sharded_memory_config, self.group_norm_grid_size, self.norm_num_groups, in_channels)
@@ -374,6 +368,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
@@ -641,6 +636,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(

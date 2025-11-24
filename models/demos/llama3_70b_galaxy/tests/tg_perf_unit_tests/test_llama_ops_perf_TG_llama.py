@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -8,6 +8,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
+@pytest.mark.no_reset_device
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_4u_us", "expected_kernel_duration_6u_us", "perf_margin"),

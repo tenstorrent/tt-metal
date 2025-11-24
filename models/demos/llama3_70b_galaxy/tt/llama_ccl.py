@@ -53,7 +53,7 @@ class TT_CCL:
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
-        self.barrier_semaphore_handles = []
+        self.barrier_semaphore_handles = [[], []]
         if mode == "prefill":
             self.from_semaphore_handles = [[], []]
             self.to_semaphore_handles = [[], []]
@@ -61,7 +61,7 @@ class TT_CCL:
 
         for i in range(2):
             for _ in range(self.num_cbs):
-                self.barrier_semaphore_handles.append(
+                self.barrier_semaphore_handles[i].append(
                     ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                 )
 
@@ -92,7 +92,7 @@ class TT_CCL:
 
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
-        self.barrier_semaphore_idx = 0
+        self.barrier_semaphore_idx = [0, 0]
         self.persistent_buffers = {}
         self.all_gather_buffers = {}
         if mode == "decode":
@@ -102,7 +102,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [8192, 4096, 2048, 1024, 128]
+            self.support_seqlens = [4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -118,12 +118,13 @@ class TT_CCL:
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
-        self.barrier_semaphore_idx = 0
+        self.barrier_semaphore_idx = [0, 0]
 
-    def get_and_cycle_barrier_semaphore_handle(self):
-        current_idx = self.barrier_semaphore_idx
-        self.barrier_semaphore_idx = (self.barrier_semaphore_idx + 1) % (2 + self.num_cbs)
-        return self.barrier_semaphore_handles[current_idx]
+    def get_and_cycle_barrier_semaphore_handle(self, cluster_axis):
+        semaphore_index = cluster_axis
+        current_idx = self.barrier_semaphore_idx[semaphore_index]
+        self.barrier_semaphore_idx[semaphore_index] = (current_idx + 1) % self.num_cbs
+        return self.barrier_semaphore_handles[semaphore_index][current_idx]
 
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
@@ -243,6 +244,15 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 128 * 1024)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
         tt_buffer = ttnn.from_torch(
@@ -517,13 +527,13 @@ class TT_CCL:
 
             buffers_dict = {
                 "QKV": [(1, 1, seqlen, 1280)],
+                "SDPA": [(1, 1, seqlen // 2, 1024)],
+                "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
                 "WO": [(1, 1, seqlen, 2048)],
                 "FF1": [(1, 1, seqlen, 3584)],
                 "FF3": [(1, 1, seqlen, 3584)],
                 "FF2": [(1, 1, seqlen, 2048)],
                 "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
@@ -537,6 +547,25 @@ class TT_CCL:
                 )
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
+
+        # Additional buffers for fixed lengths (1 Tile = 32)
+        buffers_fixed_length = {
+            "LM_HEAD": [(4, 1, 32, 16384)],
+            "SAMPLING": [(1, 1, 32, 128 * 1024)],
+        }
+        for key, shape in buffers_fixed_length.items():
+            tt_buffer = ttnn.as_tensor(
+                torch.zeros(shape[0]),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_32"),
+            )
+            ag_persistent_buffers[key] = tt_buffer
+
+        ag_persistent_buffers_all[32] = ag_persistent_buffers
         return ag_persistent_buffers_all
 
     def line_all_reduce(
@@ -573,9 +602,9 @@ class TT_CCL:
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
-
             if lm_head:
                 persistent_buffer.deallocate(True)
+
         else:
             if lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
@@ -829,23 +858,14 @@ class TT_CCL:
                 if seqlen not in self.persistent_buffers.keys()
                 else self.persistent_buffers[seqlen].get(buffer_key, None)
             )
-            ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
+            ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
                 dim,
                 cluster_axis=cluster_axis,
-                mesh_device=self.mesh_device,
-                from_remote_multi_device_global_semaphore=self.from_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                to_remote_multi_device_global_semaphore=self.to_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                math_op=math_op,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
                 num_links=num_links,
                 subdevice_id=self.worker_sub_device_id,
-                persistent_output_tensors=persistent_buffers,
             )
             # reshape input back
             ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
@@ -901,12 +921,13 @@ class TT_CCL:
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             num_links=num_links,
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            num_workers_per_link=1,
         )
 
         # reshape input back
@@ -991,32 +1012,42 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
-    def ring_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+    def ring_all_gather(
+        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None, reverse_order=False
+    ):
         B = input_tensor_mesh.shape[1]
         input_tensor_mesh = ttnn.reshape(
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
+        if "SDPA" in buffer_key:
+            # SDPA input is 8x (4= ring_size (number of devices in ring), 2 = number of chunks per device) shorter than the sequence length
+            seqlen = seqlen * 8
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
         )
         # persistent_buffers = None
 
         num_links = 4
-        ttnn_tensor_out = ttnn.experimental.all_gather_async(
+        if reverse_order:
+            all_gather_function = ttnn.experimental.all_gather_async_reversed
+        else:
+            all_gather_function = ttnn.experimental.all_gather_async
+        ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
-            # persistent_intermediate_buffer=persistent_buffers["intermediate"],
             persistent_output_buffer=persistent_buffers,
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(),
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
         )
-        if self.mode == "prefill" and buffer_key is not None:
+        if self.mode == "prefill" and buffer_key is not None and dim != 2:
+            # This condition excludes SDPA tensors (which use dim=2) from reshaping
+            # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
             if buffer_key != "LM_HEAD":
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
@@ -1128,7 +1159,6 @@ def tt_distributed_rmsnorm(
     tt_stats = ttnn.rms_norm_pre_all_gather(
         inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
     )
-    padded_shape = (1, 1, inp.shape[-2], 32)
 
     tt_stats_gathered = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"

@@ -1,16 +1,15 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
 from functools import partial
 
-import json
+import pytest
 import torch
 import random
 import ttnn
-import math
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.sweep_framework.sweep_utils.utils import sanitize_shape_rm
 from tests.sweep_framework.sweep_utils.sharding_utils import (
     gen_sharded_spec_unary,
     parse_sharding_spec,
@@ -18,19 +17,18 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
 
 random.seed(0)
 
-# Parameters provided to the test vector generator are defined here.
-# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
-# Developers can create their own generator functions and pass them to the parameters as inputs.
+# Parameters provided to the test vector generator,
+# defined as dict-type suites that contain the arguments to the run function as keys,
+# and lists of possible inputs as values.
 parameters = {
     "xfail": {
         "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
@@ -53,14 +51,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+# The actual test function.
+def run_softmax_sharded(
     input_spec,
     input_a_dtype,
-    *,
     device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
@@ -111,3 +105,22 @@ def run(
     expected_pcc = 0.999
     tensors = [input_tensor_a, output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
+
+
+# Entry point for the sweep framework.
+# Takes one test vector (as defined above) as the input.
+def run(
+    input_spec,
+    input_a_dtype,
+    *,
+    device,
+) -> list:
+    return run_softmax_sharded(input_spec, input_a_dtype, device)
+
+
+# Entry point for pytest.
+@pytest.mark.xfail
+@pytest.mark.parametrize("input_spec", parameters["xfail"]["input_spec"])
+@pytest.mark.parametrize("input_a_dtype", parameters["xfail"]["input_a_dtype"])
+def test_softmax_sharded(device, input_spec, input_a_dtype):
+    run_softmax_sharded(input_spec, input_a_dtype, device)

@@ -23,7 +23,6 @@ class SD35JointAttention:
         context_pre_only=None,
         eps=1e-5,
         mesh_device=None,
-        init=False,
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
@@ -52,7 +51,6 @@ class SD35JointAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -65,7 +63,6 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # Implementing joint attention
@@ -75,7 +72,6 @@ class SD35JointAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         self.to_out = ColParallelLinear(
@@ -84,7 +80,6 @@ class SD35JointAttention:
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -95,7 +90,6 @@ class SD35JointAttention:
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
             )
 
         self.norm_added_q = RMSNorm(**rms_kwargs)
@@ -210,21 +204,21 @@ class SD35JointAttention:
             weight = weight.T
             return {"weight": weight, "bias": bias}
 
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
+        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
+        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
         qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
         )
-        self.to_qkv.load_state_dict(qkv_state)
+        self.to_qkv.load_torch_state_dict(qkv_state)
         add_qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
         )
-        self.add_qkv_proj.load_state_dict(add_qkv_state)
-        self.to_out.load_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
+        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
+        self.to_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
         if self.context_pre_only is not None and not self.context_pre_only:
-            self.to_add_out.load_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
-        self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
+            self.to_add_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
+        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
+        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
     def __call__(self, spatial_1BND, prompt_1BLD, N):
         """
@@ -232,7 +226,7 @@ class SD35JointAttention:
         Outputs are width-fractured
         """
 
-        qkv_1BNF = self.to_qkv(spatial_1BND, core_grid=self.core_grid)
+        qkv_1BNF = self.to_qkv(spatial_1BND)
         local_heads = self.n_local_heads
         q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(qkv_1BNF, 0), num_heads=local_heads, transpose_key=False
@@ -241,7 +235,7 @@ class SD35JointAttention:
         q_BHNE = self.norm_q(q_BHNE)
         k_BHNE = self.norm_k(k_BHNE)
 
-        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD, core_grid=self.core_grid)
+        add_qkv_1BLF = self.add_qkv_proj(prompt_1BLD)
         add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
             ttnn.squeeze(add_qkv_1BLF, 0), num_heads=local_heads, transpose_key=False
         )
@@ -309,7 +303,7 @@ class SD35JointAttention:
                 **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(spatial_1BND, core_grid=self.core_grid)
+        spatial_1BND = self.to_out(spatial_1BND)
 
         prompt_out = None
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -330,7 +324,7 @@ class SD35JointAttention:
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                     **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLD = self.to_add_out(prompt_1BLD, core_grid=self.core_grid)
+            prompt_1BLD = self.to_add_out(prompt_1BLD)
             prompt_out = prompt_1BLD
 
         return spatial_1BND, prompt_out

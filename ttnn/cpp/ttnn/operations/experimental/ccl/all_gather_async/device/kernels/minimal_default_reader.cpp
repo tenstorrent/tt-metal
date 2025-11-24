@@ -16,39 +16,42 @@ using ttnn::ccl::Topology;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(2);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
-constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is backward
-constexpr bool fuse_op = get_compile_time_arg_val(8);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(9);
+constexpr uint32_t ring_size = get_compile_time_arg_val(0);
+constexpr uint32_t my_chip_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(3);
+constexpr uint32_t page_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
+constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
+constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
+constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
+constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
+constexpr bool fuse_op = get_compile_time_arg_val(16);
+constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // ARGS
+    // RUNTIME ARGS
     ///////////////////////////////////////////////////
+
     uint32_t arg_idx = 0;
-    // Load the input tensor spec
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 10;
+    constexpr uint32_t ct_idx = 18;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -71,7 +74,7 @@ void kernel_main() {
 #else
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
-    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -94,8 +97,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    const auto output_tensor_addrgen =
-        TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
+    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address, page_size);
 #endif
 
     OpSignaler op_signaler;
@@ -119,9 +121,9 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
                 uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
-                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
-                l1_write_addr += input_tensor_page_size;
+                l1_write_addr += page_size;
                 tiles_read++;
             }
 
@@ -136,7 +138,7 @@ void kernel_main() {
     uint32_t slices_received = 0;
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
-    if (topology == Topology::Linear) {
+    if constexpr (topology == Topology::Linear) {
         if (direction == 1) {
             slices_expected = num_targets_forward_direction;
             writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
@@ -144,7 +146,7 @@ void kernel_main() {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
         }
-    } else if (topology == Topology::Ring) {
+    } else if constexpr (topology == Topology::Ring) {
         if (direction == 1) {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_backward_direction - 1;
@@ -175,7 +177,9 @@ void kernel_main() {
             sender_chip_id = my_chip_id - (slices_received + 1);
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
         }
-
+        if constexpr (reverse) {
+            actual_sender_chip_id = (ring_size - 1) - actual_sender_chip_id;
+        }
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
         // In the ring case, if I have received on the left less than my targets on the right, forward
@@ -193,11 +197,18 @@ void kernel_main() {
             uint32_t row_offset = start_row_offset;
             uint32_t slice_Wt = input_tensor_Wt;
             uint32_t stride_Wt = output_tensor_Wt;
-            if (gather_dim == 3) {
+            if constexpr (gather_dim == 3) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Wt;
-            } else {
+            } else if constexpr (gather_dim == 2) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
+            } else if constexpr (gather_dim == 1) {
+                output_tile_id_start = actual_sender_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
+            } else {
+                output_tile_id_start =
+                    actual_sender_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
             }
+
+            uint32_t num_channels_processed_in_current_batch = 0;
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                 chunk_count = 0;
                 while (tiles_read < tiles_to_read) {
@@ -216,9 +227,9 @@ void kernel_main() {
                     for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                         uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
                         uint64_t noc_read_addr = get_noc_addr(tile_id, output_tensor_addrgen);
-                        noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
-                        l1_write_addr += input_tensor_page_size;
+                        l1_write_addr += page_size;
                         tiles_read++;
 
                         pages_read_in_row++;
@@ -231,11 +242,22 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_output_id, num_tiles_to_write_per_packet);
                 }
+                num_channels_processed_in_current_batch++;
+                if (gather_dim == 1 && num_channels_processed_in_current_batch == input_tensor_C) {
+                    output_tile_id_start +=
+                        output_tensor_Wt * output_tensor_Ht * (output_tensor_C - input_tensor_C + 1);
+                } else {
+                    output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
+                }
+
+                if (num_channels_processed_in_current_batch == input_tensor_C) {
+                    num_channels_processed_in_current_batch = 0;
+                }
+
                 pages_read_in_row = start_pages_read_in_row;
                 row_offset = start_row_offset;
                 tiles_read = input_tile_id_start;
                 tiles_to_read = input_tile_id_end;
-                output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
         } else {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
@@ -259,7 +281,7 @@ void kernel_main() {
         }
 
         slices_received++;
-        if (fuse_op) {
+        if constexpr (fuse_op) {
             // Signal matmul to go
             if (direction == 1 && slices_received == 1) {
                 noc_semaphore_wait_min(

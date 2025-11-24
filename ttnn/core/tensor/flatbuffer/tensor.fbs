@@ -1,4 +1,5 @@
 include "tensor_spec.fbs";
+include "tensor_topology.fbs";
 include "mesh_shape.fbs";
 include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
 
@@ -24,6 +25,7 @@ table Tensor {
     tensor_spec: TensorSpec;
     mesh_shape: MeshShape;
     shards: [TensorShard];
+    tensor_topology: TensorTopology;
 }
 
 root_type Tensor;

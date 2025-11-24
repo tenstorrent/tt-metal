@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -15,11 +16,9 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_trans
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import get_rot_mats
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -178,13 +177,23 @@ def test_decoder_inference(
         )[positions]
 
         # Reference model
-        attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
-        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+        attn_mask = torch.triu(torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min), diagonal=1)
+        if (
+            model_args.sliding_window is not None
+            and model_args.sliding_window > 0
+            and (
+                hasattr(reference_model.decoder, "attention_type")
+                and reference_model.decoder.attention_type == "sliding_attention"
+            )
+        ):
+            attn_mask += torch.tril(
+                torch.full((max_seq_len, max_seq_len), -float("inf")), diagonal=-model_args.sliding_window
+            )
         ref_output = reference_model(
             pt_decode_input,
             positions[0],
             freqs_cis_i,
-            mask=attn_mask_torch,
+            mask=attn_mask,
         )
         # Run TT model
         tt_out = tt_model(

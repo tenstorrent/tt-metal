@@ -10,7 +10,6 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <vector>
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -46,7 +45,8 @@ struct WorkerMemMap {
 };
 
 // Utility function reused across tests to get address params
-WorkerMemMap generate_worker_mem_map(std::shared_ptr<tt_metal::distributed::MeshDevice> device, Topology topology) {
+WorkerMemMap generate_worker_mem_map(
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology topology) {
     constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
     constexpr uint32_t DATA_SPACE_RESERVED_BYTES = 851968;
     constexpr uint32_t TEST_RESULTS_SIZE_BYTES = 128;
@@ -99,7 +99,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Get available links between devices
     auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-    if (eth_chans.size() == 0) {
+    if (eth_chans.empty()) {
         GTEST_SKIP() << "No fabric connection available between device 0 and device 1";
     }
     auto edm_port = *eth_chans.begin();
@@ -110,15 +110,12 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
         0, /* use_dram_dst */
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0, /* is_chip_multicast */
         0 /* additional_dir */};
 

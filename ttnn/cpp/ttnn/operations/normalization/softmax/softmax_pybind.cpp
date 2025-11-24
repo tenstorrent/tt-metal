@@ -7,7 +7,6 @@
 #include "softmax.hpp"
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
@@ -43,12 +42,6 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
         This configuration uses the default settings for Softmax operations, providing
         standard behavior suitable for most use cases. It automatically selects
         appropriate parameters based on the input tensor characteristics.
-
-        Example:
-            .. code-block:: python
-
-                config = ttnn.SoftmaxDefaultProgramConfig()
-                result = ttnn.softmax_in_place(tensor, program_config=config)
     )doc")
         .def(py::init<>());
 
@@ -70,20 +63,6 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
             * This configuration is specifically designed for sharded tensors.
             * Block dimensions must be compatible with the tensor's shard specification.
             * Proper block sizing can significantly impact performance.
-
-        Example:
-            .. code-block:: python
-
-                compute_grid = device.compute_with_storage_grid_size()
-                config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=compute_grid,
-                    subblock_w=8,
-                    block_h=32,
-                    block_w=24
-                )
-                # Modify block_w if needed
-                config.block_w = 32
-                result = ttnn.softmax_in_place(sharded_tensor, program_config=config)
     )doc")
         .def(
             py::init<CoreCoord, std::size_t, std::size_t, std::size_t>(),
@@ -107,32 +86,35 @@ void bind_normalization_softmax_operation(py::module& module) {
                 \text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j=1}^{K} e^{x_j}}
 
             Args:
-                input_tensor (ttnn.Tensor): The input tensor to apply softmax to.
+                input_tensor (ttnn.Tensor): The input tensor to apply softmax to. Must be on the device.
                 dim (int, optional): The dimension along which to compute softmax. Defaults to -1 (last dimension).
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. If not provided, inherits from input tensor.
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: Output tensor with softmax applied along the specified dimension.
 
-            Supported dtypes and layouts
+            Note:
+                The tensors support the following data types and layouts:
 
-            .. list-table::
-               :header-rows: 1
+                .. list-table::
+                    :header-rows: 1
 
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
 
-            Example:
-                .. code-block:: python
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded (L1): Height sharded
 
-                    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                    result = ttnn.softmax(tensor, dim=-1)
+            Limitations:
+                * All tensors must be on-device, interleaved, and tile layout.
+                * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
     )doc";
 
     using OperationType = decltype(ttnn::softmax);
@@ -147,17 +129,15 @@ void bind_normalization_softmax_operation(py::module& module) {
                const int8_t dim,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
+               const bool numeric_stable) -> ttnn::Tensor {
+                return self(input_tensor, dim, memory_config, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = -1,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("numeric_stable").noconvert() = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("numeric_stable").noconvert() = true});
 }
 
 // Softmax with scale and mask
@@ -183,52 +163,33 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. If not provided, inherits from input tensor.
                 is_causal_mask (bool, optional): Whether the mask is a causal mask. Defaults to False.
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: Output tensor with the fused scale-mask-softmax operation applied.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor (optional)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE, ROW_MAJOR
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor (optional)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE, ROW_MAJOR
+
+            Limitations:
                 * All tensors must be on-device.
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
-
-            Example:
-                .. code-block:: python
-
-                    compute_grid_size = device.compute_with_storage_grid_size()
-                    fuse_head = 2
-                    batch = compute_grid_size.x
-                    num_cores_r = compute_grid_size.y
-
-                    input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-
-                    attention_mask_t = ttnn.rand((batch, 1, 1, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    tt_output = ttnn.scale_mask_softmax(
-                        input_tensor=input_tensor,
-                        scale=1.0,
-                        mask=attention_mask_t,
-                    )
     )doc";
     using OperationType = decltype(ttnn::scale_mask_softmax);
 
@@ -244,17 +205,9 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const bool is_causal_mask,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable,
-               QueueId queue_id) -> ttnn::Tensor {
+               const bool numeric_stable) -> ttnn::Tensor {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    scale,
-                    mask,
-                    memory_config,
-                    is_causal_mask,
-                    compute_kernel_config,
-                    numeric_stable);
+                    input_tensor, scale, mask, memory_config, is_causal_mask, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
@@ -263,8 +216,7 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("is_causal_mask") = false,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("numeric_stable") = true});
 }
 
 // Softmax in-place operation
@@ -285,45 +237,26 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
             Keyword Args:
                 program_config (SoftmaxProgramConfig, optional): Program configuration for the operation. Defaults to SoftmaxDefaultProgramConfig().
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: The same tensor as input with softmax applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
             Note:
-                * The input tensor is modified in-place to save memory.
+                The tensors support the following data types and layouts:
+
+                .. list-table::
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+            Limitations:
+                * The input tensor is modified in-place to save memory. Must already be on the device.
                 * For very wide tensors, the operation may fall back to standard softmax if circular buffers would consume more than 90% of L1 memory.
                 * Supports both default and sharded multi-core program configurations.
-
-            Example:
-                .. code-block:: python
-
-                shape = [1, 1, 32, 32]
-                input_tensor = ttnn.rand(shape, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
-                output_tensor = ttnn.softmax_in_place(input_tensor)
-
-            Example (with sharded configuration):
-                .. code-block:: python
-
-                    compute_grid = device.compute_with_storage_grid_size()
-                    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                        compute_with_storage_grid_size=compute_grid,
-                        subblock_w=8,
-                        block_h=32,
-                        block_w=32
-                    )
-                    result = ttnn.softmax_in_place(tensor, program_config=program_config)
-
     )doc";
 
     using OperationType = decltype(ttnn::softmax_in_place);
@@ -338,17 +271,15 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
                const int8_t dim,
                const SoftmaxProgramConfig& program_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, dim, program_config, compute_kernel_config, numeric_stable);
+               const bool numeric_stable) -> ttnn::Tensor {
+                return self(input_tensor, dim, program_config, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = -1,
             py::kw_only(),
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
-            py::arg("queue_id") = 0});
+            py::arg("numeric_stable") = true});
 }
 
 // Softmax with scale and mask in-place operation
@@ -379,83 +310,32 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
             Returns:
                 ttnn.Tensor: The same tensor as input with the fused scale-mask-softmax operation applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor (optional)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE, ROW_MAJOR
-                 - 2, 3, 4
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor (optional)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                        - Ranks
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE, ROW_MAJOR
+                        - 2, 3, 4
+
+            Limitations:
                 * All tensors must be on-device.
                 * For unsharded ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor.
                 * For sharded inputs: mask must be TILE layout with identical padded shape to input.
                 * Internal block size constraints may restrict in-place operation for very large width tensors.
-
-            Example:
-                .. code-block:: python
-
-                    input_shape = (1, 1, 32, 32)
-
-                    attention_mask_t = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-                    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    tt_output = ttnn.scale_mask_softmax_in_place(
-                        input_tensor=input_tensor,
-                        scale=1.0,
-                        mask=attention_mask_t,
-                    )
-
-            Example (Sharded):
-                .. code-block:: python
-
-                    compute_grid_size = device.compute_with_storage_grid_size()
-                    fuse_head = 2
-                    batch = compute_grid_size.x
-                    num_cores_r = compute_grid_size.y
-
-                    input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-
-                    attention_mask_t = ttnn.rand((batch, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    # Shard the input tensor
-                    grid_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-                    shard_shape = [fuse_head * 384, 768]
-                    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-                    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-                    input_sharded = ttnn.to_memory_config(input_tensor, sharded_mem_config)
-
-                    # Create sharded program config
-                    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                        compute_with_storage_grid_size=compute_grid_size,
-                        subblock_w=8,
-                        block_h=12 * fuse_head,
-                        block_w=24,
-                    )
-
-                    tt_output = ttnn.scale_mask_softmax_in_place(
-                        input_tensor=input_sharded,
-                        scale=1.0,
-                        mask=attention_mask_t,
-                        program_config=program_config,
-                    )
     )doc";
 
     using OperationType = decltype(ttnn::scale_mask_softmax_in_place);
@@ -472,17 +352,9 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
                const SoftmaxProgramConfig& program_config,
                const bool is_causal_mask,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable,
-               QueueId queue_id) -> ttnn::Tensor {
+               const bool numeric_stable) -> ttnn::Tensor {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    scale,
-                    mask,
-                    program_config,
-                    is_causal_mask,
-                    compute_kernel_config,
-                    numeric_stable);
+                    input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
@@ -491,8 +363,9 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("is_causal_mask") = false,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
-            py::arg("queue_id") = 0});
+            // TODO: switch the default value to 'true' once model accuracy is fixed
+            // See issue #28531
+            py::arg("numeric_stable") = false});
 }
 
 // Softmax with scale and causal mask in-place operation
@@ -502,14 +375,8 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
             Specialized in-place operation for causal masked softmax with height-width dimension constraints.
 
             This is an optimized version of scale_mask_softmax_in_place specifically designed for transformer
-            attention patterns where the causal mask only affects the height and width dimensions. This operation
-            provides better performance for specific use cases with the following constraints:
-
-            **Requirements:**
-            * Input tensor should be sharded for optimal performance
-            * Attention mask must be interleaved and have shape [1, 1, H, W] (hw_dims_only)
-            * The mask is treated as a causal mask by design
-            * Scale parameter is typically provided for attention scaling
+            attention patterns where the causal mask only affects the height and width dimensions.
+            This operation provides better performance than general :func:`ttnn.scale_mask_softmax_in_place` for these specific constraints.
 
             The operation performs:
             1. Scales the input: ``input_tensor *= scale`` (if scale is provided)
@@ -529,66 +396,32 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
             Returns:
                 ttnn.Tensor: The same tensor as input with the specialized causal scale-mask-softmax operation applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor (Sharded)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor [1, 1, H, W]
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE (interleaved)
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor (Sharded)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor [1, 1, H, W]
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE (interleaved)
+
+            Limitations:
                 * This is an experimental/specialized feature optimized for specific transformer attention patterns.
+                * Inputs must be on the device.
                 * Input tensor must be sharded for optimal performance.
-                * Mask shape is constrained to [1, 1, H, W] format.
-                * Provides better performance than general scale_mask_softmax_in_place for these specific constraints.
-
-            Example:
-                .. code-block:: python
-
-                    compute_grid_size = device.compute_with_storage_grid_size()
-                    batch = compute_grid_size.x
-                    num_cores_r = compute_grid_size.y
-
-                    input_shape = (batch, num_cores_r, 384, 768)
-                    attention_mask_t = ttnn.rand((1, 1, 384, 768), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    input_tiled = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    # We must shard the input tensor in ROW_MAJOR orientation
-                    grid_coord = ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-                    shard_shape = [384, 768]
-                    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-                    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-                    input_sharded = ttnn.to_memory_config(input_tiled, sharded_mem_config)
-
-                    # We must also use the sharded softmax program config
-                    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-                        compute_with_storage_grid_size=compute_grid_size,
-                        subblock_w=8,
-                        block_h=12,
-                        block_w=24,
-                    )
-
-                    tt_output_sharded = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
-                        input_tensor=input_sharded,
-                        scale=1.0,
-                        mask=attention_mask_t,
-                        program_config=program_config,
-                    )
-
+                * Attention mask must be interleaved and have shape [1, 1, H, W] (i.e. hw_dims_only)
+                * The mask is treated as a causal mask by design
+                * Scale parameter is typically provided for attention scaling
     )doc";
 
     using OperationType = decltype(ttnn::scale_causal_mask_hw_dims_softmax_in_place);
@@ -604,9 +437,8 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
                const std::optional<const Tensor>& mask,
                const SoftmaxProgramConfig& program_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-               const bool numeric_stable,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
+               const bool numeric_stable) -> ttnn::Tensor {
+                return self(input_tensor, scale, mask, program_config, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
@@ -614,8 +446,9 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
             py::kw_only(),
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("numeric_stable") = false,
-            py::arg("queue_id") = 0});
+            // TODO: switch the default value to 'true' once model accuracy is fixed
+            // See issue #28531
+            py::arg("numeric_stable") = false});
 }
 
 void bind_normalization_softmax(py::module& module) {

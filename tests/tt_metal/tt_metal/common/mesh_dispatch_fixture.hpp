@@ -12,23 +12,23 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
 private:
-    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         distributed::MeshWorkload& workload,
         const bool skip_finish = false) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
@@ -36,18 +36,18 @@ public:
             distributed::Finish(mesh_device->mesh_command_queue());
         }
     }
-    void FinishCommands(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    void FinishCommands(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         distributed::Finish(mesh_device->mesh_command_queue());
     }
     void WriteBuffer(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
-        std::shared_ptr<distributed::MeshBuffer> in_buffer,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
         std::vector<uint32_t>& src_vec) {
         distributed::WriteShard(
             mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
     }
     void ReadBuffer(
-        std::shared_ptr<distributed::MeshDevice> mesh_device,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         distributed::ReadShard(
@@ -71,8 +71,8 @@ protected:
         this->DetectDispatchMode();
         // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        std::vector<chip_id_t> ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
         const auto& dispatch_core_config =
@@ -100,7 +100,7 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void()>& run_function, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+        const std::function<void()>& run_function, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running test on device {}.", device->id());
         run_function();

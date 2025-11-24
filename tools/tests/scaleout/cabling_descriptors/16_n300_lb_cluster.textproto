@@ -3,23 +3,23 @@ graph_templates {
   value {
     children {
       name: "node1"
-      node_ref { node_descriptor: "N300_LB" }
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
     }
     children {
       name: "node2"
-      node_ref { node_descriptor: "N300_LB" }
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
     }
     children {
       name: "node3"
-      node_ref { node_descriptor: "N300_LB" }
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
     }
     children {
       name: "node4"
-      node_ref { node_descriptor: "N300_LB" }
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
     }
     # Internal superpod connections
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections {
           port_a { path: ["node1"] tray_id: 1 port_id: 2 }
@@ -72,7 +72,7 @@ graph_templates {
     }
     # Inter-superpod connections
     internal_connections {
-      key: "QSFP"
+      key: "QSFP_DD"
       value {
         connections {
           port_a { path: ["superpod1", "node1"] tray_id: 2 port_id: 1 }

@@ -8,17 +8,16 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -143,6 +142,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        model_args.rope_scaling.rope_type.value if model_args.rope_scaling else "llama3",
     )
     freqs_cis = torch.complex(cos, sin)
 

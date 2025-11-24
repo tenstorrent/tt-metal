@@ -5,7 +5,7 @@
 
 import pytest
 import torch
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 import ttnn
 
@@ -66,13 +66,7 @@ def referencefp32(x, n_devices, is_rmsnorm):
     return output
 
 
-def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe):
-    kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
     tt_out = []
     for d in range(n_devices):
         if is_rmsnorm:
@@ -118,7 +112,14 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
 
     # LN pre all gather OP
-    tt_out = ln_pre_allgather_op(tt_inp, n_devices, is_rmsnorm, output_dtype)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    tt_out = ln_pre_allgather_op(tt_inp, n_devices, is_rmsnorm, output_dtype, kernel_config)
     tt_output_host = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
 
     all_passing = True
@@ -187,7 +188,6 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     assert all_passing
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
     (ttnn.bfloat16, ttnn.bfloat8_b),
@@ -222,7 +222,6 @@ def test_layernorm_part_1_with_program_cache(inp_shape, n_devices, is_rmsnorm, i
     run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
     [ttnn.bfloat16],

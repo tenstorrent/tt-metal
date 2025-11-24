@@ -238,7 +238,7 @@ If you are bringing up a new model that is similar to these but is not listed ab
 - `PAD_MLP_CORES` - models with a hidden_dim that is not a nice power of 2 may not have a valid layout or may run with lower performance. You can set this to a multiple of 8 between 8 and 64; `16` and `32` commonly work well if this is required.
 
 You should also watch out for:
-- RoPE encoding style. `llama3` and of course none are both supported. We have a [branch](https://github.com/tenstorrent/tt-metal/tree/llama-yarn) with `yarn` support in progress.
+- RoPE encoding style. `llama3`, `yarn` and of course `none` are supported. HuggingFace models encode the complex numbers in RoPE as r1, r2, ..., i1, i2, ... whereas Meta models encode the complex numbers as r1, i1, r2, i2, ... - TTT uses a Meta-style implementation of the RoPE op and when loading a HuggingFace it will reshuffle the weights of the pre-rope attention weights to interleave their outputs in this style (see `reverse_permute` in [load_checkpoints.py](tt/load_checkpoints.py)). When _using_ TTT this happens invisibly and should not affect you, but when bringing up a new model or modifying TTT being aware of this will make some otherwise confusing things clearer.
 - Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
 - We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 
@@ -368,11 +368,13 @@ Max Prefill Chunk Sizes (text-only):
 |--------------|---------------|---------------|----------------|-------------|
 | Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
 | Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
+| Qwen2.5-7B | 4k tokens | 32k tokens | 128k tokens | 128k tokens |
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | Llama3.2-90B | Not supported | Not supported | 32k tokens     | Not supported |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens | 128k tokens |
+
 
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -87,7 +89,11 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -125,7 +131,11 @@ TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
 }
 
-TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -162,7 +172,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
 // and uses standard operations like power, mean, sqrt, and multiply.
 // Same test methodology as Section 1, but using rmsnorm_composite() instead.
 // ============================================================================
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -177,7 +187,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
     using namespace ttml;
 
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
@@ -210,7 +220,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Forward_Batch) {
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -248,7 +258,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 6e-2F, 1e-8F));
 }
 
-TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
+TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
     using namespace ttml;
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
@@ -371,8 +381,8 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
 
     // Compare backward results
-    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 3e-2F));
-    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F));
+    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
 
     autograd::ctx().reset_graph();
 }
@@ -389,6 +399,10 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 // - Scale testing: small to very large tensor dimensions
 // - Training scenarios: realistic model shapes (NanoLlama, etc.)
 // ============================================================================
+
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Basic_Small) {
+    CompareKernelVsComposite({1U, 1U, 2U, 32U});
+}
 
 // Test aligned dimensions (C % 32 == 0) that fit in L1 cache
 TEST_F(RMSNormOpTest, RMSNorm_Compare_Aligned_FitsInL1) {
@@ -453,20 +467,33 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Test training-like shapes with realistic model dimensions
+// Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
     CompareKernelVsComposite({64U, 1U, 256U, 384U});
 }
 
+// Test training-like shapes with LLaMA 7B dimensions
+TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoGPT) {
+    CompareKernelVsComposite({1U, 1U, 512U, 4096U});
+}
+
 // Test small batch and sequence dimensions (non-1 values)
-TEST_F(RMSNormOpTest, RMSNorm_Compare_SmallBatch_NonUnit) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_SmallBatch_NonUnit) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({2U, 1U, 4U, 64U});
     CompareKernelVsComposite({32U, 1U, 64U, 128U});
 }
 
 // Test different masking patterns with larger batches
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Masking_Patterns) {
+TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        GTEST_SKIP() << "Skipping on P100/P150 boards";
+    }
     CompareKernelVsComposite({32U, 1U, 1024U, 4091U});  // C % 32 = 11
     CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1

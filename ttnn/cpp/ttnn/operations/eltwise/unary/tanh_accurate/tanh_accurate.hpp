@@ -14,7 +14,6 @@ namespace unary {
 
 struct Tanh_accurate {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -22,7 +21,6 @@ struct Tanh_accurate {
 
 struct Tanhshrink_accurate {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);

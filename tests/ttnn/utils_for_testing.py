@@ -7,7 +7,7 @@ import json
 import time
 
 from loguru import logger
-from models.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from typing import Tuple, Union
 
 import ttnn

@@ -20,8 +20,8 @@ namespace unit_tests::dm::one_packet {
 // Test config, i.e. test parameters
 struct OnePacketConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;
@@ -31,7 +31,7 @@ struct OnePacketConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePacketConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
     // Program
@@ -104,7 +104,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        test_config.packet_size_bytes / bfloat16::SIZEOF,
+        test_config.packet_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
@@ -116,11 +116,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
         detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, subordinate_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        auto mesh_workload = distributed::CreateMeshWorkload();
+        auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};
         auto target_devices =
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-        distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+        mesh_workload.add_program(target_devices, std::move(program));
 
         auto& cq = mesh_device->mesh_command_queue();
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -132,11 +132,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConf
         detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        auto mesh_workload = distributed::CreateMeshWorkload();
+        auto mesh_workload = distributed::MeshWorkload();
         vector<uint32_t> coord_data = {0, 0};
         auto target_devices =
             distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-        distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+        mesh_workload.add_program(target_devices, std::move(program));
 
         auto& cq = mesh_device->mesh_command_queue();
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

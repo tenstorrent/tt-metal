@@ -13,7 +13,7 @@ from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
 from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
@@ -289,7 +289,6 @@ def test_bert_question_and_answering_inference(
     pcc,
     model_location_generator,
 ):
-    # enable_persistent_kernel_cache()
     run_bert_question_and_answering_inference(
         device,
         model_version,

@@ -271,7 +271,10 @@ class TtVADHead:
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
-
+        ttnn.deallocate(bev_queries)
+        ttnn.deallocate(bev_mask)
+        ttnn.deallocate(bev_pos)
+        ttnn.deallocate(map_query_embeds)
         (
             bev_embed,
             hs,
@@ -319,7 +322,6 @@ class TtVADHead:
                     cls_tmp = ttnn.relu(cls_tmp)
 
             outputs_class = cls_tmp
-
             reg_layers = self.params.head.branches.reg_branches[str(lvl)]
 
             tmp = hs[lvl]
@@ -350,6 +352,10 @@ class TtVADHead:
             outputs_coord = tmp_out
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
+            ttnn.deallocate(reference)
+
+        ttnn.deallocate(init_reference)
+        ttnn.deallocate(inter_references)
 
         for lvl in range(map_hs.shape[0]):
             reference = map_init_reference if lvl == 0 else map_inter_references[lvl - 1]
@@ -404,6 +410,9 @@ class TtVADHead:
             map_outputs_coords.append(map_outputs_coord)
             map_outputs_pts_coords.append(map_outputs_pts_coord)
 
+        ttnn.deallocate(map_init_reference)
+        ttnn.deallocate(map_inter_references)
+
         if self.motion_decoder is not None:
             batch_size, num_agent = outputs_coords_bev[-1].shape[0], outputs_coords_bev[-1].shape[1]
             # motion_query
@@ -447,7 +456,7 @@ class TtVADHead:
                 )
             else:
                 invalid_motion_idx = None
-
+            ttnn.deallocate(hs)
             motion_hs = self.motion_decoder(
                 query=motion_query,
                 key=motion_query,
@@ -631,6 +640,7 @@ class TtVADHead:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         map_query = map_hs[-1]
+        ttnn.deallocate(map_hs)
         map_query = ttnn.reshape(map_query, (batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1))
         map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
         map_query = ttnn.unsqueeze(map_query, 0)

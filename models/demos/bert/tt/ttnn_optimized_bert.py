@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import is_grayskull
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
-from models.utility_functions import is_grayskull
 
 
 def bert_attention(
@@ -107,7 +107,7 @@ def bert_intermediate(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-        activation="gelu",
+        activation="gelu_approx",
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,

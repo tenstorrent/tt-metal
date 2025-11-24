@@ -10,9 +10,9 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -25,7 +25,7 @@ struct CoreSplitResult {
     uint32_t units_per_core_group_2 = 0;
 };
 
-CoreSplitResult split_work_to_cores_aligned(
+inline CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
     ZoneScoped;
 
@@ -73,12 +73,13 @@ CoreSplitResult split_work_to_cores_aligned(
 
 namespace ttnn::operations::embedding::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -151,18 +152,40 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     }
 
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tt_metal::detail::TileSize(weights_cb_data_format);
+    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
-    uint32_t buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+
+    constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding CB
+    uint32_t max_tiles_per_chunk = std::min(max_l1_budget_bytes / weights_single_tile_size, num_tiles_per_block);
+    max_tiles_per_chunk = std::max(max_tiles_per_chunk, 1U);
+
+    uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
+    bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
+
+    // For very large embeddings, use chunked processing
+    uint32_t tiles_per_chunk;
+    uint32_t num_chunks;
+    uint32_t buffering;
+
+    if (use_chunked_processing) {
+        tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
+        num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+        buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
+    } else {
+        // Use original non-chunked approach for smaller embeddings
+        tiles_per_chunk = num_tiles_per_block;
+        num_chunks = 1;
+        buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+    }
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t cb0_size = buffering * tiles_per_chunk * weights_single_tile_size;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            buffering * num_tiles_per_block * weights_single_tile_size, {{src0_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb0_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -178,7 +201,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     if (output_sharded) {
         output_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
-        output_cb_size = buffering * num_tiles_per_block * output_single_tile_size;
+        output_cb_size = buffering * tiles_per_chunk * output_single_tile_size;
     }
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, output_cb_data_format}})
@@ -220,8 +243,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)input_page_size,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_block_size,
-        (std::uint32_t)num_tiles_per_block,
-        (std::uint32_t)input_block_size_bytes};
+        (std::uint32_t)tiles_per_chunk,
+        (std::uint32_t)input_block_size_bytes,
+        (std::uint32_t)num_chunks};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -240,11 +264,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(src0_cb_index),                // input embeddings_cb_index
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(tiles_per_chunk),              // tiles_per_chunk
+            uint32_t(num_chunks)                    // num_chunks per block
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_1,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
@@ -254,11 +280,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(src0_cb_index),                // input embeddings_cb_index
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(tiles_per_chunk),              // tiles_per_chunk
+            uint32_t(num_chunks)                    // num_chunks per block
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
@@ -362,7 +390,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -441,7 +469,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     uint32_t out_cb_size;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
@@ -600,12 +628,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -635,6 +664,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
+    auto alignment = a.buffer()->alignment();
 
     // setup problem and grid size
 
@@ -661,7 +691,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, rounded_weight_page_size);
@@ -715,6 +745,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
+    if (a.logical_shape()[-1] <= FACE_HEIGHT) {
+        embedding_defines["ONLY_ONE_FACE_COLUMN"] = "1";
+    }
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
@@ -759,11 +792,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         row = weight_offset / num_cols;
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-        uint32_t r_f_offset = ((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW + (row % FACE_HEIGHT) * FACE_HEIGHT;
+        uint32_t r_f_offset = (((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW) + ((row % FACE_HEIGHT) * FACE_HEIGHT);
         // Offset by one face size if we are in the right half of the tile + where we are in the row
         uint32_t c_f_offset = ((col_offset % TILE_HEIGHT) / FACE_HEIGHT) * FACE_HW;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        uint32_t curr_tile = (row / TILE_HEIGHT) * tiles_per_tile_row + (col_offset / TILE_HEIGHT);
+        uint32_t curr_tile = ((row / TILE_HEIGHT) * tiles_per_tile_row) + (col_offset / TILE_HEIGHT);
 
         // Reader
         {
@@ -816,7 +849,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,

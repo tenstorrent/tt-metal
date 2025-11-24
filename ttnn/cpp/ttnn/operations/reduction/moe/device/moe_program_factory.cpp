@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>

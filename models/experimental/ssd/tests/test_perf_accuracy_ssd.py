@@ -10,12 +10,10 @@ from PIL import Image
 from loguru import logger
 from collections import defaultdict
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
-from models.utility_functions import Profiler
+from models.common.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
 from models.experimental.ssd.tt.ssd_lite import ssd_for_object_detection
 from models.experimental.ssd.reference.utils.metrics import load_ground_truth_labels, calculate_ap
@@ -39,7 +37,6 @@ def run_perf_ssd(
     iterations,
 ):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_key"
@@ -66,8 +63,6 @@ def run_perf_ssd(
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_input)

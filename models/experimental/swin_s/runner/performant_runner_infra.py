@@ -12,7 +12,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer import (
 )
 from models.experimental.swin_s.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_s.tt.tt_swin_transformer import TtSwinTransformer
-from models.utility_functions import divup, is_wormhole_b0
+from models.common.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.swin_s.common import load_torch_model
@@ -132,7 +132,7 @@ class SwinSPerformanceRunnerInfra:
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.mesh_composer)
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.94)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.97)
 
         logger.info(
             f"Swin S - batch_size={self.batch_size* self.num_devices}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"

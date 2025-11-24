@@ -1,51 +1,52 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 from types import SimpleNamespace
+from typing import Mapping, Optional
 
 import torch
 from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
-from vllm.inputs import INPUT_REGISTRY
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.generator_vllm import input_processor_for_multimodal
+from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer, model_args: ModelArgs, tt_cache_path):
     for layer_idx in range(num_layers):
-        cache_k = torch.zeros(kv_cache_shape, dtype=dtype)
-        cache_v = torch.zeros(kv_cache_shape, dtype=dtype)
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
 
         model.layers[layer_idx].attention.layer_past = [
             ttnn.as_tensor(
-                k_or_v,
+                cache_kv,
                 device=model.mesh_device,
                 dtype=ttnn.bfloat8_b,
                 layout=model_args.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-                cache_file_name=f"{tt_cache_path}/kvcache_{k_or_v.shape}",
+                # Separate cache files for K and V to avoid collision.
+                cache_file_name=f"{tt_cache_path}/{kv}cache_{kv_cache_shape}",
             )
-            for k_or_v in [cache_k, cache_v]
+            for kv in ["k", "v"]
         ]
 
     return [l.attention.layer_past for l in model.layers]
 
 
 def get_platform_specific_optimizations(model_name):
-    is_72B = "72B" in model_name
-    max_seq_len = 4096 if is_72B else 12288
+    max_seq_len = 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
@@ -89,7 +90,15 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
+class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
+
+
+# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
+@MULTIMODAL_REGISTRY.register_processor(
+    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+)
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
@@ -101,7 +110,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         optimizations, max_seq_len_native = get_platform_specific_optimizations(hf_config.name_or_path)
         if max_seq_len > max_seq_len_native:
             logger.warning(
@@ -128,7 +140,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             mesh_device,
             max_batch_size=model_args.max_batch_size,
             max_seq_len=model_args.max_seq_len,
-            optimizations=optimizations,
+            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
@@ -167,15 +179,17 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
+        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
-                for im in images
+                if im is not None
+                else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                for i, im in enumerate(images)
             ],
             dim=0,
         )
-        if "pixel_values" in images[0]:
+        if images[0] is not None and "pixel_values" in images[0]:
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
@@ -199,7 +213,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
@@ -211,13 +225,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-
-        return logits, rot_mats
+        return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
-        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
-        # [INFO] update the cos/sin matrices for the current users in the batch
-        super().update_cos_sin_rows(rot_mats_list)
+        rope_deltas_list: list = kwargs.pop(
+            "rope_deltas_all_users", None
+        )  # [INFO] update the cos/sin matrices for the current users in the batch
+        if rope_deltas_list is not None:
+            super().update_rope_deltas(rope_deltas_list)
 
         return super().decode_forward_text(*args, **kwargs)

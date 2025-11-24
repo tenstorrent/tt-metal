@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 namespace ttnn::operations::rand {
 
 Tensor Rand::invoke(
-    QueueId queue_id,
     const ttnn::Shape& shape,
     MeshDevice& device,
     const DataType dtype,

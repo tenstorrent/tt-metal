@@ -13,7 +13,6 @@ namespace copy {
 namespace detail {
 
 inline Tensor typecast_impl(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -30,7 +29,6 @@ inline Tensor typecast_impl(
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
     return ttnn::prim::typecast(
-        queue_id,
         input_tensor,
         output_dtype,
         output_memory_config,
@@ -43,7 +41,6 @@ inline Tensor typecast_impl(
 }  // namespace detail
 
 Tensor Typecast::invoke(
-    const QueueId queue_id,
     const Tensor& input,
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -55,13 +52,11 @@ Tensor Typecast::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    return detail::typecast_impl(
-        queue_id, input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
+    return detail::typecast_impl(input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
 }
 
 // eltwise_typecast is not currently supported on Grayskull
 Tensor Typecast::invoke(
-    const QueueId queue_id,
     const Tensor& input_tensor,
     const DataType& tt_input_dtype,
     const DataType& tt_output_dtype,
@@ -74,8 +69,7 @@ Tensor Typecast::invoke(
             tt_output_dtype == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
-    return detail::typecast_impl(
-        queue_id, input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
+    return detail::typecast_impl(input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 }  // namespace copy

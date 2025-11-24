@@ -7,9 +7,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "hal_types.hpp"
-#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal {

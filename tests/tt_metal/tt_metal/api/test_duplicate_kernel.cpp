@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
@@ -24,7 +24,6 @@
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,7 +37,7 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationDataflow) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -68,7 +67,7 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
@@ -107,7 +106,7 @@ TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         std::vector<uint32_t> compute_kernel_args = {};
         EXPECT_NO_THROW({
@@ -142,7 +141,7 @@ TEST_F(MeshDispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         CoreCoord compute_grid = this->devices_.at(id)->compute_with_storage_grid_size();
         std::vector<uint32_t> compute_kernel_args = {};

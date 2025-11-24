@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,8 @@ namespace experimental {
 
 struct SliceWriteOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& output_tensor,
+        ttnn::Tensor& output_tensor,
         const ttnn::SmallVector<uint32_t>& output_tensor_start,
         const ttnn::SmallVector<uint32_t>& output_tensor_end,
         const ttnn::SmallVector<uint32_t>& step);

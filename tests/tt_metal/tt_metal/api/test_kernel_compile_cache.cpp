@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,13 +21,11 @@
 #include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"
 
@@ -57,7 +55,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
+        const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
 
         const std::string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
@@ -71,7 +69,14 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
 
         program = CreateProgram();
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
-        detail::CompileProgram(device, program);
+        // Note:  Force JIT compile for this test.  Otherwise it may reuse the binary and not update the timestamp.
+        {
+            auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+            bool saved = rtoptions.get_force_jit_compile();
+            rtoptions.set_force_jit_compile(true);
+            detail::CompileProgram(device, program);
+            rtoptions.set_force_jit_compile(saved);
+        }
 
         const auto t1 = std::filesystem::last_write_time(elf_file_path);
 
@@ -108,10 +113,8 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const std::string full_kernel_name_riscv_0 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
-        const std::string full_kernel_name_riscv_1 =
-            KernelImpl::from(*kernels.at(kernel_handle_riscv_1)).get_full_kernel_name();
+        const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();
+        const std::string full_kernel_name_riscv_1 = kernels.at(kernel_handle_riscv_1)->get_full_kernel_name();
 
         const std::string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
         const std::string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);

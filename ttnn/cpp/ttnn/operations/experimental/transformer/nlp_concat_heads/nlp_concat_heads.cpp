@@ -12,7 +12,6 @@
 namespace ttnn::operations::experimental::transformer {
 
 ttnn::Tensor NLPConcatHeadsOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {

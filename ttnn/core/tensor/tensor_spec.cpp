@@ -124,7 +124,7 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorSpec::TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout) :
+TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
     cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
@@ -218,7 +218,7 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
-    } else if (memory_config().shard_spec() && memory_config().shard_spec()->mode == ShardMode::PHYSICAL) {
+    } else if (memory_config().shard_spec()) {
         tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
     }
 }

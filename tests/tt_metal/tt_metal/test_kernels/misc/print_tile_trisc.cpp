@@ -54,20 +54,11 @@ void MAIN {
         UNTILIZE_TILES(cb_id, cb_intermed, 1);
     }
     // Print the tile from each RISC, one after another
-    DPRINT_UNPACK(
-        // Wait for previous core (DATA0) to finish printing.
-        DPRINT << WAIT{1}; DPRINT << "Print tile from Unpack:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL();
-        DPRINT << RAISE{2};);
-    DPRINT_MATH(
-        // Wait for previous core (DATA0) to finish printing.
-        DPRINT << WAIT{2}; DPRINT << "Print tile from Math:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL();
-        DPRINT << RAISE{3};);
-    DPRINT_PACK(
-        // Wait for previous core (DATA0) to finish printing.
-        DPRINT << WAIT{3}; DPRINT << "Print tile from Pack:" << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL();
-        DPRINT << RAISE{4};);
+    DPRINT_UNPACK(DPRINT << "Print tile from Unpack:" << ENDL();
+                  DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL(););
+    DPRINT_MATH(DPRINT << "Print tile from Math:" << ENDL();
+                DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL(););
+    DPRINT_PACK(DPRINT << "Print tile from Pack:" << ENDL();
+                DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), true, is_tilized) << ENDL(););
 }
 }  // namespace NAMESPACE

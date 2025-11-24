@@ -14,58 +14,50 @@ To build and execute, you may use the following commands:
 ## Set up device and program/collaboration mechanisms
 
 ``` cpp
-Device *device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-We follow the standard procedure for the initial steps in setting up the host program. The device that the program will execute on is identified, and the corresponding command queue is accessed. The program is initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance with the logical mesh layout.
+We follow the standard procedure for the initial steps in setting up the host workload. The device that the workload will execute on is identified, and the corresponding command queue is accessed. The workload and program are initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance with the logical mesh layout.
 
 ## Configure and initialize DRAM buffer
 
 ``` cpp
-constexpr uint32_t single_tile_size = 2 * 1024;
-tt_metal::InterleavedBufferConfig dram_config{
-            .device= device,
-            .size = single_tile_size,
-            .page_size = single_tile_size,
-            .buffer_type = tt_metal::BufferType::DRAM
-};
+constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
+constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
+distributed::DeviceLocalBufferConfig dram_config{
+    .page_size = single_tile_size,
+    .buffer_type = tt_metal::BufferType::DRAM};
+distributed::ReplicatedBufferConfig distributed_buffer_config{
+    .size = single_tile_size};
 ```
 
-We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the device to create the buffers on as well as the size of the buffers. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
-
-``` cpp
-std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
-```
+We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. Each tile is 32x32 = 1024 bytes; doubling this allows us to tile up BFloat16 values. We specify the page_size and type of the buffer in the `DeviceLocalBufferConfig`. Our DRAM configuration will be interleaved for this example, which makes the data layout row-based. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices. Note that our choice of data format and buffer configuration has significant impact on the performance of the application, as we are able to reduce data traffic by packing values.
 
 Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
 
 ``` cpp
-uint32_t src0_bank_id = 0;
-uint32_t src1_bank_id = 0;
-uint32_t dst_bank_id = 0;
+auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
 ```
 
-For this example, we will also specify the Buffer Bank IDs to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data from the correct DRAM Memory Banks corresponding to each buffer.
+## Configure and Initialize Circular Buffers
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CBIndex::c_0;
-constexpr uint32_t num_input_tiles = 1;
-CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
-CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+constexpr uint32_t num_tiles = 1;
+auto make_cb_config = [&](CBIndex cb_index) {
+    return CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, DataFormat::Float16_b}})
+        .set_page_size(cb_index, single_tile_size);
+};
 
-constexpr uint32_t src1_cb_index = CBIndex::c_1;
-CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
-CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-
-constexpr uint32_t output_cb_index = CBIndex::c_16;
-constexpr uint32_t num_output_tiles = 1;
-CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
-CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_0));
+tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_1));
+tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_16));
 ```
 
 L1 circular buffers will be used communicate data to and from the compute engine. We create circular buffers for the source vectors and destination vector. The source data will be sent from the DRAM buffers to the circular buffer of each specified core, then the results for a given core will be stored at another circular buffer index before being sent to DRAM.
@@ -90,18 +82,11 @@ Data movement kernels are used for reading to and writing from the DRAM.
 A kernel is initialized for each of these operations, with a unique RISC-V processor assigned to each kernel. These kernels will read the data from the DRAM buffers into the circular buffers prior to the addition operation, then write the output data to the DRAM from the circular buffers so that they may be accessed by the host.
 
 ``` cpp
-vector<uint32_t> compute_kernel_args = {};
 KernelHandle eltwise_binary_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
     core,
-    ComputeConfig{
-        .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = false,
-        .math_approx_mode = false,
-        .compile_args = compute_kernel_args,
-    }
-);
+    ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
 ```
 
 In addition to the data movement kernels, we need to create a compute kernel for the addition operation. We use the kernel code for adding 2 tiles as specified in the above code block. The kernel function will use the data provided in the circular buffers for the computation.
@@ -109,27 +94,33 @@ In addition to the data movement kernels, we need to create a compute kernel for
 ## Program execution
 
 ``` cpp
-std::vector<uint32_t> src0_vec;
-std::vector<uint32_t> src1_vec;
-src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
-src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
+std::vector<bfloat16> src0_vec(n_elements_per_tile);
+std::vector<bfloat16> src1_vec(n_elements_per_tile);
+std::mt19937 rng(std::random_device{}());
+std::uniform_real_distribution<float> dist1(0.0f, 14.0f);
+std::uniform_real_distribution<float> dist2(0.0f, 8.0f);
+for (size_t i = 0; i < n_elements_per_tile; ++i) {
+    src0_vec[i] = bfloat16(dist1(rng));
+    src1_vec[i] = bfloat16(dist2(rng));
+}
 
-EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 ```
 
-Next, we create two source vectors, each loaded with a constant value, before queueing the command to feed it to the corresponding DRAM buffers using `EnqueueWriteBuffer`.
+Next, we create two source vectors, each loaded with a constant value, before queueing the command to feed it to the corresponding DRAM buffers using `EnqueueWriteMeshBuffer`.
 
 ``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id});
+SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address()});
 SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
+SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
 
-EnqueueProgram(cq, program, false);
-Finish(cq);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::Finish(cq);
 ```
 
-For each of the kernels, we will set up the corresponding runtime arguments before executing the program on the device. The reader kernel reads the source data into the circular buffers before having the compute kernel run the tile addition operation.
+For each of the kernels, we will set up the corresponding runtime arguments before adding the program to the `MeshWorkload` and executing it on the device. The reader kernel reads the source data into the circular buffers before having the compute kernel run the tile addition operation.
 
 ## Reader kernel function
 
@@ -199,9 +190,9 @@ cb_pop_front(cb_id_out0, 1);
 At this point, the results of the addition are computed and stored in the circular buffers. We can now write these values to DRAM so that they can be accessed by the host.
 
 ``` cpp
-std::vector<uint32_t> result_vec;
-EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
-CloseDevice(device);
+std::vector<bfloat16> result_vec;
+distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+mesh_device->close();
 ```
 
-When the program is finished with execution, the output data is stored in the DRAM and must be read from the device using `EnqueueReadBuffer`.
+When the program is finished with execution, the output data is stored in the DRAM and must be read from the device using `ReadShard`.

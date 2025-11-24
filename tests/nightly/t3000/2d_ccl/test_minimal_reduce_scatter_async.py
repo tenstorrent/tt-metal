@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -58,26 +58,24 @@ from models.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
-        (False, 1),
+        (True, 3),
     ],
-    ids=["perf", "check"],
+    ids=["perf"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_2d_dynamic_linear"],
+    ids=["fabric_2d_linear"],
 )
 def test_reduce_scatter_async_training_shapes(
     mesh_device,
@@ -93,9 +91,6 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
-    if enable_trace:
-        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
-
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -112,4 +107,5 @@ def test_reduce_scatter_async_training_shapes(
         ones_tensor=ones_tensor,
         use_barrier=True,
         use_persistent_buffers=False,
+        use_new=True,
     )

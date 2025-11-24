@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-// #include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {

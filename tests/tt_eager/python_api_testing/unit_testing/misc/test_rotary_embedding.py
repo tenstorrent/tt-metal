@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc, divup, is_grayskull, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, divup, is_grayskull, skip_for_blackhole
 
 
 def rotate_half(x):

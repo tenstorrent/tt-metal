@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,6 @@
 namespace ttnn {
 namespace {
 
-using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
@@ -82,7 +81,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         ASSERT_THAT(loaded_data, SizeIs(test_data.size()));
 
         for (size_t i = 0; i < test_data.size(); i++) {
-            EXPECT_FLOAT_EQ(test_data[i].to_float(), loaded_data[i].to_float());
+            EXPECT_FLOAT_EQ(static_cast<float>(test_data[i]), static_cast<float>(loaded_data[i]));
         }
     }
 }
@@ -345,6 +344,35 @@ TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
             Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
         EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
     }
+}
+
+TEST_F(TensorSerializationFlatbuffer2x4Test, FullyReplicatedRoundtrip) {
+    TemporaryFile test_file("fully_replicated_flatbuffer.tensorbin");
+    constexpr int kHeight = 32;
+    constexpr int kWidth = 40;
+    const int total_elements = 1 * 1 * kHeight * kWidth;
+
+    std::vector<float> test_data(total_elements, 0.0f);
+
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, kHeight, kWidth}, DataType::FLOAT32));
+
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
+
+    MeshShape expected_shape = MeshShape(mesh_device_->num_devices());
+    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> expected_placements;
+    expected_placements.emplace_back(ttnn::distributed::MeshMapperConfig::Replicate{});
+
+    EXPECT_EQ(replicated_tensor.tensor_topology().distribution_shape(), expected_shape);
+    EXPECT_EQ(replicated_tensor.tensor_topology().placements(), expected_placements);
+
+    dump_tensor_flatbuffer(test_file.string(), replicated_tensor);
+
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+    EXPECT_EQ(loaded_tensor.tensor_topology().distribution_shape(), expected_shape);
+    EXPECT_EQ(loaded_tensor.tensor_topology().placements(), expected_placements);
 }
 
 }  // namespace

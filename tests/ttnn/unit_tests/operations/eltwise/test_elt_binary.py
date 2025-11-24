@@ -10,7 +10,7 @@ import ttnn
 
 from math import pi
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999):
@@ -114,3 +114,48 @@ def test_maximum(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_minimum(device, h, w):
     run_elt_binary_test_min_max(device, h, w, ttnn.minimum, -100, 100)
+
+
+def test_arithmetic_operators(device):
+    """Test basic arithmetic operators (+, -, *, /) on ttnn tensors"""
+
+    # Create test tensors with different values
+    a_torch = torch.full((32, 32), 4.0, dtype=torch.bfloat16)
+    b_torch = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
+
+    # Convert to ttnn tensors on device
+    a = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT)
+    b = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Test operations
+    c = a + b  # Addition: 4 + 2 = 6
+    d = a - b  # Subtraction: 4 - 2 = 2
+    e = a * b  # Multiplication: 4 * 2 = 8
+    f = a / b  # Division: 4 / 2 = 2
+    g = a / 2  # Tensor / scalar: 4 / 2 = 2
+    h = 8 / a  # Scalar / tensor: 8 / 4 = 2
+
+    # Verify results
+    c_torch = ttnn.to_torch(c)
+    expected_add = torch.full((32, 32), 6.0, dtype=torch.bfloat16)
+    assert torch.equal(c_torch, expected_add), "Addition result incorrect"
+
+    d_torch = ttnn.to_torch(d)
+    expected_sub = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
+    assert torch.equal(d_torch, expected_sub), "Subtraction result incorrect"
+
+    e_torch = ttnn.to_torch(e)
+    expected_mul = torch.full((32, 32), 8.0, dtype=torch.bfloat16)
+    assert torch.equal(e_torch, expected_mul), "Multiplication result incorrect"
+
+    f_torch = ttnn.to_torch(f)
+    expected_div = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
+    assert torch.equal(f_torch, expected_div), "Division result incorrect"
+
+    g_torch = ttnn.to_torch(g)
+    expected_tensor_div_scalar = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
+    assert torch.equal(g_torch, expected_tensor_div_scalar), "Tensor / scalar result incorrect"
+
+    h_torch = ttnn.to_torch(h)
+    expected_scalar_div_tensor = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
+    assert torch.equal(h_torch, expected_scalar_div_tensor), "Scalar / tensor result incorrect"

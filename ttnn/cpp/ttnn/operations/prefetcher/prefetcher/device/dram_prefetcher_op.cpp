@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,17 +6,14 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
 namespace ttnn::operations::dram_prefetcher {
 
 void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() > 0, "Must have at least one input tensor");
+    TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(this->num_layers > 0, "Prefetcher must run for at least 1 layer");
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs

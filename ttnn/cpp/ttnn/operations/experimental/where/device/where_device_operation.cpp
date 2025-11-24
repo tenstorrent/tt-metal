@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,11 @@
 #include "ttnn/operation_concepts.hpp"
 
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 
 #include <tracy/Tracy.hpp>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 
 using namespace tt::tt_metal;
 
@@ -64,7 +62,6 @@ static void validate_memory_config(
 
 void WhereDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    using namespace tt::constants;
 
     validate_memory_config(attributes, args);
     WhereDeviceOperation::validate_on_program_cache_hit(attributes, args);

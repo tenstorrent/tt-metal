@@ -11,7 +11,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 
 
 def compare(tensor, name, reshape=False):
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     tensor = ttnn.from_device(tensor)
     tensor = ttnn.to_torch(tensor)

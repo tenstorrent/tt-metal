@@ -17,7 +17,6 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::Eq;
-using ::testing::IsEmpty;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 

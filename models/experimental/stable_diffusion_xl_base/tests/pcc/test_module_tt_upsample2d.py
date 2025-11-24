@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsa
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     to_channel_last_ttnn,
     from_channel_last_ttnn,
@@ -30,6 +30,7 @@ def test_upsample2d(
     stride,
     padding,
     dilation,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -56,6 +57,7 @@ def test_upsample2d(
         dilation,
         groups,
         model_config=model_config,
+        debug_mode=debug_mode,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

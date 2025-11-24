@@ -13,7 +13,7 @@
 namespace ttnn::operations::unary {
 
 struct operation_attributes_t {
-    const std::vector<UnaryWithParam> op_chain;
+    const std::vector<EltwiseUnaryWithParam> op_chain;
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const bool fp32_dest_acc_en = false;

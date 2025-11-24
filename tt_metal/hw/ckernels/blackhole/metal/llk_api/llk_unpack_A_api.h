@@ -64,7 +64,6 @@ inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
@@ -116,7 +115,7 @@ inline void llk_unpack_A_block(
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
-    std::uint32_t address = base_address;
+    std::uint32_t address = base_address + start_tile_index * offset_address;
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");

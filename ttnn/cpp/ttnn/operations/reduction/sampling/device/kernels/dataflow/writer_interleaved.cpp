@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,9 @@ Top-k Sampling:
 Samples from the top-k subset by comparing cumulative sums of probabilities with a random threshold to select the
 appropriate index.
 */
+
+constexpr uint32_t FACE_WIDTH = 16;
+constexpr uint32_t FACE_HEIGHT = 16;
 
 uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
     // Extract the sign, exponent, and mantissa from both values
@@ -236,6 +239,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
     constexpr uint32_t core_id = get_compile_time_arg_val(17);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
+    constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
+    constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
+    constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
@@ -244,32 +252,38 @@ void kernel_main() {
     cb_reserve_back(cb_id_k, 1);
     uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
     uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
-    noc_async_read(k_noc_addr + core_id * 4, cb_id_k_ptr, 4);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(k_noc_addr, cb_id_k_ptr, k_chunk_size);
     noc_async_read_barrier();
     cb_push_back(cb_id_k, 1);
     volatile tt_l1_ptr uint32_t* k_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_id_k_ptr);
-    uint32_t k = k_ptr[0];
+    // Index into the chunk to get this core's value
+    uint32_t k = k_ptr[core_id];
 
     const auto addrg_p = TensorAccessor(p_args, p_addr, 64);
     cb_reserve_back(cb_id_p, 1);
     uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
     uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
-    noc_async_read(p_noc_addr + core_id * 2, cb_id_p_ptr, 2);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(p_noc_addr, cb_id_p_ptr, p_chunk_size);
     noc_async_read_barrier();
     cb_push_back(cb_id_p, 1);
     volatile tt_l1_ptr uint16_t* p_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_p_ptr);
-    uint32_t p = p_ptr[0];
+    // Index into the chunk to get this core's value
+    uint32_t p = p_ptr[core_id];
 
     const auto addrg_temp = TensorAccessor(temp_args, temp_addr, 64);
     // cb_reserve_back(cb_id_temp, 1);
     uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
     uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
-    noc_async_read(temp_noc_addr + core_id * 2, cb_id_temp_ptr, 2);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(temp_noc_addr, cb_id_temp_ptr, temp_chunk_size);
     noc_async_read_barrier();
     // cb_push_back(cb_id_temp, 1);
 
     volatile tt_l1_ptr uint16_t* temp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_temp_ptr);
-    uint16_t temp = temp_ptr[0];
+    // Index into the chunk to get this core's value
+    uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
     generate_bcast_unary_scalar(cb_id_temp, temp_packed);
     // generate the top-k mask
@@ -298,17 +312,17 @@ void kernel_main() {
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
-    uint32_t start_id_local_phase_0 = core_id * 16;
+    uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
-    // users 0-16 have their data on first 2 faces (2 * 16 * 16 values)
-    // skip the first 2 faces for users>=16
-    if (core_id >= 16) {
-        start_id_local_phase_0 = 32 * 16 + (core_id - 16) * 16;
+    // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
+    // skip the first 2 faces for users >= FACE_WIDTH users (16 users)
+    if (core_id >= FACE_WIDTH) {
+        start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
     }
-    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + 16;
-    uint32_t start_id_local_phase_1 = 16 * 16 + start_id_local_phase_0;
-    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - 16);
-    if (k <= 16) {
+    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
+    uint32_t start_id_local_phase_1 = FACE_WIDTH * FACE_HEIGHT + start_id_local_phase_0;
+    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
+    if (k <= FACE_WIDTH) {
         end_id_local_phase_0 = start_id_local_phase_0 + k;
         start_id_local_phase_1 = end_id_local_phase_0;
         end_id_local_phase_1 = end_id_local_phase_0;
@@ -316,32 +330,43 @@ void kernel_main() {
 
     uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
     uint32_t cum_prob = 0;
-    bool cutoff_found = false;
+    uint32_t kept_tokens = 0;
+    bool cutoff_found_in_phase_0 = false;
+    bool cutoff_found_in_phase_1 = false;
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         cum_prob = bfloat16_add(cum_prob, local_values[i]);
         if (bfloat16_greater(cum_prob, bf16_p)) {
             top_p_cutoff = i + 1;  // Include this token in the top-p set
-            cutoff_found = true;
+            cutoff_found_in_phase_0 = true;
+            kept_tokens = top_p_cutoff - start_id_local_phase_0;
             break;
         }
     }
-    if (!cutoff_found) {
+    if (!cutoff_found_in_phase_0) {
+        kept_tokens = FACE_WIDTH;
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
             cum_prob = bfloat16_add(cum_prob, local_values[i]);
             if (bfloat16_greater(cum_prob, bf16_p)) {
                 top_p_cutoff = i + 1;
+                kept_tokens += top_p_cutoff - start_id_local_phase_1;
+                cutoff_found_in_phase_1 = true;
                 break;
             }
         }
     }
     // adjust phase indices
-    end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
-    if (top_p_cutoff <= 16) {
-        end_id_local_phase_0 = start_id_local_phase_0 + top_p_cutoff;
+    if (cutoff_found_in_phase_0) {
+        // skip last FACE_WIDTH tokens since cutoff found in phase 0
         start_id_local_phase_1 = end_id_local_phase_0;
         end_id_local_phase_1 = end_id_local_phase_0;
+        // adjust phase 0 to only keep the tokens that are in the top-p set
+        end_id_local_phase_0 = start_id_local_phase_0 + kept_tokens;
+    } else if (cutoff_found_in_phase_1) {
+        // in case cutoff not found in phase 0, but in phase 1,
+        // keep all tokens in phase 0 and part of tokens in phase 1 which is (kept_tokens - FACE_WIDTH)
+        end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
     }
 
     uint32_t cum_sum = 0;
@@ -372,6 +397,7 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(dst_args, dst_addr, out_stick_size);
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
+    // Write individual core result - output buffer should handle alignment
     noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);
     noc_async_write_barrier();
 }

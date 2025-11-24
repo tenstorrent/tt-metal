@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -8,13 +8,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
 from models.demos.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
@@ -54,7 +53,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=None,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
     )
@@ -72,13 +71,11 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_out = tt_model(attention_input)
 
-    # Doing contract in tt is correct!!
-    tt_output_torch = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), device=mesh_device
-    )[0, :, :, :]
+    # Tensor is replicated, so just get from first device
+    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input)[0]
-    tt_output_torch = tt_output_torch[:, :4097, :]
+    tt_output_torch = tt_output_torch[:, :seq_len, :]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

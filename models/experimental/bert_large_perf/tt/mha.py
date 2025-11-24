@@ -12,7 +12,7 @@ from transformers import BertForQuestionAnswering
 import ttnn
 from tt_lib.utils import pad_activation, pad_weight
 from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
@@ -317,6 +317,4 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     ),
 )
 def test_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
-    # enable_persistent_kernel_cache()
-
     run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator)
