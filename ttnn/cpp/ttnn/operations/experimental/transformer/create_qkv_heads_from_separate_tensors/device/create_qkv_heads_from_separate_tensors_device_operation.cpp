@@ -7,6 +7,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+using namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors;
+
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& q_input_tensor = tensor_args.input_tensor;
@@ -228,9 +230,6 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::select_program_factory(
 
 tt::stl::hash::hash_t CreateQKVHeadsSeparateTensorsDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_tensor_kv = tensor_args.input_tensor_kv;
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<CreateQKVHeadsSeparateTensorsDeviceOperation>(
@@ -239,10 +238,7 @@ tt::stl::hash::hash_t CreateQKVHeadsSeparateTensorsDeviceOperation::compute_prog
         operation_attributes.head_dim,
         operation_attributes.transpose_k_heads,
         program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor_kv.dtype(),
-        input_tensor.memory_config(),
-        input_tensor_kv.memory_config());
+        tensor_args);
 }
 
 std::tuple<

@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors {
 
 struct operation_attributes_t {
     const uint32_t num_q_heads;
@@ -26,4 +26,4 @@ struct tensor_args_t {
 using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
 using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors

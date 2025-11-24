@@ -6,7 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors {
 
 using namespace tt::constants;
 using namespace tt;
@@ -158,4 +158,4 @@ void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_out2_id, *out2_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors

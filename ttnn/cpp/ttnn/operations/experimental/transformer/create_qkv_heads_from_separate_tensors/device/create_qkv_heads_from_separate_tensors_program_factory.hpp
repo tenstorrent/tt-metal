@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors {
 
 struct CreateQKVHeadsSeparateTensorsProgramFactory {
     struct shared_variables_t {
@@ -33,4 +33,4 @@ struct CreateQKVHeadsSeparateTensorsProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors

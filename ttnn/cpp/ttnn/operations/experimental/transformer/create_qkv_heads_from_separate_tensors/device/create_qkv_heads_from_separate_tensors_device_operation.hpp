@@ -15,11 +15,15 @@
 namespace ttnn::operations::experimental::transformer {
 
 struct CreateQKVHeadsSeparateTensorsDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<CreateQKVHeadsSeparateTensorsProgramFactory>;
+    using operation_attributes_t =
+        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::operation_attributes_t;
+    using tensor_args_t = ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::tensor_args_t;
+    using spec_return_value_t =
+        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::spec_return_value_t;
+    using tensor_return_value_t =
+        ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::tensor_return_value_t;
+    using program_factory_t = std::variant<ttnn::operations::experimental::create_qkv_heads_from_separate_tensors::
+                                               CreateQKVHeadsSeparateTensorsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
