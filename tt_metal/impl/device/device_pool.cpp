@@ -644,7 +644,7 @@ uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
     const auto pci_devices = cluster.number_of_pci_devices();
     std::unordered_set<uint32_t> numa_nodes;
     
-    for (size_t device_id = 0; device_id < pci_devices; ++device_id) {
+    for (uint32_t device_id = 0; device_id < pci_devices; ++device_id) {
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         numa_nodes.insert(associated_node);
     }
