@@ -20,6 +20,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
     std::optional<unary::UnaryWithParam> fused_activation,
     const std::optional<const MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(),
@@ -34,6 +35,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
                    .config = config,
                    .fused_activation = std::move(fused_activation),
                    .output_mem_config = memory_config,
+                   .output_dtype = dtype,
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},
                {bias_tensor},
