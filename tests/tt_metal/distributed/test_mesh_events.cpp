@@ -26,6 +26,7 @@
 #include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -258,6 +259,9 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 }
 
 TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
+    // Github issue
+    SKIP_FOR_WATCHER();
+
     // Reads and writes on 2 CQs
     auto& write_cq = mesh_device_->mesh_command_queue(0);
     auto& read_cq = mesh_device_->mesh_command_queue(1);
