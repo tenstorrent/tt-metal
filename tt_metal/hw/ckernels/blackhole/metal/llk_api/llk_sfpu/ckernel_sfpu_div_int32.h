@@ -15,8 +15,9 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;
-        constexpr uint dst_tile_size_sfpu = 64;
+        // constexpr uint dst_tile_size_sfpu = 64;
 
+        /*
         // Typecast input A
         TT_SFPLOAD(0, INT32_2S_COMP, ADDR_MOD_7, dst_index_in0 * dst_tile_size_sfpu);
         TT_SFPCAST(0, 2, INT_SIGN_MAGN_TO_INT32_2S_COMP);
@@ -40,8 +41,15 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::vFloat result = _sfpu_reciprocal_<2>(float_in1);
 
         // sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
+        */
 
-        sfpi::dst_reg[0] = result;
+        sfpi::vInt in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vInt in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+        sfpi::vFloat float_in0 = sfpi::int32_to_float(in0, 0);
+        sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = float_in0;
 
         sfpi::dst_reg++;
     }
