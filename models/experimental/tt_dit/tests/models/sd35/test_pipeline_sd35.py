@@ -28,11 +28,13 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(2, 2), (2, 0), (1, 0), (2, 1), ttnn.Topology.Linear, 2],
+        [(2, 2), (1, 0), (1, 0), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
+        "2x2cfg0sp0tp1",
         "2x4cfg1sp0tp1",
         "2x4cfg0sp0tp1",
         "4x8cfg1sp0tp1",
