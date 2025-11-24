@@ -1004,12 +1004,44 @@ class MasterConfigLoader:
                         shard_shape = mem_config.shard_spec.shape
 
                         # Check tile alignment of shard shape
+                        # BUT: For WIDTH_SHARDED, shard height must match physical height
+                        #      For HEIGHT_SHARDED, shard width must match physical width
                         if shard_shape and len(shard_shape) >= 2:
                             height, width = shard_shape[0], shard_shape[1]
-                            if height % 32 != 0 or width % 32 != 0:
-                                # Round up to tile-aligned (only allowed conversion)
+
+                            # Calculate physical dimensions from tensor shape
+                            physical_height = None
+                            physical_width = None
+                            if shape and len(shape) >= 4:
+                                import math
+
+                                physical_height = (
+                                    math.prod(shape[:-1]) if len(shape) > 1 else shape[0] if len(shape) > 0 else None
+                                )
+                                physical_width = shape[-1] if len(shape) >= 1 else None
+
+                            # Get memory layout
+                            memory_layout_str = (
+                                str(mem_config.memory_layout) if hasattr(mem_config, "memory_layout") else ""
+                            )
+
+                            # Adjust height - respect physical height for WIDTH_SHARDED
+                            if "WIDTH_SHARDED" in memory_layout_str and physical_height is not None:
+                                height_aligned = physical_height
+                            else:
                                 height_aligned = ((height + 31) // 32) * 32
+                                if physical_height is not None and height_aligned > physical_height:
+                                    height_aligned = physical_height
+
+                            # Adjust width - respect physical width for HEIGHT_SHARDED
+                            if "HEIGHT_SHARDED" in memory_layout_str and physical_width is not None:
+                                width_aligned = physical_width
+                            else:
                                 width_aligned = ((width + 31) // 32) * 32
+                                if physical_width is not None and width_aligned > physical_width:
+                                    width_aligned = physical_width
+
+                            if height_aligned != height or width_aligned != width:
                                 # Update shard shape in memory config
                                 mem_config.shard_spec.shape = (height_aligned, width_aligned)
                                 invalid_reasons.append(
@@ -1028,9 +1060,47 @@ class MasterConfigLoader:
                         shard_shape = output_mem_config.shard_spec.shape
                         if shard_shape and len(shard_shape) >= 2:
                             height, width = shard_shape[0], shard_shape[1]
-                            if height % 32 != 0 or width % 32 != 0:
+
+                            # Calculate physical dimensions from tensor shape (use output shape if available, else input shape)
+                            output_shape = cfg.get("output_shape") or cfg.get("target_shape") or shape
+                            physical_height = None
+                            physical_width = None
+                            if output_shape and len(output_shape) >= 4:
+                                import math
+
+                                physical_height = (
+                                    math.prod(output_shape[:-1])
+                                    if len(output_shape) > 1
+                                    else output_shape[0]
+                                    if len(output_shape) > 0
+                                    else None
+                                )
+                                physical_width = output_shape[-1] if len(output_shape) >= 1 else None
+
+                            # Get memory layout
+                            memory_layout_str = (
+                                str(output_mem_config.memory_layout)
+                                if hasattr(output_mem_config, "memory_layout")
+                                else ""
+                            )
+
+                            # Adjust height - respect physical height for WIDTH_SHARDED
+                            if "WIDTH_SHARDED" in memory_layout_str and physical_height is not None:
+                                height_aligned = physical_height
+                            else:
                                 height_aligned = ((height + 31) // 32) * 32
+                                if physical_height is not None and height_aligned > physical_height:
+                                    height_aligned = physical_height
+
+                            # Adjust width - respect physical width for HEIGHT_SHARDED
+                            if "HEIGHT_SHARDED" in memory_layout_str and physical_width is not None:
+                                width_aligned = physical_width
+                            else:
                                 width_aligned = ((width + 31) // 32) * 32
+                                if physical_width is not None and width_aligned > physical_width:
+                                    width_aligned = physical_width
+
+                            if height_aligned != height or width_aligned != width:
                                 output_mem_config.shard_spec.shape = (height_aligned, width_aligned)
                                 invalid_reasons.append(
                                     f"output_shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
