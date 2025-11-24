@@ -131,10 +131,59 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run frequent regression tests
+      - name: Run Llama3 frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'llama3') && matrix.test-group.model == 'llama3' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+          FAKE_DEVICE: TG
+        run: |
+          pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model_nd.py --timeout=1800
+          pytest --timeout 1800 -n auto models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k full --timeout=1800
+
+      - name: Run resnet50 frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'resnet50') && matrix.test-group.model == 'resnet50' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          pytest models/demos/ttnn_resnet/tests -m models_device_performance_bare_metal
+
+      - name: Run unit/distributed frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'unit') && matrix.test-group.model == 'unit' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pytest tests/ttnn/unit_tests/gtests/test_ccl_on_TG.py --timeout 600
+          pytest tests/ttnn/distributed --timeout 600
+
+      - name: Run SD3.5 frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'sd35') && matrix.test-group.model == 'sd35' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pytest models/experimental/tt_dit/tests/models/sd35 --timeout 1200
+
+      - name: Run Wan2.2 frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'wan22') && matrix.test-group.model == 'wan22' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+        run: |
+          pytest models/experimental/tt_dit/tests/models/wan2_2 --timeout 1200
+
+      - name: Run mochi frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'mochi') && matrix.test-group.model == 'mochi' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+        run: |
+          pytest models/experimental/tt_dit/tests/models/mochi --timeout 1500
+
+      - name: Run Flux.1 frequent tests
+        if: ${{ (inputs.model == 'all' || inputs.model == 'flux1') && matrix.test-group.model == 'flux1' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+          HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        run: |
+          pytest models/experimental/tt_dit/tests/models/flux1 --timeout 1500
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
