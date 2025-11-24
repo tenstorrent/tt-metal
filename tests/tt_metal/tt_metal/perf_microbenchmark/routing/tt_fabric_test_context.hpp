@@ -554,39 +554,8 @@ public:
         // Compare latency results with golden CSV
         compare_latency_results_with_golden();
 
-        // Validate latency results against golden
-        validate_latency_against_golden();
-    }
-    
-    void validate_latency_against_golden() {
-        if (latency_comparison_results_.empty()) {
-            log_info(tt::LogTest, "No golden latency comparison performed (no golden file found)");
-            return;
-        }
-
-        // Count how many tests failed
-        int failed_count = 0;
-        for (const auto& result : latency_comparison_results_) {
-            if (!result.within_tolerance) {
-                failed_count++;
-            }
-        }
-
-        if (failed_count > 0) {
-            has_test_failures_ = true;
-            log_error(tt::LogTest, "{} latency test(s) failed golden comparison (using per-test tolerance):", failed_count);
-            for (const auto& result : latency_comparison_results_) {
-                if (!result.within_tolerance) {
-                    log_error(tt::LogTest, "  - {} [{}]: current={:.2f}ns, golden={:.2f}ns, diff={:.2f}%, tolerance={:.2f}%",
-                        result.test_name, result.status, result.current_net_avg_ns, result.golden_net_avg_ns,
-                        result.difference_percent(), result.golden_net_avg_ns > 0 ? 
-                        (result.golden_net_avg_ns * 0.01 * 10.0) : 10.0);  // Display tolerance used
-                }
-            }
-        } else {
-            log_info(tt::LogTest, "All {} latency tests passed golden comparison using per-test tolerance values", 
-                latency_comparison_results_.size());
-        }
+        // Validate latency results against golden (uses common validation method)
+        validate_against_golden();
     }
 
     void generate_bandwidth_summary() {
@@ -711,7 +680,12 @@ public:
 
     bool has_test_failures() const { return has_test_failures_; }
 
-    const std::vector<std::string>& get_all_failed_tests() const { return all_failed_tests_; }
+    std::vector<std::string> get_all_failed_tests() const {
+        std::vector<std::string> combined;
+        combined.insert(combined.end(), all_failed_bandwidth_tests_.begin(), all_failed_bandwidth_tests_.end());
+        combined.insert(combined.end(), all_failed_latency_tests_.begin(), all_failed_latency_tests_.end());
+        return combined;
+    }
 
     // Determine tolerance percentage by looking up from golden CSV entries
     double get_tolerance_percent(
@@ -1875,7 +1849,6 @@ private:
         }
 
         for (const auto& test_result : latency_results_) {
-            // Search for the corresponding golden entry for this test result
             auto golden_it = fetch_corresponding_golden_latency_entry(test_result);
 
             // Create comparison result
@@ -1888,110 +1861,102 @@ private:
             comp_result.num_links = test_result.num_links;
             comp_result.num_samples = test_result.num_samples;
             comp_result.payload_size = test_result.payload_size;
-            
             comp_result.current_net_avg_ns = test_result.net_avg_ns;
 
-            double test_tolerance = 1.0;  // Default tolerance for no golden case
+            // Populate golden value and tolerance/status using common helper
             if (golden_it != golden_latency_entries_.end()) {
                 comp_result.golden_net_avg_ns = golden_it->net_avg_ns;
-                test_tolerance = golden_it->tolerance_percent;
-                comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
-
-                if (comp_result.within_tolerance) {
-                    comp_result.status = "PASS";
-                } else {
-                    comp_result.status = "FAIL";
-                }
             } else {
-                log_warning(tt::LogTest, "Golden latency entry not found for test {}", comp_result.test_name);
                 comp_result.golden_net_avg_ns = 0.0;
-                comp_result.within_tolerance = false;
-                comp_result.status = "NO_GOLDEN";
             }
+            populate_comparison_tolerance_and_status(comp_result, golden_it, golden_latency_entries_.end());
 
             latency_comparison_results_.push_back(comp_result);
 
             if (!comp_result.within_tolerance) {
-                double acceptable_tolerance = 0.0;
-                if (golden_it != golden_latency_entries_.end()) {
-                    acceptable_tolerance = golden_it->tolerance_percent;
-                }
                 std::ostringstream oss;
-                oss << comp_result.test_name << "," << comp_result.ftype << "," << comp_result.ntype << ","
-                    << comp_result.topology << "," << comp_result.num_devices << "," << comp_result.num_links << ","
-                    << comp_result.payload_size << "," << comp_result.current_net_avg_ns << ","
-                    << comp_result.golden_net_avg_ns << "," << std::fixed << std::setprecision(2)
-                    << comp_result.difference_percent() << "," << acceptable_tolerance;
-                all_failed_tests_.push_back(oss.str());
+                oss << comp_result.test_name << " [" << comp_result.status << "]";
+                all_failed_latency_tests_.push_back(oss.str());
             }
         }
 
-        // Write comparison results to diff CSV file
+        // Initialize diff CSV file using common helper
+        auto diff_csv_stream = init_diff_csv_file(
+            latency_diff_csv_file_path_,
+            "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+            "current_net_avg_ns,golden_net_avg_ns,difference_percent,status",
+            "latency");
+
+        if (diff_csv_stream.is_open()) {
+            for (const auto& result : latency_comparison_results_) {
+                diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
+                                << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
+                                << result.payload_size << "," << std::fixed << std::setprecision(2)
+                                << result.current_net_avg_ns << "," << result.golden_net_avg_ns << ","
+                                << result.difference_percent() << "," << result.status << "\n";
+            }
+            diff_csv_stream.close();
+            log_info(tt::LogTest, "Latency comparison diff CSV results written to: {}", latency_diff_csv_file_path_.string());
+        }
+    }
+
+    // Common helper to populate tolerance and status fields
+    template<typename CompResultType, typename GoldenIterType>
+    void populate_comparison_tolerance_and_status(
+        CompResultType& comp_result,
+        GoldenIterType golden_it,
+        GoldenIterType golden_end,
+        double golden_tolerance_default = 1.0) {
+        
+        double test_tolerance = golden_tolerance_default;
+        if (golden_it != golden_end) {
+            test_tolerance = golden_it->tolerance_percent;
+            comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
+            comp_result.status = comp_result.within_tolerance ? "PASS" : "FAIL";
+        } else {
+            log_warning(tt::LogTest, "Golden entry not found for test {}", comp_result.test_name);
+            comp_result.within_tolerance = false;
+            comp_result.status = "NO_GOLDEN";
+        }
+    }
+
+    // Common CSV diff file initialization
+    std::ofstream init_diff_csv_file(std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         std::ostringstream diff_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
-        diff_oss << "latency_diff_" << arch_name << ".csv";
-        latency_diff_csv_file_path_ = output_path / diff_oss.str();
+        diff_oss << test_type << "_diff_" << arch_name << ".csv";
+        diff_csv_path = output_path / diff_oss.str();
         
-        // Create diff CSV file with header
-        std::ofstream diff_csv_stream(latency_diff_csv_file_path_, std::ios::out | std::ios::trunc);
+        std::ofstream diff_csv_stream(diff_csv_path, std::ios::out | std::ios::trunc);
         if (!diff_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create latency diff CSV file: {}", latency_diff_csv_file_path_.string());
-            return;
+            log_error(tt::LogTest, "Failed to create {} diff CSV file: {}", test_type, diff_csv_path.string());
+        } else {
+            diff_csv_stream << csv_header << "\n";
+            log_info(tt::LogTest, "Initialized {} diff CSV file: {}", test_type, diff_csv_path.string());
         }
-        
-        // Write diff header
-        diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
-                           "current_net_avg_ns,golden_net_avg_ns,difference_percent,status\n";
-        log_info(tt::LogTest, "Initialized latency diff CSV file: {}", latency_diff_csv_file_path_.string());
-
-        for (const auto& result : latency_comparison_results_) {
-            diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                            << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
-                            << result.payload_size << "," << std::fixed << std::setprecision(2)
-                            << result.current_net_avg_ns << "," << result.golden_net_avg_ns << ","
-                            << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
-        }
-        diff_csv_stream.close();
-        log_info(tt::LogTest, "Latency comparison diff CSV results appended to: {}", latency_diff_csv_file_path_.string());
+        return diff_csv_stream;
     }
 
     void populate_comparison_result_bandwidth(
         double result_bandwidth_GB_s, ComparisonResult& comp_result, auto& golden_it) {
         comp_result.current_bandwidth_GB_s = result_bandwidth_GB_s;
 
-        double test_tolerance = 1.0;  // Default tolerance for no golden case
+        // Populate golden value
         if (golden_it != golden_csv_entries_.end()) {
             comp_result.golden_bandwidth_GB_s = golden_it->bandwidth_GB_s;
-            // Use per-test tolerance from golden CSV instead of global tolerance
-            test_tolerance = golden_it->tolerance_percent;
-            comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
-
-            if (comp_result.within_tolerance) {
-                comp_result.status = "PASS";
-            } else {
-                comp_result.status = "FAIL";
-            }
         } else {
-            log_warning(tt::LogTest, "Golden CSV entry not found for test {}", comp_result.test_name);
             comp_result.golden_bandwidth_GB_s = 0.0;
-            // Set within_tolerance explicitly to prevent an edge case, where golden is not found and test result is
-            // 0.0, which would cause subsequent within_tolerance checks to be true
-            comp_result.within_tolerance = false;
-            comp_result.status = "NO_GOLDEN";
         }
+        
+        // Use common helper for tolerance and status
+        populate_comparison_tolerance_and_status(comp_result, golden_it, golden_csv_entries_.end());
     }
 
     ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
 
     std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
-
-    std::string generate_failed_test_format_string(
-        const BandwidthResultSummary& test_result,
-        double test_result_avg_bandwidth,
-        double difference_percent,
-        double acceptable_tolerance);
 
     void compare_summary_results_with_golden() {
         if (golden_csv_entries_.empty()) {
@@ -2028,34 +1993,28 @@ private:
             comparison_results_.push_back(comp_result);
 
             if (!comp_result.within_tolerance) {
-                double acceptable_tolerance = 0.0;
-                if (golden_it != golden_csv_entries_.end()) {
-                    acceptable_tolerance = golden_it->tolerance_percent;
-                }
-                std::string csv_format_string = generate_failed_test_format_string(
-                    test_result, test_result_avg_bandwidth, comp_result.difference_percent(), acceptable_tolerance);
-                all_failed_tests_.push_back(csv_format_string);
+                std::ostringstream oss;
+                oss << comp_result.test_name << " [" << comp_result.status << "]";
+                all_failed_bandwidth_tests_.push_back(oss.str());
             }
         }
 
-        // Write comparison results to diff CSV file
-        // Output directory already created in initialize_bandwidth_results_csv_file()
+        // Initialize diff CSV file using common helper (note: bandwidth uses different prefix)
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
         std::ostringstream diff_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
         diff_csv_file_path_ = output_path / diff_oss.str();
-        // Create diff CSV file with header
-        std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
+        
+        std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);
         if (!diff_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create diff CSV file: {}", diff_csv_file_path_.string());
+            log_error(tt::LogTest, "Failed to create bandwidth diff CSV file: {}", diff_csv_file_path_.string());
             return;
         }
-        // Write diff header
         diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,num_iterations,"
                            "current_avg_bandwidth_gb_s,golden_avg_bandwidth_gb_s,difference_percent,status\n";
-        log_info(tt::LogTest, "Initialized diff CSV file: {}", diff_csv_file_path_.string());
+        log_info(tt::LogTest, "Initialized bandwidth diff CSV file: {}", diff_csv_file_path_.string());
 
         for (const auto& result : comparison_results_) {
             diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
@@ -2065,23 +2024,49 @@ private:
                             << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
         }
         diff_csv_stream.close();
-        log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
+        log_info(tt::LogTest, "Bandwidth comparison diff CSV results written to: {}", diff_csv_file_path_.string());
     }
 
     void validate_against_golden() {
-        if (comparison_results_.empty()) {
+        // Handle both bandwidth and latency comparisons
+        bool has_bandwidth_results = !comparison_results_.empty();
+        bool has_latency_results = !latency_comparison_results_.empty();
+        
+        if (!has_bandwidth_results && !has_latency_results) {
             log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
             return;
         }
 
-        if (!all_failed_tests_.empty()) {
-            has_test_failures_ = true;
-            log_error(tt::LogTest, "The following tests failed golden comparison (using per-test tolerance):");
-            for (const auto& failed_test : all_failed_tests_) {
-                log_error(tt::LogTest, "  - {}", failed_test);
+        // Report bandwidth failures separately
+        if (has_bandwidth_results) {
+            if (!all_failed_bandwidth_tests_.empty()) {
+                has_test_failures_ = true;
+                log_error(tt::LogTest, "=== BANDWIDTH TEST FAILURES ===");
+                log_error(tt::LogTest, "{} bandwidth test(s) failed golden comparison (using per-test tolerance):", 
+                    all_failed_bandwidth_tests_.size());
+                for (const auto& failed_test : all_failed_bandwidth_tests_) {
+                    log_error(tt::LogTest, "  - {}", failed_test);
+                }
+            } else {
+                log_info(tt::LogTest, "All {} bandwidth tests passed golden comparison using per-test tolerance values", 
+                    comparison_results_.size());
             }
-        } else {
-            log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
+        }
+
+        // Report latency failures separately
+        if (has_latency_results) {
+            if (!all_failed_latency_tests_.empty()) {
+                has_test_failures_ = true;
+                log_error(tt::LogTest, "=== LATENCY TEST FAILURES ===");
+                log_error(tt::LogTest, "{} latency test(s) failed golden comparison (using per-test tolerance):", 
+                    all_failed_latency_tests_.size());
+                for (const auto& failed_test : all_failed_latency_tests_) {
+                    log_error(tt::LogTest, "  - {}", failed_test);
+                }
+            } else {
+                log_info(tt::LogTest, "All {} latency tests passed golden comparison using per-test tolerance values", 
+                    latency_comparison_results_.size());
+            }
         }
     }
 
@@ -2151,7 +2136,8 @@ private:
     std::vector<ComparisonResult> comparison_results_;
     std::vector<GoldenLatencyEntry> golden_latency_entries_;
     std::vector<LatencyComparisonResult> latency_comparison_results_;
-    std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run
+    std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
+    std::vector<std::string> all_failed_latency_tests_;    // Accumulates failed latency tests
     std::filesystem::path diff_csv_file_path_;
     std::filesystem::path latency_diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation

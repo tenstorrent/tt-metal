@@ -371,43 +371,6 @@ ComparisonResult TestContext::create_comparison_result(const BandwidthResultSumm
     return comp_result;
 }
 
-// Creates common CSV format string for any failure case
-std::string TestContext::generate_failed_test_format_string(
-    const BandwidthResultSummary& test_result,
-    double test_result_avg_bandwidth,
-    double difference_percent,
-    double acceptable_tolerance) {
-    std::ostringstream tolerance_stream;
-    tolerance_stream << std::fixed << std::setprecision(1) << acceptable_tolerance;
-    // Because statistics order may change, we need to find the index of average cycles and packets per second
-    double test_result_avg_cycles = -1;
-    auto cycles_stat_location = std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::CyclesMean);
-    if (cycles_stat_location == stat_order_.end()) {
-        log_warning(tt::LogTest, "Average cycles statistic not found, omitting it in failure report");
-    } else {
-        int cycles_stat_index = std::distance(stat_order_.begin(), cycles_stat_location);
-        test_result_avg_cycles = test_result.statistics_vector[cycles_stat_index];
-    }
-    double test_result_avg_packets_per_second = -1;
-    auto packets_per_second_stat_location =
-        std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::PacketsPerSecondMean);
-    if (packets_per_second_stat_location == stat_order_.end()) {
-        log_warning(tt::LogTest, "Average packets per second statistic not found, omitting it in failure report");
-    } else {
-        int packets_per_second_stat_index = std::distance(stat_order_.begin(), packets_per_second_stat_location);
-        test_result_avg_packets_per_second = test_result.statistics_vector[packets_per_second_stat_index];
-    }
-    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-    std::string csv_format_string =
-        test_result.test_name + "," + test_result.ftype + "," + test_result.ntype + "," + test_result.topology + ",\"" +
-        num_devices_str + "\"," + std::to_string(test_result.num_links) + "," +
-        std::to_string(test_result.packet_size) + "," + std::to_string(test_result.num_iterations) + "," +
-        std::to_string(test_result_avg_cycles) + "," + std::to_string(test_result_avg_bandwidth) + "," +
-        std::to_string(test_result_avg_packets_per_second) + "," + std::to_string(difference_percent) + "," +
-        tolerance_stream.str();
-    return csv_format_string;
-}
-
 void TestContext::set_comparison_statistics_csv_file_path() {
     // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all multirun
     // tests to complete Generate detailed CSV filename

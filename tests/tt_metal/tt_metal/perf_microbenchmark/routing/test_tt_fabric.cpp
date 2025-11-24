@@ -271,23 +271,16 @@ int main(int argc, char** argv) {
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
 
-    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
+    // Generate summaries after all tests have run
     if (benchmark_mode) {
         test_context.generate_bandwidth_summary();
     }
-
-    // Latency summary is generated after all tests have run
     if (latency_test_mode) {
         test_context.generate_latency_summary();
     }
 
-    // Setup Bandwidth CSV files for CI to upload
-    if (benchmark_mode) {
-        test_context.setup_ci_artifacts();
-    }
-
-    // Setup Latency CSV files for CI to upload
-    if (latency_test_mode) {
+    // Setup CSV files for CI to upload (handles both bandwidth and latency)
+    if (benchmark_mode || latency_test_mode) {
         test_context.setup_ci_artifacts();
     }
 
