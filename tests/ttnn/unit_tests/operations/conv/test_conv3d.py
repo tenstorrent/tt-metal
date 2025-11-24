@@ -62,11 +62,6 @@ def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
 
 
 def create_conv3d_config(
-    out_channels,
-    kernel_size,
-    stride,
-    padding,
-    padding_mode,
     T_out_block=1,
     W_out_block=1,
     H_out_block=1,
@@ -76,7 +71,6 @@ def create_conv3d_config(
 ):
     """Create Conv3d configuration."""
     return ttnn.Conv3dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         T_out_block=T_out_block,
@@ -84,12 +78,6 @@ def create_conv3d_config(
         H_out_block=H_out_block,
         C_out_block=C_out_block,
         C_in_block=C_in_block,
-        output_channels=out_channels,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        padding_mode=padding_mode,
-        groups=1,
         compute_with_storage_grid_size=compute_with_storage_grid_size,
     )
 
@@ -145,14 +133,18 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
 
     # Create config and run TTNN conv3d
-    config = create_conv3d_config(
-        out_channels, kernel_size, stride, padding, padding_mode, compute_with_storage_grid_size=grid_size
-    )
+    config = create_conv3d_config(compute_with_storage_grid_size=grid_size)
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
         config=config,
         compute_kernel_config=kernel_config,
     )

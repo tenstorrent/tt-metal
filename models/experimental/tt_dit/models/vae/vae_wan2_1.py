@@ -240,9 +240,6 @@ class WanCausalConv3d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
 
@@ -370,6 +367,12 @@ class WanCausalConv3d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -637,9 +640,6 @@ class WanConv2d:
             self.in_channels,
             self.out_channels,
             self.kernel_size,
-            self.stride,
-            self.internal_padding,
-            padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
         logger.info(f"Loaded conv_config: {self.conv_config}")
@@ -745,6 +745,12 @@ class WanConv2d:
             weight_tensor=self.conv_weight,
             bias_tensor=self.conv_bias,
             config=self.conv_config,
+            output_channels=self.out_channels,
+            kernel_size=self.kernel_size,
+            stride=self.stride,
+            padding=self.internal_padding,
+            padding_mode="zeros",
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
 
