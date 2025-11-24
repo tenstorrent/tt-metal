@@ -24,6 +24,7 @@ def run_strided_all_gather_impl(
     num_devices,
     ag_output_shape,
     dim,
+    other_dim,
     num_links,
     ag_input_dtype,
     layout,
@@ -83,7 +84,6 @@ def run_strided_all_gather_impl(
     ag_output_tensor_goldens_list = []
     _, _, _, hidden_dim = ag_output_shape
 
-    other_dim = 2 if dim == 3 else 2
     shard_dims = [other_dim, dim]
     for i in range(num_iters):
         ag_output_tensor = torch.rand(ag_output_shape).bfloat16()
@@ -199,25 +199,25 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "ag_output_shape, dim, other_dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
-        ([1, 1, 32, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
-        ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 32, 1024], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 32, 512], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 512], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 32, 512], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 768], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 32, 1024], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # 2 row tests
-        ([1, 1, 64, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
-        ([1, 1, 64, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
-        ([1, 1, 64, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 64, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 64, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 64, 512], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # 4 row tests
-        ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        ([1, 1, 128, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
         # Multiple y core tests
-        ([1, 1, 128, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
-        ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        ([1, 1, 128, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        ([1, 1, 128, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
         # Full tests
-        ([1, 1, 4096, 2560], 3, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        ([1, 1, 4096, 2560], 3, 2, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
     ],
     ids=[
         "1tile1chunk1worker1row",
@@ -269,6 +269,7 @@ def test_strided_all_gather_async(
     mesh_device,
     ag_output_shape,
     dim,
+    other_dim,
     num_links,
     ag_input_dtype,
     layout,
@@ -288,6 +289,7 @@ def test_strided_all_gather_async(
         mesh_device.get_num_devices(),
         ag_output_shape,
         dim,
+        other_dim,
         num_links,
         ag_input_dtype,
         layout,
