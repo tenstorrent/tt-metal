@@ -15,7 +15,8 @@ DramPrefetcherOperation::program_factory_t DramPrefetcherOperation::select_progr
     return program::DramPrefetcherProgramFactory{};
 }
 
-void validate(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+void DramPrefetcherOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(args.num_layers > 0, "Prefetcher must run for at least 1 layer");
@@ -73,14 +74,9 @@ void validate(const operation_attributes_t& args, const tensor_args_t& tensor_ar
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 
-void DramPrefetcherOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
-}
-
 void DramPrefetcherOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate(args, tensor_args);
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
 spec_return_value_t DramPrefetcherOperation::compute_output_specs(
