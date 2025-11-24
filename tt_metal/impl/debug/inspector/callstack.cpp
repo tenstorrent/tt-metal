@@ -322,25 +322,19 @@ std::string get_cpp_callstack(int max_frames) {
                         // Use the actual address from buffer[i] and convert to file offset
                         // For PIE executables and shared libraries, we need to subtract the base load address
                         Dl_info dl_info;
-                        // Reuse callstack stringstream temporarily
-                        callstack.str("");
-                        callstack.clear();
+                        std::stringstream addr_stream;
                         if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
                             // Calculate offset from module base address
                             uintptr_t offset =
                                 reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
-                            callstack << "[" << relative_path << "(+0x" << std::hex << offset << ")]";
+                            addr_stream << "[" << relative_path << "(+0x" << std::hex << offset << ")]";
                         } else {
                             // Fallback to absolute address if dladdr fails
-                            callstack << "[" << relative_path << "(+0x" << std::hex
-                                      << reinterpret_cast<uintptr_t>(buffer[i]) << ")]";
+                            addr_stream << "[" << relative_path << "(+0x" << std::hex
+                                        << reinterpret_cast<uintptr_t>(buffer[i]) << ")]";
                         }
-                        func_info_str = callstack.str();
+                        func_info_str = addr_stream.str();
                         func_info = func_info_str;
-                        // Reset callstack for reuse
-                        callstack.str("");
-                        callstack.clear();
-                        callstack << std::dec;  // Reset to decimal
                     } else {
                         free(demangled);
                         continue;  // Skip this frame if we can't extract any info
