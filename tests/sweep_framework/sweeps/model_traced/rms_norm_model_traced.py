@@ -110,6 +110,9 @@ def run(
     )
 
     start_time = start_measuring_time()
+    # Fall back to input_a_memory_config if output_memory_config is not provided
+    if output_memory_config is None:
+        output_memory_config = input_a_memory_config
     # Use the traced output_memory_config directly
     # Note: If RMS norm fails with sharded inputs, it will raise an error naturally
     output_tensor = ttnn.rms_norm(input_tensor_a, epsilon=eps, weight=weight_tensor, memory_config=output_memory_config)

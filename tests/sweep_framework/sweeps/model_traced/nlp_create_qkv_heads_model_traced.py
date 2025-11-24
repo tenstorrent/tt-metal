@@ -66,6 +66,25 @@ def run(
     batch_size = shape[0]
     seq_len = shape[2]  # Third dimension is sequence length
     hidden_dim = shape[3]
+
+    # Try to infer num_q_heads and num_kv_heads from shape if missing
+    if num_q_heads is None or num_kv_heads is None:
+        # For GQA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
+        # Try common ratios: assume head_dim = 64 (common)
+        head_dim_guess = 64
+        total_heads = hidden_dim // head_dim_guess
+        if num_q_heads is None and num_kv_heads is None:
+            # Assume GQA: num_kv_heads = num_q_heads / 2
+            # So: num_q_heads + 2*(num_q_heads/2) = 2*num_q_heads = total_heads
+            num_q_heads = total_heads // 2
+            num_kv_heads = num_q_heads // 2
+        elif num_q_heads is None:
+            # num_kv_heads is known, solve for num_q_heads
+            num_q_heads = total_heads - 2 * num_kv_heads
+        elif num_kv_heads is None:
+            # num_q_heads is known, solve for num_kv_heads
+            num_kv_heads = (total_heads - num_q_heads) // 2
+
     # For GQA: hidden_dim = num_q_heads * head_dim + 2 * num_kv_heads * head_dim
     # So head_dim = hidden_dim / (num_q_heads + 2 * num_kv_heads)
     head_dim = hidden_dim // (num_q_heads + 2 * num_kv_heads)

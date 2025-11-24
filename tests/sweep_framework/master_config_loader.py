@@ -2296,9 +2296,10 @@ class MasterConfigLoader:
                                     except:
                                         pass
 
-                    if not tensor_config or num_q_heads is None or num_kv_heads is None:
+                    if not tensor_config:
                         failed_configs += 1
                         continue
+                    # Allow None values for num_q_heads and num_kv_heads - test files will infer them
 
                     # Parse tensor config
                     parsed_dtype = self.parse_dtype(tensor_config.dtype)
@@ -2405,9 +2406,10 @@ class MasterConfigLoader:
                                     except:
                                         pass
 
-                    if not tensor_config or num_heads is None or num_kv_heads is None:
+                    if not tensor_config:
                         failed_configs += 1
                         continue
+                    # Allow None values for num_heads and num_kv_heads - test files will infer them
 
                     # Parse tensor config
                     parsed_dtype = self.parse_dtype(tensor_config.dtype)
