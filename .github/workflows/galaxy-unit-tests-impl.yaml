@@ -137,7 +137,7 @@ jobs:
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
-          
+
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
@@ -174,10 +174,10 @@ jobs:
         run: |
           mkdir -p generated/test_reports
           pip install -r models/demos/gpt_oss/requirements.txt
-          
+
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
-          
+
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900
 

@@ -84,7 +84,7 @@ jobs:
           pytest -n auto \
             models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching \
             -k "4x8sp1tp0"
-          
+
           # Test 2: Run the full pipeline demo with performance throttling
           pytest -n auto \
             models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py \
@@ -98,12 +98,12 @@ jobs:
         run: |
           # Install requirements
           pip install -r models/demos/gpt_oss/requirements.txt
-          
+
           # Test GPT-OSS 20B model
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
             pytest models/demos/gpt_oss/demo/text_demo.py \
             --timeout 1000
-          
+
           # Test GPT-OSS 120B model
           HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
             pytest models/demos/gpt_oss/demo/text_demo.py \
