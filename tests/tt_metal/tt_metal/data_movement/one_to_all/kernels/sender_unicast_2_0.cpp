@@ -8,8 +8,8 @@
 // L1 to L1 send
 void kernel_main() {
     // Compile-time arguments
-    uint32_t mst_base_addr = get_compile_time_arg_val(0);
-    uint32_t sub_base_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t mst_base_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t sub_base_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_transaction = get_compile_time_arg_val(3);
     constexpr uint32_t bytes_per_page = get_compile_time_arg_val(4);

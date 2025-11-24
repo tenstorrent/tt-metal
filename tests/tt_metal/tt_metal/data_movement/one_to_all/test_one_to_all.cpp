@@ -22,9 +22,6 @@ using namespace test_utils;
 
 namespace unit_tests::dm::core_to_all {
 
-constexpr uint32_t START_ID = 6;
-constexpr uint32_t START_ID_2_0 = 170;
-
 // Test config, i.e. test parameters
 struct OneToAllConfig {
     uint32_t test_id = 0;

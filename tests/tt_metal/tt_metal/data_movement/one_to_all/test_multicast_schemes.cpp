@@ -183,8 +183,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoo
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback2_0) {
-    GTEST_SKIP() << "Skipping test";
-
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 10;
     bool loopback = false;
     bool use_2_0_api = true;
