@@ -161,6 +161,60 @@ def test_multi_op():
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def test_multi_op_buffer_overflow():
+    COMPUTE_OP_COUNT = 267
+    DATA_MOVEMENT_OP_COUNT = 1333
+    RUN_COUNT = 1
+    REF_COMPUTE_COUNT_DICT = {
+        "wormhole_b0": [
+            72 * COMPUTE_OP_COUNT * RUN_COUNT,
+            64 * COMPUTE_OP_COUNT * RUN_COUNT,
+            56 * COMPUTE_OP_COUNT * RUN_COUNT,
+        ],
+        "blackhole": [
+            130 * COMPUTE_OP_COUNT * RUN_COUNT,
+            120 * COMPUTE_OP_COUNT * RUN_COUNT,
+            110 * COMPUTE_OP_COUNT * RUN_COUNT,
+        ],
+    }
+    REF_DATA_MOVEMENT_COUNT_DICT = {
+        "wormhole_b0": [
+            72 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            64 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            56 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+        ],
+        "blackhole": [
+            130 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            120 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+            110 * DATA_MOVEMENT_OP_COUNT * RUN_COUNT,
+        ],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in REF_COMPUTE_COUNT_DICT.keys()
+    assert ENV_VAR_ARCH_NAME in REF_DATA_MOVEMENT_COUNT_DICT.keys()
+
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in ["BRISC", "NCRISC"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert (
+            stats[statName]["stats"]["Count"] in REF_DATA_MOVEMENT_COUNT_DICT[ENV_VAR_ARCH_NAME]
+        ), "Wrong Marker Repeat count"
+
+    for risc in ["TRISC_0", "TRISC_1", "TRISC_2"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert (
+            stats[statName]["stats"]["Count"] in REF_COMPUTE_COUNT_DICT[ENV_VAR_ARCH_NAME]
+        ), "Wrong Marker Repeat count"
+
+
 def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_PER_LOOP = 52
     LOOP_COUNT = 2000
