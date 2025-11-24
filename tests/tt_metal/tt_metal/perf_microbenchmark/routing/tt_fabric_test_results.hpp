@@ -88,8 +88,6 @@ struct LatencyResult {
     double raw_max_ns{};
     double raw_avg_ns{};
     double raw_p99_ns{};
-
-    double tolerance_percent{};  // Tolerance for golden comparison
 };
 
 // Golden latency comparison structures

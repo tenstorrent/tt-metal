@@ -27,8 +27,8 @@ void kernel_main() {
 
     // Common runtime args
     const size_t result_buffer_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
-    const size_t remote_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t semaphore_address =
+        get_arg_val<uint32_t>(arg_idx++);  // Shared sync address (same offset on all devices)
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts = get_arg_val<uint32_t>(arg_idx++);
@@ -71,7 +71,7 @@ void kernel_main() {
     // Setup NOC addresses for destination (responder device)
     // Send payload to responder's scratch buffer (not its timestamp buffer)
     auto dest_semaphore_noc_addr =
-        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), remote_semaphore_address, 0);
+        safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
     auto dest_payload_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), responder_scratch_buffer_address, 0);
 
@@ -103,9 +103,9 @@ void kernel_main() {
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         };
 
-    auto wait_for_semaphore_then_reset = [local_semaphore_address](size_t target_value) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), target_value);
-        *reinterpret_cast<volatile uint32_t*>(local_semaphore_address) = 0;
+    auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
+        *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
     };
 
     // Warmup: flush the datapath
@@ -165,12 +165,12 @@ void kernel_main() {
                 noc_semaphore_wait_min(payload_l1_ptr, burst_idx + 1);
             } else {
                 for (size_t j = 0; j < burst_size; j++) {
-                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(local_semaphore_address), j + 1);
+                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
                 }
             }
 
             end_timestamp = get_timestamp();
-            *reinterpret_cast<volatile uint32_t*>(local_semaphore_address) = 0;
+            *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }
 
         // Store timestamp pair in result buffer

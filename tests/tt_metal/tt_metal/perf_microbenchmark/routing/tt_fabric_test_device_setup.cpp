@@ -1230,30 +1230,18 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
-uint32_t TestDevice::create_latency_semaphore(CoreCoord core) {
-    // Allocate semaphore and return its L1 address
-    auto semaphore_id = tt::tt_metal::CreateSemaphore(program_handle_, core, 0);
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    uint32_t semaphore_address = hal.get_alignment(tt::tt_metal::HalMemType::L1) * semaphore_id;
-    log_debug(
-        tt::LogTest,
-        "Created semaphore on node {} core {} with address 0x{:x}",
-        fabric_node_id_,
-        core,
-        semaphore_address);
-    return semaphore_address;
-}
-
 void TestDevice::create_latency_sender_kernel(
     CoreCoord core,
     FabricNodeId dest_node,
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    NocSendType noc_send_type,
-    uint32_t local_semaphore_address,
-    uint32_t remote_semaphore_address) {
+    NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
+
+    // Use static memory map address for semaphore (same as bandwidth tests)
+    // Both sender and responder use the same memory layout, so they share the sync address
+    uint32_t semaphore_address = sender_memory_map_->get_local_sync_address();
 
     // Get topology information
     const bool is_2d_fabric = device_info_provider_->is_2D_routing_enabled();
@@ -1295,8 +1283,7 @@ void TestDevice::create_latency_sender_kernel(
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
-        local_semaphore_address,                          // local semaphore address (to wait on)
-        remote_semaphore_address,                         // remote semaphore address (to signal)
+        semaphore_address,                                // shared semaphore address (same offset on all devices)
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
@@ -1334,10 +1321,9 @@ void TestDevice::create_latency_sender_kernel(
 
     log_debug(
         tt::LogTest,
-        "Created latency sender kernel on core {} with local sem 0x{:x}, remote sem 0x{:x}",
+        "Created latency sender kernel on core {} with shared semaphore address 0x{:x}",
         core,
-        local_semaphore_address,
-        remote_semaphore_address);
+        semaphore_address);
 }
 
 void TestDevice::create_latency_responder_kernel(
@@ -1346,10 +1332,12 @@ void TestDevice::create_latency_responder_kernel(
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    NocSendType noc_send_type,
-    uint32_t local_semaphore_address,
-    uint32_t remote_semaphore_address) {
+    NocSendType noc_send_type) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
+
+    // Use static memory map address for semaphore (same as bandwidth tests)
+    // Both sender and responder use the same memory layout, so they share the sync address
+    uint32_t semaphore_address = sender_memory_map_->get_local_sync_address();
 
     // Get topology information
     const bool is_2d_fabric = device_info_provider_->is_2D_routing_enabled();
@@ -1395,8 +1383,7 @@ void TestDevice::create_latency_responder_kernel(
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // local buffer for timestamp storage
-        local_semaphore_address,                          // local semaphore address (to wait on)
-        remote_semaphore_address,                         // remote semaphore address (to signal)
+        semaphore_address,                                // shared semaphore address (same offset on all devices)
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
@@ -1434,10 +1421,9 @@ void TestDevice::create_latency_responder_kernel(
 
     log_debug(
         tt::LogTest,
-        "Created latency responder kernel on core {} with local sem 0x{:x}, remote sem 0x{:x}",
+        "Created latency responder kernel on core {} with shared semaphore address 0x{:x}",
         core,
-        local_semaphore_address,
-        remote_semaphore_address);
+        semaphore_address);
 }
 
 // TestSender accessor implementations (need complete TestDevice)

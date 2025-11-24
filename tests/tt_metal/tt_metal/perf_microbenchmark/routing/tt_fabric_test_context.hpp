@@ -417,61 +417,35 @@ public:
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
 
-            // First pass for latency tests: create semaphores only
+            // Create kernels (latency or normal)
             if (latency_test_mode_) {
                 bool is_latency_sender = (device_id == latency_sender_device_);
                 bool is_latency_responder = (device_id == latency_responder_device_);
 
-                if (is_latency_sender || is_latency_responder) {
-                    // Create semaphore and store its address for exchange
-                    uint32_t local_sem_addr = test_device.create_latency_semaphore(latency_worker_core_);
-                    latency_semaphore_addresses_[device_id] = local_sem_addr;
-                }
-            }
-        }
-
-        // Second pass for latency tests: create kernels with known remote addresses
-        // For non-latency tests: create normal kernels
-        if (latency_test_mode_) {
-            TT_FATAL(latency_semaphore_addresses_.size() == 2, "Expected 2 semaphore addresses for latency test");
-            uint32_t sender_sem_addr = latency_semaphore_addresses_.at(latency_sender_device_);
-            uint32_t responder_sem_addr = latency_semaphore_addresses_.at(latency_responder_device_);
-
-            for (auto& [coord, test_device] : test_devices_) {
-                auto device_id = test_device.get_node_id();
-                bool is_latency_sender = (device_id == latency_sender_device_);
-                bool is_latency_responder = (device_id == latency_responder_device_);
-
                 if (is_latency_sender) {
-                    // Create sender kernel with both addresses known
+                    // Create sender kernel - uses static memory map addresses for semaphores
                     test_device.create_latency_sender_kernel(
                         latency_worker_core_,
                         latency_responder_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_noc_send_type_,
-                        sender_sem_addr,      // local semaphore
-                        responder_sem_addr);  // remote semaphore
+                        latency_noc_send_type_);
                 } else if (is_latency_responder) {
-                    // Create responder kernel with both addresses known
+                    // Create responder kernel - uses static memory map addresses for semaphores
                     test_device.create_latency_responder_kernel(
                         latency_worker_core_,
                         latency_sender_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_noc_send_type_,
-                        responder_sem_addr,  // local semaphore
-                        sender_sem_addr);    // remote semaphore
+                        latency_noc_send_type_);
                 } else {
                     // For non-latency devices in a latency test, create normal kernels
                     test_device.create_kernels();
                 }
-            }
-        } else {
-            // Normal mode: create standard kernels for all devices
-            for (auto& [coord, test_device] : test_devices_) {
+            } else {
+                // Normal mode: create standard kernels for all devices
                 test_device.create_kernels();
             }
         }
@@ -807,7 +781,6 @@ private:
         bandwidth_results_.clear();
         // Note: latency_results_ is NOT cleared here to preserve for golden comparison at end
         code_profiling_entries_.clear();
-        latency_semaphore_addresses_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
         // Note: latency_results_ is kept for golden comparison after all tests complete
@@ -1539,7 +1512,20 @@ private:
                        << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
                        << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns
                        << "," << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
-                       << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.tolerance_percent << "\n";
+                       << result.raw_avg_ns << "," << result.raw_p99_ns << ",";
+
+            // Find the corresponding golden entry for tolerance (like bandwidth does)
+            auto golden_it = fetch_corresponding_golden_latency_entry(result);
+            if (golden_it == golden_latency_entries_.end()) {
+                log_warning(
+                    tt::LogTest,
+                    "Golden latency entry not found for test {}, putting tolerance of 1.0 in CSV",
+                    result.test_name);
+                csv_stream << 1.0;
+            } else {
+                csv_stream << golden_it->tolerance_percent;
+            }
+            csv_stream << "\n";
         }
 
         csv_stream.close();
@@ -1858,14 +1844,6 @@ private:
                 golden_latency_entries_.size());
         }
 
-        // Update latency results with tolerance from golden entries
-        for (auto& test_result : latency_results_) {
-            auto golden_it = fetch_corresponding_golden_latency_entry(test_result);
-            if (golden_it != golden_latency_entries_.end()) {
-                test_result.tolerance_percent = golden_it->tolerance_percent;
-            }
-        }
-
         for (const auto& test_result : latency_results_) {
             auto golden_it = fetch_corresponding_golden_latency_entry(test_result);
 
@@ -2178,8 +2156,6 @@ private:
     bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
     FabricNodeId latency_sender_device_{MeshId{0}, 0};
     FabricNodeId latency_responder_device_{MeshId{0}, 0};
-    std::unordered_map<FabricNodeId, uint32_t>
-        latency_semaphore_addresses_;  // Semaphore L1 addresses for sender and responder
     uint32_t latency_burst_size_ = 1;
     uint32_t latency_num_bursts_ = 100;
     uint32_t latency_payload_size_ = 0;
