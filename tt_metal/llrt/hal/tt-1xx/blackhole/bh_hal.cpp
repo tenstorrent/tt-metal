@@ -37,7 +37,8 @@ constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
 constexpr static std::uint32_t DRAM_PROFILER_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE;
-constexpr static std::uint32_t get_dram_profiler_size(uint32_t profiler_dram_bank_size_per_risc_bytes) {
+constexpr static std::uint32_t get_dram_profiler_size(
+    [[maybe_unused]] uint32_t profiler_dram_bank_size_per_risc_bytes) {
 #if defined(TRACY_ENABLE)
     constexpr std::uint32_t MAX_NUM_UNHARVESTED_TENSIX_CORES = 140;
     constexpr std::uint32_t MAX_NUM_ETH_CORES = 14;
