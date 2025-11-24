@@ -61,7 +61,13 @@ class TtAttention(LightweightModule):
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
-            self.sdpa_program_config.k_chunk_size = 1024 if self.heads == 20 else 512
+            if out_dim == 640:
+                self.sdpa_program_config.k_chunk_size = 512
+            # TODO: 512 should be possible, latents base optimizations regressed this
+            elif out_dim == 768:
+                self.sdpa_program_config.k_chunk_size = 256
+            else:
+                self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
