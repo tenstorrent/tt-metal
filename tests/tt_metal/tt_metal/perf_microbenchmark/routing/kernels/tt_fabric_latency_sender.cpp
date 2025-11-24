@@ -121,17 +121,6 @@ void kernel_main() {
             // since we reset to 0)
             *payload_l1_ptr = burst_idx + 1;
         }
-        // Send packet
-        // if constexpr (sem_inc_only) {
-        //     send_seminc_packet();
-        // } else {
-        //     if constexpr (enable_fused_payload_with_sync) {
-        //         send_payload_packet();
-        //     } else {
-        //         send_payload_packet();
-        //         send_seminc_packet();
-        //     }
-        // }
 
         uint64_t start_timestamp = 0;  // get_timestamp();
         uint64_t end_timestamp = 0;    // get_timestamp();
@@ -150,24 +139,19 @@ void kernel_main() {
             // Don't want to include noc command buffer response time in the total latency measurement
             noc_async_writes_flushed();
             start_timestamp = get_timestamp();
-            DPRINT << "SENDER: Start timestamp: " << (uint64_t)start_timestamp << "\n";
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 // TODO: add separate src buffer -- technically a race but in practice this will never hit.
                 *payload_l1_ptr = 0;
             }
 
-            DPRINT << "SENDER: Waiting for semaphore: " << (uint32_t)(burst_idx + 1) << "\n";
-            {
-                if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
-                    DPRINT << "SENDER: noc_semaphore_wait_min: " << (uint32_t)(burst_idx + 1) << "\n";
-                    noc_semaphore_wait_min(payload_l1_ptr, burst_idx + 1);
-                } else {
-                    for (size_t j = 0; j < burst_size; j++) {
-                        DPRINT << "SENDER: noc_semaphore_wait_min 2: " << (uint32_t)(j + 1) << "\n";
-                        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
-                    }
+            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                noc_semaphore_wait_min(payload_l1_ptr, burst_idx + 1);
+            } else {
+                for (size_t j = 0; j < burst_size; j++) {
+                    noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
                 }
             }
+
             end_timestamp = get_timestamp();
             *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
         }

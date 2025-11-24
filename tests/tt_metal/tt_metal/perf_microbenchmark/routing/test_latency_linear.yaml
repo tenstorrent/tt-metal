@@ -11,7 +11,7 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 1  # num_packets represents num_bursts in latency mode
+            num_packets: 10  # num_packets represents num_bursts in latency mode
             destination:
               device: [0, 1]
 
