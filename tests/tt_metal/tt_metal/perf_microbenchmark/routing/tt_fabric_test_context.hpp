@@ -387,23 +387,68 @@ public:
                 bool is_latency_responder = (device_id == latency_responder_device_);
 
                 if (is_latency_sender) {
-                    // Create sender kernel - uses static memory map addresses for semaphores
+                    // Find the responder device to get its virtual core coordinates
+                    TestDevice* responder_device = nullptr;
+                    for (auto& [responder_coord, responder_test_device] : test_devices_) {
+                        if (responder_test_device.get_node_id() == latency_responder_device_) {
+                            responder_device = &responder_test_device;
+                            break;
+                        }
+                    }
+                    TT_FATAL(
+                        responder_device != nullptr,
+                        "Could not find responder device with node_id {}",
+                        latency_responder_device_.chip_id);
+
+                    // Get responder's virtual core coordinates for correct NOC addressing
+                    CoreCoord responder_virtual_core =
+                        responder_device->get_device_info_provider()->get_virtual_core_from_logical_core(
+                            latency_worker_core_);
+
+                    // Create sender kernel - pass responder's actual coordinates
                     test_device.create_latency_sender_kernel(
                         latency_worker_core_,
                         latency_responder_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_noc_send_type_);
+                        latency_noc_send_type_,
+                        responder_virtual_core);
                 } else if (is_latency_responder) {
-                    // Create responder kernel - uses static memory map addresses for semaphores
+                    // Find the sender device to query its buffer addresses
+                    TestDevice* sender_device = nullptr;
+                    for (auto& [sender_coord, sender_test_device] : test_devices_) {
+                        if (sender_test_device.get_node_id() == latency_sender_device_) {
+                            sender_device = &sender_test_device;
+                            break;
+                        }
+                    }
+                    TT_FATAL(
+                        sender_device != nullptr,
+                        "Could not find sender device with node_id {}",
+                        latency_sender_device_.chip_id);
+
+                    // Get sender's actual buffer addresses (passing payload_size as parameter)
+                    uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
+                    uint32_t sender_receive_buffer_address =
+                        sender_device->get_latency_receive_buffer_address(latency_payload_size_);
+
+                    // Get sender's virtual core coordinates for correct NOC addressing
+                    CoreCoord sender_virtual_core =
+                        sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(
+                            latency_worker_core_);
+
+                    // Create responder kernel - pass sender's actual addresses and coordinates
                     test_device.create_latency_responder_kernel(
                         latency_worker_core_,
                         latency_sender_device_,
                         latency_payload_size_,
                         latency_burst_size_,
                         latency_num_bursts_,
-                        latency_noc_send_type_);
+                        latency_noc_send_type_,
+                        sender_send_buffer_address,
+                        sender_receive_buffer_address,
+                        sender_virtual_core);
                 } else {
                     // For non-latency devices in a latency test, create normal kernels
                     test_device.create_kernels();

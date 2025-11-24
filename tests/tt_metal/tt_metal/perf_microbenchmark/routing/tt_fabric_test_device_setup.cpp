@@ -1230,10 +1230,17 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
-size_t TestDevice::get_latency_scratch_buffer_address() const {
-    // Scratch buffer starts after the latency result buffer
+size_t TestDevice::get_latency_send_buffer_address() const {
+    // Send buffer starts after the latency result buffer
     // Results are stored as uint32_t elapsed times (1 per sample)
     return sender_memory_map_->get_result_buffer_address() + (TestDevice::MAX_LATENCY_SAMPLES * sizeof(uint32_t));
+}
+
+size_t TestDevice::get_latency_receive_buffer_address(uint32_t payload_size) const {
+    // Receive buffer starts after the send buffer
+    // Send buffer size must accommodate the full message payload
+    TT_FATAL(payload_size > 0, "Latency payload size must be greater than 0");
+    return get_latency_send_buffer_address() + payload_size;
 }
 
 void TestDevice::create_latency_sender_kernel(
@@ -1242,7 +1249,8 @@ void TestDevice::create_latency_sender_kernel(
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    NocSendType noc_send_type) {
+    NocSendType noc_send_type,
+    CoreCoord responder_virtual_core) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1270,7 +1278,7 @@ void TestDevice::create_latency_sender_kernel(
         enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
 
     // Runtime args
-    // Calculate scratch buffer address after timestamp storage (1024 samples * 4 bytes = 4KB)
+    // Calculate send and receive buffer addresses after timestamp storage
     TT_FATAL(
         num_bursts <= MAX_LATENCY_SAMPLES,
         "Latency test num_bursts ({}) exceeds maximum supported samples ({}). "
@@ -1278,11 +1286,10 @@ void TestDevice::create_latency_sender_kernel(
         num_bursts,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t scratch_buffer_address = get_latency_scratch_buffer_address();
+    uint32_t send_buffer_address = get_latency_send_buffer_address();
+    uint32_t receive_buffer_address = get_latency_receive_buffer_address(payload_size);
 
-    // Get responder's virtual core coordinates for NOC addressing
-    CoreCoord responder_virtual_core = device_info_provider_->get_virtual_core_from_logical_core(core);
-
+    // responder_virtual_core is passed as parameter from TestContext
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
         sender_memory_map_->get_result_buffer_address(),  // result buffer for latency samples
@@ -1290,7 +1297,8 @@ void TestDevice::create_latency_sender_kernel(
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        scratch_buffer_address,                           // sender's/receiver's scratch buffer for receiving echo
+        send_buffer_address,                              // sender's send buffer (to write before sending)
+        receive_buffer_address,                           // sender's receive buffer (to wait on)
         static_cast<uint32_t>(responder_virtual_core.x),  // responder's virtual NOC X coordinate
         static_cast<uint32_t>(responder_virtual_core.y),  // responder's virtual NOC Y coordinate
     };
@@ -1336,7 +1344,10 @@ void TestDevice::create_latency_responder_kernel(
     uint32_t payload_size,
     uint32_t burst_size,
     uint32_t num_bursts,
-    NocSendType noc_send_type) {
+    NocSendType noc_send_type,
+    uint32_t sender_send_buffer_address,
+    uint32_t sender_receive_buffer_address,
+    CoreCoord sender_virtual_core) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1364,7 +1375,7 @@ void TestDevice::create_latency_responder_kernel(
         enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
 
     // Runtime args
-    // Calculate sender's scratch buffer address (where responder writes echo back to)
+    // Calculate responder's receive buffer and sender's receive buffer addresses
     constexpr uint32_t MAX_LATENCY_SAMPLES = 1024;
     TT_FATAL(
         num_bursts <= MAX_LATENCY_SAMPLES,
@@ -1373,11 +1384,10 @@ void TestDevice::create_latency_responder_kernel(
         num_bursts,
         MAX_LATENCY_SAMPLES);
 
-    uint32_t scratch_buffer_address =
-        sender_memory_map_->get_result_buffer_address() + (MAX_LATENCY_SAMPLES * sizeof(uint32_t));
-
-    // Get sender's virtual core coordinates for NOC addressing
-    CoreCoord sender_virtual_core = device_info_provider_->get_virtual_core_from_logical_core(core);
+    // Use sender's actual buffer addresses and coordinates passed from caller (no recomputation)
+    // Responder receives from sender's send buffer
+    uint32_t responder_receive_buffer_address = sender_send_buffer_address;
+    // sender_virtual_core is passed as parameter from TestContext
 
     // Build runtime args - routing parameters differ between 1D and 2D
     std::vector<uint32_t> rt_args = {
@@ -1386,7 +1396,8 @@ void TestDevice::create_latency_responder_kernel(
         payload_size,                                     // payload size
         burst_size,                                       // burst size (typically 1)
         num_bursts,                                       // num bursts
-        scratch_buffer_address,                           // sender's/receiver's scratch buffer for receiving echo
+        responder_receive_buffer_address,                 // responder's receive buffer (receives from sender)
+        sender_receive_buffer_address,                    // sender's receive buffer (responder writes here)
         static_cast<uint32_t>(sender_virtual_core.x),     // sender's virtual NOC X coordinate
         static_cast<uint32_t>(sender_virtual_core.y),     // sender's virtual NOC Y coordinate
     };
