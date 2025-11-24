@@ -9,7 +9,6 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/run_operation.hpp"

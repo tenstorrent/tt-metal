@@ -194,7 +194,6 @@ Tensor concat_impl(
         }
 
         // Format inputs if layout conversion is needed
-        using namespace ttnn::operations::experimental::auto_format;
         std::vector<Tensor> formatted_tensors = [&]() {
             if (input_layout == target_layout) {
                 // No formatting needed - inputs already in target layout

@@ -5,7 +5,6 @@
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -19,7 +18,6 @@
 namespace ttnn::operations::reduction {
 
 inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.layout() != Layout::TILE) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
@@ -35,7 +33,6 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
 }
 
 inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
     // layout conversion
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {

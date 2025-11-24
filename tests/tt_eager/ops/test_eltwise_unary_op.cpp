@@ -21,7 +21,6 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"

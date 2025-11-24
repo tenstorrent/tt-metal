@@ -8,7 +8,6 @@
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"

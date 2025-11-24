@@ -8,7 +8,6 @@
 #include <utility>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt_stl/type_name.hpp>

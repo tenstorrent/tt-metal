@@ -18,7 +18,6 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"

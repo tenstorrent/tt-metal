@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -1788,8 +1789,24 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_1.padded_shape());
-        tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
-            tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
+        // tensor_2 is always TILE layout (from permute of TILE temp)
+        // Only need to convert if tensor_1 is ROW_MAJOR
+        tensor_2 = tensor_2.to_device(tensor_1.device());
+        if (tensor_1.layout() == Layout::ROW_MAJOR) {
+            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
+            bool pad_needed = tensor_2.padded_shape() != padded_shape;
+            tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+            if (pad_needed) {
+                tensor_2 = ttnn::pad(
+                    tensor_2,
+                    padded_shape.to_array_4D(),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    0.0f,
+                    false,
+                    tensor_1.memory_config());
+            }
+        }
+        // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
@@ -1821,8 +1838,24 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_2.padded_shape());
-    tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::format_tensor(
-        tensor_2, tensor_1.device(), padded_shape, PadValue(0.0f), tensor_1.layout(), tensor_1.memory_config());
+    // tensor_2 is always TILE layout (from permute of TILE temp)
+    // Only need to convert if tensor_1 is ROW_MAJOR
+    tensor_2 = tensor_2.to_device(tensor_1.device());
+    if (tensor_1.layout() == Layout::ROW_MAJOR) {
+        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
+        bool pad_needed = tensor_2.padded_shape() != padded_shape;
+        tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+        if (pad_needed) {
+            tensor_2 = ttnn::pad(
+                tensor_2,
+                padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                0.0f,
+                false,
+                tensor_1.memory_config());
+        }
+    }
+    // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
     Tensor result = ttnn::permute(
         ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
