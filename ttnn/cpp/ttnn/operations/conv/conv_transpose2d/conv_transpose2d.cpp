@@ -313,28 +313,6 @@ Result conv_transpose2d(
         false,  // config_tensors_in_dram,
         conv_config.force_split_reader);
 
-    // call conv micro op
-    // auto conv_output = ttnn::operations::conv::conv2d::conv2d(
-    //     halo_output,
-    //     weight_tensor_on_device,
-    //     bias_tensor_on_device,
-    //     sliding_window_config,
-    //     out_channels,
-    //     groups,
-    //     conv_config.output_layout == Layout::ROW_MAJOR,
-    //     conv_config.activation,
-    //     opt_conv_op_parallel_config,
-    //     opt_conv_op_block_config,
-    //     conv_out_memory_config,
-    //     output_dtype,
-    //     {batch_size, input_height, input_width, in_channels},
-    //     compute_config,
-    //     conv_config.enable_act_double_buffer,
-    //     conv_config.enable_weights_double_buffer,
-    //     false,  // full_inner_dim
-    //     false,  // enable_activation_reuse
-    //     false,  // config_tensors_in_dram
-    //     conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }

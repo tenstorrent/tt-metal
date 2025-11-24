@@ -719,29 +719,6 @@ Result conv2d_L1(
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);
 
-        // // call conv micro op
-        // auto conv_output = conv2d(
-        //     input_tensor_post_tm,                       // a
-        //     weight_tensor_on_device,                    // b
-        //     bias_tensor_on_device,                      // bias
-        //     sliding_window_config,                      // sliding_window_config
-        //     out_channels,                               // output_channels
-        //     groups,                                     // groups
-        //     conv_config.output_layout == Layout::ROW_MAJOR,  // untilize_out
-        //     conv_config.activation,                     // activation
-        //     opt_conv_op_parallel_config,                // parallelization_config
-        //     opt_conv_op_block_config,                   // block_config
-        //     conv_out_memory_config,                     // memory_config
-        //     output_dtype,                               // dtype
-        //     {batch_size, input_height, input_width, in_channels},  // input_tensor_shape
-        //     compute_config,                             // compute_kernel_config
-        //     conv_config.enable_act_double_buffer,       // enable_act_double_buffer
-        //     conv_config.enable_weights_double_buffer,   // enable_weights_double_buffer
-        //     conv_config.full_inner_dim,                 // full_inner_dim
-        //     conv_config.enable_activation_reuse,        // enable_activation_reuse
-        //     conv_config.config_tensors_in_dram,         // config_tensors_in_dram
-        //     conv_config.force_split_reader);            // force_split_reader
-
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
