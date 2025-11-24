@@ -181,7 +181,9 @@ public:
             latency_num_bursts_ = pattern.num_packets.value();  // num_packets represents num_bursts
             latency_payload_size_ = pattern.size.value();
             latency_noc_send_type_ = pattern.ntype.value();
-            latency_worker_core_ = sender.core.value();
+            if (sender.core.has_value()) {
+                latency_worker_core_ = sender.core.value();
+            }
 
             // Allocate L1 addresses for latency semaphores
             // Use fixed L1 addresses that don't conflict with memory maps

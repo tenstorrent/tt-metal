@@ -426,7 +426,10 @@ void TestContext::collect_latency_results() {
 
     // Get the sender cores (should be exactly one)
     const auto& senders = sender_device->get_senders();
-    TT_FATAL(senders.size() == 1, "Latency sender should have exactly one core");
+    for (const auto& [core, worker] : senders) {
+        log_info(tt::LogTest, "Sender core: {}, worker: {}", core, worker.get_core());
+    }
+    TT_FATAL(senders.size() == 1, "Latency sender should have exactly one core. Got {} cores.", senders.size());
     const auto& [sender_core, sender_worker] = *senders.begin();
 
     // Calculate result buffer size needed for latency samples
