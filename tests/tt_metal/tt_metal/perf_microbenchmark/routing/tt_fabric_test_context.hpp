@@ -557,6 +557,9 @@ public:
         // Load golden latency CSV file
         load_golden_latency_csv();
 
+        // Generate latency results CSV file with all results
+        generate_latency_results_csv();
+
         // Compare latency results with golden CSV
         compare_latency_results_with_golden();
 
@@ -638,28 +641,15 @@ public:
             std::filesystem::create_directories(latency_results_path);
         }
 
-        // Generate detailed CSV filename
+        // Generate CSV filename (similar to bandwidth summary)
+        // Note: The actual file will be created in generate_latency_results_csv() after golden is loaded,
+        // similar to how bandwidth_summary_results_*.csv is created in generate_bandwidth_summary_csv()
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         std::ostringstream oss;
         oss << "latency_results_" << arch_name << ".csv";
         latency_csv_file_path_ = latency_results_path / oss.str();
 
-        // Create detailed CSV file with header
-        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
-        if (!csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create latency CSV file: {}", latency_csv_file_path_.string());
-            return;
-        }
-
-        // Write detailed header with net latency first, then responder, then raw, then per-hop, then tolerance
-        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
-                      "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
-                      "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
-                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
-                      "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
-        csv_stream.close();
-
-        log_info(tt::LogTest, "Initialized latency CSV file: {}", latency_csv_file_path_.string());
+        log_info(tt::LogTest, "Initialized latency CSV file path: {}", latency_csv_file_path_.string());
     }
 
     void close_devices() { fixture_->close_devices(); }
@@ -1546,19 +1536,23 @@ private:
         log_info(tt::LogTest, "Bandwidth results appended to CSV file: {}", csv_file_path_.string());
     }
 
-    void generate_latency_csv(const TestConfig& config) {
-        // Open CSV file in append mode
-        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::app);
+    void generate_latency_results_csv() {
+        // Open CSV file in write mode (truncate existing file, similar to bandwidth)
+        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::trunc);
         if (!csv_stream.is_open()) {
-            log_error(
-                tt::LogTest, "Failed to open latency CSV file for appending: {}", latency_csv_file_path_.string());
+            log_error(tt::LogTest, "Failed to open latency CSV file for writing: {}", latency_csv_file_path_.string());
             return;
         }
 
-        // Write only the last entry (just added)
-        // Use the ftype/ntype/topology already stored in the result struct
-        if (!latency_results_.empty()) {
-            const auto& result = latency_results_.back();
+        // Write header
+        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+                      "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
+                      "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
+                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns,"
+                      "per_hop_min_ns,per_hop_max_ns,per_hop_avg_ns,per_hop_p99_ns,tolerance_percent\n";
+
+        // Write all results
+        for (const auto& result : latency_results_) {
             csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
                        << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
                        << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
@@ -1583,7 +1577,7 @@ private:
         }
 
         csv_stream.close();
-        log_info(tt::LogTest, "Latency results appended to CSV file: {}", latency_csv_file_path_.string());
+        log_info(tt::LogTest, "Latency results written to CSV file: {}", latency_csv_file_path_.string());
     }
 
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);

@@ -95,7 +95,6 @@ Tests:
         latency_burst_size: 1
         patterns:
           - ftype: unicast
-            ntype: unicast_write
             num_packets: 256  # num_packets represents num_bursts in latency mode
             destination:
               device: [0, 1]

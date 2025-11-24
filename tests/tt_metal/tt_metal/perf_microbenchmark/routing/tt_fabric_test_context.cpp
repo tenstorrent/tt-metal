@@ -649,7 +649,4 @@ void TestContext::report_latency_results(const TestConfig& config) {
 
     // Add to results vector
     latency_results_.push_back(latency_result);
-
-    // Write to CSV file
-    generate_latency_csv(config);
 }
