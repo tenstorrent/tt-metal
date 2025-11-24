@@ -285,7 +285,7 @@ models/demos/nlp/llmsfalcon7b/t3000 @skhorasganiTT @djordje-tt @uaydonat @tensto
 models/demos/nlp/llmsllama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/nlp/llmsllama3_70b/t3000 @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar @tenstorrent/codeowner-bypass
 models/demos/nlp/llmsmixtral8x7b @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
-models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/nlp/encoder/sentence_bert/t3000 @atupe-tt @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/nlp/llmsfalcon7b/tg @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/audio/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass

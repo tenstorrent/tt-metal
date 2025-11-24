@@ -20,17 +20,17 @@ pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/common/tests/pc
 
 ### Performant Model with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/t3000/tests/test_sentence_bert_e2e_performant.py
 ```
 
 ### Performant Demo with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/t3000/sentence_bert/demo/demo.py
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/t3000/demo/demo.py
 ```
 
 ### Performant Interactive Demo with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/t3000/sentence_bert/demo/interactive_demo.py
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/t3000/demo/interactive_demo.py
 ```
 
 ## Testing
@@ -43,7 +43,7 @@ pytest --disable-warnings models/demos/t3000/sentence_bert/demo/interactive_demo
 Use the following command to run the performant dataset evaluation with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/t3000/sentence_bert/demo/dataset_evaluation.py
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/t3000/demo/dataset_evaluation.py
 ```
 
 ##  Details
