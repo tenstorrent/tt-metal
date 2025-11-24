@@ -187,7 +187,6 @@ def test_multi_conv(
             )
         op_slicing_attrs.append(last_op_slice_attr)
         current_input_channels = output_channels
-    print(current_torch_output.shape)
     ref = current_torch_output
 
     tt_output_tensor = ttnn.run_sliced_op(
@@ -209,5 +208,4 @@ def test_multi_conv(
     logger.info(f"PCC = {pcc_msg}. Threshold = {threshold}")
     if not passing:
         torch.set_printoptions(sci_mode=False)
-        diff = torch.abs(out - ref) / ref.max()
         assert passing, f"Test failed with PCC = {pcc_msg}, below threshold {threshold}"

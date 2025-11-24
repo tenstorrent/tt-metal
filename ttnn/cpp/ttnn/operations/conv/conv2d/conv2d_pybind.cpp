@@ -586,7 +586,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("weight_tensor"),
         py::arg("bias_tensor") = std::nullopt,
         py::arg("conv_config") = Conv2dConfig(),
-        py::arg("compute_config") = std::nullopt,
+        py::arg("compute_config"),
         py::arg("device"));
     py_conv_slice_attr.def("__repr__", [](const Conv2dSliceAttr& slice_attr) { return fmt::format("{}", slice_attr); });
 }
