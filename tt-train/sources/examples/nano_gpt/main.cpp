@@ -383,14 +383,15 @@ int main(int argc, char **argv) {
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
     std::variant<std::string, YAML::Node> text_or_tokens;
-    YAML::Node yaml_data;  // Separate storage
 
     try {
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(training_config.data_path);
         } else {
-            text_or_tokens = YAML::LoadFile(training_config.data_path);
+            auto yaml_data = YAML::LoadFile(training_config.data_path);
+            yaml_data["sequence_length"] = sequence_length;
+            text_or_tokens = yaml_data;
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -414,7 +415,7 @@ int main(int argc, char **argv) {
 
                 auto& yaml_node = std::get<YAML::Node>(data_source);
 
-                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node, sequence_length);
+                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
 
                 std::visit(
                     [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); }, model_config.transformer_config);

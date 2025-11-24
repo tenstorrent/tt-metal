@@ -22,10 +22,11 @@ create_in_memory_token_dataset<tokenizers::CharTokenizer>(
 }
 
 
-InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data, uint32_t seq_length) {
+InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data) {
 
 
     std::vector<uint32_t> tokens = yaml_data["tokens"].as<std::vector<uint32_t>>();
+        uint32_t seq_length = yaml_data["sequence_length"].as<uint32_t>();
 
     return InMemoryTokenDataset(tokens, seq_length);
 }

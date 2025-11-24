@@ -78,15 +78,27 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
 
 
+    auto sequence_length = std::visit(
+        [&](auto &&arg) {
+            if constexpr (requires { arg.max_sequence_length; }) {
+                return arg.max_sequence_length;
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
+
     std::variant<std::string, YAML::Node> text_or_tokens;
-    YAML::Node yaml_data;  // Separate storage
 
     try {
         // check file extension:
         if (config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(config.data_path);
         } else {
-            text_or_tokens =  YAML::LoadFile(config.data_path);
+            auto yaml_data = YAML::LoadFile(config.data_path);
+            yaml_data["sequence_length"] = sequence_length;
+            text_or_tokens = yaml_data;
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -105,8 +117,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
                 auto& yaml_node = std::get<YAML::Node>(data_source);
 
-                auto dataset = ttml::datasets::create_token_dataset_from_yaml(
-                    yaml_node, seq_len);
+                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
 
                 uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
 
@@ -116,17 +127,6 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
         };
-
-    auto sequence_length = std::visit(
-        [&](auto &&arg) {
-            if constexpr (requires { arg.max_sequence_length; }) {
-                return arg.max_sequence_length;
-            } else {
-                throw std::runtime_error(
-                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
-            }
-        },
-        config.transformer_config);
 
     auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());

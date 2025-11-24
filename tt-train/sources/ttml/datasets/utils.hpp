@@ -55,6 +55,6 @@ std::vector<DatasetSubset<DatasetType>> random_split(
     return subsets;
 }
 
-InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data, uint32_t seq_length);
+InMemoryTokenDataset create_token_dataset_from_yaml(const YAML::Node& yaml_data);
 
 }  // namespace ttml::datasets
