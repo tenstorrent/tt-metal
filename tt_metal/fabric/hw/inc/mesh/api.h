@@ -3061,12 +3061,36 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
-    fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
-        client_interface,
-        packet_header,
-        src_addr,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+    if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
+        // Small pages: use scatter operation
+        fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
+            client_interface,
+            packet_header,
+            src_addr,
+            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            page_size * 2);
+    } else {
+        // Large pages: fall back to separate multicast unicast writes
+        // Fix header state: kernel initialized noc_send_type as SCATTER_WRITE, but we need UNICAST_WRITE
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+
+        // Send page0
+        fabric_multicast_noc_unicast_write_with_state(
+            client_interface, packet_header, dst_dev_id, dst_mesh_id, ranges, src_addr, addrgen, page_id0, offset0);
+
+        // Send page1
+        fabric_multicast_noc_unicast_write_with_state(
+            client_interface,
+            packet_header,
+            dst_dev_id,
+            dst_mesh_id,
+            ranges,
+            src_addr + page_size,
+            addrgen,
+            page_id1,
+            offset1);
+    }
 }
 
 // clang-format off
@@ -3106,6 +3130,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint32_t offset0 = 0,
     uint32_t offset1 = 0) {
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+
+    // Cap payload size to prevent invalid header initialization for large pages
+    uint32_t capped_payload_size = (page_size * 2 > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size * 2;
+
     auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
@@ -3115,7 +3143,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         dst_mesh_id,
         ranges,
         tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-        page_size * 2);
+        capped_payload_size);
 }
 
 // clang-format off
