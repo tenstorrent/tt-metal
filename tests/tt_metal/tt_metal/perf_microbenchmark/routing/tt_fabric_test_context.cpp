@@ -54,8 +54,8 @@ void TestContext::read_telemetry() {
     const auto telemetry_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t telemetry_buffer_size = sizeof(LowResolutionBandwidthTelemetryResult);
 
-    // Read buffer data from all active ethernet cores
-    auto results = get_eth_readback().read_buffer(telemetry_addr, telemetry_buffer_size);
+    // Read buffer data from all active ethernet cores (including intermediate forwarding hops)
+    auto results = get_eth_readback().read_buffer(telemetry_addr, telemetry_buffer_size, true);
 
     // Process telemetry results
     auto& ctx = tt::tt_metal::MetalContext::instance();
@@ -117,6 +117,7 @@ void TestContext::clear_telemetry() {
     const auto telemetry_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t telemetry_buffer_size = sizeof(LowResolutionBandwidthTelemetryResult);
 
+    // Note: clear_buffer already clears all active ethernet cores regardless of registration
     get_eth_readback().clear_buffer(telemetry_addr, telemetry_buffer_size);
 }
 
@@ -153,8 +154,8 @@ void TestContext::read_code_profiling_results() {
     constexpr size_t code_profiling_buffer_size =
         get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
 
-    // Read buffer data from all active ethernet cores
-    auto results = get_eth_readback().read_buffer(code_profiling_addr, code_profiling_buffer_size);
+    // Read buffer data from all active ethernet cores (including intermediate forwarding hops)
+    auto results = get_eth_readback().read_buffer(code_profiling_addr, code_profiling_buffer_size, true);
 
     // Process results for each enabled timer type
     std::vector<CodeProfilingTimerType> enabled_timers;

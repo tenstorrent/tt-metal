@@ -487,7 +487,9 @@ public:
     IDeviceInfoProvider* get_device_info_provider() const { return fixture_.get(); }
 
     void process_telemetry_data(TestConfig& built_test_config) {
-        if (this->get_telemetry_enabled()) {
+        // Skip telemetry readback in latency test mode because we don't actually care about the values of the telemetry.
+        // We only enable it so that latency tests take into account the overheads of having telemetry enabled
+        if (this->get_telemetry_enabled() && !latency_test_mode_) {
             this->read_telemetry();
             this->process_telemetry_for_golden();
             this->dump_raw_telemetry_csv(built_test_config);
