@@ -26,7 +26,7 @@ training_config:
     intermediate_dim: 3072           # intermediate_size for MLP
     dropout_prob: 0.0                # attention_dropout
     num_blocks: 28                   # num_hidden_layers
-    weight_tying: "disabled"          # tie_word_embeddings: true
+    weight_tying: "enabled"          # tie_word_embeddings: true
     vocab_size: 151936               # Qwen3's vocabulary size
     max_sequence_length: 2048        # Training context (can be extended to 40960)
     runner_type: memory_efficient    # Use memory efficient runner for training
