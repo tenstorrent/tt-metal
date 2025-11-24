@@ -5,9 +5,13 @@
 #include "topology_mapper.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <unordered_set>
 #include <limits>
 #include <functional>
+#include <optional>
+#include <tuple>
+#include <map>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -23,14 +27,17 @@
 namespace tt::tt_fabric {
 
 namespace {
-// Encodes a MeshId and MeshHostRankId into a single 64-bit value for transport.
-std::uint64_t encode_mesh_id_and_rank(MeshId mesh_id, MeshHostRankId host_rank) {
-    return (static_cast<std::uint64_t>(mesh_id.get()) << 32) | static_cast<std::uint64_t>(host_rank.get());
+// Encodes MPI rank, MeshId and MeshHostRankId into a single 64-bit value for transport.
+// Format: mpi_rank (16 bits) | mesh_id (16 bits) | host_rank (32 bits)
+std::uint64_t encode_mpi_rank_mesh_id_and_rank(int mpi_rank, MeshId mesh_id, MeshHostRankId host_rank) {
+    return (static_cast<std::uint64_t>(mpi_rank & 0xFFFF) << 48) |
+           (static_cast<std::uint64_t>(mesh_id.get() & 0xFFFF) << 32) | static_cast<std::uint64_t>(host_rank.get());
 }
 
-std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_value) {
+std::tuple<int, MeshId, MeshHostRankId> decode_mpi_rank_mesh_id_and_rank(std::uint64_t encoded_value) {
     return {
-        MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
+        static_cast<int>((encoded_value >> 48) & 0xFFFF),
+        MeshId{static_cast<std::uint32_t>((encoded_value >> 32) & 0xFFFF)},
         MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
 }
 
@@ -172,12 +179,12 @@ TopologyMapper::TopologyMapper(
     // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
     build_asic_physical_chip_id_mappings();
     build_mapping();
 }
 
 // Removed bus-id pinning constructor
-
 TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -189,8 +196,115 @@ TopologyMapper::TopologyMapper(
     fixed_asic_position_pinnings_(fixed_asic_position_pinnings) {
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
     build_asic_physical_chip_id_mappings();
     build_mapping();
+}
+
+// Constructor that skips discovery and builds mapping directly from provided logical to physical chip mapping
+TopologyMapper::TopologyMapper(
+    const MeshGraph& mesh_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const LocalMeshBinding& local_mesh_binding,
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) :
+    mesh_graph_(mesh_graph),
+    physical_system_descriptor_(physical_system_descriptor),
+    local_mesh_binding_(local_mesh_binding),
+    fixed_asic_position_pinnings_({}) {
+    log_debug(
+        tt::LogFabric,
+        "TopologyMapper: Building mapping directly from provided logical to physical chip mapping (skipping "
+        "discovery)");
+
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
+
+    // Build asic to physical chip id mappings first (needed for conversion)
+    build_asic_physical_chip_id_mappings();
+
+    // Build fabric node id to asic id mapping directly from the provided logical to physical chip mapping
+    for (const auto& [fabric_node_id, physical_chip_id] : logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        // Convert physical chip id to asic id
+        auto asic_id_it = physical_chip_id_to_asic_id_.find(physical_chip_id);
+        TT_FATAL(
+            asic_id_it != physical_chip_id_to_asic_id_.end(),
+            "Physical chip id {} not found in asic to physical chip id mapping",
+            physical_chip_id);
+        tt::tt_metal::AsicID asic_id = asic_id_it->second;
+
+        // Build bidirectional mappings
+        fabric_node_id_to_asic_id_.emplace(fabric_node_id, asic_id);
+        asic_id_to_fabric_node_id_.emplace(asic_id, fabric_node_id);
+    }
+
+    // Build asic_id_to_mesh_rank mapping needed for rebuild_host_rank_structs_from_mapping
+    // This maps each asic to its mesh host rank based on the fabric node it's mapped to
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
+        asic_id_to_mesh_rank[fabric_node_id.mesh_id][asic_id] = host_rank.value();
+    }
+
+    // Populate mesh_host_rank_to_mpi_rank_ mapping from fabric_node_id_to_asic_id_
+    // For each fabric node in the mapping, determine which MPI rank owns it
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        if (host_rank.has_value()) {
+            HostName hostname = physical_system_descriptor_.get_host_name_for_asic(asic_id);
+            int mpi_rank = static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+            mesh_host_rank_to_mpi_rank_[std::make_pair(fabric_node_id.mesh_id, host_rank.value())] = mpi_rank;
+        }
+    }
+
+    // Build host rank structures from the mapping
+    rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
+
+    // For custom fabric topology, we also need to gather mesh bindings from all ranks to populate
+    // mesh_host_rank_to_mpi_rank_ for meshes this rank doesn't participate in
+    auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const std::size_t world_size = *global_context->size();
+    if (world_size > 1) {
+        // Gather mesh_id and host_rank from all ranks
+        const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
+        std::vector<std::uint32_t> counts(world_size, 0);
+        all_gather_with_timeout(
+            global_context,
+            ttsl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
+            ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
+            "mesh count all_gather");
+
+        const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
+        const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
+        std::vector<std::uint64_t> send_values(max_count, sentinel);
+        auto my_mpi_rank = static_cast<int>(*global_context->rank());
+        for (std::uint32_t i = 0; i < local_count; ++i) {
+            send_values[i] = encode_mpi_rank_mesh_id_and_rank(
+                my_mpi_rank, local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
+        }
+
+        std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
+        if (max_count > 0) {
+            all_gather_with_timeout(
+                global_context,
+                ttsl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
+                ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
+                "mesh binding all_gather");
+        }
+
+        // Decode and populate mesh_host_rank_to_mpi_rank_ from gathered data
+        for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
+            const auto encoded = gathered[idx];
+            if (encoded == sentinel) {
+                continue;
+            }
+            const auto [gathered_mpi_rank, mesh_id, host_rank] = decode_mpi_rank_mesh_id_and_rank(encoded);
+            mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = gathered_mpi_rank;
+        }
+    }
 }
 
 ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
@@ -232,17 +346,16 @@ void TopologyMapper::build_mapping() {
 
     generate_mapping_locally_ = (mesh_graph_.get_mesh_ids().size() == 1) &&
                                 (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
-    // Build host-to-mesh mapping via distributed all-gather of local bindings.
-    auto mesh_id_host_names = build_host_mesh_mapping();
-
+    // Build ASIC ID to mesh rank mapping using the gathered mesh bindings directly
+    // This function gathers mesh_id and host_rank from all MPI ranks and maps them to ASICs
     auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
-        auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
-        auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
+        auto adjacency_map_logical = build_adjacency_map_logical();
+        auto adjacency_map_physical = build_adjacency_map_physical(asic_id_to_mesh_rank);
 
         print_logical_adjacency_map(adjacency_map_logical);
         print_physical_adjacency_map(adjacency_map_physical);
@@ -270,79 +383,9 @@ void TopologyMapper::build_mapping() {
     rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
 }
 
-std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() const {
-    std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_id_to_hosts;
-
-    // Gather (mesh_id, host_rank) for ALL meshes owned by each rank, but only if multi-host.
-    auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const std::size_t world_size = *global_context->size();
-
-    // Single-host or uninitialized distributed context: compute mapping locally without any collectives
-    if (world_size == 1 || generate_mapping_locally_) {
-        for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            mesh_id_to_hosts[mesh_id].insert(physical_system_descriptor_.my_host_name());
-        }
-        return mesh_id_to_hosts;
-    }
-
-    // Build MPI rank -> host name map using PhysicalSystemDescriptor's rank mapping.
-    std::vector<HostName> rank_to_host(world_size);
-    for (const auto& host : physical_system_descriptor_.get_all_hostnames()) {
-        auto rank = physical_system_descriptor_.get_rank_for_hostname(host);
-        if (rank < rank_to_host.size()) {
-            rank_to_host[rank] = host;
-        }
-    }
-
-    // 1) All-gather counts (how many meshes each rank owns)
-    const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
-    std::vector<std::uint32_t> counts(world_size, 0);
-    all_gather_with_timeout(
-        global_context,
-        ttsl::Span<std::byte>(
-            reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
-        ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
-        "mesh count all_gather");
-
-    const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
-
-    // 2) All-gather fixed-width list of encoded (mesh_id, host_rank) per rank
-    const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
-    std::vector<std::uint64_t> send_values(max_count, sentinel);
-    for (std::uint32_t i = 0; i < local_count; ++i) {
-        send_values[i] = encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
-    }
-
-    std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
-    if (max_count > 0) {
-        all_gather_with_timeout(
-            global_context,
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
-            ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
-            "mesh binding all_gather");
-    }
-
-    // 3) Populate mesh_id_to_hosts using gathered data and counts
-    for (std::size_t mpi_rank = 0; mpi_rank < world_size; ++mpi_rank) {
-        const auto entries_for_rank = counts[mpi_rank];
-        for (std::uint32_t j = 0; j < entries_for_rank; ++j) {
-            const auto encoded = gathered[(mpi_rank * max_count) + j];
-            if (encoded == sentinel) {
-                continue;
-            }
-            const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
-            const auto& host_name = rank_to_host.at(mpi_rank);
-            mesh_id_to_hosts[mesh_id].insert(host_name);
-        }
-    }
-
-    return mesh_id_to_hosts;
-}
-
-std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
-TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>> mapping;
+std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping()
+    const {
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
     for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
@@ -353,30 +396,35 @@ TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
     return mapping;
 }
 
-std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
-TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
+std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper::build_asic_id_to_mesh_rank_mapping() {
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
 
-    if (world_size <= 1) {
-        for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            for (const auto& asic_id :
-                 physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
-                mapping[mesh_id][asic_id] = local_mesh_binding_.host_rank;
+    if (generate_mapping_locally_ || world_size <= 1) {
+        auto host_rank = local_mesh_binding_.host_rank;
+        auto mpi_rank = static_cast<int>(*host_rank);
+
+        // Get asics on current host
+        auto asics =
+            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+            for (const auto& asic : asics) {
+                mapping[mesh_id][asic] = host_rank;
+                mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = mpi_rank;
             }
         }
         return mapping;
     }
 
-    std::vector<HostName> rank_to_host(world_size);
+    // Step 1: Build MPI rank -> hostname mapping (rank from PSD is the MPI rank)
+    std::map<int, HostName> mpi_rank_to_host;
     for (const auto& host : physical_system_descriptor_.get_all_hostnames()) {
-        auto rank = physical_system_descriptor_.get_rank_for_hostname(host);
-        if (rank < rank_to_host.size()) {
-            rank_to_host[rank] = host;
-        }
+        auto mpi_rank = physical_system_descriptor_.get_rank_for_hostname(host);
+        mpi_rank_to_host[static_cast<int>(mpi_rank)] = host;
     }
 
+    // Step 2: Gather mesh_id and host_rank from all ranks to know which mesh_ids each MPI rank participates in
     const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
     std::vector<std::uint32_t> counts(world_size, 0);
     all_gather_with_timeout(
@@ -390,8 +438,11 @@ TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
 
     const std::uint64_t sentinel = std::numeric_limits<std::uint64_t>::max();
     std::vector<std::uint64_t> send_values(max_count, sentinel);
+    auto my_mpi_rank = static_cast<int>(*global_context->rank());
     for (std::uint32_t i = 0; i < local_count; ++i) {
-        send_values[i] = encode_mesh_id_and_rank(local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
+        // Encode MPI rank along with mesh_id and host_rank so we can map correctly
+        send_values[i] = encode_mpi_rank_mesh_id_and_rank(
+            my_mpi_rank, local_mesh_binding_.mesh_ids[i], local_mesh_binding_.host_rank);
     }
 
     std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
@@ -404,27 +455,48 @@ TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
             "mesh binding all_gather");
     }
 
-    for (std::size_t mpi_rank = 0; mpi_rank < world_size; ++mpi_rank) {
-        const auto entries_for_rank = counts[mpi_rank];
-        for (std::uint32_t j = 0; j < entries_for_rank; ++j) {
-            const auto encoded = gathered[(mpi_rank * max_count) + j];
-            if (encoded == sentinel) {
-                continue;
-            }
-            const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
-            const auto& host_name = rank_to_host.at(mpi_rank);
-            auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
+    // Step 3: Use the gathered mesh bindings directly to build the mapping
+    // Decode MPI rank, mesh_id and host_rank from gathered data and map to ASICs
+    // Build an ordered map from MPI rank to (mesh_id, host_rank) pairs for deterministic iteration
+    std::map<int, std::map<MeshId, MeshHostRankId>> mpi_rank_to_mesh_bindings;
+    mesh_host_rank_to_mpi_rank_.clear();
+    for (std::size_t idx = 0; idx < gathered.size(); ++idx) {
+        const auto encoded = gathered[idx];
+        if (encoded == sentinel) {
+            continue;
+        }
+        const auto [gathered_mpi_rank, mesh_id, host_rank] = decode_mpi_rank_mesh_id_and_rank(encoded);
+        mpi_rank_to_mesh_bindings[gathered_mpi_rank][mesh_id] = host_rank;
+        // Store reverse mapping for quick lookups
+        mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = gathered_mpi_rank;
+    }
+
+    // Step 4: For each MPI rank in the gathered data, assign mesh host rank to ASICs
+    for (const auto& [gathered_mpi_rank, mesh_bindings] : mpi_rank_to_mesh_bindings) {
+        // Get the hostname for this MPI rank
+        auto host_it = mpi_rank_to_host.find(gathered_mpi_rank);
+        if (host_it == mpi_rank_to_host.end()) {
+            TT_FATAL(false, "MPI rank {} not found in mpi_rank_to_host mapping", gathered_mpi_rank);
+        }
+
+        const auto& host_name = host_it->second;
+        auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
+
+        // For each mesh_id this MPI rank participates in, use the host_rank from gathered data
+        for (const auto& [mesh_id, host_rank] : mesh_bindings) {
+            // Use the host_rank directly from the gathered data (which comes from local_mesh_binding_.host_rank)
+            // This is the mesh host rank set via TT_MESH_HOST_RANK environment variable
             for (const auto& asic : asics) {
                 mapping[mesh_id][asic] = host_rank;
             }
         }
     }
+
     return mapping;
 }
 
-std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical(
-    HostMeshMapping& mesh_id_to_host_names) const {
-    std::unordered_map<MeshId, LogicalAdjacencyMap> adjacency_map;
+std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
+    std::map<MeshId, LogicalAdjacencyMap> adjacency_map;
 
     auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
         auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
@@ -432,6 +504,10 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         std::vector<tt::tt_fabric::FabricNodeId> adjacents;
         bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
+            // Skip self-connections
+            if (neighbor_chip_id == fabric_node_id.chip_id) {
+                continue;
+            }
             size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
             for (size_t i = 0; i < repeat_count; ++i) {
                 adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
@@ -440,7 +516,8 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
         return adjacents;
     };
 
-    for (const auto& [mesh_id, _] : mesh_id_to_host_names) {
+    // Iterate over all mesh IDs from the mesh graph
+    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
         LogicalAdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, chip_id);
@@ -452,31 +529,60 @@ std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_
     return adjacency_map;
 }
 
-std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
-    HostMeshMapping& mesh_id_to_host_names) const {
-    std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
+std::map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const {
+    std::map<MeshId, PhysicalAdjacencyMap> adjacency_map;
 
-    auto get_local_adjacents =
-        [&](tt::tt_metal::AsicID asic_id, MeshId /*mesh_id*/, const std::unordered_set<HostName>& mesh_hostnames) {
+    // Build a set of ASIC IDs for each mesh based on mesh rank mapping
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_asic_ids;
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            mesh_asic_ids[mesh_id].insert(asic_id);
+        }
+    }
+
+    for (const auto& [mesh_id, mesh_asics] : mesh_asic_ids) {
+        bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
+        auto z_channels = std::unordered_set<uint8_t>{8, 9};
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+
+        auto get_local_adjacents = [&](tt::tt_metal::AsicID asic_id,
+                                       const std::unordered_set<tt::tt_metal::AsicID>& mesh_asics) {
             std::vector<tt::tt_metal::AsicID> adjacents;
+
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
+                // Skip self-connections
+                if (neighbor == asic_id) {
+                    continue;
+                }
                 // Make sure that the neighbor is in the mesh
-                if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
-                    auto connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
-                    for (size_t i = 0; i < connections.size(); ++i) {
-                        adjacents.push_back(neighbor);
+                if (mesh_asics.contains(neighbor)) {
+                    if (relaxed) {
+                        if (std::find(adjacents.begin(), adjacents.end(), neighbor) == adjacents.end()) {
+                            adjacents.push_back(neighbor);
+                        }
+                    } else {
+                        // In strict mode, add each neighbor multiple times based on number of ethernet connections
+                        auto eth_connections = physical_system_descriptor_.get_eth_connections(asic_id, neighbor);
+                        for (const auto& eth_connection : eth_connections) {
+                            // NOTE: IGNORE Z channels for Blackhole galaxy in intra mesh connectivity since they are
+                            // not used intra mesh communication on black hole
+                            if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
+                                (z_channels.contains(eth_connection.src_chan) ||
+                                 z_channels.contains(eth_connection.dst_chan))) {
+                                continue;
+                            }
+                            adjacents.push_back(neighbor);
+                        }
                     }
                 }
             }
             return adjacents;
         };
 
-    for (const auto& [mesh_id, mesh_hostnames] : mesh_id_to_host_names) {
         PhysicalAdjacencyMap physical_adjacency_map;
-        for (const auto& host_name : mesh_hostnames) {
-            for (const auto& asic_id : physical_system_descriptor_.get_asics_connected_to_host(host_name)) {
-                physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_id, mesh_hostnames);
-            }
+        for (const auto& asic_id : mesh_asics) {
+            physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_asics);
         }
         adjacency_map[mesh_id] = physical_adjacency_map;
     }
@@ -492,8 +598,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const MeshId mesh_id,
     const PhysicalAdjacencyMap& adjacency_map_physical,
     const LogicalAdjacencyMap& adjacency_map_logical,
-    const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
-    const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
+    const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
     auto& phys_adj = adjacency_map_physical;
     auto& log_adj = adjacency_map_logical;
 
@@ -516,34 +622,69 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         "MGD or use ./build/test/tt_metal/tt_fabric/test_system_health to check if all chips are connected",
         mesh_id.get());
 
-    std::unordered_map<FabricNodeId, size_t> log_to_idx;
+    std::map<FabricNodeId, size_t> log_to_idx;
     for (size_t i = 0; i < n_log; ++i) {
         log_to_idx[log_nodes[i]] = i;
     }
 
-    std::vector<std::vector<size_t>> log_adj_idx(n_log);
+    // Build connection count maps for STRICT mode validation
+    // log_conn_count[i][j] = number of channels from logical node i to logical node j
+    std::vector<std::map<size_t, size_t>> log_conn_count(n_log);
     for (size_t i = 0; i < n_log; ++i) {
         for (const auto& neigh : log_adj.at(log_nodes[i])) {
-            log_adj_idx[i].push_back(log_to_idx.at(neigh));
+            size_t idx = log_to_idx.at(neigh);
+            log_conn_count[i][idx]++;
+        }
+    }
+
+    std::vector<std::vector<size_t>> log_adj_idx(n_log);
+    for (size_t i = 0; i < n_log; ++i) {
+        std::unordered_set<size_t> seen_indices;  // Track seen indices for deduplication
+        for (const auto& neigh : log_adj.at(log_nodes[i])) {
+            size_t idx = log_to_idx.at(neigh);
+            // Deduplicate: only add if we haven't seen this index before
+            if (seen_indices.insert(idx).second) {
+                log_adj_idx[i].push_back(idx);
+            }
         }
         std::sort(log_adj_idx[i].begin(), log_adj_idx[i].end());
     }
 
-    std::unordered_map<tt::tt_metal::AsicID, size_t> phys_to_idx;
+    std::map<tt::tt_metal::AsicID, size_t> phys_to_idx;
     for (size_t i = 0; i < n_phys; ++i) {
         phys_to_idx[phys_nodes[i]] = i;
     }
 
-    std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
+    // Build connection count maps for STRICT mode validation
+    // phys_conn_count[i][j] = number of channels from physical node i to physical node j
+    std::vector<std::map<size_t, size_t>> phys_conn_count(n_phys);
     for (size_t i = 0; i < n_phys; ++i) {
         for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
             auto it = phys_to_idx.find(neigh);
             if (it != phys_to_idx.end()) {
-                phys_adj_idx[i].push_back(it->second);
+                size_t idx = it->second;
+                phys_conn_count[i][idx]++;
+            }
+        }
+    }
+
+    std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
+    for (size_t i = 0; i < n_phys; ++i) {
+        std::unordered_set<size_t> seen_indices;  // Track seen indices for deduplication
+        for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
+            auto it = phys_to_idx.find(neigh);
+            if (it != phys_to_idx.end()) {
+                size_t idx = it->second;
+                // Deduplicate: only add if we haven't seen this index before
+                if (seen_indices.insert(idx).second) {
+                    phys_adj_idx[i].push_back(idx);
+                }
             }
         }
         std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
     }
+
+    bool strict_mode = !mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
 
     // mapping[logical_index] = physical_index
     std::vector<int> mapping(n_log, -1);
@@ -591,7 +732,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     std::vector<std::vector<size_t>> restricted_phys_indices_for_logical(n_log);
     if (!fixed_asic_position_pinnings_.empty()) {
         // Validate uniqueness of pins for this mesh and apply
-        std::unordered_map<FabricNodeId, AsicPosition> first_pinnings;
+        std::map<FabricNodeId, AsicPosition> first_pinnings;
 
         for (const auto& [pos, fabric_node] : fixed_asic_position_pinnings_) {
             if (fabric_node.mesh_id != mesh_id) {
@@ -640,6 +781,31 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
             size_t li = log_to_idx.at(fabric_node);
             restricted_phys_indices_for_logical[li] = std::move(matches);
+        }
+
+        // Print info about pinnings used for this mesh
+        if (!first_pinnings.empty()) {
+            std::string pinnings_str;
+            bool first = true;
+            for (const auto& [fabric_node, pos] : first_pinnings) {
+                if (!first) {
+                    pinnings_str += ", ";
+                }
+                first = false;
+                pinnings_str += fmt::format(
+                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id,
+                    *pos.first,
+                    *pos.second);
+            }
+            log_info(
+                tt::LogFabric,
+                "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
+                first_pinnings.size(),
+                mesh_id.get(),
+                pinnings_str);
         }
     }
 
@@ -828,11 +994,16 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             // Compute candidate count under current partial assignment
             size_t cand_count = 0;
             for (size_t j = 0; j < n_phys; ++j) {
-                if (used_ref[j] || phys_deg[j] < log_deg[li]) {
+                if (used_ref[j]) {
+                    continue;
+                }
+                if (phys_deg[j] < log_deg[li]) {
                     continue;
                 }
                 // Check mesh rank compatibility
-                if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
+                auto log_mesh_rank = fabric_node_id_to_mesh_rank.at(log_nodes[li]);
+                auto phys_mesh_rank = asic_id_to_mesh_rank.at(phys_nodes[j]);
+                if (log_mesh_rank != phys_mesh_rank) {
                     continue;
                 }
                 bool ok_local = true;
@@ -847,9 +1018,14 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                         break;
                     }
                 }
-                if (ok_local) {
-                    cand_count++;
+                if (!ok_local) {
+                    continue;
                 }
+                cand_count++;
+            }
+            // Skip logical nodes with zero candidates - they cannot be assigned
+            if (cand_count == 0) {
+                continue;
             }
             if (best_li == n_log || mapped_neigh_count > best_mapped_neigh ||
                 (mapped_neigh_count == best_mapped_neigh &&
@@ -885,6 +1061,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     std::size_t dfs_calls = 0;
     auto dfs_start = std::chrono::steady_clock::now();
 
+    // Optional forced first logical node (used when trying different starting nodes)
+    std::optional<size_t> forced_first_li = std::nullopt;
+
     std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
         if (pos == n_log) {
             return true;
@@ -915,7 +1094,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
 
         // Select next logical node dynamically
-        size_t li = select_next_logical(mapping, used);
+        size_t li;
+        // Select next logical node dynamically
+        li = select_next_logical(mapping, used);
         if (li == n_log) {
             return false;
         }
@@ -940,14 +1121,24 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             }
         } else {
             for (size_t j = 0; j < n_phys; ++j) {
-                if (used[j] || phys_deg[j] < log_deg[li]) {
+                if (used[j]) {
+                    continue;
+                }
+                if (phys_deg[j] < log_deg[li]) {
                     continue;
                 }
                 // Check mesh rank compatibility
-                if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
+                auto log_mesh_rank = fabric_node_id_to_mesh_rank.at(log_nodes[li]);
+                auto phys_mesh_rank = asic_id_to_mesh_rank.at(phys_nodes[j]);
+                if (log_mesh_rank != phys_mesh_rank) {
                     continue;
                 }
                 candidates.push_back(j);
+            }
+            // If no candidates found, backtrack to try a different logical node
+            if (candidates.empty()) {
+                failed_states.insert(key);
+                return false;
             }
         }
 
@@ -1005,6 +1196,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 if (log_connected && !phys_connected) {
                     ok = false;
                     break;
+                }
+                // In STRICT mode, also validate connection counts
+                if (ok && strict_mode && log_connected) {
+                    size_t log_count = log_conn_count[li].at(lk);
+                    size_t phys_count = phys_conn_count[j].at(pk);
+                    if (phys_count < log_count) {
+                        ok = false;
+                        break;
+                    }
                 }
             }
             if (!ok) {
@@ -1068,6 +1268,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                             consistent = false;
                             break;
                         }
+                        // In STRICT mode, also validate connection counts
+                        if (consistent && strict_mode && log_conn2) {
+                            size_t log_count = log_conn_count[v].at(lv);
+                            size_t phys_count = phys_conn_count[pj].at(pk2);
+                            if (phys_count < log_count) {
+                                consistent = false;
+                                break;
+                            }
+                        }
                     }
                     if (consistent) {
                         has_candidate = true;
@@ -1090,8 +1299,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             if (!ok) {
                 continue;
             }
-
-            log_debug(tt::LogFabric, "Assigning fabric_node: {} to asic: {}", log_nodes[li], phys_nodes[j]);
 
             used[j] = true;
             mapping[li] = static_cast<int>(j);
@@ -1125,7 +1332,236 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             assigned_count++;
         }
     }
-    bool found = dfs(assigned_count);
+
+    // If no nodes are assigned yet, try multiple starting logical nodes
+    // This handles cases where the first selected logical node doesn't work
+    bool found = false;
+    if (assigned_count == 0) {
+        // First, check if there are any pinned nodes that should be assigned first
+        std::vector<size_t> pinned_nodes;
+        for (size_t li = 0; li < n_log; ++li) {
+            if (!restricted_phys_indices_for_logical[li].empty()) {
+                pinned_nodes.push_back(li);
+            }
+        }
+
+        // Helper function to assign pinned nodes
+        auto assign_pinned_nodes = [&]() -> bool {
+            for (size_t pinned_li : pinned_nodes) {
+                // Find a valid candidate from the restricted list
+                bool assigned = false;
+                for (size_t j : restricted_phys_indices_for_logical[pinned_li]) {
+                    if (j < n_phys && !used[j] && phys_deg[j] >= log_deg[pinned_li]) {
+                        // Check mesh rank compatibility
+                        if (fabric_node_id_to_mesh_rank.at(log_nodes[pinned_li]) ==
+                            asic_id_to_mesh_rank.at(phys_nodes[j])) {
+                            used[j] = true;
+                            mapping[pinned_li] = static_cast<int>(j);
+                            assigned = true;
+                            break;
+                        }
+                    }
+                }
+                if (!assigned) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Select the first logical node to try (excluding pinned nodes)
+        // Use select_next_logical to pick the best first node
+        size_t first_logical_node = select_next_logical(mapping, used);
+
+        if (first_logical_node == n_log) {
+            // No unpinned nodes found, just try with pinned nodes
+            if (!pinned_nodes.empty()) {
+                if (assign_pinned_nodes()) {
+                    size_t current_assigned_count = 0;
+                    for (auto v : mapping) {
+                        if (v != -1) {
+                            current_assigned_count++;
+                        }
+                    }
+                    found = dfs(current_assigned_count);
+                }
+            }
+        } else {
+            // Collect all valid physical ASIC candidates for the first logical node
+            // Only consider ASICs that have the same mesh rank as the first logical node
+            std::vector<size_t> physical_candidates;
+            auto first_logical_mesh_rank = fabric_node_id_to_mesh_rank.at(log_nodes[first_logical_node]);
+
+            log_info(
+                tt::LogFabric,
+                "TopologyMapper: First logical node li={} (fabric_node={}) has mesh rank {}",
+                first_logical_node,
+                log_nodes[first_logical_node],
+                first_logical_mesh_rank.get());
+
+            if (!restricted_phys_indices_for_logical[first_logical_node].empty()) {
+                // Node has pinning restrictions - only use candidates from restricted list
+                for (size_t j : restricted_phys_indices_for_logical[first_logical_node]) {
+                    if (j < n_phys && phys_deg[j] >= log_deg[first_logical_node]) {
+                        auto phys_mesh_rank = asic_id_to_mesh_rank.at(phys_nodes[j]);
+                        if (first_logical_mesh_rank == phys_mesh_rank) {
+                            physical_candidates.push_back(j);
+                        }
+                    }
+                }
+            } else {
+                // No pinning restrictions - collect all valid candidates with matching mesh rank
+                for (size_t j = 0; j < n_phys; ++j) {
+                    if (phys_deg[j] < log_deg[first_logical_node]) {
+                        continue;
+                    }
+                    auto phys_mesh_rank = asic_id_to_mesh_rank.at(phys_nodes[j]);
+                    if (first_logical_mesh_rank != phys_mesh_rank) {
+                        continue;
+                    }
+                    physical_candidates.push_back(j);
+                }
+            }
+
+            log_info(
+                tt::LogFabric,
+                "TopologyMapper: Found {} physical ASIC candidates for first logical node li={} (fabric_node={}) "
+                "with matching mesh rank {}, will try each as first pinning",
+                physical_candidates.size(),
+                first_logical_node,
+                log_nodes[first_logical_node],
+                first_logical_mesh_rank.get());
+
+            // Try each physical ASIC as the first pinning
+            size_t candidate_index = 0;
+            for (size_t first_phys_j : physical_candidates) {
+                candidate_index++;
+                // Reset state (but we'll reassign pinned nodes)
+                std::fill(mapping.begin(), mapping.end(), -1);
+                std::fill(used.begin(), used.end(), false);
+                failed_states.clear();
+                dfs_calls = 0;
+                dfs_start = std::chrono::steady_clock::now();
+
+                // Assign pinned nodes first (they must be assigned before trying different starting nodes)
+                if (!pinned_nodes.empty()) {
+                    if (!assign_pinned_nodes()) {
+                        // Can't assign pinned nodes, skip this physical ASIC
+                        log_info(
+                            tt::LogFabric,
+                            "TopologyMapper: Skipping candidate {}/{} (j={}) - failed to assign pinned nodes",
+                            candidate_index,
+                            physical_candidates.size(),
+                            first_phys_j);
+                        continue;
+                    }
+                }
+
+                // Check if the first physical ASIC is still available after pinning
+                if (used[first_phys_j]) {
+                    // This physical ASIC was used for a pinned node, skip it
+                    log_info(
+                        tt::LogFabric,
+                        "TopologyMapper: Skipping candidate {}/{} (j={}) - physical ASIC already used by pinned node",
+                        candidate_index,
+                        physical_candidates.size(),
+                        first_phys_j);
+                    continue;
+                }
+
+                // Assign the first logical node to this physical ASIC
+                used[first_phys_j] = true;
+                mapping[first_logical_node] = static_cast<int>(first_phys_j);
+
+                // Clear forced_first_li since we've already pre-assigned the first node
+                forced_first_li = std::nullopt;
+
+                log_info(
+                    tt::LogFabric,
+                    "TopologyMapper: Trying first pinning {}/{}: logical node li={} (fabric_node={}) -> physical ASIC "
+                    "j={} (asic_id={}) (hostname={})",
+                    candidate_index,
+                    physical_candidates.size(),
+                    first_logical_node,
+                    log_nodes[first_logical_node],
+                    first_phys_j,
+                    phys_nodes[first_phys_j].get(),
+                    physical_system_descriptor_.get_host_name_for_asic(phys_nodes[first_phys_j]));
+
+                // Calculate assigned count after pinning and first assignment
+                size_t current_assigned_count = 0;
+                for (auto v : mapping) {
+                    if (v != -1) {
+                        current_assigned_count++;
+                    }
+                }
+
+                found = dfs(current_assigned_count);
+                if (found) {
+                    log_info(
+                        tt::LogFabric,
+                        "TopologyMapper: Successfully found mapping with first pinning {}/{}: logical node li={} "
+                        "(fabric_node={}) -> physical ASIC j={} (asic_id={})",
+                        candidate_index,
+                        physical_candidates.size(),
+                        first_logical_node,
+                        log_nodes[first_logical_node],
+                        first_phys_j,
+                        phys_nodes[first_phys_j].get());
+                    break;
+                } else {
+                    log_info(
+                        tt::LogFabric,
+                        "TopologyMapper: First pinning {}/{} failed: logical node li={} (fabric_node={}) -> physical "
+                        "ASIC j={} (asic_id={})",
+                        candidate_index,
+                        physical_candidates.size(),
+                        first_logical_node,
+                        log_nodes[first_logical_node],
+                        first_phys_j,
+                        phys_nodes[first_phys_j].get());
+                }
+            }
+
+            if (!found) {
+                log_info(
+                    tt::LogFabric,
+                    "TopologyMapper: Tried all {} physical ASIC candidates for first logical node li={} "
+                    "(fabric_node={}), none succeeded",
+                    physical_candidates.size(),
+                    first_logical_node,
+                    log_nodes[first_logical_node]);
+            }
+        }
+
+        // If we have pinned nodes but no viable starting nodes, or if all starting nodes failed,
+        // try with just pinned nodes assigned
+        if (!found && !pinned_nodes.empty()) {
+            log_info(
+                tt::LogFabric, "TopologyMapper: All starting nodes failed, trying with only pinned nodes assigned");
+            // Reset state
+            std::fill(mapping.begin(), mapping.end(), -1);
+            std::fill(used.begin(), used.end(), false);
+            failed_states.clear();
+            dfs_calls = 0;
+            dfs_start = std::chrono::steady_clock::now();
+
+            // Assign pinned nodes
+            if (assign_pinned_nodes()) {
+                size_t current_assigned_count = 0;
+                for (auto v : mapping) {
+                    if (v != -1) {
+                        current_assigned_count++;
+                    }
+                }
+                found = dfs(current_assigned_count);
+            }
+        }
+    } else {
+        // Normal case: some nodes already assigned, just run DFS once
+        found = dfs(assigned_count);
+    }
+
     TT_FATAL(
         found,
         "Graph specified in MGD could not fit in the discovered physical topology for mesh {} under the given "
@@ -1138,6 +1574,43 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         tt::tt_metal::AsicID asic = phys_nodes[mapping[i]];
         fabric_node_id_to_asic_id_.emplace(fn, asic);
         asic_id_to_fabric_node_id_.emplace(asic, fn);
+    }
+
+    // Final validation: In STRICT mode, verify all logical edges have sufficient physical connections
+    if (strict_mode) {
+        for (size_t i = 0; i < n_log; ++i) {
+            size_t phys_i = static_cast<size_t>(mapping[i]);
+            for (const auto& [neigh_log_idx, log_count] : log_conn_count[i]) {
+                size_t phys_neigh_idx = static_cast<size_t>(mapping[neigh_log_idx]);
+                // Connection should exist (validated earlier), but check to be safe
+                auto it = phys_conn_count[phys_i].find(phys_neigh_idx);
+                TT_FATAL(
+                    it != phys_conn_count[phys_i].end(),
+                    "Graph specified in MGD could not fit in the discovered physical topology for mesh {} under the "
+                    "given pinning constraints. Logical edge from node {} to {} exists, but physical edge from {} to "
+                    "{} does not. Either relax pinnings or modify the MGD. If this is unexpected, run "
+                    "./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
+                    mesh_id.get(),
+                    log_nodes[i],
+                    log_nodes[neigh_log_idx],
+                    phys_nodes[phys_i],
+                    phys_nodes[phys_neigh_idx]);
+                size_t phys_count = it->second;
+                TT_FATAL(
+                    phys_count >= log_count,
+                    "Graph specified in MGD could not fit in the discovered physical topology for mesh {} under the "
+                    "given pinning constraints. Logical edge from node {} to {} requires {} channels, but physical "
+                    "edge from {} to {} only has {} channels. Either relax pinnings or modify the MGD. If this is "
+                    "unexpected, run ./build/test/tt_metal/tt_fabric/test_system_health to check connectivity.",
+                    mesh_id.get(),
+                    log_nodes[i],
+                    log_nodes[neigh_log_idx],
+                    log_count,
+                    phys_nodes[phys_i],
+                    phys_nodes[phys_neigh_idx],
+                    phys_count);
+            }
+        }
     }
 }
 
@@ -1264,8 +1737,14 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 std::map<FabricNodeId, ChipId> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
     std::map<FabricNodeId, ChipId> mapping;
     const auto& my_host = physical_system_descriptor_.my_host_name();
+    // Sort asic_id_to_fabric_node_id_ for deterministic iteration across hosts
+    std::vector<std::pair<tt::tt_metal::AsicID, FabricNodeId>> sorted_asic_to_fabric(
+        asic_id_to_fabric_node_id_.begin(), asic_id_to_fabric_node_id_.end());
+    std::sort(sorted_asic_to_fabric.begin(), sorted_asic_to_fabric.end(), [](const auto& a, const auto& b) {
+        return a.first.get() < b.first.get();
+    });
     // Only include ASICs that are part of the current fabric mapping and reside on this host
-    for (const auto& [asic_id, fabric_node_id] : asic_id_to_fabric_node_id_) {
+    for (const auto& [asic_id, fabric_node_id] : sorted_asic_to_fabric) {
         if (physical_system_descriptor_.get_host_name_for_asic(asic_id) == my_host) {
             mapping[fabric_node_id] = get_physical_chip_id_from_asic_id(asic_id);
         }
@@ -1344,16 +1823,19 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
 }
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping(
-    const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
-    std::unordered_map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
+    std::map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
+    std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
     // For wraparound-aware construction, accumulate coordinates per host then compute minimal circular ranges.
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::vector<MeshCoordinate>>> mesh_host_to_coords;
+    std::map<MeshId, std::map<MeshHostRankId, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
-    std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
-    for (const auto& [fabric_node_id, _] : fabric_node_id_to_asic_id_) {
+    std::map<MeshId, std::map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
+    // Convert to ordered map for deterministic iteration across hosts
+    std::map<FabricNodeId, tt::tt_metal::AsicID> ordered_fabric_nodes(
+        fabric_node_id_to_asic_id_.begin(), fabric_node_id_to_asic_id_.end());
+    for (const auto& [fabric_node_id, asic_id] : ordered_fabric_nodes) {
         auto& m = per_mesh_chip_to_coord[fabric_node_id.mesh_id];
         if (m.find(fabric_node_id.chip_id) == m.end()) {
             m.emplace(
@@ -1362,7 +1844,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     }
 
     // Accumulate coordinates per host
-    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+    for (const auto& [fabric_node_id, asic_id] : ordered_fabric_nodes) {
         const auto mesh_id_val = fabric_node_id.mesh_id;
         const auto host_rank = asic_id_to_mesh_rank.at(mesh_id_val).at(asic_id);
         mesh_to_hosts[mesh_id_val].insert(host_rank);
@@ -1371,7 +1853,14 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     }
 
     // Build minimal wraparound-aware ranges per host
+    // Convert to ordered maps for deterministic iteration across hosts
+    std::map<MeshId, std::map<MeshHostRankId, std::vector<MeshCoordinate>>> ordered_mesh_host_coords;
     for (const auto& [mesh_id, host_coords_map] : mesh_host_to_coords) {
+        for (const auto& [host_rank, coords] : host_coords_map) {
+            ordered_mesh_host_coords[mesh_id][host_rank] = coords;
+        }
+    }
+    for (const auto& [mesh_id, host_coords_map] : ordered_mesh_host_coords) {
         const auto shape = mesh_graph_.get_mesh_shape(mesh_id);
         auto& range_map = mesh_host_to_range[mesh_id];
         for (const auto& [host_rank, coords] : host_coords_map) {
@@ -1435,18 +1924,28 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
             }
         }
     }
-
     // Build MeshContainer<MeshHostRankId> by row-major ordering of host tile ranges
     // Determine host grid using unique start rows/cols
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
+    mesh_host_rank_to_mpi_rank_.clear();
     std::size_t max_mesh_index = 0;
-    for (const auto& [mid, _] : mesh_to_hosts) {
+    // Convert to ordered map for deterministic iteration
+    std::map<MeshId, std::unordered_set<MeshHostRankId>> ordered_mesh_to_hosts(
+        mesh_to_hosts.begin(), mesh_to_hosts.end());
+    for (const auto& [mid, _] : ordered_mesh_to_hosts) {
         max_mesh_index = std::max<std::size_t>(max_mesh_index, *mid + 1);
     }
     mesh_host_ranks_.resize(max_mesh_index, MeshContainer<MeshHostRankId>(MeshShape{1, 1}, MeshHostRankId{0}));
-    for (const auto& [mesh_id, hosts] : mesh_to_hosts) {
-        const auto& range_map = mesh_host_to_range.at(mesh_id);
+    // Convert range_map to ordered map for deterministic iteration
+    std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> ordered_mesh_host_to_range;
+    for (const auto& [mesh_id, range_map] : mesh_host_to_range) {
+        for (const auto& [host_rank, range] : range_map) {
+            ordered_mesh_host_to_range[mesh_id].emplace(host_rank, range);
+        }
+    }
+    for (const auto& [mesh_id, hosts] : ordered_mesh_to_hosts) {
+        const auto& range_map = ordered_mesh_host_to_range.at(mesh_id);
         std::set<std::uint32_t> rows;
         std::set<std::uint32_t> cols;
         for (const auto& [host_rank, range] : range_map) {
@@ -1487,9 +1986,112 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         }
         mesh_host_ranks_[*mesh_id] = MeshContainer<MeshHostRankId>(host_grid_shape, host_rank_values);
     }
+
+    // If there's only one host rank per mesh in the mesh graph, ensure all meshes have host_rank entries
+    // even if the current rank doesn't participate in all meshes. This is needed for initialize_distributed_contexts()
+    // to be able to look up MPI ranks for all (mesh_id, host_rank) pairs.
+    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+        const auto& host_ranks = mesh_graph_.get_host_ranks(mesh_id);
+        // If there's only one host rank in the mesh graph and we don't have an entry for it, add it
+        if (host_ranks.size() == 1) {
+            MeshHostRankId mesh_host_rank{*host_ranks.values().front()};
+            auto key = std::make_pair(mesh_id, mesh_host_rank);
+            if (mesh_host_rank_coord_ranges_.find(key) == mesh_host_rank_coord_ranges_.end()) {
+                // Get the full coordinate range for this mesh from the mesh graph
+                MeshCoordinateRange coord_range = mesh_graph_.get_coord_range(mesh_id);
+                mesh_host_rank_coord_ranges_.insert({key, coord_range});
+            }
+        }
+    }
 }
 
-void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const {
+HostName TopologyMapper::get_hostname_for_mesh(MeshId mesh_id) const {
+    // Get all hosts for this mesh_id from the fabric node mapping
+    // Meshes can be multi-host, so we collect all unique hostnames and return the first one
+    std::unordered_set<HostName> mesh_hosts;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        if (fabric_node_id.mesh_id == mesh_id) {
+            mesh_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(asic_id));
+        }
+    }
+
+    TT_FATAL(!mesh_hosts.empty(), "Mesh mesh_id {} not found in fabric node mapping", *mesh_id);
+
+    // Return the first hostname (for multi-host meshes, this represents one of the hosts)
+    return *mesh_hosts.begin();
+}
+
+HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
+    // Verify that the switch exists in the mesh graph
+    const auto& switch_ids = mesh_graph_.get_switch_ids();
+    bool switch_exists = false;
+    for (const auto& existing_switch_id : switch_ids) {
+        if (*existing_switch_id == *switch_id) {
+            switch_exists = true;
+            break;
+        }
+    }
+    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
+
+    // Convert SwitchId to MeshId and use the consolidated mesh hostname function
+    return get_hostname_for_mesh(MeshId(*switch_id));
+}
+
+HostName TopologyMapper::get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const {
+    // Direct lookup in the fabric node to ASIC mapping
+    auto it = fabric_node_id_to_asic_id_.find(fabric_node_id);
+    TT_FATAL(it != fabric_node_id_to_asic_id_.end(), "Fabric node id {} not found in mapping", fabric_node_id);
+
+    // Get the hostname for the corresponding ASIC
+    return physical_system_descriptor_.get_host_name_for_asic(it->second);
+}
+
+int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRankId host_rank) const {
+    // First, try to use the direct mapping if available (from gathered mesh bindings)
+    auto direct_mapping_it = mesh_host_rank_to_mpi_rank_.find(std::make_pair(mesh_id, host_rank));
+    if (direct_mapping_it != mesh_host_rank_to_mpi_rank_.end()) {
+        return direct_mapping_it->second;
+    }
+
+    // Fallback: Find a fabric node with this mesh_id and host_rank
+    // Use the coordinate range to find a chip_id, then get the fabric node id
+    auto coord_range_it = mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, host_rank));
+    TT_FATAL(
+        coord_range_it != mesh_host_rank_coord_ranges_.end(),
+        "TopologyMapper: host_rank {} not found for mesh {}",
+        host_rank.get(),
+        mesh_id.get());
+
+    // Get a chip_id from the coordinate range (use the start coordinate)
+    const auto& coord_range = coord_range_it->second;
+    MeshCoordinate start_coord = coord_range.start_coord();
+    ChipId chip_id = mesh_graph_.coordinate_to_chip(mesh_id, start_coord);
+    FabricNodeId fabric_node_id(mesh_id, chip_id);
+
+    // Try to get the hostname for this fabric node
+    auto fabric_node_it = fabric_node_id_to_asic_id_.find(fabric_node_id);
+    if (fabric_node_it != fabric_node_id_to_asic_id_.end()) {
+        // Fabric node exists in mapping, use it
+        HostName hostname = physical_system_descriptor_.get_host_name_for_asic(fabric_node_it->second);
+        return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+    }
+
+    // Fabric node not found in mapping (current rank doesn't participate in this mesh)
+    // Try to find any fabric node for this mesh to get the hostname
+    for (const auto& [fnode_id, asic_id] : fabric_node_id_to_asic_id_) {
+        if (fnode_id.mesh_id == mesh_id) {
+            HostName hostname = physical_system_descriptor_.get_host_name_for_asic(asic_id);
+            return static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(hostname));
+        }
+    }
+
+    // If we still can't find it, this is an error
+    TT_FATAL(
+        false, "TopologyMapper: Cannot determine MPI rank for mesh {} host_rank {}", mesh_id.get(), host_rank.get());
+    return -1;  // Unreachable
+}
+
+void TopologyMapper::print_logical_adjacency_map(const std::map<MeshId, LogicalAdjacencyMap>& adj_map) const {
     log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
         log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
@@ -1506,8 +2108,7 @@ void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId
     }
 }
 
-void TopologyMapper::print_physical_adjacency_map(
-    const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const {
+void TopologyMapper::print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const {
     log_debug(tt::LogFabric, "TopologyMapper: Physical Adjacency Map:");
     for (const auto& [mesh_id, node_map] : adj_map) {
         log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
