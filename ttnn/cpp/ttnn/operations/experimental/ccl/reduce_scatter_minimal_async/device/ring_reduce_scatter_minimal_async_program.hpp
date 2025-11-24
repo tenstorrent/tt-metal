@@ -62,12 +62,10 @@ void override_runtime_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks populate_program_legacy(
     tt::tt_metal::Program& program,
-    const ::ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::operation_attributes_t&
-        operation_attributes,
-    const ::ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::tensor_args_t& tensor_args,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    const mesh_runtime_params_t& mesh_runtime_params,
     Tensor& intermediate_tensor,
-    Tensor& output_tensor,
-    const ::ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::mesh_runtime_params_t&
-        mesh_runtime_params);
+    Tensor& output_tensor);
 
 }  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program::ring

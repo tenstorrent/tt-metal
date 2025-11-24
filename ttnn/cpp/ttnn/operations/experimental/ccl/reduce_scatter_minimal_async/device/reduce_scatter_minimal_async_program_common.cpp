@@ -37,9 +37,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn {
-
-namespace operations::experimental::ccl::detail {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program {
 
 uint32_t reduce_scatter_minimal_async_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -204,13 +202,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_tile_offsets(
     return std::make_tuple(start_tiles_read, start_tiles_to_read, start_pages_read_in_row, start_row_offset);
 }
 
-}  // namespace operations::experimental::ccl::detail
-
-}  // namespace ttnn
-
-namespace ttnn {
-namespace ccl {
-
 void append_fabric_mux_connection_ct_args(
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
@@ -271,5 +262,4 @@ void append_fabric_mux_connection_rt_args(
     std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(worker_rt_args));
 }
 
-}  // namespace ccl
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::program

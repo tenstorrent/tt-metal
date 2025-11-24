@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/distributed/api.hpp"
 
 namespace ttnn {

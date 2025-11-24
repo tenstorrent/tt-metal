@@ -88,8 +88,7 @@ target_sources(
         all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
         all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
-        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
-        matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
+        matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_device_operation.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program_common.cpp

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -32,7 +32,9 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
-    return ttnn::operations::experimental::ccl::matmul_reduce_scatter_async(
+
+    // Use the prim to execute the operation
+    auto [matmul_output, reduce_scatter_output] = ttnn::prim::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,
         persistent_intermediate_buffer,
@@ -55,6 +57,8 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
         activation,
         compute_kernel_config,
         core_grid);
+
+    return std::vector<ttnn::Tensor>{matmul_output, reduce_scatter_output};
 }
 
 }  // namespace operations::experimental::ccl
