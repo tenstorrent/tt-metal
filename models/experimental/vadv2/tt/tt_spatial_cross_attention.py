@@ -57,14 +57,12 @@ class TtSpatialCrossAttention:
         if residual is None:
             inp_residual = query
             slots = ttnn.zeros_like(query)
-            slots = ttnn.to_torch(slots)
         if query_pos is not None:
             query = query + query_pos
 
         bs, num_query, _ = query.shape
 
-        D = reference_points_cam.size(3)
-        indexes = []
+        D = reference_points_cam.shape[3]
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
@@ -83,16 +81,17 @@ class TtSpatialCrossAttention:
             ttnn.deallocate(output_tensor[0])
 
         max_len = max([each.shape[0] for each in indexes])
-        query = ttnn.to_torch(query)
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
-        queries_rebatch = query.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, D, 2])
+
+        query_torch = ttnn.to_torch(query)
+        reference_points_cam_torch = ttnn.to_torch(reference_points_cam)
+
+        queries_rebatch = query_torch.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
+        reference_points_rebatch = reference_points_cam_torch.new_zeros([bs, self.num_cams, max_len, D, 2])
 
         for j in range(bs):
-            for i, reference_points_per_img in enumerate(reference_points_cam):
-                index_query_per_img = indexes[i]
-                index_query_per_img = ttnn.to_torch(index_query_per_img)
-                queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
+            for i, reference_points_per_img in enumerate(reference_points_cam_torch):
+                index_query_per_img = ttnn.to_torch(indexes[i])
+                queries_rebatch[j, i, : len(index_query_per_img)] = query_torch[j, index_query_per_img]
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
                     j, index_query_per_img
                 ]
@@ -121,14 +120,20 @@ class TtSpatialCrossAttention:
         queries = ttnn.reshape(queries, (bs, self.num_cams, max_len, self.embed_dims))
 
         queries = ttnn.to_torch(queries)
+        slots = ttnn.to_torch(slots)
+
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
                 index_query_per_img = ttnn.to_torch(index_query_per_img)
+                actual_len = len(index_query_per_img)
+                slots[j, index_query_per_img] += queries[j, i, :actual_len]
 
-                slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
-        for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                ttnn.deallocate(index_query_per_img)
+        # Convert back to ttnn (large tensor, keep in DRAM)
+        slots = ttnn.from_torch(slots, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        # Deallocate index tensors
+        for index_query_per_img in indexes:
+            ttnn.deallocate(index_query_per_img)
 
         count = ttnn.sum(bev_mask, -1) > 0
         count = ttnn.permute(count, (1, 2, 0))
@@ -136,7 +141,7 @@ class TtSpatialCrossAttention:
         count = ttnn.sum(count, -1)
         count = ttnn.clamp(count, min=1.0)
         count = ttnn.unsqueeze(count, -1)
-        slots = ttnn.from_torch(slots, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        slots = ttnn.to_layout(slots, ttnn.TILE_LAYOUT)
         slots = ttnn.div(slots, count)
         slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         ttnn.deallocate(count)
