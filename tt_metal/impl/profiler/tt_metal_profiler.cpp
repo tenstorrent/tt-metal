@@ -716,10 +716,6 @@ void InitDeviceProfiler(IDevice* device) {
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
     const uint32_t bank_size_bytes =
         get_profiler_dram_bank_size_per_risc_bytes() * hal.get_max_processors_per_core() * num_cores_per_dram_bank;
-    log_info(tt::LogMetal, "num_cores_per_dram_bank: {}", num_cores_per_dram_bank);
-    log_info(tt::LogMetal, "max_processors_per_core: {}", hal.get_max_processors_per_core());
-    log_info(tt::LogMetal, "bank_size_bytes: {}", bank_size_bytes);
-    log_info(tt::LogMetal, "hal dev size: {}", hal.get_dev_size(HalDramMemAddrType::PROFILER));
     TT_ASSERT(bank_size_bytes <= hal.get_dev_size(HalDramMemAddrType::PROFILER));
 
     const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
