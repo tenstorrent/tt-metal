@@ -40,8 +40,8 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
 namespace NAMESPACE {
 
-constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (input)
-constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (output)
+constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
+constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
 constexpr uint32_t cb_out_accumulate_im = get_compile_time_arg_val(2);    // l1 (input)
 constexpr uint32_t cb_prev_sum_2 = get_compile_time_arg_val(3);           // s2 (input)
 constexpr uint32_t cb_m_in = get_compile_time_arg_val(4);                 // m1 (input)
@@ -53,97 +53,81 @@ constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(9);         // exp
 constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);             // s (output)
 constexpr uint32_t cb_m_temp = get_compile_time_arg_val(11);              // temp for m
 constexpr uint32_t cb_s_temp = get_compile_time_arg_val(12);              // temp for s
-constexpr uint32_t cb_m1_temp = get_compile_time_arg_val(13);             // temp for m1
-constexpr uint32_t cb_m2_temp = get_compile_time_arg_val(14);             // temp for m2
-constexpr uint32_t scale_fp32 = get_compile_time_arg_val(15);
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(16);
-constexpr uint32_t vDHt = get_compile_time_arg_val(17);
-constexpr uint32_t loop_size = get_compile_time_arg_val(18);
-
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 8; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right =
-            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+constexpr uint32_t cb_s1_temp = get_compile_time_arg_val(13);             // temp for s1
+constexpr uint32_t cb_s2_temp = get_compile_time_arg_val(14);             // temp for s2
+constexpr uint32_t cb_l1_temp = get_compile_time_arg_val(15);             // temp for l1
+constexpr uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // temp for l2
+constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
+constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
+constexpr uint32_t vDHt = 8;  // get_compile_time_arg_val(19);
+constexpr uint32_t loop_size = get_compile_time_arg_val(20);
 
 void MAIN {
-    DPRINT << "compute kernel started\n";
-    DPRINT << "loop size: " << (uint32_t)loop_size << "\n";
     const bool use_half_tile = true;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
-    constexpr uint32_t out_chunk_tiles = 8;  // Sq_chunk_t * vDHt;
-
-    DPRINT << "read data of cb_m_in\n";
-    // print_full_tile(cb_m_in, 0, 1);
-
-    DPRINT << "read data of cb_prev_max\n";
-    // print_full_tile(cb_prev_max, 0, 1);
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
-        // move m2 input
-        move_block<true>(cb_prev_max, cb_m2_temp, Sq_chunk_t);
+        // move l2 input
+        move_block<false>(cb_out_accumulate_im_2, cb_l2_temp, out_chunk_tiles);
+        // move l1 input
+        move_block<false>(cb_out_accumulate_im, cb_l1_temp, out_chunk_tiles);
 
-        // move m1 input
-        move_block<true>(cb_m_in, cb_m1_temp, Sq_chunk_t);
+        // move s1 and s2
+        move_block<false>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
+        move_block<false>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
 
-        max_block<vector_mode>(cb_m1_temp, cb_m2_temp, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
+        max_block<vector_mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
 
-        cb_reserve_back(cb_exp_max_diff_2, Sq_chunk_t);
         // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
         // PREV_SUM_2 *= EXP_MAX_DIFF_2
-        sub_exp_block<scale_fp32, vector_mode>(cb_m1_temp, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
+        sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
 
-        cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
+        mul_block_inplace(cb_s2_temp, cb_exp_max_diff_2, Sq_chunk_t);
+        DPRINT << "after mul block in place 1\n";
 
-        mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
+        sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
 
-        DPRINT << "after prev sum2\n";
-
-        sub_exp_block<scale_fp32, vector_mode>(cb_m2_temp, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
-        mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+        DPRINT << "after sub_exp_block2\n";
+        mul_block_inplace(cb_s1_temp, cb_exp_max_diff, Sq_chunk_t);
 
         DPRINT << "after prev sum\n";
 
         /// CUR_SUM = PREV_SUM_2 + PREV_SUM
-        add_block(cb_prev_sum_2, cb_prev_sum, cb_s_temp, Sq_chunk_t);
+        add_block(cb_s2_temp, cb_s1_temp, cb_s_temp, Sq_chunk_t);
 
         DPRINT << "after cur sum\n";
         // OUT_ACC_2 *= EXP_MAX_DIFF
         // OUT_ACC *= EXP_MAX_DIFF_2
-        mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
-        mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
+        mul_block_bcast_cols_inplace(cb_l1_temp, cb_exp_max_diff, Sq_chunk_t, vDHt);
+
+        DPRINT << "after mul1\n";
+        mul_block_bcast_cols_inplace(cb_l2_temp, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
+
+        DPRINT << "after mul2\n";
 
         // OUT_ACC = OUT_ACC + OUT_ACC_2
-        add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
+        add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_chunk_tiles);
+        DPRINT << "after add inplace\n";
 
         // if do_final_division at the end, update OUT_ACC to be OUT_ACC / CUR_SUM
         if (loop_idx == 1) {
             // RECIP_CUR_SUM = 1 / CUR_SUM
             recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);
             // OUT_ACC = OUT_ACC * RECIP_CUR_SUM
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_s_temp, Sq_chunk_t, vDHt);
+            mul_block_bcast_cols_inplace(cb_l1_temp, cb_s_temp, Sq_chunk_t, vDHt);
         }
-        DPRINT << "after final division IF APPLICABLE\n";
 
+        DPRINT << "after final div\n";
         // OUT <- OUT_ACC
-        move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+        move_block<true>(cb_l1_temp, cb_out_o, out_chunk_tiles);
 
         // OUT_MAX <- TEMP_MAX
         move_block<true>(cb_m_temp, cb_cur_max, Sq_chunk_t);
 
         // OUT_SUM <- TEMP_SUM
         move_block<true>(cb_s_temp, cb_cur_sum, Sq_chunk_t);
-
-        DPRINT << "after moving out sum\n";
-        cb_pop_front(cb_m_in, Sq_chunk_t);
-        cb_pop_front(cb_prev_max, Sq_chunk_t);
-        DPRINT << "end of loop " << (uint32_t)loop_idx << "\n";
+        DPRINT << "end of loop\n";
     }
 }
 }  // namespace NAMESPACE

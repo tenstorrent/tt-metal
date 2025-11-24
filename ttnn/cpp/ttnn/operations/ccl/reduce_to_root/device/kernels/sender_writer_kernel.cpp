@@ -160,7 +160,7 @@ void kernel_main() {
 
     DPRINT << "read data at packet base addr for m and s send\n";
     volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(packet_base_addr);
-    for (uint16_t value = 0; value < 1024; value++) {
+    for (uint16_t value = 0; value < 10; value++) {
         DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
     }
     cb_push_back(packet_header_cb_id, 1);
