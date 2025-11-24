@@ -131,7 +131,6 @@ def test_multi_conv(
                 (output_channels, current_input_channels, kernel[0], kernel[1]),
             )
         )
-
         torch_bias_tensors.append(
             randomize_torch_tensor(
                 torch_tensor_map,
@@ -190,16 +189,9 @@ def test_multi_conv(
         current_input_channels = output_channels
     print(current_torch_output.shape)
     ref = current_torch_output
-    [out_batch, out_channels, out_height, out_width] = current_torch_output.shape
-    tt_output_tensor = ttnn.zeros(
-        [out_batch, out_height, out_width, out_channels],
-        dtype=dtype,
-        layout=input_layout,
-        device=device,
-    )
-    ttnn.run_sliced_op(
+
+    tt_output_tensor = ttnn.run_sliced_op(
         input_tensor=tt_input_tensor,
-        output_tensor=tt_output_tensor,
         op_slice_attr=op_slicing_attrs,
         dram_slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices),
     )
@@ -208,6 +200,7 @@ def test_multi_conv(
 
     tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
     out = ttnn.to_torch(tt_output_tensor_host)
+    out_height, out_width = ref.shape[1:3]
     out = out.reshape(batch_size, out_height, out_width, out.shape[-1])
     out = out[:, :, :, : ref.shape[-1]]
 

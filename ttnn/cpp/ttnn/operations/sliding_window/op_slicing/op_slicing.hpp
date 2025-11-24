@@ -46,10 +46,15 @@ public:
     virtual std::tuple<TensorSpec, tt::tt_metal::distributed::MeshDevice*> get_output_tensor_spec_and_device() = 0;
 };
 
+ttnn::Tensor run_sliced_op(
+    const ttnn::Tensor& input_tensor,
+    const std::vector<OpSliceAttr*>& op_slice_attr,
+    Op2DSliceConfig dram_slice_config);
+
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
-    std::vector<OpSliceAttr*> op_slice_attr,
+    const std::vector<OpSliceAttr*>& op_slice_attr,
     Op2DSliceConfig dram_slice_config);
 
 }  // namespace ttnn::operations::op_slicing

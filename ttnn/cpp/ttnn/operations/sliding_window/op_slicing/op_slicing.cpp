@@ -14,11 +14,20 @@
 #include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 namespace ttnn::operations::op_slicing {
-
+ttnn::Tensor run_sliced_op(
+    const ttnn::Tensor& input_tensor,
+    const std::vector<OpSliceAttr*>& op_slice_attr,
+    Op2DSliceConfig dram_slice_config) {
+    auto last_op = op_slice_attr.back();
+    auto [output_tensor_spec, device] = last_op->get_output_tensor_spec_and_device();
+    auto output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, device);
+    run_sliced_op(input_tensor, output_tensor, op_slice_attr, dram_slice_config);
+    return output_tensor;
+}
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
-    std::vector<OpSliceAttr*> op_slice_attr,
+    const std::vector<OpSliceAttr*>& op_slice_attr,
     Op2DSliceConfig dram_slice_config) {
     tt::tt_metal::Layout output_layout = output_tensor.layout();
     auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
