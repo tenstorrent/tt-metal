@@ -28,6 +28,11 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Run auto triage
         uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
         with:
