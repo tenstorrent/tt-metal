@@ -275,7 +275,7 @@ def run_all_broadcast_impl(
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     num_links,
@@ -287,7 +287,7 @@ def test_all_broadcast(
     function_level_defaults,
 ):
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -320,7 +320,7 @@ def test_all_broadcast(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
 )
 def test_all_broadcast_trace(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -330,12 +330,13 @@ def test_all_broadcast_trace(
     mem_config,
     num_iters,
     function_level_defaults,
+    silicon_arch_wormhole_b0,
 ):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -431,7 +432,7 @@ def test_all_broadcast_trace(
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_broadcast_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     num_links,
@@ -449,7 +450,7 @@ def test_all_broadcast_sharded(
         pytest.skip("bfloat8_b not supported for row-major")
 
     run_all_broadcast_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         num_links,
@@ -544,7 +545,7 @@ def test_all_broadcast_sharded_2x4(
         [1, 1, 1, 32],
     ],
 )
-def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
+def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape, silicon_arch_wormhole_b0):
     torch.manual_seed(2005)
     devices = mesh_device.get_num_devices()
     logger.info(f"devices: {devices}")

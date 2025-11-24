@@ -836,10 +836,10 @@ with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
     )
 
 # Shard model parameters on width dimension to devices in the mesh
-with ttnn.distribute(ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-1)):
+with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=-1)):
     parameters = ttnn.model_preprocessing.preprocess_model_parameters(
         initialize_model=lambda: model,
-        device=t3k_mesh_device,
+        device=mesh_device,
     )
 
 # Initialize Model

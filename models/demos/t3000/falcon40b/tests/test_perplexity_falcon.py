@@ -269,6 +269,7 @@ def test_perplexity_huggingface(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_perplexity(
     llm_mode,
     batch_size,
@@ -278,7 +279,7 @@ def test_perplexity(
     expected_ppl,
     expected_top1,
     expected_top5,
-    t3k_mesh_device,
+    mesh_device,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
 
@@ -290,7 +291,7 @@ def test_perplexity(
         batch_size,
         max_seq_len,
         model_config_str,
-        t3k_mesh_device,
+        mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
     )
