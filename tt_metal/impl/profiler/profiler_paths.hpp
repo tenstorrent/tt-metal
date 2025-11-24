@@ -6,6 +6,7 @@
 
 #define HOST_SIDE_LOG "profile_log_host.csv"
 #define DEVICE_SIDE_LOG "profile_log_device.csv"
+#define PERF_COUNTER_LOG "perf_counters.csv"
 
 namespace tt {
 

@@ -15,6 +15,9 @@ import yaml
 from datetime import datetime
 import copy
 from collections import deque
+import pandas as pd
+from math import nan
+import ast
 
 import click
 from loguru import logger
@@ -24,6 +27,7 @@ from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
     PROFILER_ARTIFACTS_DIR,
+    PROFILER_PERF_COUNTER_LOG,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
@@ -100,6 +104,18 @@ OPS_CSV_HEADER = [
     "NOC UTIL (%)",
     "DRAM BW UTIL (%)",
     "NPE CONG IMPACT (%)",
+    "SFPU Util Min (%)",
+    "SFPU Util Median (%)",
+    "SFPU Util Max (%)",
+    "Avg SFPU util on full grid (%)",
+    "FPU Util Min (%)",
+    "FPU Util Median (%)",
+    "FPU Util Max (%)",
+    "Avg FPU util on full grid (%)",
+    "MATH Util Min (%)",
+    "MATH Util Median (%)",
+    "MATH Util Max (%)",
+    "Avg Math util on full grid (%)",
 ]
 
 
@@ -441,6 +457,83 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
+    # Check if perf counters data is available (in logFolder / perf_counters.csv)
+    if os.path.isfile(logFolder / "perf_counters.csv"):
+        # For each counter type, divide counter value by ref cnt to get util metrics per core
+        #   then group by runtime id and trace id counter to get util metric for all cores in a single op
+        #   then get aggregate statistics for this distribution of values (min, median, max)
+        with open(logFolder / "perf_counters.csv") as perf_counter_file:
+            # read first line and convert to dict
+            cluster_type_str = ast.literal_eval(perf_counter_file.readline().strip())["cluster type"]
+            df = pd.read_csv(perf_counter_file, header=0, sep=",")
+
+        # get total num of compute/tensix cores avaialable on grid using cluster type
+        if cluster_type_str == "N150":
+            total_compute_cores = 72
+        else:
+            raise ValueError(f"Cluster type {cluster_type_str} not supported")
+
+        df = df.fillna(value={"trace id counter": 0})
+        df["trace id counter"] = df["trace id counter"].astype(int)
+        df["Util"] = df["value"] / df["ref cnt"] * 100
+
+        # SFPU Counter aggregations
+        sfpu_counters_grouped = df[df["counter type"] == "SFPU_COUNTER"].groupby(
+            ["runtime id", "trace id counter"], group_keys=True
+        )
+        agg_sfpu_util_min = sfpu_counters_grouped["Util"].min()
+        agg_sfpu_util_median = sfpu_counters_grouped["Util"].median()
+        agg_sfpu_util_max = sfpu_counters_grouped["Util"].max()
+        avg_sfpu_count = sfpu_counters_grouped["value"].sum() / total_compute_cores
+
+        # FPU Counter aggregations
+        fpu_counters_grouped = df[df["counter type"] == "FPU_COUNTER"].groupby(
+            ["runtime id", "trace id counter"], group_keys=True
+        )
+        agg_fpu_util_min = fpu_counters_grouped["Util"].min()
+        agg_fpu_util_median = fpu_counters_grouped["Util"].median()
+        agg_fpu_util_max = fpu_counters_grouped["Util"].max()
+        avg_fpu_count = fpu_counters_grouped["value"].sum() / total_compute_cores
+
+        # MATH Counter aggregations
+        math_counters_grouped = df[df["counter type"] == "MATH_COUNTER"].groupby(
+            ["runtime id", "trace id counter"], group_keys=True
+        )
+        agg_math_util_min = math_counters_grouped["Util"].min()
+        agg_math_util_median = math_counters_grouped["Util"].median()
+        agg_math_util_max = math_counters_grouped["Util"].max()
+        avg_math_count = math_counters_grouped["value"].sum() / total_compute_cores
+
+        op_lists = [ops, traceOps]
+        for op_list in op_lists:
+            for op_id in op_list:
+                # get trace id counter and global_call_count/runtime id
+                trace_id_counter = op_id >> TRACE_OP_ID_BITSHIFT
+                global_call_count = op_id & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
+
+                # SFPU Counter
+                op_list[op_id]["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
+                op_list[op_id]["SFPU Util Median (%)"] = agg_sfpu_util_median.get(
+                    (global_call_count, trace_id_counter), nan
+                )
+                op_list[op_id]["SFPU Util Max (%)"] = agg_sfpu_util_max.get((global_call_count, trace_id_counter), nan)
+                # FPU Counter
+                op_list[op_id]["FPU Util Min (%)"] = agg_fpu_util_min.get((global_call_count, trace_id_counter), nan)
+                op_list[op_id]["FPU Util Median (%)"] = agg_fpu_util_median.get(
+                    (global_call_count, trace_id_counter), nan
+                )
+                op_list[op_id]["FPU Util Max (%)"] = agg_fpu_util_max.get((global_call_count, trace_id_counter), nan)
+                # MATH Counter
+                op_list[op_id]["MATH Util Min (%)"] = agg_math_util_min.get((global_call_count, trace_id_counter), nan)
+                op_list[op_id]["MATH Util Median (%)"] = agg_math_util_median.get(
+                    (global_call_count, trace_id_counter), nan
+                )
+                op_list[op_id]["MATH Util Max (%)"] = agg_math_util_max.get((global_call_count, trace_id_counter), nan)
+
+                op_list[op_id]["avg_sfpu_count"] = avg_sfpu_count.get((global_call_count, trace_id_counter), nan)
+                op_list[op_id]["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
+                op_list[op_id]["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
+
     return devicesOps, traceOps
 
 
@@ -669,6 +762,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
+    if os.path.isfile(f"{logFolder / PROFILER_PERF_COUNTER_LOG}"):
+        os.system(f"cp {logFolder / PROFILER_PERF_COUNTER_LOG} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
@@ -889,6 +984,37 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                             rowDict["PM FPU UTIL (%)"] = round(fpu_util, 3)
                         except ZeroDivisionError:
                             rowDict["PM FPU UTIL (%)"] = 0.0
+
+                # get time from first core start to last core end
+                kernel_duration = (
+                    float(rowDict["DEVICE KERNEL DURATION [ns]"]) if "DEVICE KERNEL DURATION [ns]" in rowDict else nan
+                )
+                if "SFPU Util Min (%)" in opData:
+                    rowDict["SFPU Util Min (%)"] = opData.get("SFPU Util Min (%)")
+                if "SFPU Util Median (%)" in opData:
+                    rowDict["SFPU Util Median (%)"] = opData.get("SFPU Util Median (%)")
+                if "SFPU Util Max (%)" in opData:
+                    rowDict["SFPU Util Max (%)"] = opData.get("SFPU Util Max (%)")
+                if "avg_sfpu_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                    rowDict["Avg SFPU util on full grid (%)"] = opData.get("avg_sfpu_count") / kernel_duration * 100
+
+                if "FPU Util Min (%)" in opData:
+                    rowDict["FPU Util Min (%)"] = opData.get("FPU Util Min (%)")
+                if "FPU Util Median (%)" in opData:
+                    rowDict["FPU Util Median (%)"] = opData.get("FPU Util Median (%)")
+                if "FPU Util Max (%)" in opData:
+                    rowDict["FPU Util Max (%)"] = opData.get("FPU Util Max (%)")
+                if "avg_fpu_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                    rowDict["Avg FPU util on full grid (%)"] = opData.get("avg_fpu_count") / kernel_duration * 100
+
+                if "MATH Util Min (%)" in opData:
+                    rowDict["MATH Util Min (%)"] = opData.get("MATH Util Min (%)")
+                if "MATH Util Median (%)" in opData:
+                    rowDict["MATH Util Median (%)"] = opData.get("MATH Util Median (%)")
+                if "MATH Util Max (%)" in opData:
+                    rowDict["MATH Util Max (%)"] = opData.get("MATH Util Max (%)")
+                if "avg_math_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                    rowDict["Avg Math util on full grid (%)"] = opData.get("avg_math_count") / kernel_duration * 100
 
             rowDicts.append(rowDict)
 

@@ -102,6 +102,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -644,6 +645,28 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_MEM_PROFILER:
             if (is_env_enabled(value)) {
                 this->profiler_buffer_usage_enabled = true;
+            }
+            break;
+
+        // TT_METAL_PROFILE_PERF_COUNTERS
+        // Enables Performance Counter profiling using a bitfield to select counter groups.
+        // Default: 0 (disabled)
+        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=value
+        //
+        // Valid values (bitfield):
+        //   1  (1 << 0) - FPU counters
+        //   2  (1 << 1) - PACK counters
+        //   4  (1 << 2) - UNPACK counters
+        //   8  (1 << 3) - L1 counters
+        //   16 (1 << 4) - INSTRN (instruction) counters
+        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //
+        // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
+        // Note: Currently, only FPU counters are supported
+        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
+            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            if (this->profiler_perf_counter_mode != 0) {
+                this->profiler_enabled = true;
             }
             break;
 
