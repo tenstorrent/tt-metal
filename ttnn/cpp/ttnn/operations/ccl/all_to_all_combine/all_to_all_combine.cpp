@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
 #include "all_to_all_combine.hpp"
 #include "device/all_to_all_combine_device_operation.hpp"
 #include "ttnn/run_operation.hpp"

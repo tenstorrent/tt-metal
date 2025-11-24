@@ -14,7 +14,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -28,8 +27,6 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
-
-using namespace tt::constants;
 
 namespace ttnn {
 

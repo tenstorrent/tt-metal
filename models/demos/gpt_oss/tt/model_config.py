@@ -82,7 +82,7 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
+        self.model_name = "gpt-oss-120b" if "gpt-oss-120b" in self.model_path else "gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:

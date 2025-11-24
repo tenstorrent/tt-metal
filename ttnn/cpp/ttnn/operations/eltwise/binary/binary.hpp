@@ -232,7 +232,8 @@ struct WhereOperationWithScalar {
         const Tensor& true_false_tensor,  // For TTS variant, true_tensor; For TST variant, false_tensor
         unary::ScalarVariant scalar_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::binary

@@ -124,8 +124,6 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
     const ttsl::SmallVector<int>& dims) {
     using DataType = typename Expression::value_type;
 
-    TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
-
     if (expressions.empty()) {
         return XtensorAdapter<DataType>(std::vector<DataType>(), {0});
     }
@@ -136,6 +134,8 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         std::vector<size_t> shape_vec(expressions.front().shape().cbegin(), expressions.front().shape().cend());
         return XtensorAdapter<DataType>(std::move(data), std::move(shape_vec));
     }
+
+    TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
 
     const auto& first_expr = expressions.front();
     const auto& expected_shape = first_expr.shape();

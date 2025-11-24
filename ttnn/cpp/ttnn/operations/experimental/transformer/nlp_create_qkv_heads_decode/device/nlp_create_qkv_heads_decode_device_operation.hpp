@@ -7,8 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::experimental::transformer {
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
