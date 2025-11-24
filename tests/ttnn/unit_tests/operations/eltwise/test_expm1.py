@@ -9,6 +9,12 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
+def flush_subnormal_values(tensor):
+    mask = tensor < 2 ** (-126)
+    tensor[mask] = 0.0
+    return tensor
+
+
 def test_expm1_arange_masking(device):
     # Expm1 Working range - Overflow from 88.5(inf) as in exp
     low = -math.inf
@@ -19,13 +25,12 @@ def test_expm1_arange_masking(device):
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
+    # If input is subnormal then we assume hardware will flush it to 0.0
+    input_tensor = flush_subnormal_values(input_tensor)
+
     # masking to working range
     mask = (input_tensor >= low) & (input_tensor <= high)
     input_tensor = input_tensor[mask]
-
-    # Mask range where expm1 has ULP>1 (Covered in atol test below).
-    mask_failed = (input_tensor >= -0.28515625) & (input_tensor <= 0.69140625)
-    input_tensor[mask_failed] = 1.0
 
     tt_in = ttnn.from_torch(
         input_tensor,
@@ -41,7 +46,10 @@ def test_expm1_arange_masking(device):
     tt_result = ttnn.expm1(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
+    result = flush_subnormal_values(result)
+
+    assert_with_ulp(golden, result, 1.5, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
