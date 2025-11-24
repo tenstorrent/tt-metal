@@ -17,7 +17,16 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         constexpr uint dst_tile_size_sfpi = 32;
         constexpr uint dst_tile_size_sfpu = 64;
 
-        // Typecast input A
+        // For BH typecast issue, uncomment lines 21-26 and comment out the remaining lines 28-54.
+        // sfpi::vInt in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        // sfpi::vInt in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        // sfpi::vFloat float_in0 = sfpi::int32_to_float(in0, 0);
+        // sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
+        // sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = float_in1;
+        // sfpi::dst_reg++;
+
+        // Typecasting input A and B without using sfpi::int32_to_float
+        // Typecast input A to fp32
         TT_SFPLOAD(0, INT32_2S_COMP, ADDR_MOD_7, dst_index_in0 * dst_tile_size_sfpu);
         TT_SFPCAST(0, 2, INT_SIGN_MAGN_TO_INT32_2S_COMP);
         // Required after cast due to a bug in Blackhole RTL.
@@ -25,9 +34,10 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         TT_SFPCAST(0, 1, 0);
         TT_SFPSTORE(1, 3, ADDR_MOD_7, 0);
 
+        // Store typecasted tensor to float_in0
         sfpi::vFloat float_in0 = sfpi::dst_reg[0];
 
-        // Typecast input B
+        // Typecast input B to fp32
         TT_SFPLOAD(0, INT32_2S_COMP, ADDR_MOD_7, dst_index_in1 * dst_tile_size_sfpu);
         TT_SFPCAST(0, 2, INT_SIGN_MAGN_TO_INT32_2S_COMP);
         // Required after cast due to a bug in Blackhole RTL.
@@ -35,14 +45,12 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         TT_SFPCAST(0, 1, 0);
         TT_SFPSTORE(1, 3, ADDR_MOD_7, 0);
 
+        // Store typecasted tensor to float_in1
         sfpi::vFloat float_in1 = sfpi::dst_reg[0];
 
         sfpi::vFloat result = _sfpu_reciprocal_<2>(float_in1);
-
         // sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
-
         sfpi::dst_reg[0] = result;
-
         sfpi::dst_reg++;
     }
 }
