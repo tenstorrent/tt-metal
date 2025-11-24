@@ -100,6 +100,13 @@ class MasterConfigLoader:
             configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
             return self._normalize_configs(configs)
 
+        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
+        if operation_name.startswith("experimental::"):
+            experimental_op_name = f"ttnn::{operation_name}"
+            if experimental_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
+
         # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
         transformer_op_name = f"ttnn::transformer::{operation_name}"
         if transformer_op_name in self.master_data.get("operations", {}):
