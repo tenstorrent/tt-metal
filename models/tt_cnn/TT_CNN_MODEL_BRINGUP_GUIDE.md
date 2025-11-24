@@ -1,10 +1,10 @@
 # TT-CNN - Vision Model Bring-up Guide
 
-This documents demonstrates how to bring-up new vision models using the TT-CNN library.
+This document demonstrates how to bring-up new vision models using the TT-CNN library.
 
 The TT-CNN library comprises several components designed to assist the development of vision models on Tenstorrent devices. At a high level, the main TT-CNN modules include:
 
-- **Pipeline**: Provides abstractions for high-performance end-to-end model inference, with out-of-the-box support for tracing, and multi-command command queue pipelining.
+- **Pipeline**: Provides abstractions for high-performance end-to-end model inference, with out-of-the-box support for tracing, and multi-command queue pipelining.
 - **Builder**: Provides configuration-driven API for defining and instantiating convolution and pooling layers, making it easy to compose models from reusable configuration classes.
 
 Each module is documented and illustrated with working examples. To dive deeper into:
@@ -371,7 +371,7 @@ Sharding determines how tensors are distributed across device cores:
 
 - **HeightShardedStrategyConfiguration**: Best for tensors with large spatial dimensions (H×W)
   - `act_block_h_override`: Controls activation block height (must be multiple of 32)
-  - Larger values = more L1 memory per core -> you want to maxmize this value without running out of L1
+  - Larger values = more L1 memory per core -> you want to maximize this value without running out of L1
 
 - **WidthShardedStrategyConfiguration**: Best for inputs/outputs with deep channels
   - `act_block_w_div`: Divides the width dimension for sharding
@@ -733,11 +733,11 @@ def test_encoder1_pool(device):
    - Reduce `act_block_h_override` or other L1 hungry configuration options
    - Use DRAM slicing for large layers that don't fit
    - Move intermediate tensors to DRAM
-   - Use bfloat8_b activations to reduce memory pressure from intermediary tensors
+   - Use bfloat8_b activations to reduce memory pressure from intermediate tensors
 
 2. **Accuracy Issues**:
-   - Rule out correctness issues using (comparison model)[../../tech_reports/ttnn/comparison-mode.md] or unit tests
-   - Start with all activations in bfloat16 to establish baseline and then incrementally determine where you reduce precision
+   - Rule out correctness issues using [comparison model](../../tech_reports/ttnn/comparison-mode.md) or unit tests
+   - Start with all activations in bfloat16 to establish baseline and then incrementally determine where you can reduce precision
 
 4. **Performance Issues**:
    - Profile with tracy to identify bottlenecks
