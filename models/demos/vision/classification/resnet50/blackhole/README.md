@@ -20,19 +20,19 @@ Read more about it at:
 ## How to Run
 + To run the demo use:
 ```python
-pytest --disable-warnings models/demos/cnns_vits/classification/resnet50/blackhole/demo/demo.py::test_demo_sample
+pytest --disable-warnings models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_sample
 ```
 
 + Our second demo is designed to run ImageNet dataset, run it with:
 ```python
-pytest --disable-warnings models/demos/cnns_vits/classification/resnet50/blackhole/demo/demo.py::test_demo_trace_with_imagenet
+pytest --disable-warnings models/demos/vision/classification/resnet50/blackhole/demo/demo.py::test_demo_trace_with_imagenet
 ```
 
 ## Testing
 ### Blackhole Device Performance
 + To obtain device performance, run
 ```python
-pytest models/demos/cnns_vits/classification/resnet50/blackhole/tests/test_perf_device_resnet50.py::test_perf_device
+pytest models/demos/vision/classification/resnet50/blackhole/tests/test_perf_device_resnet50.py::test_perf_device
 ```
 + This will run the model for 4 times and generate CSV reports under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
 + It will also show a sumary of the device throughput in the run output.
@@ -40,7 +40,7 @@ pytest models/demos/cnns_vits/classification/resnet50/blackhole/tests/test_perf_
 ### Blackhole End-to-End Performance
 + For end-to-end performance, run
 ```python
-pytest models/demos/cnns_vits/classification/resnet50/blackhole/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
+pytest models/demos/vision/classification/resnet50/blackhole/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 + This will generate a CSV with the timings and throughputs.
 + **Expected end-to-end perf**: For batch = 16, it is about `12,600 fps` currently. This may vary machine to machine.

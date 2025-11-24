@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0, nearest_32
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
     get_conv_input_memory_config,
     is_blackhole_p100,
 )

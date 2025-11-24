@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.cnns_vits.classification.resnet50.wormhole.demo.demo import test_demo_trace_with_imagenet
+from models.demos.vision.classification.resnet50.wormhole.demo.demo import test_demo_trace_with_imagenet
 
 test_demo_trace_with_imagenet.__test__ = False
 

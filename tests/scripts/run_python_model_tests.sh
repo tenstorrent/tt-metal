@@ -35,7 +35,7 @@ run_python_model_tests_wormhole_b0() {
     pytest models/demos/nlp/llmsfalcon7b/common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
     # higher sequence lengths and different formats trigger memory issues
     pytest models/demos/nlp/llmsfalcon7b/common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest models/demos/cnns_vits/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
+    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
     # Unet Shallow
     pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
@@ -44,7 +44,7 @@ run_python_model_tests_wormhole_b0() {
     pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
     # ViT-base
-    pytest -svv models/demos/cnns_vits/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py
+    pytest -svv models/demos/vision/classification/vit/wormhole/tests/test_ttnn_optimized_sharded_vit_wh.py
 
 
     # Llama3.1-8B
@@ -92,7 +92,7 @@ run_python_model_tests_blackhole() {
         echo "LOG_METAL: Llama3 tests for $hf_model completed"
     done
 
-    pytest models/demos/cnns_vits/classification/resnet50/wormhole/tests/test_resnet50_functional.py
+    pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_functional.py
     pytest models/experimental/functional_unet/tests/test_unet_model.py
 }
 

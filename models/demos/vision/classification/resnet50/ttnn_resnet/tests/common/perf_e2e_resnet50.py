@@ -9,7 +9,7 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import (
     create_test_infra,
     load_resnet50_model,
 )

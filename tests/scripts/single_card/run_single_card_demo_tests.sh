@@ -171,13 +171,13 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  pytest models/demos/cnns_vits/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
+  pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  pytest models/demos/cnns_vits/classification/resnet50/wormhole/demo/demo.py
+  pytest models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 
 }
 
@@ -388,7 +388,7 @@ run_vovnet_demo(){
 
 run_vit_demo(){
 
- pytest models/demos/cnns_vits/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+ pytest models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 

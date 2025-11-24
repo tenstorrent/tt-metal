@@ -22,13 +22,13 @@ Read more about it at:
 ### Demo
 Run the demo with sample images:
 ```bash
-pytest --disable-warnings models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests/test_demo.py::test_demo_sample
+pytest --disable-warnings models.demos.vision.classification.resnet50.ttnn_resnet.tests/test_demo.py::test_demo_sample
 ```
-Where 16 is the batch size per device, and `models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/` is where the images are located.
+Where 16 is the batch size per device, and `models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/` is where the images are located.
 
 Run with ImageNet dataset:
 ```bash
-pytest --disable-warnings models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests/test_demo.py::test_demo_imagenet
+pytest --disable-warnings models.demos.vision.classification.resnet50.ttnn_resnet.tests/test_demo.py::test_demo_imagenet
 ```
 The 16 refers to batch size per device and 100 is the number of iterations (batches).
 - **T3000**: Processes 100 batches of size 128 total (8 devices × 16 per device), total of 12,800 images
@@ -39,7 +39,7 @@ The 16 refers to batch size per device and 100 is the number of iterations (batc
 ### End-to-End Performance
 For end-to-end performance testing, run:
 ```bash
-pytest models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
+pytest models.demos.vision.classification.resnet50.ttnn_resnet.tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 This will generate a CSV with the timings and throughputs.
 
@@ -68,4 +68,4 @@ For single device and other platform-specific versions, please refer to:
 ### Single Device
 [Grayskull](/models/demos/grayskull/resnet50/)
 
-[Wormhole_B0](/models/demos/cnns_vits/classification/resnet50/wormhole/)
+[Wormhole_B0](/models/demos/vision/classification/resnet50/wormhole/)

@@ -9,14 +9,12 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.demo_utils import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.demo_utils import (
     get_batch,
     get_data,
     get_data_loader,
 )
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import (
-    create_test_infra,
-)
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,

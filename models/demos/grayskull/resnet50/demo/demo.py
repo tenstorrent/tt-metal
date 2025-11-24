@@ -5,7 +5,7 @@
 
 import pytest
 
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.demo.demo import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import (
     run_resnet_imagenet_inference,
     run_resnet_inference,
 )
@@ -23,7 +23,7 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((20, "models/demos/cnns_vits/classification/resnet50/ttnn_resnet/demo/images/"),),
+    ((20, "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"),),
 )
 def test_demo_sample(device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

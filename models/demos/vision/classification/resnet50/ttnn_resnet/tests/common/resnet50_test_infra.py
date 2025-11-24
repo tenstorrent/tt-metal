@@ -13,10 +13,10 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tt.custom_preprocessing import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tt.custom_preprocessing import (
     create_custom_mesh_preprocessor,
 )
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50 import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50 import (
     is_blackhole_p100,
     resnet50,
 )

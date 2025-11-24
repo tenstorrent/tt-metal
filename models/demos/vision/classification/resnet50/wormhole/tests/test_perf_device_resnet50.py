@@ -5,7 +5,7 @@
 import pytest
 
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
 
 
 @run_for_wormhole_b0()
@@ -17,5 +17,5 @@ from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.per
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):
-    command = f"pytest models/demos/cnns_vits/classification/resnet50/wormhole/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
+    command = f"pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
     run_perf_device(batch_size, test, command, expected_perf)

@@ -6,7 +6,7 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.cnns_vits.classification.resnet50.ttnn_resnet.tests.common.resnet50_performant import (
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_performant import (
     run_resnet50_2cqs_inference,
     run_resnet50_inference,
     run_resnet50_trace_2cqs_inference,
