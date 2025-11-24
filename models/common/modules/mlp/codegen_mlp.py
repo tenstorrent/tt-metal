@@ -7,13 +7,14 @@ This example demonstrates:
 3. Compile-time optimization based on tensor shapes and hardware constraints
 """
 
-import ast
 import inspect
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 import ttnn
+from models.common.modules.codegen_utils.generation import class_to_source, function_to_source
 
 
 @dataclass
@@ -46,97 +47,21 @@ class MLPOpConfigs:
     activation: Callable
 
 
-def generate_kernel_config(name: str, kernel_config, indent: str = "") -> list:
-    """Generate hardware-specific configuration setup"""
-    # Alias for generate_hardware_config_source to match previous rename request
-    # Reusing the logic above
-    lines = [
-        "# Hardware-specific configuration",
-        f"{name} = ttnn.WormholeComputeKernelConfig(",
-        f"  math_fidelity=ttnn.MathFidelity.HiFi4,",  # Defaulting
-        f"  fp32_dest_acc_en=True,",  # Defaulting
-        "   packer_l1_acc=True",
-        ")",
-        "",
-    ]
-    lines = [f"{indent}{line}" for line in lines]
-    return lines
+@dataclass
+class MLPWeights:
+    gate_proj_weight: Any
+    gate_proj_bias: Any
+    up_proj_weight: Any
+    up_proj_bias: Any
+    down_proj_weight: Any
+    down_proj_bias: Any
 
 
-def generate_memory_config_source(name: str, mem_config, indent: str = ""):
-    lines = [
-        "# Memory configuration",
-        f"{name} = ttnn.MemoryConfig(",
-        f"  memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,",  # Defaulting
-        f"  buffer_type=ttnn.BufferType.L1",
-        ")",
-        "",
-    ]
-    lines = [f"{indent}{line}" for line in lines]
+class LightweightModule:
+    """LightweightModule to replace nn.Module and remove torch dependency"""
 
-    return lines
-
-
-def generate_optimized_source(func_name: str, args: list, func_def: ast.FunctionDef, indent: str = "") -> str:
-    """Generate complete optimized source code"""
-
-    # Extract function body
-    # unparse usually re-indents to 4 spaces.
-    body_code = ast.unparse(func_def.body)
-    # ast.unparse on list of stmts might not exist in older python, but unparse on FunctionDef gives whole function.
-
-    # Let's stick to unparsing the function then splitting, but handle indentation more robustly.
-    full_code = ast.unparse(func_def)
-    body_lines = full_code.split("\n")[1:]  # Skip def line
-
-    # The body_lines from ast.unparse will have 4-space indentation relative to def.
-    # We want to put them inside our generated function which is also indented.
-
-    local_indent = "    "  # 4 spaces
-    source_lines = [
-        f'def {func_name}({", ".join(args)}):',
-        f'{local_indent}"""Generated from introspected function"""',
-    ]
-
-    for line in body_lines:
-        # line already has 4 spaces from unparse if it was indented in original function?
-        # Yes, ast.unparse formats code with standard indentation.
-        # So line is like "    x = 1"
-        # We want to preserve that relative indentation.
-        source_lines.append(line)
-
-    source_lines = [f"{indent}{line}" for line in source_lines]
-    return source_lines
-
-
-def function_to_source(func: Callable, class_name: str = "GeneratedClass", indent: str = "") -> str:
-    """
-    Convert a function to optimized source code by:
-    1. Extracting the original source
-    2. Analyzing for optimization opportunities
-    3. Generating enhanced source with context
-    """
-
-    # Get original source
-    original_source = inspect.getsource(func)
-    # Dedent to ensure clean parsing if function was nested or indented
-    original_source = textwrap.dedent(original_source)
-
-    # Parse AST for analysis
-    tree = ast.parse(original_source)
-
-    # Extract function details
-    func_def = tree.body[0]
-    func_name = func_def.name
-    args = [arg.arg for arg in func_def.args.args]
-
-    # Analyze function body for TTNN operations
-    # ttnn_ops = find_ttnn_operations(func_def)
-
-    # Generate optimized source with full context
-    source_lines = generate_optimized_source(func_name, args, func_def, indent)
-
-    return source_lines
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
 
 
 # Template function for MLP forward pass
@@ -193,6 +118,92 @@ def forward_mlp_impl(x, weights, ops):
     return output
 
 
+def module_imports_template():
+    pass
+
+
+def init_ops_config_impl():
+    # Hardware-specific configuration
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
+    # Memory configuration
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1
+    )
+
+    # Op Configs
+    gate_config = OpConfig(
+        compute_kernel_config=compute_kernel_config, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+    up_config = OpConfig(compute_kernel_config=compute_kernel_config, memory_config=memory_config, dtype=ttnn.bfloat16)
+    down_config = OpConfig(
+        compute_kernel_config=compute_kernel_config, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+    return MLPOpConfigs(gate=gate_config, up=up_config, down=down_config, activation=ttnn.silu)
+
+
+class MLPModuleTemplate(LightweightModule):
+    """
+    Template class for MLP module.
+    This class is used to generate the final module.
+    """
+
+    def __init__(self, device):
+        super().__init__()
+        self.device = device
+        # Placeholders - will be replaced by generator
+        self.hidden_size = 0
+        self.intermediate_size = 0
+        self.activation = "silu"
+
+        # Initialize weights
+        self._init_weights()
+        self._init_ops_config()
+
+    def _init_weights(self):
+        """Initialize projection weights"""
+        # Gate Projection
+        self.gate_proj_weight = ttnn.create_weight(
+            shape=[self.hidden_size, self.intermediate_size],
+            dtype=ttnn.bfloat16,
+            device=self.device,
+        )
+        self.gate_proj_bias = ttnn.create_bias(shape=[self.intermediate_size], dtype=ttnn.bfloat16, device=self.device)
+
+        # Up Projection
+        self.up_proj_weight = ttnn.create_weight(
+            shape=[self.hidden_size, self.intermediate_size],
+            dtype=ttnn.bfloat16,
+            device=self.device,
+        )
+        self.up_proj_bias = ttnn.create_bias(shape=[self.intermediate_size], dtype=ttnn.bfloat16, device=self.device)
+
+        # Down Projection
+        self.down_proj_weight = ttnn.create_weight(
+            shape=[self.intermediate_size, self.hidden_size],
+            dtype=ttnn.bfloat16,
+            device=self.device,
+        )
+        self.down_proj_bias = ttnn.create_bias(shape=[self.hidden_size], dtype=ttnn.bfloat16, device=self.device)
+
+        self.weights = MLPWeights(
+            gate_proj_weight=self.gate_proj_weight,
+            gate_proj_bias=self.gate_proj_bias,
+            up_proj_weight=self.up_proj_weight,
+            up_proj_bias=self.up_proj_bias,
+            down_proj_weight=self.down_proj_weight,
+            down_proj_bias=self.down_proj_bias,
+        )
+
+    def _init_ops_config(self):
+        pass
+
+    def forward(self, x):
+        return forward_mlp_impl(x, self.weights, self.ops)
+
+
 class TTTv2MLPCodeGen:
     """
     Generates optimized MLP implementations based on configuration.
@@ -207,62 +218,37 @@ class TTTv2MLPCodeGen:
     def _validate_config(self):
         """Validate that configuration is feasible"""
 
-    def generate_forward_function(self) -> str:
-        """
-        Generate specialized forward function based on configuration.
-        """
-        return "return forward_mlp_impl(x, self.weights, self.ops)"
-
     def generate_ops_init_source(self) -> list:
         """Generate source code for _init_ops_config method"""
-        lines = []
+        # Introspect init_ops_config_impl
+        source_lines = function_to_source(init_ops_config_impl)
 
-        # Configure memory and compute based on hardware
-        lines.extend(self._generate_hardware_config())
+        # We need to process the body lines to inject activation function
+        # The source_lines from function_to_source includes "def init_ops_config_impl():" and indentation
 
-        # Determine activation function string
-        if self.mlp_config.activation == "silu":
-            activation = "ttnn.silu"
-        elif self.mlp_config.activation == "gelu":
-            activation = "ttnn.gelu"
-        elif self.mlp_config.activation == "relu":
-            activation = "ttnn.relu"
-        else:
-            activation = f"ttnn.{self.mlp_config.activation}"
+        processed_lines = []
+        for line in source_lines:
+            current_line = line
+            if "activation=ttnn.silu" in current_line:
+                # Inject correct activation
+                if self.mlp_config.activation == "silu":
+                    activation = "ttnn.silu"
+                elif self.mlp_config.activation == "gelu":
+                    activation = "ttnn.gelu"
+                elif self.mlp_config.activation == "relu":
+                    activation = "ttnn.relu"
+                else:
+                    activation = f"ttnn.{self.mlp_config.activation}"
 
-        # Generate OpConfigs for each operation
-        lines.extend(
-            [
-                "# Op Configs",
-                "gate_config = OpConfig(",
-                "    compute_kernel_config=compute_kernel_config,",
-                "    memory_config=memory_config,",
-                "    dtype=ttnn.bfloat16",
-                ")",
-                "up_config = OpConfig(",
-                "    compute_kernel_config=compute_kernel_config,",
-                "    memory_config=memory_config,",
-                "    dtype=ttnn.bfloat16",
-                ")",
-                "down_config = OpConfig(",
-                "    compute_kernel_config=compute_kernel_config,",
-                "    memory_config=memory_config,",
-                "    dtype=ttnn.bfloat16",
-                ")",
-                f"self.ops = MLPOpConfigs(gate=gate_config, up=up_config, down=down_config, activation={activation})",
-                "",
-            ]
-        )
+                current_line = current_line.replace("activation=ttnn.silu", f"activation={activation}")
 
-        return lines
+            if "return MLPOpConfigs" in current_line:
+                # Change return to assignment to self.ops
+                current_line = current_line.replace("return MLPOpConfigs", "self.ops = MLPOpConfigs")
 
-    def _generate_hardware_config(self) -> list:
-        """Generate hardware-specific configuration setup"""
-        # Just passing None for now as we hardcoded defaults in the function
-        lines = generate_kernel_config("compute_kernel_config", None)
-        lines.extend(generate_memory_config_source("memory_config", None))
+            processed_lines.append(current_line)
 
-        return lines
+        return processed_lines[1:]  # Skip def line
 
     def generate_module_class(self) -> str:
         """Generate complete module class with initialization and forward"""
@@ -270,39 +256,29 @@ class TTTv2MLPCodeGen:
         device_name = "wormhole_b0"  # Hardcoded default for now as we don't have hw_config
 
         # Build complete class
-        class_lines = [
-            "from dataclasses import dataclass",
-            "from typing import Optional, Any, Callable",
-            "",
-            "class LightweightModule:",
-            '    """LightweightModule to replace nn.Module and remove torch dependency"""',
-            "    def __call__(self, *args, **kwargs):",
-            "        return self.forward(*args, **kwargs)",
-            "",
-            "@dataclass",
-            "class OpConfig:",
-            "    compute_kernel_config: Optional[Any] = None",
-            "    memory_config: Optional[Any] = None",
-            "    dtype: Optional[Any] = None",
-            "    program_config: Optional[Any] = None",
-            "",
-            "@dataclass",
-            "class MLPOpConfigs:",
-            "    gate: OpConfig",
-            "    up: OpConfig",
-            "    down: OpConfig",
-            "    activation: Callable",
-            "",
-            "@dataclass",
-            "class MLPWeights:",
-            "    gate_proj_weight: Any",
-            "    gate_proj_bias: Any",
-            "    up_proj_weight: Any",
-            "    up_proj_bias: Any",
-            "    down_proj_weight: Any",
-            "    down_proj_bias: Any",
-            "",
-        ]
+        class_lines = []
+
+        # Add imports
+        import_src = inspect.getsource(module_imports_template)
+        import_src = textwrap.dedent(import_src)
+        # Split lines and skip def line
+        import_lines = import_src.split("\n")[1:]
+        # Dedent body lines (they are indented inside the function)
+        # Assuming 4 spaces indentation for function body
+        import_lines = [line[4:] if line.startswith("    ") else line for line in import_lines]
+
+        class_lines.extend(import_lines)
+        class_lines.append("")
+
+        # Add template classes
+        class_lines.extend(class_to_source(LightweightModule))
+        class_lines.append("")
+        class_lines.extend(class_to_source(OpConfig))
+        class_lines.append("")
+        class_lines.extend(class_to_source(MLPOpConfigs))
+        class_lines.append("")
+        class_lines.extend(class_to_source(MLPWeights))
+        class_lines.append("")
 
         # Add the implementation function source code as a free function (not in class)
         impl_source = function_to_source(forward_mlp_impl)
@@ -310,122 +286,187 @@ class TTTv2MLPCodeGen:
             class_lines.append(line)
         class_lines.append("")
 
-        # Continue with class definition
-        class_lines.extend(
-            [
-                f"class TTTv2MLP_{device_name}(LightweightModule):",
-                f'    """',
-                f"    Auto-generated MLP module for {device_name}",
-                f"    Configuration:",
-                f"      - Hidden size: {self.mlp_config.hidden_size}",
-                f"      - Intermediate size: {self.mlp_config.intermediate_size}",
-                f"      - Activation: {self.mlp_config.activation}",
-                f'    """',
-                f"",
-                f"    def __init__(self, device):",
-                f"        super().__init__()",
-                f"        self.device = device",
-                f"        self.hidden_size = {self.mlp_config.hidden_size}",
-                f"        self.intermediate_size = {self.mlp_config.intermediate_size}",
-                f"        self.activation = '{self.mlp_config.activation}'",
-                f"        ",
-                f"        # Initialize weights",
-                f"        self._init_weights()",
-                f"        self._init_ops_config()",
-                # todo)) { for prefetcher
-                # f"        self.prefetcher = TtLlamaPrefetcherSetup(device, 1, 1, mode='decode')", if self.please_gen_prefetcher else ""
-                # f"        self.prefetcher.insert_tensor(self.weights.gate_proj_weight)",
-                # f"        self.prefetcher.insert_tensor(self.weights.up_proj_weight)",
-                # f"        self.prefetcher.insert_tensor(self.weights.down_proj_weight)",
-                # }
-                f"",
-                f"    def _init_weights(self):",
-                f'        """Initialize projection weights"""',
-                f"        import ttnn",
-                f"",
-                f"        # Gate Projection",
-                f"        gate_proj_weight = ttnn.create_weight(",
-                f"            shape=[{self.mlp_config.hidden_size}, {self.mlp_config.intermediate_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"        gate_proj_bias = ttnn.create_bias(",
-                f"            shape=[{self.mlp_config.intermediate_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"",
-                f"        # Up Projection",
-                f"        up_proj_weight = ttnn.create_weight(",
-                f"            shape=[{self.mlp_config.hidden_size}, {self.mlp_config.intermediate_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"        up_proj_bias = ttnn.create_bias(",
-                f"            shape=[{self.mlp_config.intermediate_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"",
-                f"        # Down Projection",
-                f"        down_proj_weight = ttnn.create_weight(",
-                f"            shape=[{self.mlp_config.intermediate_size}, {self.mlp_config.hidden_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"        down_proj_bias = ttnn.create_bias(",
-                f"            shape=[{self.mlp_config.hidden_size}],",
-                f"            dtype=ttnn.bfloat16,",
-                f"            device=self.device",
-                f"        )",
-                f"",
-                f"        self.weights = MLPWeights(",
-                f"            gate_proj_weight=gate_proj_weight, gate_proj_bias=gate_proj_bias,",
-                f"            up_proj_weight=up_proj_weight, up_proj_bias=up_proj_bias,",
-                f"            down_proj_weight=down_proj_weight, down_proj_bias=down_proj_bias",
-                f"        )",
-                f"",
-                f"        self.training = False",
-                f"",
-            ]
-        )
+        # Generate the main module class from template
+        template_source = class_to_source(MLPModuleTemplate)
 
-        # Add _init_ops_config method
-        class_lines.append("    def _init_ops_config(self):")
-        ops_config_lines = self.generate_ops_init_source()
-        for line in ops_config_lines:
-            if line.strip():
-                class_lines.append(f"        {line}")
+        # Remove the original docstring from template if present
+        # We assume docstring is at the beginning of the body
+        # A simple heuristic: if lines 1 start with """, skip until end of docstring
+        body_start_idx = 1
+        if len(template_source) > 1 and template_source[1].strip().startswith('"""'):
+            # Find end of docstring
+            for i in range(1, len(template_source)):
+                if template_source[i].strip().endswith('"""') and (i > 1 or len(template_source[i].strip()) > 3):
+                    body_start_idx = i + 1
+                    break
+                elif template_source[i].strip() == '"""' and i > 1:
+                    body_start_idx = i + 1
+                    break
+
+        # Construct final lines
+        new_class_name = f"TTTv2MLP_{device_name}"
+        final_lines = [template_source[0]]  # Class definition
+
+        # Add new docstring
+        config_doc = [
+            f'    """',
+            f"    Auto-generated MLP module for {device_name}",
+            f"    Configuration:",
+            f"      - Hidden size: {self.mlp_config.hidden_size}",
+            f"      - Intermediate size: {self.mlp_config.intermediate_size}",
+            f"      - Activation: {self.mlp_config.activation}",
+            f'    """',
+        ]
+        final_lines.extend(config_doc)
+
+        # Process body lines
+        skip = False
+        for line in template_source[body_start_idx:]:
+            if "self.hidden_size = 0" in line:
+                final_lines.append(line.replace("0", str(self.mlp_config.hidden_size)))
+            elif "self.intermediate_size = 0" in line:
+                final_lines.append(line.replace("0", str(self.mlp_config.intermediate_size)))
+            elif 'self.activation = "silu"' in line:
+                final_lines.append(line.replace('"silu"', f"'{self.mlp_config.activation}'"))
+            elif "def _init_ops_config(self):" in line:
+                # final_lines.append(line) # Don't append def line again as function_to_source does not include it?
+                # wait function_to_source DOES include def.
+                # generate_ops_init_source returns body lines now.
+
+                final_lines.append(line)  # Append the def line from template
+                ops_init_lines = self.generate_ops_init_source()
+                # Indent them. function_to_source body lines have 4 space indent.
+                # We need them inside the method, so +4 spaces?
+                # function_to_source returns:
+                # def ...:
+                #     """..."""
+                #     body...
+
+                # generate_ops_init_source returns:
+                #     """..."""
+                #     body...
+
+                # We want:
+                #     def _init_ops_config(self):
+                #         """..."""
+                #         body...
+
+                # So we need to indent whatever generate_ops_init_source returns by 4 spaces (since it's already indented for function level, but we are inside class)
+                # But wait, function_to_source returns lines that are already indented 4 spaces relative to def?
+                # Yes.
+
+                for l in ops_init_lines:
+                    # It already has 4 spaces indent from function_to_source logic
+                    # We are putting it inside a class, so we need 4 spaces more.
+                    if l.strip():
+                        # l is like "    x = 1"
+                        final_lines.append(f"    {l}")
+                    else:
+                        final_lines.append("")
+                final_lines.append("")  # Add blank line after _init_ops_config
+                skip = True  # Skip the 'pass' or body of template _init_ops_config
+            elif skip:
+                # Assuming _init_ops_config is the last method or we look for next dedent/def
+                if line.strip().startswith("def ") or (line.strip() != "" and not line.startswith("        ")):
+                    skip = False
+                    if line.strip():
+                        final_lines.append(line)
+                else:
+                    pass  # Skip body
             else:
-                class_lines.append("")
-        class_lines.append("")
+                final_lines.append(line)
 
-        # Add the forward function
-        forward_src = self.generate_forward_function()
-        forward_lines = forward_src.split("\n")
+        # Replace class name in the definition line
+        final_lines[0] = final_lines[0].replace("MLPModuleTemplate", new_class_name)
 
-        # Add definition of forward
-        class_lines.append("    def forward(self, x):")
-
-        for line in forward_lines:
-            if line.strip():
-                class_lines.append(f"        {line}")
-            else:
-                class_lines.append("")
+        class_lines.extend(final_lines)
 
         return "\n".join(class_lines)
+
+
+class SaveSource:
+    """Handles saving generated source code to files."""
+
+    def __init__(self, filename: Optional[str] = None):
+        """
+        Initialize save source handler.
+
+        Args:
+            filename: Optional filename. If None, defaults to a generated subdirectory
+                     relative to codegen_mlp.py. Can be a relative or absolute path.
+                     If None, defaults to generated/mlp_wormhole_b0_{hidden_size}.py
+        """
+        self._filename = filename
+        self._default_dir = None
+
+    def _get_default_dir(self) -> Path:
+        """Get the default generated directory."""
+        if self._default_dir is None:
+            # Get directory of codegen_mlp.py
+            codegen_file = Path(__file__).resolve()
+            codegen_dir = codegen_file.parent
+            self._default_dir = codegen_dir / "generated"
+            # Ensure directory exists
+            self._default_dir.mkdir(exist_ok=True)
+        return self._default_dir
+
+    def get_filename(self, mlp_config: Optional[MLPConfig] = None) -> Optional[str]:
+        """
+        Get the filename, computing default if needed.
+
+        Args:
+            mlp_config: Optional MLP config to use for default filename generation.
+
+        Returns:
+            Filename path or None if not saving.
+        """
+        if self._filename:
+            # If filename is provided, resolve it relative to default dir if it's relative
+            filepath = Path(self._filename)
+            if not filepath.is_absolute():
+                return str(self._get_default_dir() / filepath)
+            return str(filepath)
+
+        # Generate default filename based on config
+        if mlp_config:
+            default_name = f"mlp_wormhole_b0_{mlp_config.hidden_size}.py"
+        else:
+            default_name = "mlp_wormhole_b0_4096.py"
+
+        return str(self._get_default_dir() / default_name)
+
+    def save(self, source_code: str, mlp_config: Optional[MLPConfig] = None) -> None:
+        """
+        Save source code to file.
+
+        Args:
+            source_code: The generated source code to save.
+            mlp_config: Optional MLP config for filename generation.
+        """
+        filepath = self.get_filename(mlp_config)
+        if not filepath:
+            return
+
+        with open(filepath, "w") as f:
+            f.write("# Auto-generated by TTTv2 CodeGen\n")
+            f.write("import ttnn\n\n")
+            f.write(source_code)
 
 
 def MLP(
     mlp_config: MLPConfig,
     *,
-    # Removed hw_config
     gen_format: str = "class",
-    save_source: bool = False,
-    filename: str = "",
+    save_source: Optional[SaveSource] = None,
 ) -> Tuple[type, str]:
     """
     Main API to compile an MLP module for specific hardware and configuration.
+
+    Args:
+        mlp_config: MLP configuration.
+        gen_format: Generation format ("class" or "function").
+        save_source: Optional SaveSource instance. If provided, saves generated code to file.
+                    If None (default), no file is saved.
 
     Returns:
         - Compiled module class or pure function
@@ -441,21 +482,18 @@ def MLP(
     elif gen_format == "function":
         # For function format, we return the template implementation
         # But simpler to just rely on class format for now or adapt similarly
-        body = codegen.generate_forward_function()
-        source_code = function_to_source(forward_mlp_impl)
+        # body = codegen.generate_forward_function()
         # This is not quite right for "function" mode as it lacks context, but sticking to "class" mode primarily.
         # The previous logic for function mode was a bit hacked too.
         # Let's just return the implementation function source.
+        raise ValueError(f"TODO: Implement function format")
 
     else:
         raise ValueError(f"Invalid generation format: {gen_format}")
 
-    # Save source if requested
-    if save_source:
-        with open(filename, "w") as f:
-            f.write("# Auto-generated by TTTv2 CodeGen\n")
-            f.write("import ttnn\n\n")
-            f.write(source_code)
+    # Save source if save_source handler is provided
+    if save_source is not None:
+        save_source.save(source_code, mlp_config)
 
     # Compile the source into a class
     namespace = {"ttnn": ttnn, "Optional": Optional, "Any": Any, "Callable": Callable}
@@ -489,11 +527,10 @@ if __name__ == "__main__":
         dropout=0.0,
     )
 
+    save_source = SaveSource()
     module_class = MLP(
         mlp_config,
-        gen_format="class",
-        save_source=True,
-        filename=f"mlp_wormhole_b0_{mlp_config.hidden_size}.py",
+        save_source=save_source,
     )
 
     print(f"Generated class: {module_class}")
@@ -501,6 +538,8 @@ if __name__ == "__main__":
         print("\nGenerated source preview:")
         print("-" * 60)
 
-        with open(f"mlp_wormhole_b0_{mlp_config.hidden_size}.py", "r") as f:
-            print("\n".join(f.readlines()[:50]))
-        print("... [truncated]\n")
+        filename = save_source.get_filename(mlp_config)
+        if filename:
+            with open(filename, "r") as f:
+                print("\n".join(f.readlines()[:50]))
+            print("... [truncated]\n")
