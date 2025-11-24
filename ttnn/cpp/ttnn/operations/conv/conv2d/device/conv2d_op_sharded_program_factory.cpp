@@ -863,7 +863,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.push_back(0);
     }
     if (block_sharded) {
-        reader_compile_time_args.push_back(delay_cycles);
+        reader_compile_time_args.push_back(0);
     }
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
@@ -986,7 +986,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     if (block_sharded) {
-        writer_compile_time_args.push_back(delay_cycles);
+        writer_compile_time_args.push_back(0);
     }
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
@@ -1351,11 +1351,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
         uint32_t end_coord_x = bottom_right_core_out.x;
         uint32_t end_coord_y = bottom_right_core_out.y;
+        CoreCoord bottom_right_core_all = all_cores.bounding_box().end_coord;
+        uint32_t end_coord_y_all = bottom_right_core_all.y;
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
                 SetRuntimeArgs(
-                    program, compute_kernel_id, core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+                    program,
+                    compute_kernel_id,
+                    core,
+                    std::vector<uint32_t>{
+                        (end_coord_y_all - core.y) * delay_cycles, static_cast<uint32_t>(skip_compute)});
             }
         }
     }

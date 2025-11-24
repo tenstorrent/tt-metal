@@ -12,8 +12,15 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // #include "debug/dprint.h"
+
+FORCE_INLINE void delay_in_cycles(uint32_t cycles) {
+    while (cycles--) {
+        asm volatile("nop");
+    }
+}
 
 #define DEBUG_PRINT 0
 
@@ -243,8 +250,9 @@ void MAIN {
     // Skip dummy compute operations when possible to reduce di/dt issues, but allow dummy
     // tilize operations on cores without input data for code simplicity.
     bool skip_compute = false;
+    uint32_t delay_cycles = get_arg_val<uint32_t>(0);
     if constexpr (check_skip_compute) {
-        skip_compute = (bool)get_arg_val<uint32_t>(0);
+        skip_compute = (bool)get_arg_val<uint32_t>(1);
     }
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -358,7 +366,9 @@ void MAIN {
                 }
 
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
-
+                if (delay_cycles > 0) {
+                    delay_in_cycles(delay_cycles);
+                }
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
