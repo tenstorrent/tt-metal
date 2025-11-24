@@ -298,12 +298,11 @@ chan_id_t FabricContext::get_fabric_master_router_chan(ChipId chip_id) const {
 
 std::pair<std::vector<size_t>, size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
     std::vector<size_t> addresses_to_clear = {
-        this->router_config_->edm_local_sync_address, 
-        this->router_config_->edm_local_tensix_sync_address
-    };
-    
+
+        this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
+
     size_t buffer_size = 1;
-    
+
     if (this->router_config_->sender_txq_id != this->router_config_->receiver_txq_id) {
         addresses_to_clear.push_back(this->router_config_->to_sender_channel_remote_ack_counters_base_addr);
         addresses_to_clear.push_back(this->router_config_->to_sender_channel_remote_completion_counters_base_addr);
@@ -311,7 +310,7 @@ std::pair<std::vector<size_t>, size_t> FabricContext::get_fabric_router_addresse
         addresses_to_clear.push_back(this->router_config_->receiver_channel_remote_completion_counters_base_addr);
         buffer_size = 4;
     }
-    
+
     return {addresses_to_clear, buffer_size};
 }
 
