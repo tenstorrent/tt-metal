@@ -88,19 +88,19 @@ void validate_inputs(
     }
 }
 
-bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
+// bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
 
 void check_support(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_dtype = input_tensor.dtype();
-    const auto& index_dtype = index_tensor.dtype();
+    // const auto& index_dtype = index_tensor.dtype();
     const auto& source_dtype = source_tensor.dtype();
     const auto& input_layout = input_tensor.layout();
-    const auto& index_layout = index_tensor.layout();
+    // const auto& index_layout = index_tensor.layout();
     const auto& source_layout = source_tensor.layout();
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto& index_shape = index_tensor.logical_shape();
-    const auto& source_shape = source_tensor.logical_shape();
+    // const auto& input_shape = input_tensor.logical_shape();
+    // const auto& index_shape = index_tensor.logical_shape();
+    // const auto& source_shape = source_tensor.logical_shape();
     // check if to_layout fp32 tiled precision case
     TT_FATAL(
         !(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE),
@@ -113,7 +113,7 @@ void check_support(
         source_dtype,
         source_layout);
     // check if to_layout int32 tiled row>256 garbage case
-    constexpr uint32_t to_layout_int32_scatter_axis_max_length = 256;
+    // constexpr uint32_t to_layout_int32_scatter_axis_max_length = 256;
     // TT_FATAL(
     //     !(is_i32(input_dtype) && input_layout == Layout::TILE &&
     //       input_shape[dim] > to_layout_int32_scatter_axis_max_length),
@@ -248,6 +248,12 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
     if (*opt_reduction_string == "multiply") {
         return scatter::ScatterReductionType::MULTIPLY;
     }
+    if (*opt_reduction_string == "max" || *opt_reduction_string == "amax") {
+        return scatter::ScatterReductionType::AMAX;
+    }
+    if (*opt_reduction_string == "min" || *opt_reduction_string == "amin") {
+        return scatter::ScatterReductionType::AMIN;
+    }
     return scatter::ScatterReductionType::INVALID;
 }
 
@@ -265,7 +271,8 @@ Tensor ScatterOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
-    const std::optional<std::string>& opt_reduction_string) {
+    const std::optional<std::string>& opt_reduction_string,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
@@ -309,7 +316,8 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        reduction);
+        reduction,
+        sub_core_grid);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,
@@ -318,6 +326,17 @@ Tensor ScatterOperation::invoke(
         original_input_tensor_lshape,
         original_layout);
     return output;
+}
+
+Tensor ScatterAddOperation::invoke(
+    const Tensor& input_tensor,
+    const int32_t& dim,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    return ScatterOperation::invoke(
+        input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -50,18 +50,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto src_buffer = src_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
-    auto device = input_tensor.device();
-    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
     const uint32_t& source_stick_size = src_shape[-1];
     const uint32_t& output_stick_size = output_shape[-1];
-
-    const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
     // input dtype byte sizes
     const uint32_t& input_datum_size = input_tensor.element_size();
@@ -96,11 +88,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
     const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
 
-    create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
-    create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
-    create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
-    create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
-
     constexpr const char* reader_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp";
     constexpr const char* writer_kernel_path =
@@ -128,6 +115,21 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+
+    auto device = input_tensor.device();
+    const auto compute_with_storage_grid_size = args.sub_core_grid.has_value()
+                                                    ? args.sub_core_grid->bounding_box().end_coord
+                                                    : device->compute_with_storage_grid_size();
+
+    const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
+    const auto
+        [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
+
+    create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
+    create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
+    create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
+    create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
 
     auto reader_kernel =
         create_kernel(program, reader_kernel_path, all_cores, ReaderDataMovementConfig{compile_time_args});

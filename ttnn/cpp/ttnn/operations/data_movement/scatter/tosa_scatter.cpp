@@ -154,7 +154,8 @@ Tensor TOSAScatterOperation::invoke(
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
-        ScatterReductionType::INVALID);
+        ScatterReductionType::INVALID,
+        std::nullopt);
     return post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }
 
