@@ -26,13 +26,13 @@ pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/common/tests/pc
 
 Run the performant model with Trace+2CQs (with mean-pooling and random inputs):
 ```
-pytest --disable-warnings models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_data_parallel
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/tg/tests/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_data_parallel
 ```
 
 ### Performant Demo with Trace+2CQ
 Run the performant demo with Trace+2CQs:
 ```
-pytest --disable-warnings models/demos/tg/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/tg/demo/demo.py::test_sentence_bert_demo_inference
 ```
 
 ### Performant Interactive Demo with Trace+2CQ
@@ -43,7 +43,7 @@ pytest --disable-warnings models/demos/tg/sentence_bert/demo/demo.py::test_sente
 
 Run the interactive demo:
 ```
-pytest --disable-warnings models/demos/tg/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/tg/demo/interactive_demo.py::test_interactive_demo_inference
 ```
 
 ## Testing
@@ -54,7 +54,7 @@ pytest --disable-warnings models/demos/tg/sentence_bert/demo/interactive_demo.py
 
 Run the dataset evaluation:
 ```
-pytest --disable-warnings models/demos/tg/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_data_parallel
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/tg/demo/dataset_evaluation.py::test_sentence_bert_eval_data_parallel
 ```
 
 ## Details

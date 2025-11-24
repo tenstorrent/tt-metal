@@ -185,7 +185,7 @@ run_tg_mochi_demo_tests() {
 
 run_tg_sentence_bert_tests() {
 
-  pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
+  pytest models/demos/nlp/encoder/sentence_bert/tg/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
 
 }
 

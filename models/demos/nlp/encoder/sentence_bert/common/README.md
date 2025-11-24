@@ -22,4 +22,4 @@ Find sentence_bert instructions for the following device implementations:
 
 - QuietBox / LoudBox: [demos/t3000/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/t3000/README.md)
 
-- Galaxy: [demos/tg/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/tg/sentence_bert/README.md)
+- Galaxy: [demos/tg/sentence_bert/README](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/nlp/encoder/sentence_bert/tg/README.md)
