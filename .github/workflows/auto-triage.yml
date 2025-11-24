@@ -26,40 +26,10 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    env:
-      OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_OPENAI_KEY }}
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Install opencode CLI
-        run: |
-          curl -fsSL https://opencode.ai/install | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          opencode --version || (echo "opencode CLI installation failed" && exit 1)
-
       - name: Run auto triage
-        uses: tenstorrent/metal-infra-actions/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
           model: ${{ inputs.model }}
-
-      - name: Publish triage report to summary
-        if: always()
-        run: |
-          if [ -f .auto_triage/output/explanation.md ]; then
-            {
-              echo "## Auto Triage Report"
-              cat .auto_triage/output/explanation.md
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No explanation produced." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload auto-triage artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: auto-triage-output
-          path: .auto_triage/output
-          if-no-files-found: ignore
