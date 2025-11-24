@@ -62,7 +62,7 @@ def base_model_name_from_env():
     HF_MODEL = os.getenv("HF_MODEL")
 
     if HF_MODEL:
-        model_name = HF_MODEL.split("/")[-1]
+        model_name = HF_MODEL.strip("/").split("/")[-1]
     else:
         return None
 
