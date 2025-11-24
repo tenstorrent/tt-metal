@@ -177,7 +177,12 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
 
         # Load the same weights that the TTNN model uses
         logger.info("Loading reference model weights...")
-        reference_weights = setup["model_args"].load_state_dict()
+        reference_weights = setup["model_args"].load_state_dict(
+            weights_path=setup["model_args"].model_path,
+            head_dim=setup["model_args"].hf_config.head_dim,
+            dummy_weights=setup["model_args"].dummy_weights,
+            convert_to_meta_format=setup["model_args"].convert_to_meta_format,
+        )
 
         # Create reference model and load the real weights
         reference_model = GptOssForCausalLM(config)
@@ -210,7 +215,6 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],
-            instruct=True,
             global_batch_size=global_batch_size,
             optimizations=None,
             max_seq_len=max_seq_len,
@@ -236,7 +240,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             input_prompts,
             tokenizer,
             model_args,
-            instruct=True,
+            instruct=False,
             max_generated_tokens=max_generated_tokens,
             max_prefill_len=1024,
         )
@@ -313,7 +317,6 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],
-            instruct=True,
             global_batch_size=global_batch_size,
             optimizations=None,
             max_seq_len=max_seq_len,
@@ -339,7 +342,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             input_prompts,
             tokenizer,
             model_args,
-            instruct=True,
+            instruct=False,
             max_generated_tokens=max_generated_tokens,
             max_prefill_len=1024,
         )

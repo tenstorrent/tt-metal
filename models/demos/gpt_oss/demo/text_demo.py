@@ -17,6 +17,9 @@ Updated to use refactored TestFactory and MeshConfig patterns:
 - Passes mesh_config to create_tt_model for proper sharding
 """
 
+import json
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -29,7 +32,7 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 from models.demos.gpt_oss.tt.common import create_tt_model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
+from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 
 # Import specific utilities from tt_transformers
@@ -41,17 +44,16 @@ def prepare_gpt_oss_generator_args(
     num_devices,
     data_parallel,
     mesh_device,
-    instruct,
     global_batch_size,
     optimizations,
     max_seq_len,
     page_params,
     paged_attention,
     mesh_config=None,
+    state_dict=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
     submesh_devices = create_submeshes(mesh_device, data_parallel)
-    state_dict = None
 
     # Hybrid requires a model per submesh
     model_args = []
@@ -71,7 +73,6 @@ def prepare_gpt_oss_generator_args(
         # Use GPT-OSS create_tt_model directly!
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
-            instruct=instruct,
             max_batch_size=global_batch_size // data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
@@ -101,49 +102,116 @@ def prepare_gpt_oss_generator_args(
     return model_args, model, page_table, tt_kv_cache, tokenizer, processor, paged_attention_config
 
 
+@pytest.mark.parametrize(
+    "mesh_shape",
+    [
+        # LoudBox (1×8) - Single device, low latency
+        (1, 8),
+        # Galaxy (4×8) - Multi-device mesh, higher throughput
+        (4, 8),
+    ],
+    ids=["mesh_1x8", "mesh_4x8"],
+)
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params",
     [
-        (  # LoudBox (1×8) - Single device, low latency
-            (1, 8),  # mesh_shape
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
             4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            True,  # instruct (set to False for base model, True for instruct model)
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
         ),
-        (  # Galaxy (4×8) - Multi-device mesh, higher throughput
-            (4, 8),  # mesh_shape
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
             4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            True,  # instruct
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            4 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            16 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            64 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (
+            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
         ),
     ],
-    ids=["mesh_1x8", "mesh_4x8"],
+    ids=[
+        "prefill_128",
+        "prefill_1k",
+        "prefill_4k",
+        "prefill_16k",
+        "prefill_32k",
+        "prefill_64k",
+        "prefill_128k",
+    ],
 )
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(
     mesh_device,
     device_params,
     mesh_shape,
+    input_prompts,
     data_parallel,
     batch_size,
     repeat_batches,
     max_seq_len,
     max_generated_tokens,
-    instruct,
     page_params,
     sampling_params,
     is_ci_env,
+    state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -190,13 +258,13 @@ def test_gpt_oss_demo(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
-        instruct=instruct,
         global_batch_size=global_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
+        state_dict=state_dict,
     )
 
     # Create generator (match tt-transformers pattern)
@@ -204,10 +272,15 @@ def test_gpt_oss_demo(
 
     profiler.end(f"generator_setup", iteration=batch_idx)
 
-    # Prepare input prompts like tt_transformers does
-    input_prompts = ["What are the prime factors of 1?"]
-    if len(input_prompts) == 1:  # Manual input - repeat for global batch size
+    # Prepare input prompts
+    logger.info(f"Reading inputs...")
+    profiler.start("loading_inputs")
+    if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
+        all_prompts = input_prompts
+    else:  # Inputs from file
+        input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, instruct=False)
+    profiler.end("loading_inputs")
 
     # Create repeat batches (like tt-transformers)
     repeat_batch_prompts = []
@@ -231,7 +304,12 @@ def test_gpt_oss_demo(
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
-            input_prompts_batch, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+            input_prompts_batch,
+            tokenizer,
+            model_args,
+            instruct=False,
+            max_generated_tokens=max_generated_tokens,
+            max_prefill_len=max_seq_len,
         )
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
@@ -349,7 +427,7 @@ def test_gpt_oss_demo(
         logger.info("Finished decoding, printing the final outputs...\n")
         for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts_batch)):
             text = tokenizer.decode(output)
-            prompt_including_assistant_tags = tokenizer.decode(model_args[0].encode_prompt(prompt, instruct=instruct))
+            prompt_including_assistant_tags = tokenizer.decode(model_args[0].encode_prompt(prompt))
             text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
             short_prompt = (
                 (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
@@ -412,35 +490,18 @@ def test_gpt_oss_demo(
     logger.info("GPT-OSS demo completed successfully!")
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
+    tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
     model_name = model_args[0].model_name
     model_device_key = f"{tt_device_name}_{model_name}"
 
-    dict_target_prefill_tok_s = {
-        "T3K_gpt-oss-20b": 43,
-        "T3K_gpt-oss-120b": 43,
-        "TG_gpt-oss-20b": 43,
-        "TG_gpt-oss-120b": 43,
-    }
-
-    dict_target_decode_tok_s_u = {
-        "T3K_gpt-oss-20b": 17.5,
-        "T3K_gpt-oss-120b": 17.5,
-        "TG_gpt-oss-20b": 17.5,
-        "TG_gpt-oss-120b": 17.5,
-    }
-
-    dict_target_decode_tok_s = {
-        "T3K_gpt-oss-20b": 2200,
-        "T3K_gpt-oss-120b": 2200,
-        "TG_gpt-oss-20b": 2200,
-        "TG_gpt-oss-120b": 2200,
-    }
+    perf_targets = json.load(open(Path(__file__).parent.parent.joinpath("perf_targets.json")))
 
     targets = {
-        "prefill_t/s": dict_target_prefill_tok_s[model_device_key],
-        "decode_t/s": dict_target_decode_tok_s[model_device_key],
-        "decode_t/s/u": dict_target_decode_tok_s_u[model_device_key],
+        "prefill_t/s": perf_targets["targets"]["TTFT"][model_device_key],
+        "decode_t/s": perf_targets["targets"]["decode_tok_s"][model_device_key],
+        "decode_t/s/u": perf_targets["targets"]["decode_tok_s_u"][model_device_key],
     }
+    breakpoint()
 
     if is_ci_env:
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
@@ -487,36 +548,20 @@ def test_gpt_oss_demo(
 
         # check measurements against CI performance targets
         logger.info(f"Checking measurements against CI performance targets for {model_name} on {tt_device_name}")
-        # Targets set to 0.95x observed values for decode rates (higher is better)
-        # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
-        ci_target_ttft = {
-            # N150 targets (milliseconds) - lower is better
-            "T3K_gpt-oss-20b": (700, 1.2),
-            "TG_gpt-oss-20b": (450, 1.2),
-            "T3K_gpt-oss-120b": (3600, 1.2),
-            "TG_gpt-oss-120b": (1600, 1.2),
-        }
-        ci_target_decode_tok_s_u = {
-            "T3K_gpt-oss-20b": 13,
-            "TG_gpt-oss-20b": 13,
-            "T3K_gpt-oss-120b": 8,
-            "TG_gpt-oss-120b": 8,
-        }
-
         # Only call verify_perf if the model_device_key exists in the targets
         ci_targets = {}
-        if model_device_key in ci_target_ttft:
-            current_ttft_target = ci_target_ttft[model_device_key]
+        if model_device_key in perf_targets["ci"]["TTFT"]:
+            current_ttft_target = perf_targets["ci"]["TTFT"][model_device_key]
             if isinstance(current_ttft_target, tuple):
                 high_tol_percentage = current_ttft_target[1]
                 current_ttft_target = current_ttft_target[0]
             else:
                 high_tol_percentage = 1.15
             ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
-        if model_device_key in ci_target_decode_tok_s_u:
-            ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+        if model_device_key in perf_targets["ci"]["decode_tok_s_u"]:
+            ci_targets["decode_t/s/u"] = perf_targets["ci"]["decode_tok_s_u"][model_device_key]
             # calculate from per-user rate
-            ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+            ci_targets["decode_t/s"] = perf_targets["ci"]["decode_tok_s_u"][model_device_key] * global_batch_size
 
         if ci_targets:  # Only verify performance if we have targets for this model/device combination
             verify_perf(
