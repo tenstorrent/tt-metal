@@ -22,7 +22,8 @@ struct PagedFillCacheDeviceOperation {
     using tensor_args_t = fill::tensor_args_t;
     using spec_return_value_t = fill::spec_return_value_t;
     using tensor_return_value_t = fill::tensor_return_value_t;
-    using program_factory_t = std::variant<program::PagedFillCacheProgramFactory>;
+    using program_factory_t =
+        std::variant<program::PagedFillCacheProgramFactory, program::PagedFillCacheMeshWorkloadFactory>;
     using shared_variables_t = program::PagedFillCacheProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

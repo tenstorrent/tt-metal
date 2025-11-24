@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.generation_utils import get_logits_processor
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 
 
@@ -238,8 +238,6 @@ def run_summarization_dataset_inference(device, batch_size, sequence_length, max
     ),
 )
 def test_t5_demo_for_summarize(input_path, device, batch_size, sequence_length, max_tokens, model_name):
-    disable_persistent_kernel_cache()
-
     return run_summarization_inference(input_path, device, batch_size, sequence_length, max_tokens, model_name)
 
 
@@ -251,6 +249,4 @@ def test_t5_demo_for_summarize(input_path, device, batch_size, sequence_length, 
     ),
 )
 def test_t5_demo_for_summarize_dataset(device, batch_size, sequence_length, max_tokens, model_name):
-    disable_persistent_kernel_cache()
-
     return run_summarization_dataset_inference(device, batch_size, sequence_length, max_tokens, model_name)

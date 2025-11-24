@@ -43,4 +43,21 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
+struct PagedTiledFusedUpdateCacheMeshWorkloadFactory {
+    using shared_variables_t = PagedTiledFusedUpdateCacheSharedVariables;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
 }  // namespace ttnn::operations::experimental::paged_cache::fused_update::program::tiled

@@ -6,8 +6,6 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/constants.hpp>
-
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn {

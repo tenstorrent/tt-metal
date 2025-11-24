@@ -20,7 +20,8 @@ struct PagedUpdateCacheDeviceOperation {
     using tensor_args_t = update::tensor_args_t;
     using spec_return_value_t = update::spec_return_value_t;
     using tensor_return_value_t = update::tensor_return_value_t;
-    using program_factory_t = std::variant<program::PagedUpdateCacheProgramFactory>;
+    using program_factory_t =
+        std::variant<program::PagedUpdateCacheProgramFactory, program::PagedUpdateCacheMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

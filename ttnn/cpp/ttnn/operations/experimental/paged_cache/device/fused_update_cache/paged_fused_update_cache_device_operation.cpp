@@ -14,11 +14,20 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor1 = tensor_args.input_tensor1;
     const auto& input_tensor2 = tensor_args.input_tensor2;
+    const bool use_mesh_workload_factory = operation_attributes.mesh_coords.has_value();
 
     if (input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE) {
-        return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
+        if (use_mesh_workload_factory) {
+            return program::tiled::PagedTiledFusedUpdateCacheMeshWorkloadFactory{};
+        } else {
+            return program::tiled::PagedTiledFusedUpdateCacheProgramFactory{};
+        }
     } else if (input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR) {
-        return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
+        if (use_mesh_workload_factory) {
+            return program::rm::PagedRowMajorFusedUpdateCacheMeshWorkloadFactory{};
+        } else {
+            return program::rm::PagedRowMajorFusedUpdateCacheProgramFactory{};
+        }
     } else {
         TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
     }
@@ -232,7 +241,7 @@ void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 PagedFusedUpdateCacheDeviceOperation::spec_return_value_t PagedFusedUpdateCacheDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
-    return {};
+    return {tensor_args.cache_tensor1.tensor_spec(), tensor_args.cache_tensor2.tensor_spec()};
 }
 
 PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCacheDeviceOperation::create_output_tensors(
@@ -243,58 +252,10 @@ PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCach
 
 tt::stl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& cache_tensor1 = tensor_args.cache_tensor1;
-    const auto& input_tensor1 = tensor_args.input_tensor1;
-    const auto& cache_tensor2 = tensor_args.cache_tensor2;
-    const auto& input_tensor2 = tensor_args.input_tensor2;
-
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
-    tt::stl::hash::hash_t hash = 0;
-    hash = tt::stl::hash::hash_objects(
-        hash,
-        // Exclude update_idxs (runtime-only, only used in override_runtime_arguments)
-        // Exclude batch_offset (runtime-only, always 0 per validation)
-        operation_attributes.compute_kernel_config,  // Affects fp32_dest_acc_en in ComputeConfig
-        operation_attributes.share_cache,            // Affects cache_batch_num_tiles in compile-time args
-        operation_attributes.mesh_coords,            // Affects mesh workload filtering
-        program_factory.index(),                     // Include program factory variant index
-        cache_tensor1.dtype(),
-        cache_tensor1.layout(),
-        cache_tensor1.memory_config(),
-        cache_tensor1.padded_shape(),
-        input_tensor1.dtype(),
-        input_tensor1.layout(),
-        input_tensor1.memory_config(),
-        input_tensor1.padded_shape(),
-        cache_tensor2.dtype(),
-        cache_tensor2.layout(),
-        cache_tensor2.memory_config(),
-        cache_tensor2.padded_shape(),
-        input_tensor2.dtype(),
-        input_tensor2.layout(),
-        input_tensor2.memory_config(),
-        input_tensor2.padded_shape());
-
-    if (tensor_args.update_idxs_tensor.has_value()) {
-        hash = tt::stl::hash::hash_objects(
-            hash,
-            tensor_args.update_idxs_tensor.value().dtype(),
-            tensor_args.update_idxs_tensor.value().layout(),
-            tensor_args.update_idxs_tensor.value().memory_config(),
-            tensor_args.update_idxs_tensor.value().padded_shape());
-    }
-
-    if (tensor_args.page_table.has_value()) {
-        hash = tt::stl::hash::hash_objects(
-            hash,
-            tensor_args.page_table.value().dtype(),
-            tensor_args.page_table.value().layout(),
-            tensor_args.page_table.value().memory_config(),
-            tensor_args.page_table.value().padded_shape());
-    }
-
-    return hash;
+    return operation::hash_operation<PagedFusedUpdateCacheDeviceOperation>(
+        operation_attributes, tensor_args, program_factory.index());
 }
 
 std::tuple<
