@@ -21,6 +21,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
+// TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 constexpr int UNTILIZE_BLOCK_SIZE = 32;
 
 // In order to make circular buffer indices sequential, we use variable to keep track of the next available index.
