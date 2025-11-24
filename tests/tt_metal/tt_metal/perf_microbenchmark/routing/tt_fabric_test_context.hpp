@@ -166,43 +166,7 @@ public:
 
         // Handle latency test mode setup (after policy management)
         if (config.latency_test_mode) {
-            this->set_latency_test_mode(true);
-
-            // Validate that latency tests don't use multiple iterations
-            if (config.iteration_number > 0) {
-                log_warning(
-                    tt::LogTest,
-                    "Latency tests do not support multiple iterations. Use num_bursts in the test config instead to "
-                    "collect multiple samples.");
-            }
-
-            // Identify sender and responder devices
-            TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
-            TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
-
-            const auto& sender = config.senders[0];
-            const auto& pattern = sender.patterns[0];
-            const auto& dest = pattern.destination.value();
-
-            latency_sender_device_ = sender.device;
-            latency_responder_device_ = dest.device.value();
-
-            // Store latency parameters for use in compile_programs()
-            latency_burst_size_ = sender.latency_burst_size;    // Extract from sender config
-            latency_num_bursts_ = pattern.num_packets.value();  // num_packets represents num_bursts
-            latency_payload_size_ = pattern.size.value();
-            latency_noc_send_type_ = pattern.ntype.value();
-            if (sender.core.has_value()) {
-                latency_worker_core_ = sender.core.value();
-            }
-
-            log_info(
-                tt::LogTest,
-                "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
-                latency_sender_device_.chip_id,
-                latency_responder_device_.chip_id,
-                latency_payload_size_,
-                latency_num_bursts_);
+            setup_latency_test_mode(config);
         }
     }
 
@@ -784,6 +748,47 @@ private:
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
         // Note: latency_results_ is kept for golden comparison after all tests complete
+    }
+
+    // Configures latency test mode by extracting and storing parameters from the test config
+    void setup_latency_test_mode(const TestConfig& config) {
+        this->set_latency_test_mode(true);
+
+        // Validate that latency tests don't use multiple iterations
+        if (config.iteration_number > 0) {
+            log_warning(
+                tt::LogTest,
+                "Latency tests do not support multiple iterations. Use num_bursts in the test config instead to "
+                "collect multiple samples.");
+        }
+
+        // Identify sender and responder devices
+        TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
+        TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
+
+        const auto& sender = config.senders[0];
+        const auto& pattern = sender.patterns[0];
+        const auto& dest = pattern.destination.value();
+
+        latency_sender_device_ = sender.device;
+        latency_responder_device_ = dest.device.value();
+
+        // Store latency parameters for use in compile_programs()
+        latency_burst_size_ = sender.latency_burst_size;    // Extract from sender config
+        latency_num_bursts_ = pattern.num_packets.value();  // num_packets represents num_bursts
+        latency_payload_size_ = pattern.size.value();
+        latency_noc_send_type_ = pattern.ntype.value();
+        if (sender.core.has_value()) {
+            latency_worker_core_ = sender.core.value();
+        }
+
+        log_info(
+            tt::LogTest,
+            "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
+            latency_sender_device_.chip_id,
+            latency_responder_device_.chip_id,
+            latency_payload_size_,
+            latency_num_bursts_);
     }
 
     void add_traffic_config(const TestTrafficConfig& traffic_config) {
