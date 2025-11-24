@@ -456,6 +456,7 @@ private:
         resolved_test.seed = parsed_test.seed;
         resolved_test.global_sync_configs = parsed_test.global_sync_configs;
         resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.latency_test_mode = parsed_test.latency_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
@@ -479,6 +480,7 @@ private:
         resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
         resolved_sender.core = parsed_sender.core;
         resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
+        resolved_sender.latency_burst_size = parsed_sender.latency_burst_size;  // Copy latency burst size
 
         resolved_sender.patterns.reserve(parsed_sender.patterns.size());
         for (const auto& parsed_pattern : parsed_sender.patterns) {
@@ -657,8 +659,9 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
+                            // Explicitly preserve benchmark_mode and latency_test_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
+                            next_config.latency_test_mode = current_config.latency_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -683,8 +686,9 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
+                            // Explicitly preserve benchmark_mode and latency_test_mode
                             next_config.benchmark_mode = current_config.benchmark_mode;
+                            next_config.latency_test_mode = current_config.latency_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {

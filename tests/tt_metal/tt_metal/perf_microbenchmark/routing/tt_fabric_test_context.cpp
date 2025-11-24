@@ -407,3 +407,120 @@ void TestContext::set_comparison_statistics_csv_file_path() {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
     comparison_statistics_csv_file_path_ = output_path / comparison_statistics_oss.str();
 }
+
+void TestContext::collect_latency_results() {
+    log_info(tt::LogTest, "Collecting latency results from sender device");
+
+    // Find the sender device
+    const TestDevice* sender_device = nullptr;
+    MeshCoordinate sender_coord{0, 0};
+    for (const auto& [coord, device] : test_devices_) {
+        if (device.get_node_id() == latency_sender_device_) {
+            sender_device = &device;
+            sender_coord = coord;
+            break;
+        }
+    }
+
+    TT_FATAL(sender_device != nullptr, "Could not find latency sender device");
+
+    // Get the sender cores (should be exactly one)
+    const auto& senders = sender_device->get_senders();
+    TT_FATAL(senders.size() == 1, "Latency sender should have exactly one core");
+    const auto& [sender_core, sender_worker] = *senders.begin();
+
+    // Calculate result buffer size needed for latency samples
+    // Each sample is a pair of uint64_t (start_timestamp, end_timestamp)
+    uint32_t num_samples = 0;
+    for (const auto& [config, _] : sender_worker.configs_) {
+        num_samples += config.parameters.num_packets;  // num_packets represents num_bursts in latency mode
+    }
+    uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);  // 2 timestamps per sample
+
+    // Read latency samples from sender device
+    auto result_data = fixture_->read_buffer_from_cores(
+        sender_coord, {sender_core}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+
+    log_info(tt::LogTest, "Collected {} latency samples", num_samples);
+}
+
+void TestContext::report_latency_results(const TestConfig& config) {
+    log_info(tt::LogTest, "Reporting latency results for test: {}", config.parametrized_name);
+
+    // Find the sender device
+    const TestDevice* sender_device = nullptr;
+    MeshCoordinate sender_coord{0, 0};
+    for (const auto& [coord, device] : test_devices_) {
+        if (device.get_node_id() == latency_sender_device_) {
+            sender_device = &device;
+            sender_coord = coord;
+            break;
+        }
+    }
+
+    TT_FATAL(sender_device != nullptr, "Could not find latency sender device");
+
+    // Use stored latency parameters
+    uint32_t num_samples = latency_num_bursts_;
+    uint32_t payload_size = latency_payload_size_;
+    uint32_t result_buffer_size = num_samples * 2 * sizeof(uint64_t);
+
+    // Read latency samples from sender device
+    auto result_data = fixture_->read_buffer_from_cores(
+        sender_coord, {latency_worker_core_}, sender_memory_map_.get_result_buffer_address(), result_buffer_size);
+
+    const auto& data = result_data.at(latency_worker_core_);
+
+    // Parse timestamp pairs and compute latencies
+    std::vector<uint64_t> latencies_cycles;
+    latencies_cycles.reserve(num_samples);
+
+    for (uint32_t i = 0; i < num_samples; i++) {
+        uint64_t start_ts = static_cast<uint64_t>(data[i * 2]) | (static_cast<uint64_t>(data[i * 2 + 1]) << 32);
+        uint64_t end_ts = static_cast<uint64_t>(data[i * 2 + 2]) | (static_cast<uint64_t>(data[i * 2 + 3]) << 32);
+
+        if (end_ts > start_ts) {
+            latencies_cycles.push_back(end_ts - start_ts);
+        }
+    }
+
+    if (latencies_cycles.empty()) {
+        log_warning(tt::LogTest, "No valid latency samples collected");
+        return;
+    }
+
+    // Sort for percentile calculation
+    std::sort(latencies_cycles.begin(), latencies_cycles.end());
+
+    // Get device frequency for conversion to ns
+    uint32_t freq_mhz = get_device_frequency_mhz(latency_sender_device_);
+    double freq_ghz = static_cast<double>(freq_mhz) / 1000.0;
+    double ns_per_cycle = 1.0 / freq_ghz;
+
+    // Calculate statistics
+    uint64_t min_cycles = latencies_cycles.front();
+    uint64_t max_cycles = latencies_cycles.back();
+    uint64_t sum_cycles = std::accumulate(latencies_cycles.begin(), latencies_cycles.end(), 0ULL);
+    double avg_cycles = static_cast<double>(sum_cycles) / latencies_cycles.size();
+
+    uint64_t p50_cycles = latencies_cycles[latencies_cycles.size() / 2];
+    uint64_t p99_cycles = latencies_cycles[static_cast<size_t>(latencies_cycles.size() * 0.99)];
+
+    // Convert to nanoseconds
+    double min_ns = min_cycles * ns_per_cycle;
+    double max_ns = max_cycles * ns_per_cycle;
+    double avg_ns = avg_cycles * ns_per_cycle;
+    double p50_ns = p50_cycles * ns_per_cycle;
+    double p99_ns = p99_cycles * ns_per_cycle;
+
+    // Log results
+    log_info(tt::LogTest, "=== Latency Test Results for {} ===", config.parametrized_name);
+    log_info(tt::LogTest, "  Payload size: {} bytes", payload_size);
+    log_info(tt::LogTest, "  Num samples: {}", latencies_cycles.size());
+    log_info(tt::LogTest, "  Min latency: {:.2f} ns ({} cycles)", min_ns, min_cycles);
+    log_info(tt::LogTest, "  Max latency: {:.2f} ns ({} cycles)", max_ns, max_cycles);
+    log_info(tt::LogTest, "  Avg latency: {:.2f} ns ({:.0f} cycles)", avg_ns, avg_cycles);
+    log_info(tt::LogTest, "  P50 latency: {:.2f} ns ({} cycles)", p50_ns, p50_cycles);
+    log_info(tt::LogTest, "  P99 latency: {:.2f} ns ({} cycles)", p99_ns, p99_cycles);
+    log_info(tt::LogTest, "=====================================");
+}

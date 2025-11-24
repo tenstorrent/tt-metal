@@ -136,28 +136,68 @@ public:
     }
 
     void prepare_for_test(const TestConfig& config) {
-        // Skip reconstruction entirely for explicit YAML policies
-        if (!use_dynamic_policies_) {
+        // Skip reconstruction entirely for explicit YAML policies (but latency mode still needs setup below)
+        if (!use_dynamic_policies_ && !config.latency_test_mode) {
             return;  // Early return - allocator and maps already correct, reset() will clean up state
         }
 
-        // Ask policy manager if a new policy is needed
-        // Returns nullopt if cached policy should be reused, otherwise returns new policy
-        auto new_policy = policy_manager_->get_new_policy_for_test(config);
+        if (use_dynamic_policies_) {
+            // Ask policy manager if a new policy is needed
+            // Returns nullopt if cached policy should be reused, otherwise returns new policy
+            auto new_policy = policy_manager_->get_new_policy_for_test(config);
 
-        if (new_policy.has_value()) {
-            // New policy computed - need to reconstruct allocator and memory maps
-            update_memory_maps(new_policy.value());
+            if (new_policy.has_value()) {
+                // New policy computed - need to reconstruct allocator and memory maps
+                update_memory_maps(new_policy.value());
 
-            allocator_.reset();
-            allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-                *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
+                allocator_.reset();
+                allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+                    *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
+            }
+
+            // Validate packet size (uses either new policy or cached policy)
+            const auto& policy_to_validate =
+                new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
+            validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
         }
 
-        // Validate packet size (uses either new policy or cached policy)
-        const auto& policy_to_validate =
-            new_policy.has_value() ? new_policy.value() : policy_manager_->get_cached_policy();
-        validate_packet_sizes_for_policy(config, policy_to_validate.default_payload_chunk_size);
+        // Handle latency test mode setup (after policy management)
+        if (config.latency_test_mode) {
+            this->set_latency_test_mode(true);
+
+            // Identify sender and responder devices
+            TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
+            TT_FATAL(config.senders[0].patterns.size() == 1, "Latency test mode requires exactly one pattern");
+
+            const auto& sender = config.senders[0];
+            const auto& pattern = sender.patterns[0];
+            const auto& dest = pattern.destination.value();
+
+            latency_sender_device_ = sender.device;
+            latency_responder_device_ = dest.device.value();
+
+            // Store latency parameters for use in compile_programs()
+            latency_burst_size_ = sender.latency_burst_size;    // Extract from sender config
+            latency_num_bursts_ = pattern.num_packets.value();  // num_packets represents num_bursts
+            latency_payload_size_ = pattern.size.value();
+            latency_noc_send_type_ = pattern.ntype.value();
+            latency_worker_core_ = sender.core.value();
+
+            // Allocate L1 addresses for latency semaphores
+            // Use fixed L1 addresses that don't conflict with memory maps
+            // These will be zeroed out by the kernel initialization
+            constexpr uint32_t LATENCY_SEMAPHORE_BASE_ADDRESS = 0x80000;  // Safe L1 address
+            latency_semaphore_addresses_[latency_sender_device_] = LATENCY_SEMAPHORE_BASE_ADDRESS;
+            latency_semaphore_addresses_[latency_responder_device_] = LATENCY_SEMAPHORE_BASE_ADDRESS;
+
+            log_info(
+                tt::LogTest,
+                "Latency test mode: sender={}, responder={}, payload={} bytes, bursts={}",
+                latency_sender_device_.chip_id,
+                latency_responder_device_.chip_id,
+                latency_payload_size_,
+                latency_num_bursts_);
+        }
     }
 
     uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
@@ -181,6 +221,14 @@ public:
     }
 
     void process_traffic_config(TestConfig& config) {
+        // Latency test mode: skip normal resource allocation and traffic config setup
+        if (config.latency_test_mode) {
+            log_debug(tt::LogTest, "Latency test mode: skipping normal traffic config processing");
+            // Latency mode uses specialized kernels set up in compile_programs()
+            // No need for allocator or traffic configs
+            return;
+        }
+
         // Allocate resources
         log_debug(tt::LogTest, "Allocating resources for test config");
         this->allocator_->allocate_resources(config);
@@ -363,6 +411,28 @@ public:
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
 
+            // Set up latency test mode if enabled
+            if (latency_test_mode_) {
+                bool is_sender = (device_id == latency_sender_device_);
+                bool is_responder = (device_id == latency_responder_device_);
+
+                if (is_sender || is_responder) {
+                    FabricNodeId peer_node = is_sender ? latency_responder_device_ : latency_sender_device_;
+
+                    test_device.set_latency_test_mode(
+                        true,
+                        is_sender,
+                        is_responder,
+                        latency_burst_size_,
+                        latency_num_bursts_,
+                        latency_semaphore_addresses_[device_id],
+                        latency_payload_size_,
+                        latency_noc_send_type_,
+                        peer_node,
+                        latency_worker_core_);
+                }
+            }
+
             test_device.create_kernels();
             auto& program_handle = test_device.get_program_handle();
             if (program_handle.impl().num_kernels()) {
@@ -398,6 +468,12 @@ public:
     }
 
     void validate_results() {
+        // Skip validation in benchmark or latency mode (neither validates packet contents)
+        if (benchmark_mode_ || latency_test_mode_) {
+            log_info(tt::LogTest, "Skipping validation ({})", benchmark_mode_ ? "benchmark_mode" : "latency_test_mode");
+            return;
+        }
+
         constexpr uint32_t MAX_CONCURRENT_DEVICES = 16;
 
         // Convert map to vector for easier indexing
@@ -444,6 +520,9 @@ public:
         // Generate CSV file with bandwidth results
         generate_bandwidth_csv(config);
     }
+
+    void collect_latency_results();
+    void report_latency_results(const TestConfig& config);
 
     void generate_bandwidth_summary() {
         // Load golden CSV file
@@ -515,9 +594,13 @@ public:
 
     void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
 
+    void set_latency_test_mode(bool latency_test_mode) { latency_test_mode_ = latency_test_mode; }
+
     bool get_benchmark_mode() { return benchmark_mode_; }
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
+
+    bool get_latency_test_mode() { return latency_test_mode_; }
 
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
@@ -625,6 +708,7 @@ public:
 private:
     void reset_local_variables() {
         benchmark_mode_ = false;
+        latency_test_mode_ = false;
         global_sync_ = false;
         global_sync_val_ = 0;
         outgoing_traffic_.clear();
@@ -632,6 +716,7 @@ private:
         device_core_cycles_.clear();
         bandwidth_results_.clear();
         code_profiling_entries_.clear();
+        latency_semaphore_addresses_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
@@ -1692,6 +1777,15 @@ private:
 
     bool benchmark_mode_ = false;     // Benchmark mode for current test
     bool telemetry_enabled_ = false;  // Telemetry enabled for current test
+    bool latency_test_mode_ = false;  // Latency test mode for current test (mutually exclusive with benchmark_mode)
+    FabricNodeId latency_sender_device_{MeshId{0}, 0};
+    FabricNodeId latency_responder_device_{MeshId{0}, 0};
+    std::unordered_map<FabricNodeId, tt::tt_metal::DeviceAddr> latency_semaphore_addresses_;
+    uint32_t latency_burst_size_ = 1;
+    uint32_t latency_num_bursts_ = 100;
+    uint32_t latency_payload_size_ = 0;
+    NocSendType latency_noc_send_type_ = NocSendType::NOC_UNICAST_WRITE;
+    CoreCoord latency_worker_core_{0, 0};
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
 

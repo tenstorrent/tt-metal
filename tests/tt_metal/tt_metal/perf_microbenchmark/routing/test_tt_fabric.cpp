@@ -232,12 +232,23 @@ int main(int argc, char** argv) {
                     test_context.report_code_profiling_results();
                 }
 
-                test_context.validate_results();
-                log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
+                // Validation (skip in benchmark or latency mode)
+                if (!test_context.get_benchmark_mode() && !test_context.get_latency_test_mode()) {
+                    test_context.validate_results();
+                    log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
+                }
 
+                // Performance profiling (benchmark mode)
                 if (test_context.get_benchmark_mode()) {
                     test_context.profile_results(built_test);
                 }
+
+                // Latency measurement (latency test mode)
+                if (test_context.get_latency_test_mode()) {
+                    test_context.collect_latency_results();
+                    test_context.report_latency_results(built_test);
+                }
+
                 if (test_context.get_telemetry_enabled()) {
                     test_context.clear_telemetry();
                 }
