@@ -7,18 +7,26 @@
 
 namespace ttnn::operations::reduction {
 
-std::tuple<Tensor, Tensor> GroupedGateOperation::invoke(
+std::array<Tensor, 2> GroupedGateOperation::invoke(
     const Tensor& scores,
     const Tensor& bias,
-    const float route_scale,
-    const float epsilon,
     const uint32_t n_groups,
-    const uint32_t topk,
+    const uint32_t summed_experts_per_group,
     const uint32_t topk_groups,
     const uint32_t n_activated_experts,
+    const float route_scale,
+    const float epsilon,
     const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::prim::grouped_gate(
-        scores, bias, route_scale, epsilon, n_groups, topk, topk_groups, n_activated_experts, output_mem_config);
+        scores,
+        bias,
+        n_groups,
+        summed_experts_per_group,
+        topk_groups,
+        n_activated_experts,
+        route_scale,
+        epsilon,
+        output_mem_config);
 }
 
 }  // namespace ttnn::operations::reduction

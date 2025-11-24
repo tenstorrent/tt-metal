@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/grouped_gate/grouped_gate_pybind.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/reduction/grouped_gate/grouped_gate.hpp"
 
 namespace ttnn::operations::reduction {
@@ -22,45 +22,45 @@ void py_bind_grouped_gate(py::module& module) {
                 bias (ttnn.Tensor): Bias tensor.
                 route_scale (float): Routing scale factor.
                 epsilon (float): Epsilon for numerical stability.
-                n_groups (int): Number of groups.
-                topk (int): Number of experts per group to consider.
-                topk_groups (int): Number of top groups to route to.
-                n_activated_experts (int): Number of final experts to select.
+                n_groups (int): Number of groups to partition the experts into.
+                summed_experts_per_group (int): Number of experts per group to sum prior to ranking groups.
+                topk_groups (int): Number of top groups to select from.
+                n_activated_experts (int): Number of final experts to select per token.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None.
 
             Returns:
-                Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the routing weights and selected expert indices.
+                Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores and selected expert indices.
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::grouped_gate)& self,
                const ttnn::Tensor& scores,
                const ttnn::Tensor& bias,
-               const float route_scale,
-               const float epsilon,
                const uint32_t n_groups,
-               const uint32_t topk,
+               const uint32_t summed_experts_per_group,
                const uint32_t topk_groups,
                const uint32_t n_activated_experts,
+               const float route_scale,
+               const float epsilon,
                const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(
                     scores,
                     bias,
-                    route_scale,
-                    epsilon,
                     n_groups,
-                    topk,
+                    summed_experts_per_group,
                     topk_groups,
                     n_activated_experts,
+                    route_scale,
+                    epsilon,
                     memory_config);
             },
             py::arg("scores"),
             py::arg("bias"),
-            py::arg("route_scale"),
-            py::arg("epsilon"),
             py::arg("n_groups"),
-            py::arg("topk"),
+            py::arg("summed_experts_per_group"),
             py::arg("topk_groups"),
             py::arg("n_activated_experts"),
+            py::arg("route_scale") = 1.0f,
+            py::arg("epsilon") = 1e-5f,
             py::arg("memory_config") = std::nullopt});
 }
 

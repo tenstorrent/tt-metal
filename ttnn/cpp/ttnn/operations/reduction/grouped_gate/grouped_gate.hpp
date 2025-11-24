@@ -9,15 +9,15 @@
 namespace ttnn::operations::reduction {
 
 struct GroupedGateOperation {
-    static std::tuple<Tensor, Tensor> invoke(
+    static std::array<Tensor, 2> invoke(
         const Tensor& scores,
         const Tensor& bias,
-        const float route_scale,
-        const float epsilon,
         const uint32_t n_groups,
-        const uint32_t topk,
+        const uint32_t summed_experts_per_group,
         const uint32_t topk_groups,
         const uint32_t n_activated_experts,
+        const float route_scale = 1.0f,
+        const float epsilon = 1e-5f,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 

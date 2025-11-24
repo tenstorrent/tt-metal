@@ -11,12 +11,12 @@ namespace ttnn::operations::reduction {
 
 struct GroupedGateDeviceOperation {
     struct operation_attributes_t {
-        float route_scale;
-        float epsilon;
         uint32_t n_groups;
-        uint32_t topk;
+        uint32_t summed_experts_per_group;
         uint32_t topk_groups;
         uint32_t n_activated_experts;
+        float route_scale;
+        float epsilon;
         MemoryConfig output_mem_config;
     };
 
@@ -25,8 +25,8 @@ struct GroupedGateDeviceOperation {
         const Tensor& bias;
     };
 
-    using spec_return_value_t = std::tuple<Tensor, Tensor>;
-    using tensor_return_value_t = std::tuple<Tensor, Tensor>;
+    using spec_return_value_t = std::array<TensorSpec, 2>;
+    using tensor_return_value_t = std::array<Tensor, 2>;
 
     struct ProgramFactory {
         struct shared_variables_t {
@@ -63,15 +63,18 @@ struct GroupedGateDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
 
+    // Select the program factory based on the operation attributes and tensor args
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& scores,
         const Tensor& bias,
-        const float route_scale,
-        const float epsilon,
         const uint32_t n_groups,
-        const uint32_t topk,
+        const uint32_t summed_experts_per_group,
         const uint32_t topk_groups,
         const uint32_t n_activated_experts,
+        const float route_scale,
+        const float epsilon,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 

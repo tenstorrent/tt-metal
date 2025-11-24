@@ -16,10 +16,20 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
 
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
-    auto& output_weights = std::get<0>(tensor_return_value);
-    auto& output_indices = std::get<1>(tensor_return_value);
+    auto& output_weights = tensor_return_value[0];
+    auto& output_indices = tensor_return_value[1];
 
-    IDevice* device = scores.device();
+    TT_FATAL(scores.dtype() == DataType::BFLOAT16, "Scores tensor must be BFLOAT16");
+    TT_FATAL(scores.layout() == Layout::TILE, "Scores tensor must be TILE layout");
+    TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must be BFLOAT16");
+    TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must be TILE layout");
+    TT_FATAL(output_weights.dtype() == DataType::BFLOAT16, "Output weights tensor must be BFLOAT16");
+    TT_FATAL(output_weights.layout() == Layout::TILE, "Output weights tensor must be TILE layout");
+    TT_FATAL(output_indices.dtype() == DataType::UINT16, "Output indices tensor must be UINT16");
+    TT_FATAL(output_indices.layout() == Layout::TILE, "Output indices tensor must be TILE layout");
+
+    auto device = scores.device();
+    TT_FATAL(device != nullptr, "Device must be non-null");
     auto program = CreateProgram();
 
     CoreRangeSet all_cores({
