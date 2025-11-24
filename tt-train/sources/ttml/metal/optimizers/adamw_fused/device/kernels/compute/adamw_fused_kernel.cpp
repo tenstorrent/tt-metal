@@ -43,6 +43,7 @@ void MAIN {
     uint32_t inv_sqrt_bc2 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t one_minus_beta1 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t one_minus_beta2 = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t decay_factor = get_arg_val<uint32_t>(runtime_args_counter++);
 
     init_sfpu(cb_param_idx, cb_output_idx);
 
@@ -130,6 +131,8 @@ void MAIN {
         }
         cb_pop_front(cb_v_t, block_size);
 
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        }
         sqrt_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sqrt_tile(block_size + block_idx);
@@ -160,6 +163,10 @@ void MAIN {
         copy_tile_init(cb_param_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
+        }
+        binop_with_scalar_tile_init();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_unary_tile(block_size + block_idx, decay_factor);
         }
         sub_binary_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
