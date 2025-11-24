@@ -163,52 +163,53 @@ Using a second command queue only for writes enables us to eliminate the gap bet
 
 ### 2.2 APIs
 
-In order to use multiple command queues, we need to be familiar with the following apis:
+Configuring multiple command queues require the following APIs:
 
 * `num_command_queues`
 
-  This is a parameter to the device creation api, and sets how many command queues to create the device with. The default is one, and the max is two. In pytest, we can pass this using the `device_params` fixture:
+  This parameter sets the number of command queues to create. Default number of queues is one, two maximum. Pass pytest by using the `device_params` fixture:
 
   `@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True)`
 * `event = ttnn.record_event(device, cq_id = 0)`
 
-  This will record the event on the device after all current commands on the specified command queue are finished. This event will be visible to all command queue
+  This event is recorded on the device after all commands in the queue are finished. This event is visible to all command queues
 * `ttnn.wait_for_event(cq_id = 0, event = event)`
 
-  This will enqueue a command to the specified command queue to stall until the specified event has been recorded on the device. No commands sent to the command queue after the wait for event command will be executed until the event occurs
+  A command is enqueued to the specified command queue to stall until the specified event has been recorded on the device. No commands sent to the command queue after the wait for event command are executed until the event occurs.
 
-In addition, for our example of using one command queue only for writing inputs, we need to preallocate our input tensor and keep it in memory. This is so that we have a static location we will write our inputs to as this will happen in parallel with op execution that produces intermediate tensors, so we can’t have them use overlapping data regions. We can use the following apis to achieve this:
+For a single command queue only used for writing inputs, preallocate the input tensor and store it in memory. This static location is required for write inputs as operations execute in parallel, creating intermediate tensors. Overlapping data regions cannot be used for write inputs and operation execution. Use the following APIs to configure this single command queue:
 
 * `device_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, input_mem_config)`
 
-  This will allocate a tensor with the specified parameters on the device. The tensor data will be uninitialized
+  Allocate a tensor with specific parameters on the device. The tensor data is uninitialized:
 * `ttnn.copy_host_to_device_tensor(host_tensor, device_tensor, cq_id=0)`
 
-  This will copy data from the input host tensor to the allocated on device tensor
+  Data is copied from the input host tensor to the allocated on device tensor.
 
 ### 2.3 Programming Examples
 
 #### 2.3.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1
 
-Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. To work around this, we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation.
+To optimize performance allocate tensors to L1 memory. Many models do not have suffient memory to fit in L1 memory if input tensors are also stored in L1 memory. Instead allocate the input tensors to DRAM to keep the tensor presistent in memory. Run an operation to move the tensor to L1 memory. Allocate the input as DRAM sharded and move it to L1 sharded memory with the reshard operation to optimize performance.
 
-For using 2 command queues where one is just for writes, and one for running programs and reading, we will need to create and use 2 events.
-The first event we use is an event to signal that the write has completed on command queue 1. This event will be waited on by command queue 0 so that it only executes operations after the write has completed. The second event we have is for signaling that command queue 0 has consumed the input tensor, and that it is okay for command queue 1 to overwrite it with new data. This is waited on by command queue 1 before it writes the next input.
+To configure multiple command queues (one for writes, the other for running programs and reading) create two events:
+1. Create an event to signal writes are completed on CQ1. CQ0 waits for this event so that is executes operations after the write is complete.
+2. Create an event to signal that CQ0 has read the input tensor, and that CQ1 can overwrite with new data. CQ1 waits for this event before writing the next input.
 
 <!-- ![Ops_Reads_CQ0_Writes_CQ1](images/Ops_Reads_CQ0_Writes_CQ1.png){width=15 height=15} -->
 <img src="images/Ops_Reads_CQ0_Writes_CQ1.png" style="width:1000px;"/>
 
 ```py
-# This example uses 1 CQ for only writing inputs (CQ 1), and one CQ for executing programs/reading back the output (CQ 0)
+# This example uses CQ1 for input writes, and CQ0 for executing programs/reading back the output.
 
-# `op_event` signals when the first operation is completed. This is the consumer of the input tensor so once this is completed, we can issue the next write
+# `op_event` signals when the first operation is complete. It reads the input tensor and issues the next write once complete.
 
-# `write_event` signals when input write is completed. This is used to signal that the input tensor can be read/consumed
+# `write_event` signals when an input write is complete. It signals that the input tensor can be read.
 
-# Allocate our persistent input tensor
+# Allocate the persistent input tensor:
 input_dram_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_dram_mem_config)
 
-# Dummy record an op event on CQ 0 since we wait on this first in the loop
+# Dummy record an operation event on CQ0 while waiting on the first in the loop:
 op_event =ttnn.record_event(device, 0)
 
 outputs = []
