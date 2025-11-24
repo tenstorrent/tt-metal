@@ -100,8 +100,8 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top <<= 22
         TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid <<= 11
 
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
         TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
