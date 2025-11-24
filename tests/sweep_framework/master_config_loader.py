@@ -356,12 +356,25 @@ class MasterConfigLoader:
                     physical_width = None
                     if tensor_shape and len(tensor_shape) >= 4:
                         # For 4D tensors [B, H, W, C] or [B, C, H, W]
-                        # Physical height is typically shape[1] or shape[2] depending on layout
-                        # Physical width is typically shape[2] or shape[3] depending on layout
-                        # For TILE layout: [B, C, H, W] -> physical H=H, W=W
-                        # For ROW_MAJOR: [B, H, W, C] -> physical H=H, W=W
-                        # Use the last two dimensions as height and width
-                        physical_height = tensor_shape[-2] if len(tensor_shape) >= 2 else None
+                        # For WIDTH_SHARDED: shard height must match physical height
+                        #   Physical height = product of all dims except last (width dim)
+                        #   Physical width = last dim (width dim)
+                        # For HEIGHT_SHARDED: shard width must match physical width
+                        #   Physical height = first dims (height dims)
+                        #   Physical width = product of remaining dims
+                        # For simplicity, use:
+                        #   Physical height = product of all dims except last
+                        #   Physical width = last dim
+                        # This works for both WIDTH_SHARDED and HEIGHT_SHARDED
+                        import math
+
+                        physical_height = (
+                            math.prod(tensor_shape[:-1])
+                            if len(tensor_shape) > 1
+                            else tensor_shape[0]
+                            if len(tensor_shape) > 0
+                            else None
+                        )
                         physical_width = tensor_shape[-1] if len(tensor_shape) >= 1 else None
 
                     # Adjust height - but respect physical height for WIDTH_SHARDED
