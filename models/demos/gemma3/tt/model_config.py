@@ -1260,10 +1260,11 @@ class ModelArgs:
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {
             # for gemma we have different default supported seq lens than in tt_transformers
-            "N150": [128, 256],
-            "N300": [128, 256],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
+            # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
+            "N150": [],
+            "N300": [],
+            "T3K": [],
+            "TG": [],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
