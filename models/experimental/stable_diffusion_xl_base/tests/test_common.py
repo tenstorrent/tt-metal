@@ -531,7 +531,7 @@ def prepare_image_latents(
                 if start_latent_seed is not None:
                     torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
                 image_latents.append(latent.sample())
-                if index == 0 and batch_size > 1:
+                if start_latent_seed is not None and index == 0 and batch_size > 1:
                     saved_global_rng_state = torch.get_rng_state()
             image_latents = torch.cat(image_latents, dim=0)
         else:
