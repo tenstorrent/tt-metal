@@ -1,51 +1,18 @@
-node_descriptors {
-  key: "4_N300_LOUDBOX"
-  value {
-    motherboard: "X12DPG-QT6"
-    boards {
-      board { tray_id: 1 board_type: "N300" }
-      board { tray_id: 2 board_type: "N300" }
-      board { tray_id: 3 board_type: "N300" }
-      board { tray_id: 4 board_type: "N300" }
-    }
-    port_type_connections {
-      key: "WARP100"
-      value {
-        # Tray 1 <-> Tray 2: WARP100 ports 1 & 2
-        connections { port_a { tray_id: 1 port_id: 1 } port_b { tray_id: 2 port_id: 1 } }
-        connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 2 port_id: 2 } }
-        # Tray 3 <-> Tray 4: WARP100 ports 1 & 2
-        connections { port_a { tray_id: 3 port_id: 1 } port_b { tray_id: 4 port_id: 1 } }
-        connections { port_a { tray_id: 3 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
-      }
-    }
-    port_type_connections {
-      key: "QSFP_DD"
-      value {
-        # Tray 1 <-> Tray 4: QSFP_DD port 2, channels 0,1
-        connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
-        # Tray 2 <-> Tray 3: QSFP_DD port 1, channels 6,7
-        connections { port_a { tray_id: 2 port_id: 1 } port_b { tray_id: 3 port_id: 1 } }
-      }
-    }
-  }
-}
-
 graph_templates {
-  key: "4_n300_loudbox"
+  key: "T3K"
   value {
     children {
-      name: "loudbox"
-      node_ref { node_descriptor: "4_N300_LOUDBOX" }
+      name: "node1"
+      node_ref { node_descriptor: "N300_LB_DEFAULT" }
     }
   }
 }
 
-# Root instance - single LoudBox with 4 N300 cards
+# Root instance - T3K with single node
 root_instance {
-  template_name: "4_n300_loudbox"
+  template_name: "T3K"
   child_mappings {
-    key: "loudbox"
+    key: "node1"
     value { host_id: 0 }
   }
 }
