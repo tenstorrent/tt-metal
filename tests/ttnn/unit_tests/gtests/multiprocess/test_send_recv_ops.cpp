@@ -315,6 +315,35 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
     return asic_id_to_mesh_coord_map;
 }
 
+// std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecting_coords(
+//     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+//     uint32_t neighbor_mesh_id,
+//     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+//     auto neighbor_rank = neighbor_mesh_id;
+//     auto my_host = physical_system_descriptor.my_host_name();
+//     auto my_rank = physical_system_descriptor.get_rank_for_hostname(my_host);
+//     std::string neighbor_host;
+
+//     for (const auto& [host_name, rank] : physical_system_descriptor.get_host_to_rank_map()) {
+//         if (rank == neighbor_rank) {
+//             neighbor_host = host_name;
+//             break;
+//         }
+//     }
+//     auto exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(my_host, neighbor_host);
+//     for (const auto& exit_node : exit_nodes) {
+//         auto src_mesh_coord = asic_id_to_mesh_coord.at(exit_node.src_exit_node);
+//         auto dst_mesh_coord = asic_id_to_mesh_coord.at(exit_node.dst_exit_node);
+//         std::cout << my_rank << " connnected to " << neighbor_mesh_id << " via " << src_mesh_coord << " -> " <<
+//         dst_mesh_coord << std::endl;
+//     }
+//     exit(0);
+//     auto exit_node = physical_system_descriptor.get_connecting_exit_nodes(my_host, neighbor_host)[0];
+//     auto src_mesh_coord = asic_id_to_mesh_coord.at(exit_node.src_exit_node);
+//     auto dst_mesh_coord = asic_id_to_mesh_coord.at(exit_node.dst_exit_node);
+//     return std::make_pair(src_mesh_coord, dst_mesh_coord);
+// }
+
 std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecting_coords(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     uint32_t neighbor_mesh_id,
@@ -339,16 +368,40 @@ std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate> get_connecti
         return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(1, 1));
     }
     if (my_mesh_id == 1 && neighbor_mesh_id == 2) {
-        return std::make_pair(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 3));
+        return std::make_pair(distributed::MeshCoordinate(0, 2), distributed::MeshCoordinate(0, 1));
     }
     if (my_mesh_id == 2 && neighbor_mesh_id == 1) {
-        return std::make_pair(distributed::MeshCoordinate(0, 3), distributed::MeshCoordinate(0, 0));
+        return std::make_pair(distributed::MeshCoordinate(0, 1), distributed::MeshCoordinate(0, 2));
     }
     if (my_mesh_id == 2 && neighbor_mesh_id == 3) {
-        return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(0, 2));
+        return std::make_pair(distributed::MeshCoordinate(1, 1), distributed::MeshCoordinate(1, 1));
     }
     if (my_mesh_id == 3 && neighbor_mesh_id == 2) {
-        return std::make_pair(distributed::MeshCoordinate(0, 2), distributed::MeshCoordinate(1, 2));
+        return std::make_pair(distributed::MeshCoordinate(1, 1), distributed::MeshCoordinate(1, 1));
+    }
+    if (my_mesh_id == 3 && neighbor_mesh_id == 4) {
+        return std::make_pair(distributed::MeshCoordinate(0, 3), distributed::MeshCoordinate(0, 0));
+    }
+    if (my_mesh_id == 4 && neighbor_mesh_id == 3) {
+        return std::make_pair(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 3));
+    }
+    if (my_mesh_id == 4 && neighbor_mesh_id == 5) {
+        return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(1, 1));
+    }
+    if (my_mesh_id == 5 && neighbor_mesh_id == 4) {
+        return std::make_pair(distributed::MeshCoordinate(1, 1), distributed::MeshCoordinate(1, 2));
+    }
+    if (my_mesh_id == 5 && neighbor_mesh_id == 6) {
+        return std::make_pair(distributed::MeshCoordinate(0, 2), distributed::MeshCoordinate(0, 2));
+    }
+    if (my_mesh_id == 6 && neighbor_mesh_id == 5) {
+        return std::make_pair(distributed::MeshCoordinate(0, 2), distributed::MeshCoordinate(0, 2));
+    }
+    if (my_mesh_id == 6 && neighbor_mesh_id == 7) {
+        return std::make_pair(distributed::MeshCoordinate(1, 2), distributed::MeshCoordinate(0, 1));
+    }
+    if (my_mesh_id == 7 && neighbor_mesh_id == 6) {
+        return std::make_pair(distributed::MeshCoordinate(0, 1), distributed::MeshCoordinate(1, 2));
     }
     TT_FATAL(false, "No connecting coords found for mesh {} and neighbor {}", my_mesh_id, neighbor_mesh_id);
     return std::make_pair(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
@@ -375,7 +428,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
     // auto sender_logical_coord = CoreCoord(0, 0);
     // auto recv_logical_coord = CoreCoord(0, 1);
 
-    uint32_t socket_fifo_size = 56 * 1024;
+    uint32_t socket_fifo_size = 112 * 1024;
     auto mesh_shape = mesh_device_->shape();
 
     auto physical_system_descriptor = create_physical_system_descriptor();
@@ -498,7 +551,7 @@ TEST_F(MeshDeviceClosetBoxSendRecvFixture, SendRecvPipeline) {
             std::tie(intermed_send, intermed_recv) =
                 distributed::MeshSocket::create_socket_pair(mesh_device_, mesh_device_, intermed_socket_config);
         } else {
-            distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(1, 0);
+            distributed::MeshCoordinate end_coord = distributed::MeshCoordinate(1, 3);
             distributed::SocketConnection end_connection = {
                 .sender_core = {my_recv, CoreCoord(0, 0)}, .receiver_core = {end_coord, CoreCoord(0, 0)}};
             distributed::SocketConfig end_socket_config = {
