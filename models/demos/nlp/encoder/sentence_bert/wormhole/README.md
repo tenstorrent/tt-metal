@@ -15,7 +15,7 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 ## How to Run
 - Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
 ###  Performant Model with Trace+2CQ
@@ -24,24 +24,24 @@ pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/pcc/test_ttn
 #### Single Device (BS=8):
 - End-to-end performance with mean-pooling post-processing is **433 sentences per second**
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
 
 #### Multi Device (DP=2, n300):
 - End-to-end performance with mean-pooling post-processing is **772 sentences per second**
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_dp
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_dp
 ```
 
 ### Performant Demo with Trace+2CQ
 #### Single Device (BS=8):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py::test_sentence_bert_demo_inference
 ```
 
 #### Multi Device (DP=2, n300):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py::test_sentence_bert_demo_inference_dp
 ```
 
 ### Performant Interactive Demo with Trace+2CQ
@@ -52,12 +52,12 @@ pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/demo.py::test
 
 #### Single Device (BS=8):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/interactive_demo.py::test_interactive_demo_inference
 ```
 
 #### Multi Device (DP=2, n300):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference_dp
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/interactive_demo.py::test_interactive_demo_inference_dp
 ```
 
 ## Testing
@@ -67,12 +67,12 @@ pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/interactive_d
 
 #### Single Device (BS=8):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/dataset_evaluation.py::test_sentence_bert_eval
 ```
 
 #### Multi Device (DP=2, n300):
 ```
-pytest --disable-warnings models/demos/wormhole/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp
+pytest --disable-warnings models/demos/nlp/encoder/sentence_bert/wormhole/demo/dataset_evaluation.py::test_sentence_bert_eval_dp
 ```
 
 ##  Details

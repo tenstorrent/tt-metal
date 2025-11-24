@@ -88,7 +88,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest models/demos/wormhole/sentence_bert/demo/demo.py
+  pytest models/demos/nlp/encoder/sentence_bert/wormhole/demo/demo.py
 
 }
 
