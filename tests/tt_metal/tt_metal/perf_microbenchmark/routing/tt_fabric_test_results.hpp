@@ -60,6 +60,36 @@ struct BandwidthResultSummary {
     std::optional<std::string> test_ts;
 };
 
+// Latency measurement result structure
+struct LatencyResult {
+    std::string test_name;
+    std::string ftype;
+    std::string ntype;
+    std::string topology;
+    uint32_t num_devices{};
+    uint32_t num_links{};
+    uint32_t num_samples{};
+    uint32_t payload_size{};
+
+    // Statistics for net latency (raw - responder) - MOST IMPORTANT METRIC
+    double net_min_ns{};
+    double net_max_ns{};
+    double net_avg_ns{};
+    double net_p99_ns{};
+
+    // Statistics for responder processing time
+    double responder_min_ns{};
+    double responder_max_ns{};
+    double responder_avg_ns{};
+    double responder_p99_ns{};
+
+    // Statistics for raw latency (round-trip time)
+    double raw_min_ns{};
+    double raw_max_ns{};
+    double raw_avg_ns{};
+    double raw_p99_ns{};
+};
+
 // Golden CSV comparison structures
 struct GoldenCsvEntry {
     std::string test_name;

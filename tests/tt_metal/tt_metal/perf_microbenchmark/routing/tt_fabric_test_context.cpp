@@ -602,4 +602,43 @@ void TestContext::report_latency_results(const TestConfig& config) {
         net_stats.p99 * ns_per_cycle);
     log_info(tt::LogTest, "========================================================================");
     log_info(tt::LogTest, "");
+
+    // Populate LatencyResult structure for CSV export
+    LatencyResult latency_result;
+    latency_result.test_name = config.name;
+
+    // Extract ftype and ntype from first sender's first pattern
+    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+    latency_result.ftype = fetch_pattern_ftype(first_pattern);
+    latency_result.ntype = fetch_pattern_ntype(first_pattern);
+
+    latency_result.topology = enchantum::to_string(config.fabric_setup.topology);
+    latency_result.num_devices = test_devices_.size();
+    latency_result.num_links = config.fabric_setup.num_links;
+    latency_result.num_samples = raw_latencies_cycles.size();
+    latency_result.payload_size = payload_size;
+
+    // Net latency statistics (most important)
+    latency_result.net_min_ns = net_stats.min * ns_per_cycle;
+    latency_result.net_max_ns = net_stats.max * ns_per_cycle;
+    latency_result.net_avg_ns = net_stats.avg * ns_per_cycle;
+    latency_result.net_p99_ns = net_stats.p99 * ns_per_cycle;
+
+    // Responder processing time statistics
+    latency_result.responder_min_ns = responder_stats.min * ns_per_cycle;
+    latency_result.responder_max_ns = responder_stats.max * ns_per_cycle;
+    latency_result.responder_avg_ns = responder_stats.avg * ns_per_cycle;
+    latency_result.responder_p99_ns = responder_stats.p99 * ns_per_cycle;
+
+    // Raw latency statistics
+    latency_result.raw_min_ns = raw_stats.min * ns_per_cycle;
+    latency_result.raw_max_ns = raw_stats.max * ns_per_cycle;
+    latency_result.raw_avg_ns = raw_stats.avg * ns_per_cycle;
+    latency_result.raw_p99_ns = raw_stats.p99 * ns_per_cycle;
+
+    // Add to results vector
+    latency_results_.push_back(latency_result);
+
+    // Write to CSV file
+    generate_latency_csv(config);
 }

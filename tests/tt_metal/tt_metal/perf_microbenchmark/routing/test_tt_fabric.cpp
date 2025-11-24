@@ -95,6 +95,14 @@ int main(int argc, char** argv) {
         test_context.initialize_bandwidth_results_csv_file();
     }
 
+    bool latency_test_mode = std::any_of(
+        raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) { return config.latency_test_mode; });
+
+    // Initialize CSV file for latency results if any of the configs have latency test mode set
+    if (latency_test_mode) {
+        test_context.initialize_latency_results_csv_file();
+    }
+
     cmdline_parser.apply_overrides(raw_test_configs);
 
     if (raw_test_configs.empty()) {

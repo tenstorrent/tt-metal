@@ -76,6 +76,7 @@ using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
 using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
 using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
+using LatencyResult = tt::tt_fabric::fabric_tests::LatencyResult;
 using GoldenCsvEntry = tt::tt_fabric::fabric_tests::GoldenCsvEntry;
 using ComparisonResult = tt::tt_fabric::fabric_tests::ComparisonResult;
 using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyzer;
@@ -164,6 +165,14 @@ public:
         // Handle latency test mode setup (after policy management)
         if (config.latency_test_mode) {
             this->set_latency_test_mode(true);
+
+            // Validate that latency tests don't use multiple iterations
+            if (config.iteration_number > 0) {
+                log_warning(
+                    tt::LogTest,
+                    "Latency tests do not support multiple iterations. Use num_bursts in the test config instead to "
+                    "collect multiple samples.");
+            }
 
             // Identify sender and responder devices
             TT_FATAL(config.senders.size() == 1, "Latency test mode requires exactly one sender");
@@ -600,6 +609,39 @@ public:
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
     }
 
+    void initialize_latency_results_csv_file() {
+        // Create output directory
+        std::filesystem::path tt_metal_home =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
+        std::filesystem::path latency_results_path = tt_metal_home / output_dir;
+
+        if (!std::filesystem::exists(latency_results_path)) {
+            std::filesystem::create_directories(latency_results_path);
+        }
+
+        // Generate detailed CSV filename
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
+        std::ostringstream oss;
+        oss << "latency_results_" << arch_name << ".csv";
+        latency_csv_file_path_ = latency_results_path / oss.str();
+
+        // Create detailed CSV file with header
+        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
+        if (!csv_stream.is_open()) {
+            log_error(tt::LogTest, "Failed to create latency CSV file: {}", latency_csv_file_path_.string());
+            return;
+        }
+
+        // Write detailed header with net latency first, then responder, then raw
+        csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,num_samples,payload_size,"
+                      "net_min_ns,net_max_ns,net_avg_ns,net_p99_ns,"
+                      "responder_min_ns,responder_max_ns,responder_avg_ns,responder_p99_ns,"
+                      "raw_min_ns,raw_max_ns,raw_avg_ns,raw_p99_ns\n";
+        csv_stream.close();
+
+        log_info(tt::LogTest, "Initialized latency CSV file: {}", latency_csv_file_path_.string());
+    }
+
     void close_devices() { fixture_->close_devices(); }
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
@@ -727,6 +769,7 @@ private:
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
         bandwidth_results_.clear();
+        latency_results_.clear();
         code_profiling_entries_.clear();
         latency_semaphore_addresses_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
@@ -1439,6 +1482,36 @@ private:
         log_info(tt::LogTest, "Bandwidth results appended to CSV file: {}", csv_file_path_.string());
     }
 
+    void generate_latency_csv(const TestConfig& config) {
+        // Extract representative ftype and ntype from first sender's first pattern
+        const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+        std::string ftype_str = fetch_pattern_ftype(first_pattern);
+        std::string ntype_str = fetch_pattern_ntype(first_pattern);
+
+        // Open CSV file in append mode
+        std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::app);
+        if (!csv_stream.is_open()) {
+            log_error(
+                tt::LogTest, "Failed to open latency CSV file for appending: {}", latency_csv_file_path_.string());
+            return;
+        }
+
+        // Write data rows (header already written in initialize_latency_results_csv_file)
+        for (const auto& result : latency_results_) {
+            csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
+                       << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
+                       << config.fabric_setup.num_links << "," << result.num_samples << "," << result.payload_size
+                       << "," << std::fixed << std::setprecision(2) << result.net_min_ns << "," << result.net_max_ns
+                       << "," << result.net_avg_ns << "," << result.net_p99_ns << "," << result.responder_min_ns << ","
+                       << result.responder_max_ns << "," << result.responder_avg_ns << "," << result.responder_p99_ns
+                       << "," << result.raw_min_ns << "," << result.raw_max_ns << "," << result.raw_avg_ns << ","
+                       << result.raw_p99_ns << "\n";
+        }
+
+        csv_stream.close();
+        log_info(tt::LogTest, "Latency results appended to CSV file: {}", latency_csv_file_path_.string());
+    }
+
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
 
     void write_bandwidth_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) {
@@ -1808,6 +1881,7 @@ private:
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
+    std::vector<LatencyResult> latency_results_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
     std::vector<CodeProfilingEntry> code_profiling_entries_;  // Per-test code profiling data
     bool code_profiling_enabled_ = false;
@@ -1825,6 +1899,7 @@ private:
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
     std::filesystem::path csv_summary_upload_file_path_;
+    std::filesystem::path latency_csv_file_path_;
 
     // Golden CSV comparison data
     std::vector<GoldenCsvEntry> golden_csv_entries_;
