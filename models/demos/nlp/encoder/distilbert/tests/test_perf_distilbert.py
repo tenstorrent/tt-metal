@@ -18,7 +18,7 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     profiler,
 )
-from models.demos.distilbert.tt import ttnn_optimized_distilbert
+from models.demos.nlp.encoder.distilbert.tt import ttnn_optimized_distilbert
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 

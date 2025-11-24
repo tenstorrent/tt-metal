@@ -190,7 +190,7 @@ run_sdxl_func() {
 run_distilbert_func() {
   fail=0
 
-  pytest models/demos/distilbert/demo/demo.py || fail=1
+  pytest models/demos/nlp/encoder/distilbert/demo/demo.py || fail=1
 
   pytest models/demos/wormhole/distilbert/demo/demo.py || fail=1
 

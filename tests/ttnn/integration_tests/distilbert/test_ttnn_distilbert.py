@@ -12,7 +12,7 @@ from transformers import (
     DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering,
 )
 from transformers import AutoTokenizer
-from models.demos.distilbert.tt import ttnn_optimized_distilbert
+from models.demos.nlp.encoder.distilbert.tt import ttnn_optimized_distilbert
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
