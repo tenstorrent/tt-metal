@@ -311,6 +311,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/moe_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/topk_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/manual_seed/manual_seed_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sliding_window/sliding_window_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_${PY_BINDING}.cpp
@@ -441,7 +442,6 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
-file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
     PUBLIC
@@ -449,7 +449,68 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
-            ${api}
+            api/tools/profiler/op_profiler.hpp
+            api/ttnn/async_runtime.hpp
+            api/ttnn/cluster.hpp
+            api/ttnn/common/constants.hpp
+            api/ttnn/common/guard.hpp
+            api/ttnn/common/queue_id.hpp
+            api/ttnn/config.hpp
+            api/ttnn/core.hpp
+            api/ttnn/decorators.hpp
+            api/ttnn/device.hpp
+            api/ttnn/device_operation.hpp
+            api/ttnn/distributed/api.hpp
+            api/ttnn/distributed/bidirectional_fabric_socket.hpp
+            api/ttnn/distributed/create_socket.hpp
+            api/ttnn/distributed/distributed_configs.hpp
+            api/ttnn/distributed/distributed_pybind.hpp
+            api/ttnn/distributed/distributed_tensor.hpp
+            api/ttnn/distributed/fabric_socket.hpp
+            api/ttnn/distributed/host_ccl.hpp
+            api/ttnn/distributed/isocket.hpp
+            api/ttnn/distributed/mpi_socket.hpp
+            api/ttnn/distributed/tensor_topology.hpp
+            api/ttnn/distributed/types.hpp
+            api/ttnn/events.hpp
+            api/ttnn/global_circular_buffer.hpp
+            api/ttnn/global_semaphore.hpp
+            api/ttnn/graph/graph_argument_serializer.hpp
+            api/ttnn/graph/graph_consts.hpp
+            api/ttnn/graph/graph_operation_queries.hpp
+            api/ttnn/graph/graph_processor.hpp
+            api/ttnn/graph/graph_pybind.hpp
+            api/ttnn/graph/graph_query_op_constraints.hpp
+            api/ttnn/graph/graph_query_op_runtime.hpp
+            api/ttnn/graph/graph_trace_utils.hpp
+            api/ttnn/mesh_device_operation_adapter.hpp
+            api/ttnn/mesh_device_operation_utils.hpp
+            api/ttnn/old_infra_device_operation.hpp
+            api/ttnn/operation.hpp
+            api/ttnn/operation_concepts.hpp
+            api/ttnn/reports.hpp
+            api/ttnn/run_operation.hpp
+            api/ttnn/tensor/host_buffer/functions.hpp
+            api/ttnn/tensor/layout/alignment.hpp
+            api/ttnn/tensor/layout/layout.hpp
+            api/ttnn/tensor/layout/page_config.hpp
+            api/ttnn/tensor/layout/tensor_layout.hpp
+            api/ttnn/tensor/memory_config/memory_config.hpp
+            api/ttnn/tensor/serialization.hpp
+            api/ttnn/tensor/shape/shape.hpp
+            api/ttnn/tensor/storage.hpp
+            api/ttnn/tensor/tensor.hpp
+            api/ttnn/tensor/tensor_attributes.hpp
+            api/ttnn/tensor/tensor_impl.hpp
+            api/ttnn/tensor/tensor_spec.hpp
+            api/ttnn/tensor/tensor_utils.hpp
+            api/ttnn/tensor/to_string.hpp
+            api/ttnn/tensor/types.hpp
+            api/ttnn/tensor/unit_mesh/unit_mesh_utils.hpp
+            api/ttnn/tensor/xtensor/conversion_utils.hpp
+            api/ttnn/tensor/xtensor/partition.hpp
+            api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
+            api/ttnn/types.hpp
             cpp/ttnn/operations/copy/typecast/typecast.hpp
             cpp/ttnn/operations/creation.hpp
             cpp/ttnn/operations/functions.hpp

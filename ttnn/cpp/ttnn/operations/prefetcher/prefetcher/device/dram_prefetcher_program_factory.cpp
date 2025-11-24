@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -16,7 +15,7 @@
 namespace ttnn::operations::dram_prefetcher::program {
 
 using std::vector;
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
