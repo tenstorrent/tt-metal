@@ -96,7 +96,7 @@ The diagram below illustrates the corresponding Downsample1 module:
     ```
     ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/bert_tiny/demo/demo.py::test_demo[models/demos/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-8-device_params0]"
     ```
-  - Once you execute such command, a .csv perf sheet will apear in your execution path. You may open the file via excel for better utilities.
+  - Once you execute such command, a .csv perf sheet will appear in your execution path. You may open the file via excel for better utilities.
   - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it.
   - [Perf Report Headers](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers) will be particularly helpful in understanding the content of the generated perf sheet.
   - The first thing to check on the perf sheet would be to look at the device kernel duration reported in ns per op. By using excel tools, you can quickly identify the largest values in the column. Then see, which op they correspond to. Here are some examples:
