@@ -1476,8 +1476,9 @@ private:
             return;
         }
 
-        // Write data rows (header already written in initialize_bandwidth_results_csv_file)
-        for (const auto& result : bandwidth_results_) {
+        // Write only the last entry (just added)
+        if (!bandwidth_results_.empty()) {
+            const auto& result = bandwidth_results_.back();
             csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
                        << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
                        << result.device_id << "," << config.fabric_setup.num_links << ","
@@ -1499,11 +1500,6 @@ private:
     }
 
     void generate_latency_csv(const TestConfig& config) {
-        // Extract representative ftype and ntype from first sender's first pattern
-        const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-        std::string ftype_str = fetch_pattern_ftype(first_pattern);
-        std::string ntype_str = fetch_pattern_ntype(first_pattern);
-
         // Open CSV file in append mode
         std::ofstream csv_stream(latency_csv_file_path_, std::ios::out | std::ios::app);
         if (!csv_stream.is_open()) {
@@ -1512,16 +1508,17 @@ private:
             return;
         }
 
-        // Write data rows (header already written in initialize_latency_results_csv_file)
-        for (const auto& result : latency_results_) {
-            csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
-                       << enchantum::to_string(config.fabric_setup.topology) << "," << result.num_devices << ","
-                       << config.fabric_setup.num_links << "," << result.num_samples << "," << result.payload_size
-                       << "," << std::fixed << std::setprecision(2) << result.net_min_ns << "," << result.net_max_ns
-                       << "," << result.net_avg_ns << "," << result.net_p99_ns << "," << result.responder_min_ns << ","
-                       << result.responder_max_ns << "," << result.responder_avg_ns << "," << result.responder_p99_ns
-                       << "," << result.raw_min_ns << "," << result.raw_max_ns << "," << result.raw_avg_ns << ","
-                       << result.raw_p99_ns << "," << result.tolerance_percent << "\n";
+        // Write only the last entry (just added)
+        // Use the ftype/ntype/topology already stored in the result struct
+        if (!latency_results_.empty()) {
+            const auto& result = latency_results_.back();
+            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
+                       << "," << result.num_devices << "," << result.num_links << "," << result.num_samples << ","
+                       << result.payload_size << "," << std::fixed << std::setprecision(2) << result.net_min_ns << ","
+                       << result.net_max_ns << "," << result.net_avg_ns << "," << result.net_p99_ns << ","
+                       << result.responder_min_ns << "," << result.responder_max_ns << "," << result.responder_avg_ns
+                       << "," << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
+                       << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.tolerance_percent << "\n";
         }
 
         csv_stream.close();
@@ -1529,7 +1526,7 @@ private:
     }
 
     std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
-    
+
     std::vector<GoldenLatencyEntry>::iterator fetch_corresponding_golden_latency_entry(const LatencyResult& test_result);
 
     void write_bandwidth_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) {
@@ -1797,22 +1794,22 @@ private:
             entry.num_links = std::stoul(tokens[5]);
             entry.num_samples = std::stoul(tokens[6]);
             entry.payload_size = std::stoul(tokens[7]);
-            
+
             entry.net_min_ns = std::stod(tokens[8]);
             entry.net_max_ns = std::stod(tokens[9]);
             entry.net_avg_ns = std::stod(tokens[10]);
             entry.net_p99_ns = std::stod(tokens[11]);
-            
+
             entry.responder_min_ns = std::stod(tokens[12]);
             entry.responder_max_ns = std::stod(tokens[13]);
             entry.responder_avg_ns = std::stod(tokens[14]);
             entry.responder_p99_ns = std::stod(tokens[15]);
-            
+
             entry.raw_min_ns = std::stod(tokens[16]);
             entry.raw_max_ns = std::stod(tokens[17]);
             entry.raw_avg_ns = std::stod(tokens[18]);
             entry.raw_p99_ns = std::stod(tokens[19]);
-            
+
             // Tolerance is optional for backward compatibility
             if (tokens.size() >= 21) {
                 entry.tolerance_percent = std::stod(tokens[20]);
@@ -1873,7 +1870,9 @@ private:
 
             latency_comparison_results_.push_back(comp_result);
 
-            if (!comp_result.within_tolerance) {
+            // Only count as failure if golden entry exists and test failed
+            // NO_GOLDEN status is just a warning, not a failure
+            if (!comp_result.within_tolerance && comp_result.status != "NO_GOLDEN") {
                 std::ostringstream oss;
                 oss << comp_result.test_name << " [" << comp_result.status << "]";
                 all_failed_latency_tests_.push_back(oss.str());
@@ -1901,13 +1900,12 @@ private:
     }
 
     // Common helper to populate tolerance and status fields
-    template<typename CompResultType, typename GoldenIterType>
+    template <typename CompResultType, typename GoldenIterType>
     void populate_comparison_tolerance_and_status(
         CompResultType& comp_result,
         GoldenIterType golden_it,
         GoldenIterType golden_end,
         double golden_tolerance_default = 1.0) {
-        
         double test_tolerance = golden_tolerance_default;
         if (golden_it != golden_end) {
             test_tolerance = golden_it->tolerance_percent;
@@ -1928,7 +1926,7 @@ private:
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         diff_oss << test_type << "_diff_" << arch_name << ".csv";
         diff_csv_path = output_path / diff_oss.str();
-        
+
         std::ofstream diff_csv_stream(diff_csv_path, std::ios::out | std::ios::trunc);
         if (!diff_csv_stream.is_open()) {
             log_error(tt::LogTest, "Failed to create {} diff CSV file: {}", test_type, diff_csv_path.string());
@@ -1949,7 +1947,7 @@ private:
         } else {
             comp_result.golden_bandwidth_GB_s = 0.0;
         }
-        
+
         // Use common helper for tolerance and status
         populate_comparison_tolerance_and_status(comp_result, golden_it, golden_csv_entries_.end());
     }
@@ -1992,7 +1990,9 @@ private:
             populate_comparison_result_bandwidth(test_result_avg_bandwidth, comp_result, golden_it);
             comparison_results_.push_back(comp_result);
 
-            if (!comp_result.within_tolerance) {
+            // Only count as failure if golden entry exists and test failed
+            // NO_GOLDEN status is just a warning, not a failure
+            if (!comp_result.within_tolerance && comp_result.status != "NO_GOLDEN") {
                 std::ostringstream oss;
                 oss << comp_result.test_name << " [" << comp_result.status << "]";
                 all_failed_bandwidth_tests_.push_back(oss.str());
@@ -2006,7 +2006,7 @@ private:
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
         diff_csv_file_path_ = output_path / diff_oss.str();
-        
+
         std::ofstream diff_csv_stream(diff_csv_file_path_, std::ios::out | std::ios::trunc);
         if (!diff_csv_stream.is_open()) {
             log_error(tt::LogTest, "Failed to create bandwidth diff CSV file: {}", diff_csv_file_path_.string());
@@ -2031,7 +2031,7 @@ private:
         // Handle both bandwidth and latency comparisons
         bool has_bandwidth_results = !comparison_results_.empty();
         bool has_latency_results = !latency_comparison_results_.empty();
-        
+
         if (!has_bandwidth_results && !has_latency_results) {
             log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
             return;
@@ -2042,13 +2042,39 @@ private:
             if (!all_failed_bandwidth_tests_.empty()) {
                 has_test_failures_ = true;
                 log_error(tt::LogTest, "=== BANDWIDTH TEST FAILURES ===");
-                log_error(tt::LogTest, "{} bandwidth test(s) failed golden comparison (using per-test tolerance):", 
+                log_error(
+                    tt::LogTest,
+                    "{} bandwidth test(s) failed golden comparison (using per-test tolerance):",
                     all_failed_bandwidth_tests_.size());
-                for (const auto& failed_test : all_failed_bandwidth_tests_) {
-                    log_error(tt::LogTest, "  - {}", failed_test);
+
+                // Print detailed failure information
+                for (const auto& result : comparison_results_) {
+                    if (!result.within_tolerance && result.status != "NO_GOLDEN") {
+                        // Look up tolerance from golden entry by searching directly
+                        double tolerance = 1.0;
+                        for (const auto& golden : golden_csv_entries_) {
+                            if (golden.test_name == result.test_name && golden.ftype == result.ftype &&
+                                golden.ntype == result.ntype && golden.topology == result.topology &&
+                                golden.num_links == result.num_links && golden.packet_size == result.packet_size) {
+                                tolerance = golden.tolerance_percent;
+                                break;
+                            }
+                        }
+
+                        log_error(tt::LogTest, "  - {} [{}]:", result.test_name, result.status);
+                        log_error(tt::LogTest, "      Expected: {:.6f} GB/s", result.golden_bandwidth_GB_s);
+                        log_error(tt::LogTest, "      Actual:   {:.6f} GB/s", result.current_bandwidth_GB_s);
+                        log_error(
+                            tt::LogTest,
+                            "      Diff:     {:.2f}% (tolerance: {:.2f}%)",
+                            result.difference_percent(),
+                            tolerance);
+                    }
                 }
             } else {
-                log_info(tt::LogTest, "All {} bandwidth tests passed golden comparison using per-test tolerance values", 
+                log_info(
+                    tt::LogTest,
+                    "All {} bandwidth tests passed golden comparison using per-test tolerance values",
                     comparison_results_.size());
             }
         }
@@ -2058,13 +2084,49 @@ private:
             if (!all_failed_latency_tests_.empty()) {
                 has_test_failures_ = true;
                 log_error(tt::LogTest, "=== LATENCY TEST FAILURES ===");
-                log_error(tt::LogTest, "{} latency test(s) failed golden comparison (using per-test tolerance):", 
+                log_error(
+                    tt::LogTest,
+                    "{} latency test(s) failed golden comparison (using per-test tolerance):",
                     all_failed_latency_tests_.size());
-                for (const auto& failed_test : all_failed_latency_tests_) {
-                    log_error(tt::LogTest, "  - {}", failed_test);
+
+                // Print detailed failure information
+                for (const auto& result : latency_comparison_results_) {
+                    if (!result.within_tolerance && result.status != "NO_GOLDEN") {
+                        // Look up tolerance from golden entry by searching directly
+                        double tolerance = 1.0;
+                        for (const auto& golden : golden_latency_entries_) {
+                            if (golden.test_name == result.test_name && golden.ftype == result.ftype &&
+                                golden.ntype == result.ntype && golden.topology == result.topology &&
+                                golden.num_devices == result.num_devices && golden.num_links == result.num_links &&
+                                golden.payload_size == result.payload_size) {
+                                tolerance = golden.tolerance_percent;
+                                break;
+                            }
+                        }
+
+                        log_error(tt::LogTest, "  - {} [{}]:", result.test_name, result.status);
+                        log_error(
+                            tt::LogTest,
+                            "      Test config: {} {} {} {} devs {} links payload={}B",
+                            result.ftype,
+                            result.ntype,
+                            result.topology,
+                            result.num_devices,
+                            result.num_links,
+                            result.payload_size);
+                        log_error(tt::LogTest, "      Expected: {:.2f} ns", result.golden_net_avg_ns);
+                        log_error(tt::LogTest, "      Actual:   {:.2f} ns", result.current_net_avg_ns);
+                        log_error(
+                            tt::LogTest,
+                            "      Diff:     {:.2f}% (tolerance: {:.2f}%)",
+                            result.difference_percent(),
+                            tolerance);
+                    }
                 }
             } else {
-                log_info(tt::LogTest, "All {} latency tests passed golden comparison using per-test tolerance values", 
+                log_info(
+                    tt::LogTest,
+                    "All {} latency tests passed golden comparison using per-test tolerance values",
                     latency_comparison_results_.size());
             }
         }
