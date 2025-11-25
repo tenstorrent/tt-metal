@@ -17,9 +17,9 @@ Workspace Layout
 -Case Matrix
 ------------
 - **Case 1 – Failure attributable to a specific commit**
-  - You have enough evidence to tie the observed failure to a particular commit (or tiny set) within a ≤100 commit window, and `download_data_between_commits.sh` succeeds. Matching failures across runs strengthens the case but is **not** required; a single failing run plus a compelling diff/copilot summary is sufficient.
+  - You have enough evidence to tie the observed failure to a particular commit (or tiny set) within a ≤200 commit window (the scripts can download metadata in batches). Matching failures across runs strengthens the case but is **not** required; a single failing run plus a compelling diff/copilot summary is sufficient.
 - **Case 2 – Deterministic failure, culprit commit unknown**
-  - The failure is deterministic but you cannot identify the exact commit (expired logs, >100 commits so the download script aborts, or other data gaps). Focus on root-cause instructions rather than naming a commit.
+  - The failure is deterministic but you cannot identify the exact commit (expired logs, >200 commits so the download script aborts, or other data gaps). Focus on root-cause instructions rather than naming a commit.
 - **Case 3 – Failure unrelated to tt-metal changes**
   - Evidence shows the issue is probably external (infrastructure, flaky machines, mismatched dependencies, or commits that clearly cannot affect the failing test). Use this only when you have exhausted reasonable tt-metal hypotheses.
 
@@ -28,48 +28,57 @@ You must justify the selected case explicitly in `./output/explanation.md`.
 Shared Workflow (All Cases)
 ---------------------------
 1. Inspect `./data/boundaries_summary.json` (or `./data/subjob_runs.json`) to understand the ordered history and identify the last successful run and subsequent failures. The higher the run_number the newer the run.
-2. **Log downloads:**
+2. **Run-level evidence collection:**
    - Start by downloading:
      - The **oldest failing run** (first failure after the last success) and
      - The **two most recent failing runs**.
    - If there are fewer than three failures total, download all of them.
+   - Before pulling logs for any run, execute `./get_annotations.sh <job_url> [output_json]`. If the annotations contain meaningful test-level errors, rely on them and skip log downloads for that run. Only fall back to `./get_logs.sh` when annotations are missing or generic (e.g., “process exited with error code 1”, runner disconnects, etc.).
 - If the oldest failing run cannot be downloaded (logs expired or `get_logs.sh` errors), treat this as a strong signal toward Case 2. Continue the investigation using the most recent logs you can obtain, but remain open to switching to Case 3 if those logs indicate the job never ran the test or otherwise point to external causes.
    - If the downloaded errors match, rely on that signature. If they differ, continue with the most recent error unless you need an extra run to resolve ambiguity. Avoid additional downloads unless absolutely necessary (they are expensive).
 - If you truly need additional evidence, you may download more runs, but justify the cost and stop as soon as you have enough data.
-3. Determine whether the failure is likely caused by tt-metal changes. Matching errors across runs help establish determinism, but a single run can still justify Case 1 if the commit evidence is strong. **Never** assume determinism just because a run is the latest; always explain your rationale.
+3. **Ignore setup failures:** if the job never reached the actual test (e.g., runner issues, environment setup failure, infra outage), discard that run entirely—it must not influence determinism or commit ranges. Only runs that executed the test suite belong in your analysis.
+4. Determine whether the failure is likely caused by tt-metal changes. Matching errors across runs help establish determinism, but a single run can still justify Case 1 if the commit evidence is strong. **Never** assume determinism just because a run is the latest; always explain your rationale.
 4. If you can map the failure to code changes (even from a single run), proceed toward Case 1. If you believe the failure is deterministic but cannot identify a culprit commit, you are heading toward Case 2. If tt-metal seems unrelated, that’s Case 3.
 5. Contact planning: while you work, note commit authors, file owners (`git log`, `git blame`, `.github/CODEOWNERS`), and capture GitHub profile URLs for everyone you may need to ping.
-6. Run `./download_data_between_commits.sh` before analyzing commits. If it prints `BATCH_COUNT=<n>`, call `./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index>` for each batch index `0..n-1` (using the same output JSON so results append) before continuing.
+6. Run `./download_data_between_commits.sh` before analyzing commits. If it prints `BATCH_COUNT=<n>`, call `./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index>` for each batch index `0..n-1`. Let both scripts use their default output (`./data/commit_info.json`) so each batch automatically appends to the same file.
 7. In your final report, include links to the last successful job run, the first failing job run, and every commit between them (use the compare URL and `commit_info.json`).
 
 Failure Evidence Rules
 ----------------------
 - Repeated identical **test** errors across runs strongly indicate determinism but are not strictly required for Case 1. Use your judgment: if code diffs clearly explain the failure, you may proceed with a single run.
-- Treat infrastructure/setup issues (runner disconnects, missing deps, timeouts before tests) as non-deterministic unless commits point directly to them.
+- Treat infrastructure/setup issues (runner disconnects, missing deps, timeouts before tests) as non-deterministic and exclude them entirely from the run history. Only consider runs where the tests actually executed.
+- Anchor on the **most recent** run that executed the tests: its failure signature is the reference. Earlier runs only count as the start of a deterministic failure if they show the exact same test-level error.
+- If there is only one test-executing failure, or no earlier run repeats the same error, treat that lone failure as the entire signal.
 - If log archives lack the actual test output, assume that specific run is non-deterministic.
 - Always document the failure signature and why you believe it is (or is not) attributable to tt-metal code.
 
 Toolbox Reference
 -----------------
-1. **Download logs**
+1. **Fetch job annotations (preferred)**
+   ```
+   ./get_annotations.sh <job_url> [output_json]
+   ```
+   Saves the run’s annotations (if any) under `./logs/job_<id>/annotations.json`. Use this before touching logs.
+2. **Download logs (fallback when annotations have no signal)**
    ```
    ./get_logs.sh <job_url> [output_dir]
    ```
-2. **List commits between the last success and first deterministic failure**
+3. **List commits between the last success and first deterministic failure**
    ```
    ./download_data_between_commits.sh <good_commit> <bad_commit> [output_json]
    ```
    Creates/updates `./data/commit_info.json`. If more than 30 commits are detected it will report `BATCH_COUNT` and expect the batch script below to be called.
-3. **Download commit metadata in batches (when requested)**
+4. **Download commit metadata in batches (when requested)**
    ```
    ./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index> [output_json]
    ```
    Processes up to 30 commits per batch and appends to the specified JSON (run for indices `0..BATCH_COUNT-1`).
-4. **Changed files for a commit**
+5. **Changed files for a commit**
    ```
    ./get_changed_files.sh <commit> [output_json]
    ```
-5. **Full diff for a commit**
+6. **Full diff for a commit**
    ```
    ./get_commit_diff.sh <commit> [output_patch]
    ```
@@ -78,7 +87,7 @@ Case 1 – Deterministic Failure With Identified Commit
 -----------------------------------------------------
 Trigger this case when:
 - You have two matching test failures that prove determinism.
-- The commit window between last success and first deterministic failure has ≤100 commits (script succeeds).
+- The commit window between last success and first deterministic failure has ≤200 commits (batches cover anything above 30).
 - A specific commit (or very small set) clearly explains the failure via Copilot overview, file diffs, etc.
 
 Actions:
@@ -98,7 +107,7 @@ Case 2 – Deterministic Failure But Commit Unknown
 -------------------------------------------------
 Use this case when a deterministic failure exists but you cannot determine the commit because:
 - The oldest failing run’s logs cannot be retrieved (expired or `get_logs.sh` error) and the remaining evidence still points to a tt-metal regression rather than an external issue.
-- The commit window exceeds 100 commits (script exits with “too many commits. cannot download”).
+- The commit window exceeds 200 commits (script exits with “too many commits. cannot download”).
 - Metadata is insufficient to map the failure to a specific change.
 
 Actions:
