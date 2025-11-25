@@ -11,14 +11,14 @@ namespace ttnn::operations::embedding_backward {
 namespace embedding_backward {
 
 struct operation_attributes_t {
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const tt::tt_metal::DataType output_dtype;
-    const uint32_t num_embeddings;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::DataType output_dtype;
+    uint32_t num_embeddings;
 };
 
 struct tensor_args_t {
-    const Tensor& index_tensor;
-    const Tensor& grad_tensor;
+    Tensor index_tensor;
+    Tensor grad_tensor;
     std::optional<Tensor> preallocated_output;
 };
 
