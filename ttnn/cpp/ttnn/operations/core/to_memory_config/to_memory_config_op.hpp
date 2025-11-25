@@ -75,24 +75,16 @@ struct ToMemoryConfig {
                                           .output_dtype = dtype.value_or(tensor.dtype())},
                                       {tensor})
                                       .at(0);
-                    return tt::tt_metal::operation::run(
-                               data_movement::InterleavedToShardedDeviceOperation{
-                                   .output_mem_config = memory_config, .output_dtype = dtype.value_or(temp.dtype())},
-                               {temp},
-                               {},
-                               optional_output_tensors)
-                        .at(0);
+                    const bool keep_l1_aligned = false;
+                    return ttnn::prim::interleaved_to_sharded(
+                        temp, memory_config, dtype.value_or(temp.dtype()), keep_l1_aligned, output_tensor);
                 }
             } else {
                 auto bbox = memory_config.shard_spec().value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
-                return tt::tt_metal::operation::run(
-                           data_movement::InterleavedToShardedDeviceOperation{
-                               .output_mem_config = memory_config, .output_dtype = dtype.value_or(tensor.dtype())},
-                           {tensor},
-                           {},
-                           optional_output_tensors)
-                    .at(0);
+                const bool keep_l1_aligned = false;
+                return ttnn::prim::interleaved_to_sharded(
+                    tensor, memory_config, dtype.value_or(tensor.dtype()), keep_l1_aligned, output_tensor);
             }
         } else {
             // to_interleaved path
