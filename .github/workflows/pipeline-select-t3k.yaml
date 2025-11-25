@@ -29,7 +29,7 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-nightly:
+      t3000-e2e:
         required: false
         type: boolean
         default: false
@@ -89,16 +89,16 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
-  t3000-integration-tests:
+  t3000-e2e-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
+    uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-nightly }}
+    if: ${{ inputs.t3000-e2e }}
   t3000-model-perf-tests:
     needs: build-artifact
     secrets: inherit

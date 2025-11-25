@@ -13,12 +13,12 @@ ops:
         time_budget: 540
       P150b:
         time_budget: 540
-  integration:
+  e2e:
     skus:
       wh_llmbox:
         time_budget: 90
 fabric:
-  integration:
+  e2e:
     skus:
       wh_llmbox:
         time_budget: 165
@@ -32,7 +32,7 @@ ttnn:
       wh_llmbox:
         time_budget: 50
 scaleout:
-  integration:
+  e2e:
     skus:
       wh_llmbox:
         time_budget: 30
@@ -41,7 +41,7 @@ scaleout:
       wh_llmbox:
         time_budget: 20
 models:
-  integration:
+  e2e:
     skus:
       wh_llmbox:
         time_budget: 10
