@@ -16,6 +16,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "dprint_pages.h"
 #include <type_traits>
+#include <array>
+
 namespace policies = norm::kernel_util::generic::policies;
 
 namespace norm::kernel_util::compute::numeric {
@@ -45,54 +47,45 @@ inline void scale_dest(uint32_t dst, uint32_t scalar) {
  * @brief The compute logic for accumulating a CB. Does
  * no src configuring or packing
  */
-template <bool FLOAT32_REDUCTION, policies::PopInputPolicy pop_input_policy, typename... additional_cbs>
+template <bool FLOAT32_REDUCTION, policies::PopInputPolicy pop_input_policy, typename... AdditionalCBs>
 inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
     uint32_t cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
-    additional_cbs... cb_additional) {
-    static_assert((std::conjunction_v<std::is_same<additional_cbs, uint32_t>...>), "All inputs must be uint32_t");
+    AdditionalCBs... cb_additional) {
+    static_assert(
+        (std::conjunction_v<std::is_same<AdditionalCBs, uint32_t>...>), "All additional CBs must be uint32_t");
 
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
 
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scalar, cb_out);
-    for (uint32_t t = 0; t < num_tiles; t += block_size) {
-        const uint32_t num_previous_tiles = pop_input ? 0 : t;
-        cb_wait_front(cb_in, num_previous_tiles + block_size);
-        for (uint32_t j = 0; j < block_size; j++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                cb_in, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
-        }
-        if constexpr (pop_input) {
-            cb_pop_front(cb_in, block_size);
-        }
-    }
-
-    constexpr uint32_t num_additional_cbs = sizeof...(additional_cbs);
-    if constexpr (num_additional_cbs > 0) {
-        uint32_t additional_cbs_array[num_additional_cbs] = {cb_additional...};
-
-        for (uint32_t i = 0; i < num_additional_cbs; i++) {
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(additional_cbs_array[i], cb_scalar, cb_out);
-            for (uint32_t t = 0; t < num_tiles; t += block_size) {
-                const uint32_t num_previous_tiles = pop_input ? 0 : t;
-                cb_wait_front(additional_cbs_array[i], num_previous_tiles + block_size);
-                for (uint32_t j = 0; j < block_size; j++) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                        additional_cbs_array[i],
-                        cb_scalar,
-                        num_previous_tiles + j,
-                        detail::scaler_tile_idx,
-                        detail::dst0);
-                }
-                if constexpr (pop_input) {
-                    cb_pop_front(additional_cbs_array[i], block_size);
-                }
+    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
+        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
+        for (uint32_t t = 0; t < num_tiles; t += block_size) {
+            const uint32_t num_previous_tiles = pop_input ? 0 : t;
+            cb_wait_front(cb, num_previous_tiles + block_size);
+            for (uint32_t j = 0; j < block_size; j++) {
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+                    cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
+            }
+            if constexpr (pop_input) {
+                cb_pop_front(cb, block_size);
             }
         }
+    };
+
+    accumulate_cb(cb_in);
+
+    constexpr uint32_t num_additional_cbs = sizeof...(cb_additional);
+    if constexpr (num_additional_cbs > 0) {
+        const std::array<uint32_t, num_additional_cbs> additional_cbs_array = {cb_additional...};
+
+        for (uint32_t i = 0; i < num_additional_cbs; i++) {
+            accumulate_cb(additional_cbs_array[i]);
+        }
     }
+
     reduce_uninit<FLOAT32_REDUCTION>();
 }
 
