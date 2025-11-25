@@ -10,7 +10,6 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
-#include "ttnn/operations/experimental/reduction/argmax/argmax_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
@@ -48,6 +47,7 @@
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -76,8 +76,6 @@ void py_module(nb::module_& mod) {
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
     transformer::bind_rotate_half(mod);
 
-    reduction::detail::bind_argmax_operation(mod);
-    reduction::detail::bind_argmin_operation(mod);
     reduction::detail::bind_fast_reduce_nc(mod);
 
     ssm::detail::bind_prefix_scan(mod);
@@ -113,6 +111,8 @@ void py_module(nb::module_& mod) {
     broadcast_to::detail::bind_broadcast_to(mod);
 
     operations::experimental::ternary::detail::bind_where(mod);
+
+    minimal_matmul::detail::bind_minimal_matmul(mod);
 }
 
 }  // namespace ttnn::operations::experimental
