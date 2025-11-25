@@ -883,6 +883,20 @@ class ModelArgs:
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )
 
+            # Minimal matmul config for MLP W1 prefill
+            def prefill_mlp_w1_minimal_matmul_config(seq_len):
+                """Returns minimal matmul config for prefill MLP W1."""
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                )
+
+            self.model_config["PREFILL_MLP_W1_MINIMAL_MATMUL_CONFIG"] = prefill_mlp_w1_minimal_matmul_config
+
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:
                 lm_head_num_rows = 4
