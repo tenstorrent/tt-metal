@@ -361,7 +361,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     this->initialize_active_devices();
 
     this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 5000);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -662,7 +662,11 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-
+            // If the read value matches expected status, then we can break out of the loop
+            // No need to check for timeout in this case.
+            if (master_router_status[0] == expected_status) {
+                break;
+            }
             // Check for timeout
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
