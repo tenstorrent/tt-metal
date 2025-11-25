@@ -6,7 +6,7 @@
 
 namespace ttnn::operations::embedding::program {
 
-inline CoreSplitResult split_work_to_cores_aligned(
+CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
     ZoneScoped;
 
