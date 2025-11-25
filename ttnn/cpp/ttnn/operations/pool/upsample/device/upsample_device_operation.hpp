@@ -38,8 +38,8 @@ struct UpsampleOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int scale_factor_h,
-        const int scale_factor_w,
+        int scale_factor_h,
+        int scale_factor_w,
         const std::string& mode,
         const MemoryConfig& output_mem_config,
         const DeviceComputeKernelConfig& compute_kernel_config);
