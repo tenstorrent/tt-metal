@@ -30,6 +30,10 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(7);
 
+    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
+    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t IGNORE_BATCH = 0x2;
+
     constexpr uint32_t cb_id_in0 = 0;
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
@@ -53,10 +57,12 @@ void kernel_main() {
 
             const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
-            // We need to pass the value to compute cores regardless of the value of is_batch_valid
-            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+            // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
+            cb_reserve_back(nnz_cb_id, 1);
+            auto nnz_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(nnz_cb_id));
+            // Pass chunk_count to compute UNPACK
+            nnz_ptr[0] = is_batch_valid;
+            cb_push_back(nnz_cb_id, 1);
 
             // Skip sending the input tensor for this batch as it is not valid.
             if (!is_batch_valid) {
