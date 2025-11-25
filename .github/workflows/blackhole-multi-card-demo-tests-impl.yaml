@@ -39,7 +39,7 @@ jobs:
             arch: blackhole
             cmd: |
               if [ "${{ inputs.runner-label }}" != "P300-viommu" ]; then echo "Skipping - not P300-viommu"; exit 0; fi
-              pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
+              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
             owner_id: U08TED0JM9D # Samuel Adesoye
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -86,6 +86,13 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+      - name: Download Flux.1-dev model weights from LFC
+        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        timeout-minutes: 15
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
@@ -144,7 +151,13 @@ jobs:
             arch: blackhole
             cmd: |
               if [ "${{ inputs.runner-label }}" != "BH-QB-GE" ]; then echo "Skipping - not BH-QB-GE"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
+              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
+            owner_id: U08TED0JM9D # Samuel Adesoye
+          - name: "Wan2.2-T2V-A14B ${{ inputs.runner-label }} performance"
+            arch: blackhole
+            cmd: |
+              if [ "${{ inputs.runner-label }}" != "BH-QB-GE" ]; then echo "Skipping - not BH-QB-GE"; exit 0; fi
+              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_480p"
             owner_id: U08TED0JM9D # Samuel Adesoye
     name: ${{ matrix.test-group.name }}
     runs-on:
