@@ -36,11 +36,6 @@ struct ReshapeDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const ttnn::Shape& logical_output_shape,

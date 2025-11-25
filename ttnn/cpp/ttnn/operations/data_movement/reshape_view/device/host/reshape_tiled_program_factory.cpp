@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -256,6 +256,26 @@ Tensor compute_reshape_mapping_host_tensor(
     return Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout));
 }
 }  // namespace detail
+
+// Algorithm overview:
+// The host computes the mapping between input shape and the output shapes as a series of data segments that are
+// contiguous for both input and output tensors. The mapping data is stored as 4 integers per segment: input page index,
+// offset of the segment in the input page, offset of the segment in the output page, number of elements in the segment;
+// the ordering of the segments in the map are concomitant with the ordering of the output tensor pages. The mapping
+// data is stored as an auxiliary integer tensor where each page corresponds to a page of the output tensor.
+
+// The device operation is parallelized over output tensor pages, where each core operates on a range of pages.
+
+// The reader kernel loads the mapping tensor page that corresponds to the current output tensor page on which it is
+// operating and pushes it on to the circular buffer. The reader kernel loops over all of the data segments represented
+// by the map and loads the specified input pages, avoiding redundant loads of pages for segments that come from the
+// same input page, and pushes them to the circular buffer.
+
+// The writer kernel pops mapping pages off the circular buffer, corresponding to the current page. It loops through
+// the input tensor pages specified by the map and, as necessary, pops input pages off the circular buffer, again
+// accounting for consecutive segments that come from the same input page. Using the offsets and size supplied by the
+// map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
+// the scratch page is copied to its output destination.
 
 ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
     const operation_attributes_t& operation_attributes,

@@ -8,8 +8,7 @@
 namespace ttnn::operations::data_movement::reshape {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         return ReshapeRMProgramFactory{};
     } else {
@@ -18,8 +17,7 @@ ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_a = tensor_args.input;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -33,14 +31,12 @@ void ReshapeDeviceOperation::validate_on_program_cache_miss(
 }
 
 void ReshapeDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input;
     auto mem_config = operation_attributes.output_mem_config;
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -59,14 +55,12 @@ ReshapeDeviceOperation::spec_return_value_t ReshapeDeviceOperation::compute_outp
 }
 
 ReshapeDeviceOperation::tensor_return_value_t ReshapeDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.logical_shape();
     const auto& input_dtype = input_tensor.dtype();
@@ -87,19 +81,6 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config);
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<ReshapeDeviceOperation::tensor_return_value_t>
-ReshapeDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& output_tensor = tensor_return_value;
-    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<ReshapeDeviceOperation::tensor_return_value_t> result(
-        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
-    return result;
-}
-
 std::tuple<ReshapeDeviceOperation::operation_attributes_t, ReshapeDeviceOperation::tensor_args_t>
 ReshapeDeviceOperation::invoke(
     const Tensor& input,
@@ -108,8 +89,7 @@ ReshapeDeviceOperation::invoke(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor) {
     return {
-        operation_attributes_t{
-            logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor},
+        operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config, recreate_mapping_tensor},
         tensor_args_t{input}};
 }
 
