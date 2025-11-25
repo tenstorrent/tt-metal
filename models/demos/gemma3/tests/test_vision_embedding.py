@@ -16,6 +16,11 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -29,10 +34,11 @@ def test_vision_embedding_integration(
     mesh_device,
     reset_seeds,
     bsz,
+    dummy_weights,
 ):
     pcc_required = 0.9999
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_tower.vision_model.embeddings."

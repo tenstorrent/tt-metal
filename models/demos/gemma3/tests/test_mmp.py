@@ -16,6 +16,11 @@ from models.demos.gemma3.tt.multi_modal_projector import TtGemma3MultiModalProje
 
 @torch.no_grad()
 @pytest.mark.parametrize(
+    "dummy_weights",
+    [True, False],
+    ids=["dummy_weights", "real_weights"],
+)
+@pytest.mark.parametrize(
     "device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -33,7 +38,7 @@ from models.demos.gemma3.tt.multi_modal_projector import TtGemma3MultiModalProje
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
+def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device, dummy_weights):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -41,6 +46,7 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
         device,
         max_batch_size=batch_size,
         max_seq_len=128,
+        dummy_weights=dummy_weights,
     )
 
     tt_model_args.n_layers = 1
