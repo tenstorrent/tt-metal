@@ -114,6 +114,7 @@ def test_conv2d_inference(
     ##### Perform the torch ops #####
     supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
 
+    # subclass MllamaPrecomputedAspectRatioEmbedding expects parameters in the following format
     class Config:
         def __init__(
             self,
@@ -127,10 +128,11 @@ def test_conv2d_inference(
             self.max_aspect_ratio_id = max_aspect_ratio_id
             self.is_gated = is_gated
 
+    # partial loading of HF safetensors to match model graph expect dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(model_args.model_base_path.__str__(), embedding_layer_prefix)
     reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
-
+    # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
     aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))
     reference_output = reference_model(input_tensor, aspect_ratios_id)
 
