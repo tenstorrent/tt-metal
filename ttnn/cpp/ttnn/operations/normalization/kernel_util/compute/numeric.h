@@ -14,7 +14,6 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "dprint_pages.h"
 #include <type_traits>
 #include <array>
 
@@ -102,6 +101,7 @@ inline void accumulate_compute_loop(
  * @param block_size The number of tiles to wait for at a time
  * @param epilogue Optional functor to call after the accumulation before tile registers
  * are committed and packed
+ * @param additional_cbs Optional additional input CBs to accumulate
  * @tparam FLOAT32_REDUCTION Whether to reduce the sum in FP32 precision
  * @tparam pop_input_policy The policy for whether to pop the input CB after processing
  * @tparam wait_at_end_policy The policy for whether to wait at the end of the function
@@ -110,14 +110,16 @@ template <
     bool FLOAT32_REDUCTION,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
-    typename Epilogue = decltype(detail::no_op)>
-inline void accumulate_cb(
+    typename Epilogue = decltype(detail::no_op),
+    typename... AdditionalCBs>
+inline void accumulate_cbs_with_epilogue(
     uint32_t cb_in,
     uint32_t cb_scalar,
     uint32_t cb_out,
     uint32_t num_tiles,
     uint32_t block_size,
-    Epilogue epilogue = detail::no_op) {
+    Epilogue epilogue = detail::no_op,
+    AdditionalCBs... additional_cbs) {
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
 
@@ -125,7 +127,8 @@ inline void accumulate_cb(
     tile_regs_acquire();
 
     detail::accumulate_compute_loop<FLOAT32_REDUCTION, pop_input_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size);
+        cb_in, cb_scalar, cb_out, num_tiles, block_size, additional_cbs...);
+
     epilogue();
 
     tile_regs_commit();
@@ -174,10 +177,7 @@ template <
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
     uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
-    constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
-    constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
-
-    accumulate_cb<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    accumulate_cbs_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
         cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
             detail::scale_dest(detail::dst0, one_over_N);
         });
@@ -223,66 +223,17 @@ inline void row_wise_mean_with_pre_add(
     uint32_t cb_in0,
     uint32_t cb_in1,
     uint32_t cb_scalar,
-    uint32_t cb_sum,
     uint32_t cb_out,
     uint32_t one_over_N,
     uint32_t num_tiles,
     uint32_t block_size) {
-    constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
-    constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
-
-    cb_reserve_back(cb_out, 1);
-    tile_regs_acquire();
-    reconfig_data_format(cb_in0, cb_scalar);
-    detail::accumulate_compute_loop<FLOAT32_REDUCTION, pop_input_policy>(
-        cb_in0, cb_scalar, cb_out, num_tiles, block_size, cb_in1);
-    detail::scale_dest(detail::dst0, one_over_N);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_out);
-    pack_tile(detail::dst0, cb_out);
-    tile_regs_release();
-
-    cb_push_back(cb_out, 1);
-
-    // reconfig_data_format(cb_in1, cb_scalar);
-    // tile_regs_acquire();
-    // detail::accumulate_compute_loop<FLOAT32_REDUCTION, pop_input_policy>(cb_in1, cb_scalar, cb_sum, num_tiles,
-    // block_size); tile_regs_commit(); tile_regs_wait(); pack_reconfig_data_format(cb_sum); pack_tile(detail::dst0,
-    // cb_sum); tile_regs_release();
-
-    // cb_push_back(cb_sum, 2);
-    // cb_wait_front(cb_sum, 2);
-
-    // UNPACK(DPRINT << "sum 1:" << ENDL());
-    // UNPACK(tt::compute::common::print_full_tile(cb_sum, 0, true));
-    // UNPACK(DPRINT << "sum 2:" << ENDL());
-    // UNPACK(tt::compute::common::print_full_tile(cb_sum, 1, true));
-
-    // reconfig_data_format(cb_sum, cb_sum);
-    // add_tiles_init(cb_sum, cb_sum);
-    // add_tiles(cb_sum, cb_sum, 0, 1, detail::dst0);
-    // tile_regs_commit();
-    // tile_regs_wait();
-    // cb_reserve_back(cb_out, 1);
-    // pack_reconfig_data_format(cb_out);
-    // pack_tile(detail::dst0, cb_out);
-    // tile_regs_release();
-    // cb_push_back(cb_out, 1);
-
-    // cb_wait_front(cb_out, 1);
-
-    // UNPACK(DPRINT << "out:" << ENDL());
-    // UNPACK(tt::compute::common::print_full_tile(cb_out, 0, true));
-
-    // cb_pop_front(cb_sum, 1);
-
-    if constexpr (wait_at_end) {
-        cb_wait_front(cb_out, 1);
-    }
-
-    // Accumulate cb_sum to cb_out, scaling by 1/N
-    // accumulate_cb<FLOAT32_REDUCTION, policies::PopInputPolicy::POP, wait_at_end_policy>(cb_sum, cb_scalar, cb_out,
-    // /*num_tiles*/ 2, /*block_size*/ 2, [&one_over_N](){detail::scale_dest(detail::dst0, one_over_N);});
+    accumulate_cbs_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+        cb_in0,
+        cb_scalar,
+        cb_out,
+        num_tiles,
+        block_size,
+        [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); },
+        cb_in1);
 }
 }  // namespace norm::kernel_util::compute::numeric
