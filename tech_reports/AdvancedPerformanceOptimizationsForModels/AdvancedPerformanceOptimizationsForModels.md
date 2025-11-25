@@ -193,7 +193,7 @@ For a single command queue only used for writing inputs, preallocate the input t
 To optimize performance allocate tensors to L1 memory. Many models do not have sufficient memory to fit in L1 memory if input tensors are also stored in L1 memory. Instead allocate the input tensors to DRAM to keep the tensor persistent in memory. Run an operation to move the tensor to L1 memory. Allocate the input as DRAM sharded and move it to L1 sharded memory with the reshard operation to optimize performance.
 
 To configure multiple command queues (one for writes, the other for running programs and reading) create two events:
-1. Create an event to signal writes are completed on CQ1. CQ0 waits for this event so that is executes operations after the write is complete.
+1. Create an event to signal writes are completed on CQ1. CQ0 waits for this event so that it executes operations after the write is complete.
 2. Create an event to signal that CQ0 has read the input tensor, and that CQ1 can overwrite with new data. CQ1 waits for this event before writing the next input.
 
 <!-- ![Ops_Reads_CQ0_Writes_CQ1](images/Ops_Reads_CQ0_Writes_CQ1.png){width=15 height=15} -->
