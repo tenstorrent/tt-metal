@@ -9,7 +9,10 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "tilize_program_factory.hpp"
+#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_block_program_factory.hpp"
+#include "tilize_single_core_program_factory.hpp"
+#include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -38,7 +41,7 @@ struct TilizeDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
+        const Tensor& input_tensors,
         const tt::tt_metal::MemoryConfig output_mem_config,
         const tt::tt_metal::DataType output_dtype,
         const bool use_multicore,

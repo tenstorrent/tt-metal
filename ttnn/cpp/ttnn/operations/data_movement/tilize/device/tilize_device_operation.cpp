@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_device_operation.hpp"
-#include "tilize_program_factory.hpp"
+#include "tilize_device_operation_types.hpp"
+#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_block_program_factory.hpp"
+#include "tilize_single_core_program_factory.hpp"
+#include "tilize_multi_core_sharded_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -19,7 +23,7 @@ void TilizeDeviceOperation::validate_on_program_cache_hit(
 
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensors.at(0);
+    const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
@@ -71,7 +75,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
 
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensors.at(0);
+    const auto& input_tensor = tensor_args.input_tensor;
     if (input_tensor.memory_config().is_sharded()) {
         auto mem_config =
             operation_attributes.output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
@@ -97,7 +101,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensors.at(0);
+    const auto& input_tensor_a = tensor_args.input_tensor;
 
     if (input_tensor_a.memory_config().is_sharded()) {
         return program::TilizeMultiCoreShardedProgramFactory{};
@@ -114,13 +118,12 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return {
-        create_device_tensor(compute_output_specs(args, tensor_args).at(0), tensor_args.input_tensors.at(0).device())};
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
 tt::tt_metal::operation::Hash TilizeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensors.at(0);
+    const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
@@ -136,12 +139,16 @@ tt::tt_metal::operation::Hash TilizeDeviceOperation::compute_program_hash(
 
 std::tuple<TilizeDeviceOperation::operation_attributes_t, TilizeDeviceOperation::tensor_args_t>
 TilizeDeviceOperation::invoke(
-    const std::vector<Tensor>& input_tensors,
+    const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig output_mem_config,
     const tt::tt_metal::DataType output_dtype,
     const bool use_multicore,
     const bool enough_space_width,
     const bool enough_space_height) {
+    tensor_args_t tensor_args;
+    tensor_args.input_tensor = input_tensor;
+    tensor_args.optional_input_tensor = {};
+
     return {
         operation_attributes_t{
             .output_mem_config = output_mem_config,
@@ -150,7 +157,7 @@ TilizeDeviceOperation::invoke(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
         },
-        tensor_args_t{.input_tensors = {input_tensors}, .optional_input_tensors = {}, .output_tensors = {}}};
+        tensor_args};
 }
 
 }  // namespace ttnn::operations::data_movement

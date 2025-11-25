@@ -182,7 +182,10 @@ target_sources(
         squeeze/squeeze.cpp
         stack/stack.cpp
         tilize/device/tilize_device_operation.cpp
-        tilize/device/tilize_program_factory.cpp
+        tilize/device/tilize_multi_core_interleaved_program_factory.cpp
+        tilize/device/tilize_multi_core_block_program_factory.cpp
+        tilize/device/tilize_single_core_program_factory.cpp
+        tilize/device/tilize_multi_core_sharded_program_factory.cpp
         tilize/tilize.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_op.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_program_factory.cpp
