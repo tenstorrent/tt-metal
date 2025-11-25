@@ -26,6 +26,8 @@
  * @note Requires ROCC instruction definitions from rocc_instructions.hpp
  */
 #pragma once
+// clang-format off
+
 
 #include "rocc_instructions.hpp"
 
@@ -33,7 +35,7 @@
 #define CMDBUF_1 1
 
 /* Default transaction ID for both command buffers */
-constexpr uint32_t CMDBUF_DEF_TRID = 0;
+constexpr uint32_t CMDBUF_DEF_TRID = 1;
 /* Static(starting) transcation ID for command buffer 0 */
 constexpr uint32_t CMDBUF_0_TRID_STATIC = 1;
 /* Start transcation ID for command buffer 0 when using TID wrapping */
@@ -92,15 +94,18 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         bool mcast = false,                                                                                            \
         TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},                                                       \
         bool wrapping_en = true,                                                                                       \
-        bool posted = true) {                                                                                          \
+        bool posted = true,                                                                                            \
+        bool linked = false,                                                                                           \
+        bool src_include = false) {                                                                                    \
         TT_ROCC_CMD_BUF_MISC_reg_u misc;                                                                               \
         misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;                                                                   \
                                                                                                                        \
-        misc.f.linked = mcast;                                                                                         \
+        misc.f.linked = linked;                                                                                        \
         misc.f.posted = wr && posted;                                                                                  \
         misc.f.multicast = mcast;                                                                                      \
         misc.f.write_trans = wr;                                                                                       \
         misc.f.wrapping_en = wrapping_en;                                                                              \
+        misc.f.src_include = src_include;                                                                              \
                                                                                                                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);                         \
                                                                                                                        \
@@ -571,8 +576,8 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
-    inline                                                                                                             \
-        __attribute__((always_inline)) void set_dest_##buf_name(uint64_t addr, uint64_t coordinates, uint64_t base) {  \
+    inline __attribute__((always_inline)) void set_dest_##buf_name(                                                    \
+        uint64_t addr, uint64_t coordinates, uint64_t base) {                                                          \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET, addr);                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_BASE_REG_OFFSET, base);                        \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET, coordinates);                \
@@ -663,8 +668,8 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
     }                                                                                                                  \
                                                                                                                        \
     /*                                                                                                                 \
-     * @def issue_transaction_cmdbuf_0                                                                                 \
-     * @def issue_transaction_cmdbuf_1                                                                                 \
+     * @def issue_cmdbuf_0                                                                                 \
+     * @def issue_cmdbuf_1                                                                                 \
      *                                                                                                                 \
      * @brief Kicks off noc transaction with previously configured command buff                                        \
      *                                                                                                                 \
@@ -830,42 +835,51 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         issue_read_##buf_name();                                                                                       \
     }                                                                                                                  \
                                                                                                                        \
-    inline __attribute__((always_inline)) void noc_write_prep_##buf_name(                                              \
+    inline __attribute__((always_inline)) void noc_write_setup_##buf_name(                                             \
         uint64_t src_coordinate,                                                                                       \
         uint64_t src_addr,                                                                                             \
         uint64_t dest_coordinate,                                                                                      \
         uint64_t dest_addr,                                                                                            \
         uint64_t len_bytes,                                                                                            \
-        uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                     \
+        uint32_t transaction_id,                                                                                       \
+        uint8_t req_vc,                                                                                                \
+        uint8_t resp_vc,                                                                                               \
         bool mcast = false,                                                                                            \
         bool snoop_bit = false,                                                                                        \
         bool flush_bit = false,                                                                                        \
-        bool posted = true) {                                                                                          \
+        bool posted = true,                                                                                            \
+        bool linked = false,                                                                                           \
+        bool src_include = false) {                                                                                    \
         reset_##buf_name();                                                                                            \
-        setup_as_copy_##buf_name(true, mcast, {0}, false, posted);                                                     \
+        setup_as_copy_##buf_name(true, mcast, {0}, false, posted, linked, src_include);                                \
         setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(true, mcast);                                                                             \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, req_vc);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, resp_vc);                       \
         setup_trids_##buf_name(transaction_id);                                                                        \
-        if (snoop_bit || flush_bit)                                                                                    \
+        if (snoop_bit || flush_bit) {                                                                                  \
             setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
+        }                                                                                                              \
         set_src_##buf_name(src_addr, src_coordinate);                                                                  \
         set_dest_##buf_name(dest_addr, dest_coordinate);                                                               \
         set_len_##buf_name(len_bytes);                                                                                 \
     }                                                                                                                  \
                                                                                                                        \
-    inline __attribute__((always_inline)) void noc_read_prep_##buf_name(                                               \
+    inline __attribute__((always_inline)) void noc_read_setup_##buf_name(                                              \
         uint64_t src_coordinate,                                                                                       \
         uint64_t src_addr,                                                                                             \
         uint64_t dest_coordinate,                                                                                      \
         uint64_t dest_addr,                                                                                            \
         uint64_t len_bytes,                                                                                            \
-        uint32_t transaction_id = CMDBUF_DEF_TRID,                                                                     \
+        uint32_t transaction_id,                                                                                       \
+        uint8_t req_vc,                                                                                                \
+        uint8_t resp_vc,                                                                                               \
         bool snoop_bit = false,                                                                                        \
         bool flush_bit = false) {                                                                                      \
         reset_##buf_name();                                                                                            \
         setup_as_copy_##buf_name(false, false, {0}, false);                                                            \
         setup_ongoing_##buf_name(false, false, false, false, false);                                                   \
-        setup_vcs_##buf_name(false);                                                                                   \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET, req_vc);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET, resp_vc);                       \
         setup_trids_##buf_name(transaction_id);                                                                        \
         if (snoop_bit || flush_bit)                                                                                    \
             setup_packet_tags_##buf_name(snoop_bit, flush_bit);                                                        \
@@ -1199,15 +1213,20 @@ DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
 inline __attribute__((always_inline)) void reset_reg_cmdbuf() { SCMDBUF_RESET(); }
 
 inline __attribute__((always_inline)) void setup_as_copy_reg_cmdbuf(
-    bool wr, bool mcast = false, TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0}, bool posted = true) {
+    bool wr,
+    bool mcast = false,
+    TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u mcast_exclude = {0},
+    bool posted = true,
+    bool linked = false,
+    bool src_include = false) {
     TT_ROCC_CMD_BUF_MISC_reg_u misc;
     misc.val = TT_ROCC_CMD_BUF_MISC_REG_DEFAULT;
 
-    misc.f.linked = mcast;
+    misc.f.linked = linked;
     misc.f.posted = wr && posted;
     misc.f.multicast = mcast;
     misc.f.write_trans = wr;
-
+    misc.f.src_include = src_include;
     SCMDBUF_WR_REG(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET, misc.val);
 
     if (mcast) {

@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include "xcustom_test.hpp"
-#include "overlay_reg.h"
+#include "meta/registers/overlay_reg.h"
 
 /**
  * @defgroup misc_instructions Miscellaneous Instructions

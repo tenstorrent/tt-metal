@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 50;
+        uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles;
         uint32_t l1_buffer_addr = 400 * 1024;
 
@@ -100,12 +100,7 @@ int main(int argc, char** argv) {
             program,
             dram_copy_kernel,
             core,
-            {l1_buffer_addr,
-            input_dram_buffer_addr,
-            0,
-            output_dram_buffer_addr,
-            0,
-            dram_buffer_size});
+            {l1_buffer_addr, input_dram_buffer_addr, 0, output_dram_buffer_addr, 0, dram_buffer_size});
 
         tt_metal::detail::LaunchProgram(device, program);
 
