@@ -121,8 +121,6 @@ class TtAttention(LightweightModule):
             )
             ttnn.deallocate(qkv_fused)
         else:
-            print(f"Q hidden states shape: {hidden_states.shape}")
-            print(f"program config: {self.dense_out_program_config}")
             q_heads = ttnn.matmul(
                 hidden_states,
                 self.tt_q_weights,
@@ -130,8 +128,6 @@ class TtAttention(LightweightModule):
                 compute_kernel_config=self.q_compute_kernel_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            print(f"K hidden states shape: {encoder_hidden_states.shape}")
-            print(f"program config: {self.k_program_config}")
             k_heads = ttnn.matmul(
                 encoder_hidden_states,
                 self.tt_k_weights,
@@ -183,8 +179,6 @@ class TtAttention(LightweightModule):
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        print(f"OUT hidden states shape: {hidden_states.shape}")
-        print(f"OUT program config: {self.dense_out_program_config}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,

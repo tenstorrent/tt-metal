@@ -36,9 +36,6 @@ class TtGEGLU(LightweightModule):
                 # hence using L1 memory config instead
                 input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        print(f"GEGLU input tensor shape: {input_tensor.shape}")
-        print(f"GEGLU weights 1 shape: {self.tt_weights_1.shape}")
-        print(f"program config: {self.program_config}")
         hidden_states = ttnn.linear(
             input_tensor,
             self.tt_weights_1,
@@ -47,9 +44,6 @@ class TtGEGLU(LightweightModule):
             program_config=self.program_config,
             compute_kernel_config=self.compute_config,
         )
-        print(f"GEGLU input tensor shape: {hidden_states.shape}")
-        print(f"GEGLU weights 1 shape: {self.tt_weights_2.shape}")
-        print(f"program config: {self.program_config_gelu}")
         gate = ttnn.linear(
             input_tensor,
             self.tt_weights_2,

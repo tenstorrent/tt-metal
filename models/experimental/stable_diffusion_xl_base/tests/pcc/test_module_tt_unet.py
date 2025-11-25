@@ -197,7 +197,7 @@ def run_unet_model(
     "input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape",
     [
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
-        # ((1, 9, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
+        ((1, 9, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

@@ -97,9 +97,6 @@ class TtTransformer2DModel(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
-        print(f"Transformer Model input tensor shape: {hidden_states.shape}")
-        print(f"Transformer Model weights shape: {self.tt_weights_in.shape}")
-        print(f"program config: {self.program_config_in}")
         if C == 1280:
             # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
             # hence using L1 memory config instead
@@ -116,9 +113,6 @@ class TtTransformer2DModel(LightweightModule):
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
 
-        print(f"Transformer Model output tensor shape: {hidden_states.shape}")
-        print(f"Transformer Model weights shape: {self.tt_weights_out.shape}")
-        print(f"program config: {self.program_config_out}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights_out,

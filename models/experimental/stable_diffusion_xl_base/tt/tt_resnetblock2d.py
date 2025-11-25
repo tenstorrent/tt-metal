@@ -327,9 +327,6 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv2_bias = tt_conv2_bias
 
         if self.tt_conv3_weights is not None:
-            print(f"input_tensor shape before conv3: {input_tensor.shape}")
-            print(f"tt_conv3_weights shape: {self.tt_conv3_weights.shape}")
-            print(f"conv3 program config: {self.conv3_program_config}")
             input_tensor_pre_conv = input_tensor
             input_tensor = ttnn.linear(
                 input_tensor,

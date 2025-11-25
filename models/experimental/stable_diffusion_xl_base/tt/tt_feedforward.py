@@ -34,9 +34,6 @@ class TtFeedForward(LightweightModule):
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)
 
-        print(f"FeedForward input tensor shape: {hidden_states.shape}")
-        print(f"FeedForward weights shape: {self.tt_weights.shape}")
-        print(f"program config: {self.ff2_model_config}")
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_weights,
