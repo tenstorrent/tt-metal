@@ -29,7 +29,8 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(indices_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
 
-    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    const auto [output_spec, metadata_spec, untilize_intermediate_spec] =
+        compute_output_specs(operation_attributes, tensor_args);
 
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
@@ -43,15 +44,15 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             "Output metadata tensor must be in row major layout");
 
         TT_FATAL(
-            output_specs[0] == sparse_token_tensor.tensor_spec(),
+            output_spec == sparse_token_tensor.tensor_spec(),
             "Optional sparse output token tensor spec {} does not match computed output spec {}",
             sparse_token_tensor.tensor_spec(),
-            output_specs[0]);
+            output_spec);
         TT_FATAL(
-            output_specs[1] == metadata_tensor.tensor_spec(),
+            metadata_spec == metadata_tensor.tensor_spec(),
             "Optional metadata tensor spec {} does not match computed output spec {}",
             metadata_tensor.tensor_spec(),
-            output_specs[1]);
+            metadata_spec);
     }
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
@@ -139,21 +140,23 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
         auto output_tensors = tensor_args.optional_output_tensors.value();
         auto preallocated_output_spec = output_tensors[0].tensor_spec();
         auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
-        return {preallocated_output_spec, preallocated_metadata_spec};
+        return std::make_tuple(preallocated_output_spec, preallocated_metadata_spec, std::optional<TensorSpec>());
     }
-    return {output_tokens_spec, metadata_spec};
+    return std::make_tuple(output_tokens_spec, metadata_spec, std::optional<TensorSpec>());
 }
 
 AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensors.has_value()) {
-        return tensor_args.optional_output_tensors.value();
+        const auto& optional_tensors = tensor_args.optional_output_tensors.value();
+        return std::make_tuple(optional_tensors[0], optional_tensors[1], std::make_optional(optional_tensors[2]));
     }
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    const auto [output_spec, metadata_spec, untilize_intermediate_spec] =
+        compute_output_specs(operation_attributes, tensor_args);
 
-    auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
-    auto metadata_tensor = create_device_tensor(output_spec[1], tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor};
+    auto output_tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    auto metadata_tensor = create_device_tensor(metadata_spec, tensor_args.input_tensor.device());
+    return {output_tensor, metadata_tensor, std::optional<Tensor>()};
 }
 
 std::tuple<AllToAllDispatchDeviceOperation::operation_attributes_t, AllToAllDispatchDeviceOperation::tensor_args_t>
@@ -162,7 +165,7 @@ AllToAllDispatchDeviceOperation::invoke(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
-    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+    const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
