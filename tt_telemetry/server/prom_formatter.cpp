@@ -187,7 +187,7 @@ void process_metrics(
                                 std::lock_guard<std::mutex> lock(emitted_conflicts_mutex);
                                 if (emitted_conflicts.insert(conflict_id).second) {
                                     log_warning(
-                                        tt::LogDebug,
+                                        tt::LogAlways,
                                         "Custom label '{}' for metric '{}' overrides path-derived label value '{}'",
                                         key,
                                         path,
