@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 
 import pytest
@@ -47,6 +48,10 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
     margin = 0.05
     expected_perf = expected_perf if is_wormhole_b0() else 0
     expected_inference_time = 1 / (expected_perf * (1 - margin))
+
+    # Set TT_GH_CI_INFRA environment variable when running on CI to use local weights instead of HuggingFace
+    if "TT_GH_CI_INFRA" in os.environ:
+        os.environ["TT_GH_CI_INFRA"] = "1"
 
     command = f"pytest models/demos/wormhole/sentence_bert/tests/pcc/{pcc_file}.py::{function_name}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
