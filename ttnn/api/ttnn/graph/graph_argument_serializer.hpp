@@ -9,6 +9,13 @@
 #include <string>
 #include <typeindex>
 #include <unordered_map>
+#include <iostream>
+#include <set>
+#include <variant>
+#include <tuple>
+#include <array>
+#include <vector>
+#include <optional>
 
 namespace ttnn::graph {
 std::string graph_demangle(std::string_view name);
@@ -26,6 +33,12 @@ private:
 
     template <typename T, std::size_t N>
     void register_small_vector();
+
+    template <typename T, std::size_t N>
+    void register_array();
+
+    template <typename T>
+    void register_vector();
 
     template <typename T>
     void register_type();
