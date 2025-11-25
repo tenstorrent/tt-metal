@@ -89,10 +89,10 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
-  t3000-nightly-tests:
+  t3000-integration-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

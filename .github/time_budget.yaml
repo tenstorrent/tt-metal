@@ -13,22 +13,22 @@ ops:
         time_budget: 540
       P150b:
         time_budget: 540
-  nightly:
+  integration:
     skus:
       wh_llmbox:
         time_budget: 90
 fabric:
-  nightly:
+  integration:
     skus:
       wh_llmbox:
         time_budget: 165
 scaleout:
-  nightly:
+  integration:
     skus:
       wh_llmbox:
         time_budget: 30
 models:
-  nightly:
+  integration:
     skus:
       wh_llmbox:
         time_budget: 10

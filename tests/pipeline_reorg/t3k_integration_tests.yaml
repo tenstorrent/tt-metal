@@ -1,4 +1,4 @@
-# This file defines the test matrix for the T3000 nightly tests pipeline.
+# This file defines the test matrix for the T3000 integration tests pipeline (which currently runs nightly)
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.

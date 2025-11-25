@@ -1,4 +1,4 @@
-name: "[internal] T3000 nightly tests impl"
+name: "[internal] T3000 integration tests impl"
 
 on:
   workflow_call:
@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_integration_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -34,13 +36,11 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ./tests/pipeline_reorg/nightly/tests.yaml \
+            ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "nightly"
+            "integration"
       - name: Load test matrix
         id: load-test-matrix
-        env:
-          TESTS_YAML_PATH: ./tests/pipeline_reorg/nightly/tests.yaml
         run: |
           set -e
           # Install yq
@@ -61,7 +61,7 @@ jobs:
           echo "${json_output}"
           echo "matrix=${json_output}" >> $GITHUB_OUTPUT
 
-  t3000-nightly-tests:
+  t3000-integration-tests:
     needs: load-test-matrix
     strategy:
       fail-fast: false
