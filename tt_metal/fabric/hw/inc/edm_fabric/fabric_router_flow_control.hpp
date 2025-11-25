@@ -241,3 +241,15 @@ FORCE_INLINE void receiver_send_completion_ack(
     }
     receiver_channel_response_credit_sender.send_completion_credit(src_id);
 }
+
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_received_ack(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (CHECK_BUSY) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+    }
+    receiver_channel_response_credit_sender.send_ack_credit(src_id);
+}
+
+

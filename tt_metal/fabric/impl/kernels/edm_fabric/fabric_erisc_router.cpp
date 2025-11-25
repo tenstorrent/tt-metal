@@ -1355,6 +1355,36 @@ FORCE_INLINE void establish_edm_connection(
     local_sender_channel_worker_interface.cache_producer_noc_addr();
 }
 
+template <
+    bool ENABLE_FIRST_LEVEL_ACK,
+    bool enable_deadlock_avoidance,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    typename EdmChannelWorkerIFs>
+FORCE_INLINE void send_credits_to_upstream_workers(
+    EdmChannelWorkerIFs& local_sender_channel_worker_interface,
+    int32_t num_credits,
+    bool channel_connection_established) {
+    if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+        local_sender_channel_worker_interface
+            .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
+                num_credits);
+    } else {
+        // Connection liveness checks are only done for connections that are not persistent
+        // For those connections, it's unsafe to use free-slots counters held in stream registers
+        // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
+        // instead because these connections will be read/write counter based instead
+        local_sender_channel_worker_interface.increment_local_read_counter(num_credits);
+        if (channel_connection_established) {
+            local_sender_channel_worker_interface
+                .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
+        } else {
+            local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
+            // If not connected, we update the read counter in L1 as well so the next connecting worker
+            // is more likely to see space available as soon as it tries connecting
+        }
+    }
+}
+
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1389,6 +1419,10 @@ FORCE_INLINE void run_sender_channel_step_impl(
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        bool sender_backpressured_from_sender_side = free_slots == 0;
+        can_send = can_send && !sender_backpressured_from_sender_side;
+    }
     if (can_send) {
         did_something = true;
 
@@ -1413,24 +1447,44 @@ FORCE_INLINE void run_sender_channel_step_impl(
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
-        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-            local_sender_channel_worker_interface
-                .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
-                    completions_since_last_check);
-        } else {
-            // Connection liveness checks are only done for connections that are not persistent
-            // For those connections, it's unsafe to use free-slots counters held in stream registers
-            // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
-            // instead because these connections will be read/write counter based instead
-            local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-            if (channel_connection_established) {
-                local_sender_channel_worker_interface
-                    .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
-            } else {
-                local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                // If not connected, we update the read counter in L1 as well so the next connecting worker
-                // is more likely to see space available as soon as it tries connecting
-            }
+        // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
+        // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
+        // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
+        if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+            send_credits_to_upstream_workers<ENABLE_FIRST_LEVEL_ACK, enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface,
+                completions_since_last_check,
+                channel_connection_established);
+        }
+    }
+
+    // Process ACKs from receiver
+    // ACKs are processed second to avoid any sort of races. If we process acks second,
+    // we are guaranteed to see equal to or greater the number of acks than completions
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
+        if (acks_since_last_check > 0) {
+            send_credits_to_upstream_workers<ENABLE_FIRST_LEVEL_ACK, enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface,
+                acks_since_last_check,
+                channel_connection_established);
+            // if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            //     local_sender_channel_worker_interface
+            //         .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
+            // } else {
+            //     if (channel_connection_established) {
+            //         local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+            //     } else {
+            //         ASSERT(
+            //             local_sender_channel_worker_interface.local_write_counter.counter >
+            //             (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
+            //         ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
+            //         auto new_val = local_sender_channel_worker_interface.local_write_counter.counter -
+            //                        (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
+            //         local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter = new_val;
+            //     }
+            // }
+            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
         }
     }
 
@@ -1502,7 +1556,36 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table) {
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
+    bool pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
+
+    bool unwritten_packets;
+    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
+        auto& ack_counter = receiver_channel_pointers.ack_counter;
+        bool pkts_received = pkts_received_since_last_check > 0;
+        ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
+        bool can_send_ack = pkts_received;
+        if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+        }
+        if (pkts_received) {
+            // currently only support processing one packet at a time, so we only decrement by 1
+            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            uint8_t src_ch_id;
+            if constexpr (skip_src_ch_id_update) {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+            } else {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(ack_counter.get_buffer_index());
+            }
+            receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                receiver_channel_response_credit_sender, src_ch_id);
+
+            ack_counter.increment();
+        }
+        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+    } else {
+        unwritten_packets = pkts_received_since_last_check != 0;
+    }
+
 
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;

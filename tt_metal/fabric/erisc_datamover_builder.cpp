@@ -933,6 +933,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Get the VC0 downstream EDM count based on 2D routing
     uint32_t num_vc0_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
+    bool enable_first_level_ack = this->config.topology == tt::tt_fabric::Topology::Ring || this->config.topology == tt::tt_fabric::Topology::Torus;
+
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
@@ -949,7 +951,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         vc1_has_different_downstream_dest,
-        this->has_tensix_extension};
+        this->has_tensix_extension,
+        enable_first_level_ack};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,

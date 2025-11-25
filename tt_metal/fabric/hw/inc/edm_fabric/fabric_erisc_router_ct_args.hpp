@@ -140,7 +140,9 @@ constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN
 constexpr bool has_tensix_extension = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool skip_src_ch_id_update = has_tensix_extension;
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
+
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
 constexpr uint32_t remote_vc1_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 constexpr size_t remote_worker_sender_channel =
