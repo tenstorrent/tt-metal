@@ -99,6 +99,7 @@ Actions:
    - `explanation.md` covering:
      - Why the failure is deterministic.
      - The commit window, Copilot summaries referenced, and supporting diffs.
+     - Exact code changes (file path + before/after hunk) from the suspected commit that plausibly trigger the observed error, with a clear explanation tying the change to the failure signature. At minimum: cite the old code (pre-commit), the new code (post-commit), and describe how the behavior change produces the observed test failure.
      - Detailed fix-forward suggestions (not just “revert”).
      - A “Who to contact” section listing names + GitHub handles + profile URLs, prioritizing the culprit commit author and relevant file owners (per `git log`, `git blame`, `.github/CODEOWNERS`).
      - Direct links to the last successful job, the first failing job, each commit in the window, and the suspected culprit commit.
@@ -114,7 +115,8 @@ Actions:
 1. Explain clearly why the commit cannot be identified (expired logs, excessive commit span, missing data, etc.).
 2. Describe the failure signature, affected files/tests, and best-effort hypotheses on where the bug likely lives in the codebase.
 3. Produce **only** `./output/explanation.md` (no JSON outputs). Include:
-   - Determinism evidence.
+   - Determinism evidence and the exact error message text (or stack trace snippet) observed in the relevant job(s).
+   - Code references from the repository (file path + failing code block) that most likely cause or influence the failure, even if no specific culprit commit is known. Compare old vs. current behavior when possible.
    - Guidance for engineers on how to debug/fix the issue (files to inspect, test commands, configs to tweak).
    - A contact list (names + handles + GitHub URLs) derived from `git log`, `git blame`, `.github/CODEOWNERS`, prioritizing likely owners of the failing areas.
 
@@ -128,12 +130,13 @@ Choose this case when tt-metal commits cannot reasonably explain the failure. In
 
 Actions:
 1. Document why tt-metal is likely not at fault:
-   - Summaries of the failures you inspected.
+   - Summaries of the failures you inspected and the exact error messages observed.
    - Commit analysis showing no plausible offending changes.
    - Any external/environmental clues from the logs.
 2. Produce `./output/explanation.md` with:
    - A clear statement that this is Case 3.
    - Suggestions for next steps (check runners, dependencies, hardware, upstream repos, etc.).
+   - References to any code/config files inspected to justify that tt-metal itself is not at fault (even if only to show they remained unchanged).
    - A contact list (names + handles + GitHub URLs) for people who can help investigate the suspected area (e.g., infra owners, CODEOWNERS of the test, commit authors touching tooling).
 
 Contact Guidance (All Cases)
