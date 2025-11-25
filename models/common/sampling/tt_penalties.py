@@ -54,7 +54,7 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
 
     # If logits are >1, divide by penalty, otherwise multiply by penalty.
     logits = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
-    scaling = ttnn.where(ttnn.gt(logits, 1, **op_kwargs), combined_mask, combined_mask, **op_kwargs)
+    scaling = ttnn.where(ttnn.gt(logits, 1, **op_kwargs), penalties, inverse_penalties, **op_kwargs)
 
     logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
 
