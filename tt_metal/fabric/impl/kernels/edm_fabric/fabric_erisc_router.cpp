@@ -789,11 +789,9 @@ FORCE_INLINE void receiver_forward_packet(
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
-                WATCHER_RING_BUFFER_PUSH(0x00001111);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-                case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                WATCHER_RING_BUFFER_PUSH(0x00002222);
+            case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -801,7 +799,6 @@ FORCE_INLINE void receiver_forward_packet(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                WATCHER_RING_BUFFER_PUSH(0x00003333);
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -1422,12 +1419,7 @@ FORCE_INLINE void run_sender_channel_step_impl(
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
-    if constexpr (ENABLE_FIRST_LEVEL_ACK) {
-        bool sender_backpressured_from_sender_side = free_slots == 0;
-        can_send = can_send && !sender_backpressured_from_sender_side;
-    }
     if (can_send) {
-        WATCHER_RING_BUFFER_PUSH(0x55550000 | sender_channel_index);
         did_something = true;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
@@ -1455,7 +1447,6 @@ FORCE_INLINE void run_sender_channel_step_impl(
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
         // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
         if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-            WATCHER_RING_BUFFER_PUSH(0xdeaddead);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface,
                 completions_since_last_check,
@@ -1469,7 +1460,6 @@ FORCE_INLINE void run_sender_channel_step_impl(
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
         if (acks_since_last_check > 0) {
-            WATCHER_RING_BUFFER_PUSH((0xBBBB << 16) | sender_channel_index);
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface,
@@ -1558,31 +1548,30 @@ FORCE_INLINE void run_receiver_channel_step_impl(
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
+            invalidate_l1_cache();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            // WATCHER_RING_BUFFER_PUSH(0xABCD0001);
             static_assert (!skip_src_ch_id_update, "skip_src_ch_id_update must be false when ENABLE_FIRST_LEVEL_ACK is true");
             auto receiver_buffer_index = ack_counter.get_buffer_index();
             tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
                 local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-                uint8_t src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
-            WATCHER_RING_BUFFER_PUSH(0xAAAA | (ack_counter.get_buffer_index() << 24) | (src_ch_id << 16) | (receiver_channel << 20));
+            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+            uint8_t src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
 
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             ack_counter.increment();
         }
         unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
-        
+
     } else {
         unwritten_packets = pkts_received_since_last_check != 0;
     }
-        
+
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
     receiver_forward_timer.set_should_dump(unwritten_packets);
     receiver_forward_timer.open();
-        
+
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1635,7 +1624,6 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
         if (can_send_to_all_local_chip_receivers) {
-            WATCHER_RING_BUFFER_PUSH(0x50505050);
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
@@ -1665,10 +1653,6 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             }
-        } else {
-            // WATCHER_RING_BUFFER_PUSH(0x88882255);
-            // WATCHER_RING_BUFFER_PUSH(downstream_edm_interfaces_vc0[receiver_channel].worker_credits_stream_id);
-            // WATCHER_RING_BUFFER_PUSH(get_ptr_val(downstream_edm_interfaces_vc0[receiver_channel].worker_credits_stream_id));
         }
     }
 

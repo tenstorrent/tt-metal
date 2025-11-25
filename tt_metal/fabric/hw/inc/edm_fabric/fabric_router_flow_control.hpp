@@ -42,10 +42,6 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
-        // WATCHER_RING_BUFFER_PUSH(reinterpret_cast<uint32_t>(ack_counters_base_ptr));
-        // WATCHER_RING_BUFFER_PUSH(src_id);
-        // WATCHER_RING_BUFFER_PUSH(round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)));
-        WATCHER_RING_BUFFER_PUSH(0xc0ffee00 | src_id);
 
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
@@ -76,7 +72,6 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        WATCHER_RING_BUFFER_PUSH(0xc0ffee00 | src_id);
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
 
@@ -260,5 +255,3 @@ FORCE_INLINE void receiver_send_received_ack(
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id);
 }
-
-
