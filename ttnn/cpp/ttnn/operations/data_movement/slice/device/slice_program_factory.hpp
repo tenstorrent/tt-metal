@@ -4,35 +4,128 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/device_operation.hpp"
+#include "slice_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks slice_multi_core(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_tensor_start,
-    const ttnn::Shape& output_tensor_end,
-    const ttnn::Shape& step,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+using namespace slice;
 
-tt::tt_metal::operation::ProgramWithCallbacks slice_rm_multi_core_stride(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const ttnn::Shape& slice_start,
-    const ttnn::Shape& slice_end,
-    const ttnn::Shape& slice_step,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+// Row-major interleaved program factory
+struct SliceRmProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        CoreCoord compute_with_storage_grid_size;
+        std::optional<CoreRangeSet> sub_core_grids;
+        tt::tt_metal::CBHandle cb_src0{};
+        ttnn::Shape slice_start;  // Store for runtime args callback
+    };
 
-tt::tt_metal::operation::ProgramWithCallbacks slice_multi_core_with_tensor_args(
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-tt::tt_metal::operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
-    const Tensor& input_tensor,
-    const Tensor& start_tensor,
-    const Tensor& end_tensor,
-    Tensor& output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
 
-}  // namespace ttnn::operations::data_movement::detail
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+};
+
+// Row-major sharded program factory
+struct SliceRmShardedProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::CBHandle cb_src0;
+        tt::tt_metal::CBHandle cb_output;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+};
+
+// Row-major stride program factory
+struct SliceRmStrideProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle reader_kernel_id;
+        tt::tt_metal::KernelHandle writer_kernel_id;
+        std::vector<CoreCoord> all_cores_vec;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+};
+
+// Tile layout program factory
+struct SliceTileProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle unary_reader_kernel_id;
+        tt::tt_metal::KernelHandle unary_writer_kernel_id;
+        CoreCoord compute_with_storage_grid_size;
+        std::optional<CoreRangeSet> sub_core_grids;
+        std::vector<uint32_t> accumulated_total_per_dim;
+        ttnn::Shape slice_start;  // Store for runtime args callback
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+};
+
+// Tile layout with tensor args program factory
+struct SliceTileTensorArgsProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::KernelHandle unary_reader_kernel_id;
+        tt::tt_metal::KernelHandle unary_writer_kernel_id;
+        CoreCoord compute_with_storage_grid_size;
+        std::optional<CoreRangeSet> sub_core_grids;
+        std::vector<uint32_t> accumulated_total_per_dim;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output);
+};
+
+}  // namespace ttnn::operations::data_movement::program

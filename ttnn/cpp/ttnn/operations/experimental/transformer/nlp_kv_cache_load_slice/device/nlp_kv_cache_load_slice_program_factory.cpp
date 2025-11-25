@@ -145,7 +145,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
         auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
         const auto tensor_start =
-            static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
+            static_cast<const ttnn::operations::experimental::transformer::NlpKVCacheLoadSliceDeviceOperation*>(
+                operation)
+                ->output_tensor_start;
         auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
             src_tensor, dst_tensor, tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
 

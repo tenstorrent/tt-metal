@@ -46,7 +46,8 @@ struct MeshPartitionDeviceOperation {
         // -- shared variables --------------------------------------------
         struct shared_variables_t {
             OverrideRuntimeArgsCallback override_runtime_arguments_callback;
-            ttnn::operations::data_movement::SliceDeviceOperation slice_op;
+            ttnn::operations::data_movement::slice::operation_attributes_t slice_attrs;
+            ttnn::operations::data_movement::SliceDeviceOperation::program_factory_t program_factory;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

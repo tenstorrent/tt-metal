@@ -235,9 +235,19 @@ def test_slice_rm_program_cache_collison(device):
     tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     for i in range(shape[-1]):
+        print("########################")
+        print(i)
         tt_out = tt_input[:, :, i : i + 1]
         torch_out = torch_input[:, :, i : i + 1]
-        assert_with_pcc(torch_out, ttnn.to_torch(tt_out), 0.99)
+        try:
+            assert_with_pcc(torch_out, ttnn.to_torch(tt_out), 0.99)
+        except:
+            print(f"Error at index {i}")
+            print("tt_out: ")
+            print(tt_out)
+            print("torch_out: ")
+            print(torch_out)
+            raise
 
 
 @pytest.mark.parametrize(

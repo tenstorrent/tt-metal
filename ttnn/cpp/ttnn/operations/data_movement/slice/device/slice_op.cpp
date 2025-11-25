@@ -5,7 +5,6 @@
 #include <tt-metalium/constants.hpp>
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -79,98 +78,103 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
-void SliceDeviceOperation::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+void SliceDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
-    const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
+    TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
+    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
+        tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
-        input_tensor_a.layout());
+        tensor_args.input.layout());
     TT_FATAL(
-        input_tensor_a.padded_shape().rank() == this->slice_start.rank() &&
-            this->slice_start.rank() == this->slice_end.rank(),
+        tensor_args.input.padded_shape().rank() == args.slice_start.rank() &&
+            args.slice_start.rank() == args.slice_end.rank(),
         "Input tensor rank ({}), slice start rank ({}), and slice end rank ({}) must all be equal",
-        input_tensor_a.padded_shape().rank(),
-        this->slice_start.rank(),
-        this->slice_end.rank());
-    for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
+        tensor_args.input.padded_shape().rank(),
+        args.slice_start.rank(),
+        args.slice_end.rank());
+    for (uint32_t i = 0; i < tensor_args.input.padded_shape().rank(); i++) {
         TT_FATAL(
-            this->slice_start[i] < input_tensor_a.padded_shape()[i],
+            args.slice_start[i] < tensor_args.input.padded_shape()[i],
             "Slice start[{}] ({}) must be less than input tensor shape[{}] ({})",
             i,
-            this->slice_start[i],
+            args.slice_start[i],
             i,
-            input_tensor_a.padded_shape()[i]);
+            tensor_args.input.padded_shape()[i]);
         TT_FATAL(
-            this->slice_end[i] <= input_tensor_a.padded_shape()[i],
+            args.slice_end[i] <= tensor_args.input.padded_shape()[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
-            this->slice_end[i],
-            input_tensor_a.padded_shape()[i]);
+            args.slice_end[i],
+            tensor_args.input.padded_shape()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(
-            this->slice_start[i] <= this->slice_end[i],
+            args.slice_start[i] <= args.slice_end[i],
             "Slice start[{}] ({}) must be <= slice end[{}] ({})",
             i,
-            this->slice_start[i],
+            args.slice_start[i],
             i,
-            this->slice_end[i]);
+            args.slice_end[i]);
     }
-    if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
-        const auto& out_tensor = output_tensors[0].value();
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto& out_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(
             out_tensor.padded_shape() == output_shape_required,
-            "The input tensors need a shape of {}, however the output tensor is only {}",
+            "The preallocated output tensor needs a shape of {}, however it is {}",
             output_shape_required,
             out_tensor.padded_shape());
     }
-    auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
+    auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
-        TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
-        TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
         TT_FATAL(
-            step.size() == this->slice_end.rank(),
+            tensor_args.input.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
+        TT_FATAL(!tensor_args.input.is_sharded(), "Strided slice is not supported for sharded tensor");
+        TT_FATAL(
+            args.step.size() == args.slice_end.rank(),
             "Number of steps {} must match number of ends/starts {}",
-            step.size(),
-            this->slice_end.rank());
+            args.step.size(),
+            args.slice_end.rank());
     }
-    if (input_tensor_a.layout() == Layout::TILE) {
+    if (tensor_args.input.layout() == Layout::TILE) {
         TT_FATAL(
-            input_tensor_a.physical_volume() % TILE_HW == 0,
+            tensor_args.input.physical_volume() % TILE_HW == 0,
             "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
-            input_tensor_a.physical_volume(),
+            tensor_args.input.physical_volume(),
             TILE_HW);
         TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
+            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (args.slice_start[-2] % TILE_HEIGHT == 0),
             "Can only slice tilized tensor with height begin index aligned to tiles");
         TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
+            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (args.slice_start[-1] % TILE_WIDTH == 0),
             "Can only slice tilized tensor with width begin index aligned to tiles");
-    } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+    } else if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         if (has_step) {
-            for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
-                TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
+            for (uint32_t i = 0; i < tensor_args.input.padded_shape().rank(); i++) {
+                TT_FATAL(args.step[i] > 0, "Step({}) = {} should be positive", i, args.step[i]);
             }
         }
     }
 }
 
-std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
+void SliceDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
-    if (this->use_tensor_args) {
+    if (args.use_tensor_args) {
         TT_FATAL(
-            this->slice_dim.has_value() && this->num_devices.has_value(),
+            args.slice_dim.has_value() && args.num_devices.has_value(),
             "slice_dim and num_devices must be provided for tensor args path");
 
-        uint32_t slice_dimension = this->slice_dim.value();
-        uint32_t num_parts = this->num_devices.value();
+        uint32_t slice_dimension = args.slice_dim.value();
+        uint32_t num_parts = args.num_devices.value();
 
         for (uint32_t i = 0; i < out_shape.size(); i++) {
             out_shape[i] = input_tensor.logical_shape()[i];
@@ -194,44 +198,84 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
         out_shape[slice_dimension] = slice_size;
     } else {
         // Regular path using slice_start, slice_end, step
-        auto output_dim_i = [this](size_t i) {
-            return (this->slice_end[i] - this->slice_start[i] + this->step[i] - 1) / this->step[i];
+        auto output_dim_i = [&args](size_t i) {
+            return (args.slice_end[i] - args.slice_start[i] + args.step[i] - 1) / args.step[i];
         };
         for (uint32_t i = 0; i < out_shape.size(); i++) {
             out_shape[i] = output_dim_i(i);
         }
     }
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    return {ttnn::TensorSpec(
+    return ttnn::TensorSpec(
         output_tensor_shape,
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), this->output_mem_config))};
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-SliceDeviceOperation::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, true);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
-}
-
-operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-    if (this->use_tensor_args) {
-        // Use tensor args device path
-        return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors, this->sub_core_grids);
-    } else {
-        // Use regular path with Shape args
-        return detail::slice_multi_core(
-            input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step, this->sub_core_grids);
+SliceDeviceOperation::tensor_return_value_t SliceDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
     }
+
+    const auto& input = tensor_args.input;
+    const auto output_spec = compute_output_specs(args, tensor_args);
+
+    return create_device_tensor(output_spec, input.device());
+}
+
+SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+
+    if (args.use_tensor_args) {
+        return program::SliceTileTensorArgsProgramFactory{};
+    }
+
+    // Check if we have step != 1
+    bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
+
+    if (input.layout() == Layout::ROW_MAJOR) {
+        if (input.is_sharded()) {
+            return program::SliceRmShardedProgramFactory{};
+        } else if (has_step) {
+            return program::SliceRmStrideProgramFactory{};
+        } else {
+            return program::SliceRmProgramFactory{};
+        }
+    } else {
+        // Layout::TILE
+        return program::SliceTileProgramFactory{};
+    }
+}
+
+tt::stl::hash::hash_t SliceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // auto program_factory = select_program_factory(args, tensor_args);
+
+    // Hash the operation attributes and program factory variant
+    operation::Hash hash = operation::hash_operation<SliceDeviceOperation>(args, tensor_args.input.tensor_spec());
+
+    return hash;
+}
+
+std::tuple<SliceDeviceOperation::operation_attributes_t, SliceDeviceOperation::tensor_args_t>
+SliceDeviceOperation::invoke(
+    const Tensor& input,
+    const ttnn::Shape& slice_start,
+    const ttnn::Shape& slice_end,
+    const ttnn::Shape& step,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool use_tensor_args,
+    std::optional<Tensor> start_tensor,
+    std::optional<Tensor> end_tensor,
+    const std::optional<uint32_t>& slice_dim,
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& preallocated_output) {
+    return {
+        operation_attributes_t{
+            slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
+        tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output}};
 }
 
 }  // namespace ttnn::operations::data_movement

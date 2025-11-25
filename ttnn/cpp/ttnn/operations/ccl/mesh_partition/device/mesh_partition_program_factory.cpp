@@ -82,33 +82,46 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         ends,
         strides);
 
-    auto slice_op = ttnn::operations::data_movement::SliceDeviceOperation{
-        .slice_start = begins,
-        .slice_end = ends,
-        .step = strides,
-        .output_mem_config = operation_attributes.output_mem_config};
+    // Use the new prim::slice operation
+    using SliceOp = ttnn::operations::data_movement::SliceDeviceOperation;
 
-    auto input_tensors = std::vector<ttnn::Tensor>{tensor_args.input_tensor};
-    auto output_tensors = std::vector<ttnn::Tensor>{tensor_return_value};
-    auto optional_output_tensors = std::vector<std::optional<ttnn::Tensor>>{std::nullopt};
-    slice_op.validate_with_output_tensors(input_tensors, optional_output_tensors);
+    auto [slice_attrs, slice_tensor_args] = SliceOp::invoke(
+        tensor_args.input_tensor,
+        begins,
+        ends,
+        strides,
+        operation_attributes.output_mem_config,
+        false,         // use_tensor_args
+        std::nullopt,  // start_tensor
+        std::nullopt,  // end_tensor
+        std::nullopt,  // slice_dim
+        std::nullopt,  // num_devices
+        std::nullopt,  // sub_core_grids
+        std::nullopt   // preallocated_output
+    );
 
-    auto cached_program = slice_op.create_program(input_tensors, output_tensors);
-    TT_FATAL(
-        cached_program.override_runtime_arguments_callback.has_value(),
-        "override_runtime_arguments_callback is not set for program at mesh coordinate ({}, {})",
-        mesh_coordinate[0],
-        mesh_coordinate[1]);
+    SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
+
+    auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
+
+    // Create the cached program by visiting the variant
+    // We need to use a common return type, so we extract just the program
+    Program program = std::visit(
+        [&](auto&& factory) -> Program {
+            auto cached_prog = factory.create(slice_attrs, slice_tensor_args, tensor_return_value);
+            return std::move(cached_prog.program);
+        },
+        program_factory);
 
     // -- building the return value -----------------------------------
+    // Note: Runtime argument override is not implemented for slice in mesh_partition yet
+    // The override callback is left empty for now
     shared_variables_t vars{
-        // if the optional holds a callback, move it; otherwise construct an empty
-        // std::function (== "no-op")
-        .override_runtime_arguments_callback = cached_program.override_runtime_arguments_callback.value_or(
-            OverrideRuntimeArgsCallback{}),  //   ^ empty functor
-        .slice_op = slice_op};
+        .override_runtime_arguments_callback = OverrideRuntimeArgsCallback{},
+        .slice_attrs = slice_attrs,
+        .program_factory = program_factory};
 
-    return {std::move(cached_program.program), std::move(vars)};
+    return {std::move(program), std::move(vars)};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
@@ -121,8 +134,11 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     std::vector<tt::tt_metal::Tensor> output_tensors{tensor_return_value};
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        shared_variables.override_runtime_arguments_callback(
-            (const void*)&shared_variables.slice_op, program, input_tensors, input_tensor_options, output_tensors);
+        // Runtime argument override not yet supported for TMP slice operation in mesh_partition
+        if (shared_variables.override_runtime_arguments_callback) {
+            shared_variables.override_runtime_arguments_callback(
+                nullptr, program, input_tensors, input_tensor_options, output_tensors);
+        }
     }
 }
 
