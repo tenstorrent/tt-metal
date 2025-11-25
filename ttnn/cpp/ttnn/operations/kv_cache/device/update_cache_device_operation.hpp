@@ -36,10 +36,10 @@ struct UpdateKVCacheOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& cache,
         const Tensor& input,
-        const uint32_t batch_idx,
-        const uint32_t update_index,
-        const uint32_t batch_offset,
-        const UpdateCacheOpType op_type,
+        uint32_t batch_idx,
+        uint32_t update_index,
+        uint32_t batch_offset,
+        UpdateCacheOpType op_type,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
