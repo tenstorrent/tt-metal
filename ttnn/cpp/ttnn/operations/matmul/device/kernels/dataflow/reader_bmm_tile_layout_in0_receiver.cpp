@@ -45,13 +45,13 @@ void kernel_main() {
             // We do this by passing the value to the compute kernel via mailbox.
             // But first, lets wait for the sparsity data to be multicast to us.
             // Set in0 semaphore value to INVALID
-            noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
-            // Atomic increment source core counter
-            noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
-            // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            noc_semaphore_wait_min(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+            // noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+            // // Atomic increment source core counter
+            // noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+            // // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
+            // noc_semaphore_wait_min(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
+            // const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
             // ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, true);
