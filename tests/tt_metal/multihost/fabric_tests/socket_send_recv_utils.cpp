@@ -12,11 +12,13 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {
@@ -320,7 +322,11 @@ void test_multi_mesh_single_conn_bwd(
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 void test_multi_mesh_single_conn_fwd(
@@ -377,7 +383,11 @@ void test_multi_mesh_single_conn_fwd(
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 void test_multi_mesh_multi_conn_fwd(
@@ -437,7 +447,11 @@ void test_multi_mesh_multi_conn_fwd(
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
         }
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
@@ -533,7 +547,11 @@ void test_multi_mesh_multi_conn_bidirectional(
             test_socket_send_recv(mesh_device, backward_socket, data_size, socket_page_size);
         }
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 }  // namespace multihost_utils

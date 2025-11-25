@@ -95,7 +95,11 @@ TEST_F(InterMeshSplit1x2FabricFixture, MultiHopUnicast) {
     run_send_recv(1, 2);
     run_send_recv(2, 1);
     run_send_recv(3, 0);
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 // ========= Data-Movement Tests for 2 Loudboxes with Intermesh Connections  =========
@@ -202,7 +206,11 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
         }
         log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
@@ -227,7 +235,11 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
         }
         log_info(tt::LogTest, "{} rank completed unicast to receiver", *(distributed_context->rank()));
     }
-    distributed_context->barrier();
+    // Use compute-only distributed context to exclude switch meshes from barriers
+    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+    const auto& compute_only_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
+    compute_only_context->barrier();
 }
 
 }  // namespace fabric_router_tests::multihost
