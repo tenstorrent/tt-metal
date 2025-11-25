@@ -31,7 +31,7 @@
   timeout: 30
 
 - name: t3k_addrgen_write_tests
-  cmd: build/test/tt_metal/tt_fabric/addrgen_write/test_addrgen_write
+  cmd: build/test/tt_metal/tt_fabric/test_addrgen_write
   sku: wh_llmbox
   owner_id: U08LD7UCKDF # Tomer Levin
   team: scaleout
