@@ -271,3 +271,8 @@ inline void llk_unpack_fast_tilize_block(
     _llk_unpack_fast_tilize_block_(
         base_address, tile_index, unpack_src_format[operand_id], unit_dim, num_units, full_dim);
 }
+
+inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    std::uint32_t operand_id = get_operand_id(operand);
+    _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
+}
