@@ -14,6 +14,7 @@
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
+#include <impl/debug/watcher_server.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

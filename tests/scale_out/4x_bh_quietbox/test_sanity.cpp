@@ -11,6 +11,7 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric::tests::scale_out {
 
