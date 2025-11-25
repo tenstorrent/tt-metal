@@ -504,6 +504,8 @@ def prepare_image_latents(
     is_strength_max=True,
     add_noise=True,
     latents=None,  # passed in latents
+    start_latent_seed=None,
+    fixed_seed_for_batch=False,
 ):
     # 4, 5, 8
     assert image is not None, "Image is not provided"
@@ -516,6 +518,7 @@ def prepare_image_latents(
         int(height) // torch_pipeline.vae_scale_factor,
         int(width) // torch_pipeline.vae_scale_factor,
     )
+    saved_rng_state = None
 
     if isinstance(image, ttnn.Tensor):
         image_latents = image
@@ -524,7 +527,13 @@ def prepare_image_latents(
             image_latents = image
         else:
             if tt_pipeline.pipeline_config.vae_on_device:
-                image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+                image_latents = []
+                for index, latent in enumerate(tt_pipeline.tt_vae.encode(image).latent_dist):
+                    if start_latent_seed is not None:
+                        torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
+                    image_latents.append(latent.sample())
+                    if start_latent_seed is not None and index == 0 and batch_size > 1:
+                        saved_rng_state = torch.get_rng_state()
                 image_latents = torch.cat(image_latents, dim=0)
             else:
                 image_latents = [
@@ -536,6 +545,8 @@ def prepare_image_latents(
         image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     if add_noise:
+        if saved_rng_state is not None:
+            torch.set_rng_state(saved_rng_state)
         torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
         torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
         if is_strength_max:
@@ -577,6 +588,7 @@ def prepare_mask_latents_inpainting(
     dtype,
     cpu_device,
     masked_image_latents=None,
+    fixed_seed_for_batch=False,
 ):
     assert masked_image is not None, "Masked image must be provided at the moment"
     assert masked_image_latents is None, "Masked image latents are not supported for inpainting pipeline at the moment"
@@ -601,9 +613,13 @@ def prepare_mask_latents_inpainting(
                     masked_image, generator=None
                 )
             else:
-                masked_image_latents = [
-                    mask.sample() for mask in tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist
-                ]
+                masked_image_latents = []
+                if fixed_seed_for_batch and batch_size > 1:
+                    saved_rng_state = torch.get_rng_state()
+                for index, mask_dist in enumerate(tt_inpainting_pipeline.tt_vae.encode(masked_image).latent_dist):
+                    if fixed_seed_for_batch and batch_size > 1 and index != 0:
+                        torch.set_rng_state(saved_rng_state)
+                    masked_image_latents.append(mask_dist.sample())
                 masked_image_latents = torch.cat(masked_image_latents, dim=0)
                 masked_image_latents = (
                     tt_inpainting_pipeline.torch_pipeline.vae.config.scaling_factor * masked_image_latents
