@@ -32,11 +32,8 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     return 1;
 }
 
-
 CoreRange validate_fuse_sync_args(
-    const CoreRangeSet& sub_core_grids,
-    const std::optional<CoreRangeSet>& sync_core_grids) {
-    
+    const CoreRangeSet& sub_core_grids, const std::optional<CoreRangeSet>& sync_core_grids) {
     TT_FATAL(sync_core_grids.has_value(), "Expected a semaphore with sync cores");
     TT_FATAL(
         sync_core_grids->contains(sub_core_grids), "synchronized cores must be a superset of untilize worker cores");
@@ -48,16 +45,16 @@ CoreRange validate_fuse_sync_args(
         TT_FATAL(maybe_merged_range.has_value(), "Sync core ranges must all be contiguous");
         core_range = maybe_merged_range.value();
     }
-    
+
     return core_range;
 }
 
-
 std::array<uint32_t,5> get_fuse_sync_ct_args(const CoreRange& sync_core_grid, MeshDevice * device) {
-    const auto & start_coord = device->worker_core_from_logical_core(sync_core_grid.start_coord);
-    const auto & end_coord = device->worker_core_from_logical_core(sync_core_grid.end_coord);
+    // writer uses NOC1 by default so the coordinates are flipped
+    const auto end_coord = device->worker_core_from_logical_core(sync_core_grid.start_coord);
+    const auto start_coord = device->worker_core_from_logical_core(sync_core_grid.end_coord);
     const uint32_t num_dests = sync_core_grid.size() - 1;
-    
+
     return {
         start_coord.x, // noc_start_x
         start_coord.y, // noc_start_y
@@ -132,7 +129,7 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     const uint32_t output_page_size_bytes = padded_shape[-1] * output_tensor.element_size();
     std::vector<uint32_t> writer_ct_args = {output_page_size_bytes};
     TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
-    
+
     std::map<std::string,std::string> writer_defines;
     if(semaphore.has_value()){
         writer_defines["FUSED_OP_SYNC"] ="1";
@@ -146,8 +143,7 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
         all_cores,
-        defines=writer_defines,
-        WriterDataMovementConfig(writer_ct_args));
+        WriterDataMovementConfig(writer_ct_args, writer_defines));
 
     /** compute
      */
