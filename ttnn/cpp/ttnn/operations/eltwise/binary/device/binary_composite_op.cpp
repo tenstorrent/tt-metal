@@ -749,29 +749,11 @@ Tensor ExecutePower::invoke(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
-    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
-    if (static_cast<float>(exponent_floor) == exponent) {
-        if (output_tensor.has_value()) {
-            ttnn::power(input_a, exponent_floor, output_mem_config, output_tensor);
-            return output_tensor.value();
-        }
-        return ttnn::power(input_a, exponent_floor, output_mem_config);
+    if (output_tensor.has_value()) {
+        ttnn::power(input_a, exponent, output_mem_config, output_tensor);
+        return output_tensor.value();
     }
-    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
-    Tensor pow_trunc_log =
-        ttnn::multiply(ttnn::log(input_a, true, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
-    Tensor pow_frac = ttnn::exp(pow_trunc_log, false, output_mem_config);
-    pow_trunc_log.deallocate();
-    float t_nan = std::nanf("");
-    Tensor result = ttnn::multiply(
-        ttnn::power(input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
-    // To handle negative inputs:
-    // in torch For -ve inputs with float exponent power returns nan
-    auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config()
-                                                          : output_mem_config.value_or(input_a.memory_config());
-    result = ttnn::where(ttnn::ltz(input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
-    return result;
+    return ttnn::power(input_a, exponent, output_mem_config);
 }
 
 // power - integer exponent
