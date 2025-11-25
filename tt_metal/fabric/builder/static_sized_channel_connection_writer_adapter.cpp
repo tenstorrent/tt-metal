@@ -4,7 +4,7 @@
 
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
