@@ -408,7 +408,8 @@ public:
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool has_fabric_router);
 
     void create_and_compile(tt::tt_metal::Program& program);
 
@@ -453,6 +454,10 @@ private:
     // Direction for routing
     eth_chan_directions direction_;
 
+    // Whether this mux has a fabric router to connect to
+    // False for missing directions in UDM mode (inter-mux forwarding only)
+    bool has_fabric_router_;
+
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
 
@@ -477,7 +482,8 @@ public:
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool /*has_fabric_router*/);
 
     void create_and_compile(tt::tt_metal::Program& program);
 
