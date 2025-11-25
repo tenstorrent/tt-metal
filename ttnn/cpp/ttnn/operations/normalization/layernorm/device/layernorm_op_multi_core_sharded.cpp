@@ -323,7 +323,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     const auto fuse_pre_add = b.has_value();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size, Wt, W};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size, Wt};
     if (!large_tensor_needed) {
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
