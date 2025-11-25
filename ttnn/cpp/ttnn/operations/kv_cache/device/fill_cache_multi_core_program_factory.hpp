@@ -10,19 +10,19 @@ namespace ttnn::operations::kv_cache::program {
 
 struct FillCacheMultiCoreProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        tt::tt_metal::CBHandle cb_src0;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        tt::tt_metal::CBHandle cb_src0{};
         std::vector<CoreCoord> cores;
-        uint32_t g1_numcores;
+        uint32_t g1_numcores = 0;
         CoreRangeSet core_group_1;
-        uint32_t num_blocks_per_core_group_1;
+        uint32_t num_blocks_per_core_group_1 = 0;
         CoreRangeSet core_group_2;
-        uint32_t num_blocks_per_core_group_2;
-        uint32_t Wt;
-        uint32_t input_Ht;
-        uint32_t cache_HtWt;
-        uint32_t cache_CHtWt;
+        uint32_t num_blocks_per_core_group_2 = 0;
+        uint32_t Wt = 0;
+        uint32_t input_Ht = 0;
+        uint32_t cache_HtWt = 0;
+        uint32_t cache_CHtWt = 0;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
