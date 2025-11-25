@@ -111,6 +111,8 @@ class HunyuanAttention:
             packer_l1_acc=True,
         )
 
+        self.scale = 1.0
+
     def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
@@ -229,7 +231,7 @@ class HunyuanAttention:
                     k_1KSH,
                     v_1VSH,
                     is_causal=True,
-                    scale=1.0,
+                    scale=self.scale,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     program_config=self.sdpa_program_config,
                 )
@@ -240,9 +242,82 @@ class HunyuanAttention:
                     k_1KSH,
                     v_1VSH,
                     cur_pos_tensor=current_pos,
-                    scale=1.0,
+                    scale=self.scale,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     program_config=self.sdpa_program_config,
                 )
         elif mode == "gen_image":
-            pass
+            # TODO: Figure out timestep_index logic
+            timestep_index = 0
+            causal_len = timestep_index + 1
+            if first_step:
+                # First causal_len tokens are text, rest are image
+                text_q = q_1QSH[:, :, :causal_len, :]
+                text_k = k_1KSH[:, :, :causal_len, :]
+                text_v = v_1VSH[:, :, :causal_len, :]
+                image_q = q_1QSH[:, :, causal_len:, :]
+                text_attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    text_q,
+                    text_k,
+                    text_v,
+                    is_causal=True,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+                image_attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    image_q,
+                    k_1KSH,
+                    v_1VSH,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+                attn_output_1QSH = torch.cat([text_attn_output, image_attn_output], dim=2)
+            else:
+                timestep_q = q_1QSH[:, :, 0:1, :]
+                timestep_k = k_1KSH[:, :, :causal_len, :]
+                timestep_v = v_1VSH[:, :, :causal_len, :]
+                image_q = q_1QSH[:, :, 1:, :]
+                timestep_attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    timestep_q,
+                    timestep_k,
+                    timestep_v,
+                    is_causal=True,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+                image_attn_output = ttnn.transformer.scaled_dot_product_attention(
+                    image_q,
+                    k_1KSH,
+                    v_1VSH,
+                    is_causal=False,
+                    scale=self.scale,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+                attn_output_1QSH = torch.cat([timestep_attn_output, image_attn_output], dim=2)
+
+        attn_output_1QSH = ttnn.reshape(attn_output_1QSH, [1, self.n_local_heads, -1, self.head_dim])
+        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+            attn_output_1QSH,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_output_11SH = ttnn.experimental.all_gather_async(
+            attn_output_11SH,
+            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                attn_output_11SH.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+            ),
+            dim=3,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                self.parallel_config.tensor_parallel.mesh_axis
+            ),
+            num_links=self.ccl_manager.num_links,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            # **self.ccl_manager.get_ag_hyperparams(attn_output_11SH.shape),
+        )
+        attn_output_11SH = self.to_out(attn_output_11SH, compute_kernel_config=self.mm_compute_kernel_config)
+        return attn_output_11SH
