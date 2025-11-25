@@ -65,13 +65,13 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
         output_shape[operation_attributes.out_dim] % 32);
     TT_FATAL(
         operation_attributes.in_dim != last_dim || input_shape[operation_attributes.in_dim] % 32 == 0,
-        "{} dimension doesnt support padding, so must be divisible by 32. Input tensor shape {} , but has {} padding",
+        "{} dimension doesn't support padding, so must be divisible by 32. Input tensor shape {} , but has {} padding",
         operation_attributes.in_dim,
         input_shape,
         input_shape[operation_attributes.in_dim] % 32);
     TT_FATAL(
         operation_attributes.out_dim != last_dim || output_shape[operation_attributes.out_dim] % 32 == 0,
-        "{} dimension doesnt support padding, so must be divisible by 32. Output tensor shape {} , but has {} padding",
+        "{} dimension doesn't support padding, so must be divisible by 32. Output tensor shape {} , but has {} padding",
         operation_attributes.out_dim,
         output_shape,
         output_shape[operation_attributes.out_dim] % 32);
