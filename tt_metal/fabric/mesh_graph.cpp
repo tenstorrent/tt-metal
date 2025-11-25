@@ -815,16 +815,20 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
 }
 
 MeshGraph MeshGraph::generate_from_physical_system_descriptor(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    const tt::tt_metal::PhysicalSystemDescriptor& /* physical_system_descriptor */, FabricConfig fabric_config) {
     // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
     // Generate of mesh shape 2x4
-    auto mesh_graph = generate_mesh_graph_of_shape(MeshShape(1, 2), FabricType::MESH);
+    FabricType fabric_type = get_fabric_type(fabric_config);
+
+    // FIXME: This is temp test
+    auto mesh_graph = generate_mesh_graph_of_shape(MeshShape(2, 4), fabric_type, 2);
 
     // Form a mesh graph of that size and return it
     return mesh_graph;
 }
 
-MeshGraph MeshGraph::generate_mesh_graph_of_shape(MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type) {
+MeshGraph MeshGraph::generate_mesh_graph_of_shape(
+    MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction) {
     MeshGraph mesh_graph;
 
     // Get chip spec from MetalContext
@@ -832,15 +836,16 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(MeshShape mesh_shape, tt::tt_f
     const auto& cluster = metal_context.get_cluster();
     tt::ARCH arch = cluster.get_cluster_desc()->get_arch();
 
-    // Get num_eth_ports_per_direction from a chip's soc descriptor
-    // Default to 4 if we can't determine it
-    std::uint32_t num_eth_ports_per_direction = 4;
-    auto chip_ids = cluster.all_chip_ids();
-    if (!chip_ids.empty()) {
-        ChipId sample_chip_id = *chip_ids.begin();
-        num_eth_ports_per_direction =
-            cluster.get_soc_desc(sample_chip_id).get_cores(CoreType::ETH).size() / 4;  // Divide by 4 for 4 directions
+    // Get reliability mode from MetalContext (via rtoptions)
+    tt::tt_fabric::FabricReliabilityMode reliability_mode =
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    auto reliability_mode_override = metal_context.rtoptions().get_reliability_mode();
+    if (reliability_mode_override.has_value()) {
+        reliability_mode = reliability_mode_override.value();
     }
+
+    // Use the provided num_connections_per_direction
+    std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;
 
     // Set chip spec
     mesh_graph.chip_spec_ = ChipSpec{
@@ -878,8 +883,11 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(MeshShape mesh_shape, tt::tt_f
     mesh_graph.inter_mesh_connectivity_.resize(total_mesh_count);
     mesh_graph.inter_mesh_connectivity_[0].resize(mesh_shape[0] * mesh_shape[1]);
 
-    // Set intra-mesh relaxed policy (default to strict for auto-generated meshes)
-    mesh_graph.intra_mesh_relaxed_policy_[mesh_id] = false;
+    // Set intra-mesh relaxed policy based on reliability mode
+    // RELAXED_SYSTEM_HEALTH_SETUP_MODE -> relaxed = true
+    // STRICT_SYSTEM_HEALTH_SETUP_MODE -> relaxed = false
+    bool is_relaxed = (reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    mesh_graph.intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
 
     // Build intra-mesh connectivity using fabric_type
     MeshCoordinateRange mesh_coord_range(mesh_shape);

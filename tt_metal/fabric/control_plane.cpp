@@ -502,26 +502,39 @@ void ControlPlane::init_control_plane_auto_discovery(
     // Initialize physical system descriptor
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     // Generate Mesh graph based on physical system descriptor
-    auto mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(
-        tt::tt_fabric::MeshGraph::generate_from_physical_system_descriptor(*this->physical_system_descriptor_));
+    // Reliability mode is obtained from MetalContext inside the function
+    this->mesh_graph_ =
+        std::make_unique<tt::tt_fabric::MeshGraph>(tt::tt_fabric::MeshGraph::generate_from_physical_system_descriptor(
+            *this->physical_system_descriptor_, fabric_config));
+
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         // Initialize topology mapper with provided mapping, skipping discovery
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph,
+            *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
+            *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
+
+    // Initialize routing table generator after topology_mapper is created
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
+
+    // Initialize distributed contexts after topology_mapper is created so we can use its helper function
+    this->initialize_distributed_contexts();
+    this->generate_intermesh_connectivity();
+
+    // Printing, only enabled with log_debug
+    this->mesh_graph_->print_connectivity();
 }
 
 ControlPlane::ControlPlane() { init_control_plane_auto_discovery(std::nullopt); }
