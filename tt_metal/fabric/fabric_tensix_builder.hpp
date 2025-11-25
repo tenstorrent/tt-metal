@@ -198,8 +198,8 @@ private:
         eth_chan_directions direction);
 
     // Sub-builders based on mode
-    std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder_;      // Always created
-    std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder_;  // Only in UDM mode
+    std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder_{};      // Always created
+    std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder_{};  // Only in UDM mode
 
     // Common properties shared by both mux and relay builders
     CoreCoord logical_core_;

@@ -13,8 +13,8 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "llrt/core_descriptor.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
@@ -361,8 +361,8 @@ private:
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
 
     // Upstream router coordinates for sync
-    std::vector<uint32_t> upstream_routers_noc_x_;
-    std::vector<uint32_t> upstream_routers_noc_y_;
+    std::vector<uint32_t> upstream_routers_noc_x_{};
+    std::vector<uint32_t> upstream_routers_noc_y_{};
 };
 
 /**
