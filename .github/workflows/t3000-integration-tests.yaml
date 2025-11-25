@@ -1,9 +1,9 @@
-name: "(T3K) T3000 nightly tests"
+name: "(T3K) T3000 integration tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
   build-artifact:
@@ -12,12 +12,12 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
       build-wheel: true
-  t3000-nightly-tests:
+      version: 22.04
+  t3000-integration-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

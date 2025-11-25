@@ -25,15 +25,15 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-frequent:
+      t3000-integration:
         required: false
         type: boolean
         default: false
-      t3000-nightly:
+      t3000-e2e:
         required: false
         type: boolean
         default: false
-      t3000-model-perf:
+      t3000-perf:
         required: false
         type: boolean
         default: false
@@ -79,36 +79,36 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-demo }}
-  t3000-frequent-tests:
+  t3000-integration-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-frequent }}
-  t3000-nightly-tests:
+    if: ${{ inputs.t3000-integration }}
+  t3000-e2e-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-nightly }}
-  t3000-model-perf-tests:
+    if: ${{ inputs.t3000-e2e }}
+  t3000-perf-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.t3000-model-perf }}
+    if: ${{ inputs.t3000-perf }}
   t3000-profiler-tests:
     needs: build-artifact
     secrets: inherit

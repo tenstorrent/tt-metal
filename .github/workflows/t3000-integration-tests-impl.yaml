@@ -1,36 +1,29 @@
-# This is a template workflow for running Ops Sanity pipeline tests.
-# These tests are meant to run after every commit and are meant to replace the existing APC pipeline.
-
-
-# The following parameters can be controlled in the tests.yaml file by the developer:
-
-# name: The name of the test
-# cmd: The command to run the test
-# sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
-# owner_id: The owner of the test
-
-
-name: "[testing] Ops Sanity pipeline"
+name: "[internal] T3000 integration tests impl"
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
+      docker-image:
+        required: true
+        type: string
       build-artifact-name:
         required: true
         type: string
       wheel-artifact-name:
         required: true
         type: string
-      docker-image:
-        required: true
+      extra-tag:
+        required: false
         type: string
+        default: "in-service"
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_integration_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4
@@ -43,17 +36,11 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ./tests/pipeline_reorg/ops/sanity/tests.yaml \
+            ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "sanity"
-
+            "integration"
       - name: Load test matrix
         id: load-test-matrix
-        # the tests.yaml file is currently hardcoded
-        # Install yq to parse the tests.yaml file
-        # TODO: move yq install out to install dependencies step.
-        env:
-          TESTS_YAML_PATH: ./tests/pipeline_reorg/ops/sanity/tests.yaml
         run: |
           set -e
           # Install yq
@@ -74,43 +61,31 @@ jobs:
           echo "${json_output}"
           echo "matrix=${json_output}" >> $GITHUB_OUTPUT
 
-  build-artifact:
-    # This job will ONLY run if the build-artifact-name input is NOT provided.
-    if: ${{ inputs.build-artifact-name == '' }}
+  t3000-integration-tests:
     needs: load-test-matrix
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-
-  tests:
-    # If the build-artifact-name input is NOT provided, we need to run the build-artifact job first.
-    needs: [load-test-matrix, build-artifact]
-    # Always run this job even if build-artifact job is not run.
-    if: always()
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on: >-
-      ${{
-        (matrix.test-group.sku == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', matrix.test-group.sku))
-        || ((matrix.test-group.sku == 'P150b') && format('tt-ubuntu-2204-{0}-metal', matrix.test-group.sku))
-        || format('tt-ubuntu-2204-{0}-viommu-metal', matrix.test-group.sku)
-      }}
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
     container:
-      image: ${{ inputs.docker-image || needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image }}
       env:
-        LOGURU_LEVEL: INFO
+        TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -124,16 +99,23 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name || needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          ls -lart /mnt/MLPerf/
           echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

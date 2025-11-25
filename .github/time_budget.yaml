@@ -13,3 +13,59 @@ ops:
         time_budget: 540
       P150b:
         time_budget: 540
+  e2e:
+    skus:
+      wh_llmbox:
+        time_budget: 90
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 30
+fabric:
+  e2e:
+    skus:
+      wh_llmbox:
+        time_budget: 165
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 40
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 10
+ttnn:
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 45
+scaleout:
+  e2e:
+    skus:
+      wh_llmbox:
+        time_budget: 20
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 15
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 30
+models:
+  e2e:
+    skus:
+      wh_llmbox:
+        time_budget: 10
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 410
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 420
+  perf:
+    skus:
+      wh_llmbox:
+        time_budget: 660
