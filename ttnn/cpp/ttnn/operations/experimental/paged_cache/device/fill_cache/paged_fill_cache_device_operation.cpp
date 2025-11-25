@@ -4,7 +4,6 @@
 
 #include "paged_fill_cache_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -79,7 +78,10 @@ tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
 
-    return operation::hash_operation<PagedFillCacheDeviceOperation>(args, tensor_args, program_factory.index());
+    // Exclude batch_idx_fallback from hash since it's a runtime-only parameter (used only in runtime args)
+    // Include mesh_coords since it affects program factory selection
+    return operation::hash_operation<PagedFillCacheDeviceOperation>(
+        args.mesh_coords, tensor_args, program_factory.index());
 }
 
 std::tuple<PagedFillCacheDeviceOperation::operation_attributes_t, PagedFillCacheDeviceOperation::tensor_args_t>
