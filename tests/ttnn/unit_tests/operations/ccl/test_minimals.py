@@ -20,7 +20,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
     run_rms_trace,
+    run_rms_trace_qwen,
     run_rms_fuse_impl,
+    run_rms_fuse_impl_qwen,
 )
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
@@ -567,6 +569,80 @@ def test_tg_trace_rms_fuse(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        (
+            4,
+            5120,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_tg_trace_rms_fuse_qwen(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    use_new_version,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace_qwen(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Linear,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
 @pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -622,6 +698,80 @@ def test_6u_trace_rms_fuse(
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Ring,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        (
+            4,
+            5120,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_6u_trace_rms_fuse_qwen(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    use_new_version,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace_qwen(
         mesh_device,
         num_devices,
         elements_per_batch,
@@ -700,6 +850,83 @@ def test_rms_fuse(
     topology,
 ):
     run_rms_fuse_impl(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        topology,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        output_dtype=output_dtype,
+        num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION No Reshard (Qwen)
+        (
+            4,
+            5120,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))}),
+            None,
+        ),
+        (
+            4,
+            5120,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 4))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [True, False])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_qwen(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    fused_add,
+    use_noc1_only,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
+):
+    run_rms_fuse_impl_qwen(
         mesh_device,
         num_devices,
         elements_per_batch,
