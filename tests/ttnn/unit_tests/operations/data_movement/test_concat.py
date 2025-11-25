@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from models.common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
 
