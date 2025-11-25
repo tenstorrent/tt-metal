@@ -659,7 +659,7 @@ std::optional<int> MeshDevice::get_child_mesh_id_with_in_use_cq(uint32_t cq_id) 
         if (auto submesh_ptr = submesh.lock()) {
             auto child_mesh_id = submesh_ptr->get_child_mesh_id_with_in_use_cq(cq_id);
             if (child_mesh_id) {
-                return *child_mesh_id;
+                return child_mesh_id;
             }
         }
     }
