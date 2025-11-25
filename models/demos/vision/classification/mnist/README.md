@@ -13,7 +13,7 @@ The MNIST model uses only fully connected linear layers to classify handwritten 
 ## How to Run
 To run the demo for digit classification using the MNIST model, use the following command:
 ```
-pytest models/demos/mnist/demo/demo.py::test_demo_dataset
+pytest models/demos/vision/classification/mnist/demo/demo.py::test_demo_dataset
 ```
 
 ## Details

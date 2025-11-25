@@ -203,7 +203,7 @@ run_distilbert_func() {
 
 run_mnist_func() {
 
-  pytest models/demos/mnist/demo/demo.py
+  pytest models/demos/vision/classification/mnist/demo/demo.py
 
 }
 
