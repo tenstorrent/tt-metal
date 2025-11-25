@@ -210,7 +210,7 @@ To configure multiple command queues (one for writes, the other for running prog
 input_dram_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_dram_mem_config)
 
 # Dummy record an operation event on CQ0 while waiting on the first in the loop:
-op_event =ttnn.record_event(device, 0)
+op_event = ttnn.record_event(device, 0)
 
 outputs = []
 
