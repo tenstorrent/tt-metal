@@ -103,9 +103,10 @@ jobs:
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_COMMAND: ${{ matrix.test-group.cmd }}
         run: |
-          echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
+          bash -c "$TEST_COMMAND"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
