@@ -74,7 +74,6 @@ target_sources(
         all_to_all_async/device/all_to_all_async_device_operation.cpp
         all_to_all_async/device/all_to_all_async_program_factory.cpp
         all_to_all_async_generic/all_to_all_async_generic.cpp
-        all_to_all_async_generic/device/all_to_all_program_factory.cpp
         all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp
         all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp
         all_reduce_async/all_reduce_async.cpp
