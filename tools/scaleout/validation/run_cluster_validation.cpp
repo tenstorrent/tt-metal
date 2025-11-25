@@ -154,8 +154,6 @@ AsicTopology run_connectivity_validation(
     if (!input_args.validate_connectivity) {
         return {};
     }
-
-    log_output_rank0("Generating Global System Descriptor in-memory");
     YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
 
     log_output_rank0("Obtaining Factory System Descriptor");
