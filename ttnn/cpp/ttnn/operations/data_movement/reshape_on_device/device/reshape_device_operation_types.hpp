@@ -9,8 +9,8 @@
 namespace ttnn::operations::data_movement {
 
 struct ReshapeOperationAttributes {
-    ttnn::Shape logical_output_shape;
-    ttnn::Shape padded_output_shape;
+    tt::tt_metal::Shape logical_output_shape;
+    tt::tt_metal::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
