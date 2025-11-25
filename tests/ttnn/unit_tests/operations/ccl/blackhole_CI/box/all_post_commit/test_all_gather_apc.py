@@ -107,6 +107,7 @@ def test_all_gather_2D_line(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
+        use_semaphore_free_all_gather_impl=True,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
