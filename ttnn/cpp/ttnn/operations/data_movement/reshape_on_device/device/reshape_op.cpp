@@ -11,14 +11,14 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
-        return reshape_on_device::ReshapeRMProgramFactory{};
+        return ReshapeRMProgramFactory{};
     } else {
-        return reshape_on_device::ReshapeTileProgramFactory{};
+        return ReshapeTileProgramFactory{};
     }
 }
 
@@ -107,8 +107,8 @@ ReshapeDeviceOperation::invoke(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     return {
-        reshape_on_device::operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
-        reshape_on_device::tensor_args_t{input_tensor}};
+        operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
+        tensor_args_t{input_tensor}};
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshape_on_device

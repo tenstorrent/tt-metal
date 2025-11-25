@@ -10,7 +10,7 @@
 #include "reshape_tile_program_factory.hpp"
 #include "reshape_rm_program_factory.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 struct ReshapeDeviceOperation {
     using operation_attributes_t = reshape_on_device::operation_attributes_t;
@@ -45,9 +45,10 @@ struct ReshapeDeviceOperation {
         const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshape_on_device
 
 namespace ttnn::prim {
-constexpr auto reshape_on_device = ttnn::
-    register_operation<"ttnn::prim::reshape_on_device", ttnn::operations::data_movement::ReshapeDeviceOperation>();
+constexpr auto reshape_on_device = ttnn::register_operation<
+    "ttnn::prim::reshape_on_device",
+    ttnn::operations::data_movement::reshape_on_device::ReshapeDeviceOperation>();
 }
