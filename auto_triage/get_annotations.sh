@@ -39,9 +39,13 @@ fi
 
 echo "$ANNOTATIONS" | jq '.' > "$OUTPUT_FILE"
 COUNT=$(echo "$ANNOTATIONS" | jq 'length' 2>/dev/null || echo 0)
+CLEAN_COUNT=$(echo "$COUNT" | tr -cd '0-9')
+if [ -z "$CLEAN_COUNT" ]; then CLEAN_COUNT=0; fi
 
-if [ "$COUNT" -eq 0 ]; then
+if [ "$CLEAN_COUNT" -eq 0 ]; then
     echo -e "${YELLOW}No annotations returned for job ${JOB_ID}.${NC}"
 else
-    echo -e "${GREEN}Saved ${COUNT} annotation(s) to ${OUTPUT_FILE}.${NC}"
+    echo -e "${GREEN}Saved ${CLEAN_COUNT} annotation(s) to ${OUTPUT_FILE}.${NC}"
+    echo "Annotations:"
+    cat "$OUTPUT_FILE"
 fi
