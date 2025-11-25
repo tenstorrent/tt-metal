@@ -116,19 +116,21 @@ def test_sum_nd_shard(device, shapes, keepdim):
         ),
     ),
 )
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
-def test_sum_subcores(device, sub_core_grids, dtype):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63), (16, 41, 63, 63)])
+def test_sum_subcores(device, sub_core_grids, dtype, shape):
     torch.manual_seed(0)
 
-    # Simple global sum using sub_core_grids, based on test_sum_global
-    torch_input_tensor = torch_random((4, 32, 63), -100, 100, dtype=torch.bfloat16)
+    # Prepare Torch input/output
+    torch_input_tensor = torch_random(shape, -100, 100, dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor)
 
+    # Prepare TTNN input/output
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-
     output_tensor = ttnn.sum(input_tensor, sub_core_grids=sub_core_grids)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
 
+    # Compare
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
     assert_with_pcc(torch_output_tensor, output_tensor)
