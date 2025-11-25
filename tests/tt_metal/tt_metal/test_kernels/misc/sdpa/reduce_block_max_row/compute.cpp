@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce_custom.h"
+#include "compute_kernel_api/transpose_wh.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -47,15 +48,24 @@ void MAIN {
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
+
+        if (do_eltwise) {
+            // copy_tile_to_dst_init_short(prev_max_cb);
+            // copy_tile(prev_max_cb, i, prev_max_dst_idx);
+            transpose_wh_init_short(prev_max_cb);
+            transpose_wh_tile(prev_max_cb, i, reduce_dst_idx);
+            // max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        }
+
         reduce_block_max_row_init<cols>();
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit();
 
-        if (do_eltwise) {
-            copy_tile_to_dst_init_short(prev_max_cb);
-            copy_tile(prev_max_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
-        }
+        // if (do_eltwise) {
+        //     copy_tile_to_dst_init_short(prev_max_cb);
+        //     copy_tile(prev_max_cb, i, prev_max_dst_idx);
+        //     max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        // }
 
         pack_tile(reduce_dst_idx, out_max_cb);
         release_dst();

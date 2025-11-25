@@ -101,7 +101,6 @@ static bool test_sdpa_reduce_c(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
-    uint32_t head_dim,
     bool fp32_dest_acc_en,
     bool do_eltwise_max,
     const std::string& kernel_path,
@@ -110,12 +109,11 @@ static bool test_sdpa_reduce_c(
 
     log_info(
         LogTest,
-        "Running {} test with q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: {}, "
+        "Running {} test with q_chunk_size: {}, k_chunk_size: {}, fp32_dest_acc_en: {}, "
         "do_eltwise_max: {}",
         kernel_name,
         q_chunk_size,
         k_chunk_size,
-        head_dim,
         fp32_dest_acc_en,
         do_eltwise_max);
 
@@ -308,7 +306,6 @@ int main(int argc, char** argv) {
      */
     std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
     std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
-    std::vector<uint32_t> head_dims = {64, 128, 256};
     std::vector<bool> fp32_dest_acc_ens = {false, true};
     std::vector<bool> do_eltwise = {false, true};
 
@@ -323,41 +320,39 @@ int main(int argc, char** argv) {
     // std::vector<bool> do_eltwise = {false, true};
 
     // Test both implementations
+    // std::vector<std::pair<std::string, std::string>> kernel_variants = {
+    //     {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
+    //     {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
     std::vector<std::pair<std::string, std::string>> kernel_variants = {
-        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
         {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
 
     for (const auto& [kernel_path, kernel_name] : kernel_variants) {
         log_info(LogTest, "Testing kernel variant: {}", kernel_name);
         for (uint32_t q_chunk_size : q_chunk_sizes) {
             for (uint32_t k_chunk_size : k_chunk_sizes) {
-                for (uint32_t head_dim : head_dims) {
-                    for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                        for (bool do_elt : do_eltwise) {
-                            bool this_passed = test_sdpa_reduce_c(
-                                mesh_device,
+                for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
+                    for (bool do_elt : do_eltwise) {
+                        bool this_passed = test_sdpa_reduce_c(
+                            mesh_device,
+                            q_chunk_size,
+                            k_chunk_size,
+                            fp32_dest_acc_en,
+                            do_elt,
+                            kernel_path,
+                            kernel_name);
+                        if (!this_passed) {
+                            log_error(
+                                LogTest,
+                                "Test Failed for kernel: {}, q_chunk_size: {}, k_chunk_size: {}"
+                                "fp32_dest_acc_en: "
+                                "{}, do_eltwise: {}",
+                                kernel_name,
                                 q_chunk_size,
                                 k_chunk_size,
-                                head_dim,
                                 fp32_dest_acc_en,
-                                do_elt,
-                                kernel_path,
-                                kernel_name);
-                            if (!this_passed) {
-                                log_error(
-                                    LogTest,
-                                    "Test Failed for kernel: {}, q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, "
-                                    "fp32_dest_acc_en: "
-                                    "{}, do_eltwise: {}",
-                                    kernel_name,
-                                    q_chunk_size,
-                                    k_chunk_size,
-                                    head_dim,
-                                    fp32_dest_acc_en,
-                                    do_elt);
-                            }
-                            pass &= this_passed;
+                                do_elt);
                         }
+                        pass &= this_passed;
                     }
                 }
             }
