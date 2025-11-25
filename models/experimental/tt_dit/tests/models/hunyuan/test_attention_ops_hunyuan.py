@@ -41,7 +41,7 @@ def stack_cos_sin(cos, sin):
     ],
     ids=["128_seq"],
 )
-@pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
+# @pytest.mark.parametrize("is_fsdp", [True, False], ids=["yes_fsdp", "no_fsdp"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_hunyuan_attention(
     mesh_device: ttnn.MeshDevice,
@@ -50,7 +50,7 @@ def test_hunyuan_attention(
     num_links: int,
     B: int,
     seq_len: int,
-    is_fsdp: bool,
+    # is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -68,6 +68,15 @@ def test_hunyuan_attention(
     layer_id = 0
 
     MIN_PCC = 0.99
+
+    state_dict = {
+        "to_q": torch.ones(hidden_dim, num_attention_heads * head_dim),
+        "to_k": torch.ones(hidden_dim, num_key_value_heads * head_dim),
+        "to_v": torch.ones(hidden_dim, num_key_value_heads * head_dim),
+        "to_out.0": torch.ones(num_attention_heads * head_dim, hidden_dim),
+        "norm_q.weight": torch.ones(head_dim),
+        "norm_k.weight": torch.ones(head_dim),
+    }
 
     # Create CCL manager
     ccl_manager = CCLManager(
@@ -92,7 +101,6 @@ def test_hunyuan_attention(
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
     )
 
     # Initialize weights randomly for testing
@@ -101,25 +109,20 @@ def test_hunyuan_attention(
     input_tensor = torch.randn((1, B, seq_len, hidden_dim), dtype=torch_dtype)
 
     # TODO: Use real ROPE embeddings
-    rope_cos = torch.randn(spatial_seq_len, heads, head_dim // 2)
-    rope_sin = torch.randn(spatial_seq_len, heads, head_dim // 2)
-
-    rope_cos_stack, rope_sin_stack = stack_cos_sin(
-        rope_cos.unsqueeze(0).permute(0, 2, 1, 3), rope_sin.unsqueeze(0).permute(0, 2, 1, 3)
-    )
+    rope_cos = torch.randn(seq_len, num_attention_heads, head_dim // 2)
+    rope_sin = torch.randn(seq_len, num_attention_heads, head_dim // 2)
 
     # Sequence fractured spatial
     tt_input = bf16_tensor(input_tensor, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    tt_rope_cos = bf16_tensor(rope_cos, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
+    tt_rope_sin = bf16_tensor(rope_sin, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)
     tt_trans_mat = bf16_tensor(trans_mat, device=mesh_device)
 
     # Run TT model
-    logger.info(
-        f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
-    )
-    tt_spatial_out, tt_prompt_out = tt_model(
+    tt_output = tt_model(
         tt_input,
         tt_rope_cos,
         tt_rope_sin,

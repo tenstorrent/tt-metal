@@ -4,9 +4,9 @@
 
 import torch
 import ttnn
-from ...layers.normalization import RMSNorm
-from ...layers.linear import ColParallelLinear
-from ...utils.substate import substate
+from ....layers.normalization import RMSNorm
+from ....layers.linear import ColParallelLinear
+from ....utils.substate import substate
 
 
 class HunyuanAttention:
@@ -143,11 +143,7 @@ class HunyuanAttention:
         self.norm_added_k.from_cached_state_dict(substate(cache_dict, "norm_added_k"))
 
         self.to_qkv.from_cached_state_dict(substate(cache_dict, "to_qkv"))
-        self.add_qkv_proj.from_cached_state_dict(substate(cache_dict, "add_qkv_proj"))
         self.to_out.from_cached_state_dict(substate(cache_dict, "to_out"))
-
-        if not self.context_pre_only:
-            self.to_add_out.from_cached_state_dict(substate(cache_dict, "to_add_out"))
 
     def load_state_dict(self, state_dict):
         def reshape_and_merge_qkv(q_state, k_state, v_state):
