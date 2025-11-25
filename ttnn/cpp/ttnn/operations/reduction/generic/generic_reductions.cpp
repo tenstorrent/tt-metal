@@ -495,7 +495,8 @@ Tensor pool_sum(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        /*non_height_width_dims=*/{});
+        /*non_height_width_dims=*/{},
+        /*sub_core_grids=*/std::nullopt);
 }
 
 template struct Reduce<ReduceType::Sum>;
