@@ -91,9 +91,6 @@ class TrainingConfig:
         self.weight_decay = float(tc.get("weight_decay", 0.01))
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
-        self.transformer_config = TransformerConfig(tc.get("transformer_config", {}))
-        self.seq_len = int(self.transformer_config.max_sequence_length)
-
     def update_config(self, yaml_config: dict):
         """Update training configuration from another YAML config.
 
@@ -110,10 +107,6 @@ class TrainingConfig:
             tc.get("gradient_accumulation_steps", self.gradient_accumulation_steps)
         )
         self.checkpoint_dir = tc.get("checkpoint_dir", self.checkpoint_dir)
-
-        if "transformer_config" in tc:
-            self.transformer_config.update_config(tc.get("transformer_config", {}))
-            self.seq_len = int(self.transformer_config.max_sequence_length)
 
 
 class TransformerConfig:

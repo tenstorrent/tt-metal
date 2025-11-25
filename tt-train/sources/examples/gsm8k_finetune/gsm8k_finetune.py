@@ -17,12 +17,12 @@ from transformers import AutoTokenizer
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
-from typing import Optional
 
 import ttml
-from ttml.common.config import get_config, TrainingConfig, SchedulerConfig, DeviceConfig
+from ttml.common.config import TrainingConfig, DeviceConfig, SchedulerConfig, load_config
 from ttml.common.model_factory import TransformerModelFactory
-from ttml.common.utils import *
+from ttml.common.schedulers import SpeedrunScheduler, OptimParamSetter
+from ttml.common.utils import round_up_to_tile, initialize_device, create_optimizer, get_loss_over_devices, build_logits_mask, no_grad, get_tt_metal_home
 from ttml.common.data import build_causal_mask
 
 # Configuration
@@ -315,14 +315,18 @@ def train():
     tokenizer = AutoTokenizer.from_pretrained(
         "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     )
-    yaml_config = get_config(CONFIG)
+
+    yaml_config = load_config(CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs")
+    model_config = load_config(yaml_config["training_config"]["model_config"])
 
     override_config_path = (
         f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
     )
+
     if os.path.isfile(override_config_path):
         print("Applying training overrides...")
-        override_config = get_config(override_config_path)
+
+        override_config = load_config(override_config_path)
 
         def deep_update(a: dict, b: dict) -> dict:
             for k, v in b.items():
@@ -333,6 +337,7 @@ def train():
             return a
 
         deep_update(yaml_config, override_config)
+        deep_update(model_config, override_config)
 
         # pretty output of yaml config
         import yaml
@@ -364,7 +369,7 @@ def train():
     # Setup model
     print("Setting up model...")
     orig_vocab_size = tokenizer.vocab_size
-    tt_model_factory = TransformerModelFactory(yaml_config)
+    tt_model_factory = TransformerModelFactory(model_config)
     tt_model_factory.transformer_config.vocab_size = orig_vocab_size
     print("Created Model Factory")
 

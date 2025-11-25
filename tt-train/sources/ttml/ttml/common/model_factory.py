@@ -52,9 +52,7 @@ class TransformerModelFactory:
         self.multihost_config = MultiHostConfig(yaml_config)
         training_config = yaml_config.get("training_config", {})
         self.model_type = training_config.get("model_type", "gpt2")
-        self.transformer_config = TransformerConfig(
-            training_config.get("transformer_config", {})
-        )
+        self.transformer_config = TransformerConfig(yaml_config)
 
     def _create_gpt2(self):
         """Create GPT-2 model from configuration.
