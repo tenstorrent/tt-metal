@@ -61,14 +61,17 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
 
     cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
+
+    const uint32_t num_tiles_to_wait = dst_tiles * cols;
+    uint32_t in0_wait_tiles = num_tiles_to_wait;
 
     max_tile_init();
 
     // Hardcoding some granularity constants
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {
+        cb_wait_front(in0_cb, in0_wait_tiles);
         acquire_dst();
 
         /**
@@ -102,6 +105,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         release_dst();
 
         row_start_idx += dst_tiles;
+        in0_wait_tiles += num_tiles_to_wait;
     }
 
     cb_push_back(out_cb, rows);
@@ -629,8 +633,10 @@ void matmul_blocks(
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    uint32_t output_num_tiles = M * N;
-    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    const uint32_t output_num_tiles = M * N;
+    const uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    const uint32_t in0_subblock_all_cols_num_tiles = subblock_h * N;
+
     uint32_t in0_index_offset = 0;
 
     const uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
@@ -662,7 +668,7 @@ void matmul_blocks(
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
-                uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+                uint32_t out_row_offset = r * N;
                 for (uint32_t c = 0; c < subblock_w; c++) {
                     pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
                     dst_idx++;
@@ -673,9 +679,10 @@ void matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
         in0_wait_tiles += in0_subblock_num_tiles;
+        // Somewhat granularize the push of in0 subblocks
+        cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
     }
     cb_pop_front(in1_cb, K * N);
-    cb_push_back(out_cb, output_num_tiles);
 }
 
 template <uint32_t M>
