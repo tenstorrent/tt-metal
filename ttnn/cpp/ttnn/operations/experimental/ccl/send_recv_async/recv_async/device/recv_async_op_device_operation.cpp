@@ -27,9 +27,9 @@ void RecvAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& mesh_socket = args.mesh_socket;
     const auto& output_tensor = tensor_args.output_tensor;
 
-    std::vector<Tensor> input_tensors = {output_tensor};
+    std::vector<Tensor> output_tensors = {output_tensor};
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
-        input_tensors, mesh_socket, "recv_async");
+        output_tensors, mesh_socket, "recv_async");
 }
 
 RecvAsyncDeviceOperation::spec_return_value_t RecvAsyncDeviceOperation::compute_output_specs(
