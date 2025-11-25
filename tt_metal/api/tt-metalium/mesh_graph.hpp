@@ -123,6 +123,10 @@ public:
 
     std::vector<MeshId> get_mesh_ids() const;
 
+    // Get compute mesh IDs only (excludes switches)
+    // This is the preferred method for APIs that need to allocate compute devices
+    std::vector<MeshId> get_compute_mesh_ids() const;
+
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank
     // Otherwise, return the chip ids for the entire mesh
@@ -133,6 +137,8 @@ public:
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
+    // Check if a mesh_id corresponds to a switch
+    bool is_switch(MeshId mesh_id) const;
 
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;

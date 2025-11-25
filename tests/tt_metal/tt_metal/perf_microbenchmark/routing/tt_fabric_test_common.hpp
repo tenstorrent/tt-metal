@@ -1468,7 +1468,10 @@ public:
     }
 
     void barrier() const override {
-        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        // Use compute-only distributed context to exclude switch meshes from barriers
+        // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
+        const auto& distributed_context =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
         distributed_context->barrier();
     }
 

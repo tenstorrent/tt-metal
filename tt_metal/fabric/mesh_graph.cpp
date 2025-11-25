@@ -713,6 +713,21 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     return mesh_ids;
 }
 
+std::vector<MeshId> MeshGraph::get_compute_mesh_ids() const {
+    std::vector<MeshId> compute_mesh_ids;
+    compute_mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+        if (!this->is_switch(mesh_id)) {
+            compute_mesh_ids.push_back(mesh_id);
+        }
+    }
+    return compute_mesh_ids;
+}
+
+bool MeshGraph::is_switch(MeshId mesh_id) const {
+    return std::find(switch_ids_.begin(), switch_ids_.end(), mesh_id) != switch_ids_.end();
+}
+
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
     auto it = mesh_to_chip_ids_.find(mesh_id);
     TT_FATAL(it != mesh_to_chip_ids_.end(), "MeshGraph: mesh_id {} not found", mesh_id);
