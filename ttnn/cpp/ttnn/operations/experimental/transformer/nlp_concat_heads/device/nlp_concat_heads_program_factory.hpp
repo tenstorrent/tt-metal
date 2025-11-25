@@ -7,7 +7,7 @@
 #include "nlp_concat_heads_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::nlp_concat_heads::program {
 
 struct NLPConcatHeadsSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
@@ -35,4 +35,4 @@ struct NLPConcatHeadsProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::nlp_concat_heads::program

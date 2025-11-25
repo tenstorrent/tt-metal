@@ -4,7 +4,7 @@
 
 #include "nlp_concat_heads_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads {
 
 NLPConcatHeadsDeviceOperation::program_factory_t NLPConcatHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -111,4 +111,4 @@ NLPConcatHeadsDeviceOperation::invoke(const Tensor& input_tensor, const std::opt
         tensor_args_t{.input = input_tensor}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::nlp_concat_heads

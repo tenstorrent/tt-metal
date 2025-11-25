@@ -9,7 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::nlp_concat_heads::program {
 
 using namespace tt::constants;
 using namespace tt;
@@ -235,4 +235,4 @@ void NLPConcatHeadsProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::nlp_concat_heads::program

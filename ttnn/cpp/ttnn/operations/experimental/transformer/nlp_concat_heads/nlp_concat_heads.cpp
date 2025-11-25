@@ -9,12 +9,11 @@
 
 #include <utility>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads {
 
 ttnn::Tensor NLPConcatHeadsOperation::invoke(
     const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    // Use the new prim registration
     return ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::nlp_concat_heads
