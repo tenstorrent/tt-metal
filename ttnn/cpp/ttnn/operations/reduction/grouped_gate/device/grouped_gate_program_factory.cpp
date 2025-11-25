@@ -79,6 +79,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"scores_cb_index", scores_cb_index},
         {"bias_cb_index", bias_cb_index},
         {"width_tiles", width_tiles},
+        {"scores_page_size", scores.buffer()->page_size()},
+        {"bias_page_size", bias.buffer()->page_size()},
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
@@ -96,6 +98,13 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
         {"sigmoid_input_cb_index", sigmoid_input_cb_index},
         {"add_bias_cb_index", add_bias_cb_index},
+        {"weights_cb_index", weights_cb_index},
+        {"indices_cb_index", indices_cb_index},
+        {"width_tiles", width_tiles},
+        {"scores_page_size", scores.buffer()->page_size()},
+        {"bias_page_size", bias.buffer()->page_size()},
+        {"weights_page_size", output_weights.buffer()->page_size()},
+        {"indices_page_size", output_indices.buffer()->page_size()},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -115,6 +124,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
+    std::vector<uint32_t> compute_runtime_args = {0, 0};
     std::vector<uint32_t> writer_runtime_args = {
         output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0};
 
@@ -135,6 +145,10 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         end_height_tile = start_height_tile + workload_per_core;
         reader_runtime_args[2] = start_height_tile;
         reader_runtime_args[3] = end_height_tile;
+
+        compute_runtime_args[0] = start_height_tile;
+        compute_runtime_args[1] = end_height_tile;
+
         writer_runtime_args[2] = start_height_tile;
         writer_runtime_args[3] = end_height_tile;
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);

@@ -51,11 +51,7 @@ def grouped_gate_golden(
     chosen_scores = torch.gather(scores, dim=-1, index=top_k_experts_indices)
 
     # normalize the chosen scores
-    normalized_scores = chosen_scores / chosen_scores.sum(dim=-1, keepdim=True)
-
-    # Note: The reference implementation does NOT add epsilon.
-    # If you need it for stability, keep it, but it deviates from the reference.
-    normalized_scores = normalized_scores + epsilon
+    normalized_scores = chosen_scores / (chosen_scores.sum(dim=-1, keepdim=True) + epsilon)
 
     # then scale the normalized scores by the scales
     scaled_scores = normalized_scores * route_scale
