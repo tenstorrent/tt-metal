@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src_addr           = get_arg_val<uint32_t>(0);

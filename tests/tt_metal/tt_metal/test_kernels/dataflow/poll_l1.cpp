@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     set_l1_data_cache<true>();
