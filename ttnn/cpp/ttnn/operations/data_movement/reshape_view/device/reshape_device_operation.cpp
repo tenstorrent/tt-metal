@@ -69,7 +69,7 @@ tt::stl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
-    // don't hash on ReshapeDeviceOperation::recreate_mapping_tensor
+    // don't hash on operation_attributes_t::recreate_mapping_tensor
 
     return tt::stl::hash::hash_objects(
         program_factory.index(),
