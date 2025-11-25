@@ -746,8 +746,6 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
-    persistent_buffer,
-    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
@@ -784,16 +782,11 @@ def run_tt_image_gen(
                 noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
+                noise_pred_out = ttnn.all_gather(
                     noise_pred,
                     dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
                     cluster_axis=0,
-                    mesh_device=ttnn_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
                 )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
@@ -893,8 +886,7 @@ def run_tt_image_gen(
         profiler.end("read_output_tensor")
 
         B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
+        imgs = output_tensor.reshape(batch_size * B, C, H, W)
     else:
         profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
@@ -944,8 +936,6 @@ def run_tt_image_gen_inpainting(
     image_latents_shape,  # 4 channels
     vae,  # can be host vae or tt vae
     batch_size,
-    persistent_buffer,
-    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
@@ -983,16 +973,11 @@ def run_tt_image_gen_inpainting(
                 noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
+                noise_pred_out = ttnn.all_gather(
                     noise_pred,
                     dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
                     cluster_axis=0,
-                    mesh_device=ttnn_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
                 )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
@@ -1087,8 +1072,7 @@ def run_tt_image_gen_inpainting(
         profiler.end("read_output_tensor")
 
         B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
+        imgs = output_tensor.reshape(batch_size * B, C, H, W)
     else:
         profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]

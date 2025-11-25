@@ -23,7 +23,7 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt {
 
@@ -240,6 +240,9 @@ class RunTimeOptions {
     // Fabric router sync timeout configuration (in milliseconds)
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
+    // Disable XIP dump
+    bool disable_xip_dump = false;
 
 public:
     RunTimeOptions();
@@ -561,6 +564,8 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
+
+    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

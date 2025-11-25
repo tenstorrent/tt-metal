@@ -8,6 +8,7 @@
 #include "hw/inc/host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/blackhole/lf_dev_mem_map.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace {
 
