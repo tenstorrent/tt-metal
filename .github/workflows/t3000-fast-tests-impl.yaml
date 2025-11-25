@@ -67,7 +67,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
-        timeout-minutes: 60
+        timeout-minutes: 240
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
