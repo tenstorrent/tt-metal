@@ -55,12 +55,12 @@ struct AllToAllDispatchDeviceOperation {
         const Tensor input_tensor;
         const Tensor expert_indices_tensor;
         const Tensor expert_mapping_tensor;
-        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
+        const std::optional<std::array<Tensor, 3>> optional_output_tensors;
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
+    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::TensorSpec>>;
 
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    using tensor_return_value_t = std::tuple<Tensor, Tensor, std::optional<Tensor>>;
 
     struct AllToAllDispatchSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -119,7 +119,7 @@ struct AllToAllDispatchDeviceOperation {
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         std::optional<uint32_t> axis,
-        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
+        const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
