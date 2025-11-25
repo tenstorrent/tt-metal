@@ -20,6 +20,7 @@ from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rop
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
@@ -55,34 +56,82 @@ def get_platform_specific_optimizations(model_name):
 
 def initialize_vllm_text_transformer(
     hf_config,
+    tt_data_parallel,
     mesh_device,
     max_batch_size,
     max_seq_len,
+    n_layers=None,
     dtype=ttnn.bfloat8_b,
-    optimizations=None,
+    optimizations=DecodersPrecision.performance,
 ):
-    tt_model_args = ModelArgs(
-        mesh_device,
-        instruct=("Instruct" in hf_config.name_or_path),
-        max_batch_size=max_batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-    )
-    assert tt_model_args.model_name.replace("-", "").endswith(
-        hf_config.name_or_path.split("/")[-1].replace("-", "")
-    ), f"The model specified in vLLM ({hf_config.name_or_path}) does not match the model name ({tt_model_args.model_name}) with model weights ({tt_model_args.CKPT_DIR})."
-    state_dict = tt_model_args.load_state_dict()
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+    # Load model args, weights
+    model_args = []
+    for submesh in submesh_devices:
+        model_args_i = ModelArgs(
+            submesh,
+            instruct=("Instruct" in hf_config.name_or_path),
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+        )
 
-    model = Transformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        use_paged_kv_cache=True,  # [INFO] use paged kv cache provided by this generator
-    )
+        assert model_args_i.model_name.replace("-", "") in hf_config.name_or_path.replace(
+            "-", ""
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
+        if n_layers is not None:
+            model_args_i.n_layers = n_layers
 
-    return tt_model_args, model
+        model_args.append(model_args_i)
+
+    state_dict = model_args[0].load_state_dict()
+
+    tt_model = []
+    for i, submesh in enumerate(submesh_devices):
+        tt_model_i = Transformer(
+            args=model_args[i],
+            mesh_device=submesh,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args[i].weight_cache_path(dtype),
+            use_paged_kv_cache=True,
+        )
+        tt_model.append(tt_model_i)
+
+    return tt_model, model_args
+
+
+def initialize_vllm_vision_transformer(
+    config,
+    tt_data_parallel,
+    reference_model,
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    ref_model_name,
+):
+    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+    # Load model args, weights
+    model_args = []
+    for submesh in submesh_devices:
+        model_args_i = VisionModelArgs(
+            submesh,
+            max_batch_size=max_batch_size // tt_data_parallel,
+            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
+            max_seq_len=max_seq_len,
+        )
+        model_args_i.hf_config.vision_config.depth = config.vision_config.depth
+
+        model_args.append(model_args_i)
+
+    tt_model = []
+    for model_args_i in model_args:
+        vision_model_i = DropInVisionTransformer(reference_model.visual, model_args_i)
+        tt_model.append(vision_model_i)
+
+    return tt_model, model_args
+
+    return model_args
 
 
 class CustomNamespace(SimpleNamespace):
@@ -136,14 +185,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             ref_model_name, config=config, torch_dtype="auto", device_map="auto"
         )
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
-        vision_model_args = VisionModelArgs(
+        visual_model, _ = initialize_vllm_vision_transformer(
+            config,
+            tt_data_parallel,
+            reference_model,
             mesh_device,
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=model_args.max_seq_len,
-            optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
+            max_batch_size,
+            max_seq_len,
+            ref_model_name,
         )
-        vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
 
         return cls(
             model,

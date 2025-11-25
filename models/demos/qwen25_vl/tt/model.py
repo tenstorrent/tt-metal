@@ -165,6 +165,7 @@ class DropInVisionTransformer(torch.nn.Module):
         model_args: VisionModelArgs,
         dtype=ttnn.bfloat8_b,
         debug=False,
+        mesh_device=None,
     ):
         """
         Initialize the TorchVisionTransformer wrapper.
@@ -179,19 +180,22 @@ class DropInVisionTransformer(torch.nn.Module):
         self.reference_model = reference_model
         self.model_args = model_args
         self.debug = debug
-
+        self.mesh_device = mesh_device
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
         state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
         # Initialize TT model
-        self.tt_model = VisionTransformer(
-            args=model_args,
-            state_dict=state_dict,
-            weight_cache_path=model_args.weight_cache_path(dtype),
-            dtype=dtype,
-        )
+        self.tt_model = [
+            VisionTransformer(
+                args=model_args_i,
+                state_dict=state_dict,
+                weight_cache_path=model_args_i.weight_cache_path(dtype),
+                dtype=dtype,
+            )
+            for model_args_i in model_args
+        ]
 
     @property
     def dtype(self):
@@ -199,7 +203,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     @property
     def spatial_merge_size(self):
-        return self.model_args.hf_config.vision_config.spatial_merge_size
+        return self.model_args[0].hf_config.vision_config.spatial_merge_size
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
@@ -219,8 +223,9 @@ class DropInVisionTransformer(torch.nn.Module):
         all_grid_thw = grid_thw
         final_outputs = []
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
-        for grid_thw in all_grid_thw:
+        for idx, grid_thw in enumerate(all_grid_thw):
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
+            model_id = idx // self.model_args[0].max_batch_size
             pixel_values = all_pixel_values[: grid_thw.prod(), :]
             all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
             # --- Preprocessing ---
@@ -234,10 +239,10 @@ class DropInVisionTransformer(torch.nn.Module):
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
                 grid_thw=grid_thw,
-                head_dim=self.model_args.head_dim,
-                spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
-                window_size=self.model_args.hf_config.vision_config.window_size,
-                patch_size=self.model_args.hf_config.vision_config.patch_size,
+                head_dim=self.model_args[model_id].head_dim,
+                spatial_merge_size=self.model_args[model_id].hf_config.vision_config.spatial_merge_size,
+                window_size=self.model_args[model_id].hf_config.vision_config.window_size,
+                patch_size=self.model_args[model_id].hf_config.vision_config.patch_size,
             )
 
             # 3. Use reference model's patch embedding
@@ -262,38 +267,41 @@ class DropInVisionTransformer(torch.nn.Module):
                 cos_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
-                # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                # # todo)) refactor this code to make the intent clear, which is data parallelism
+                # mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             sin = ttnn.from_torch(
                 sin_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
-                device=self.model_args.mesh_device,
-                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 # todo)) refactor this code to make the intent clear, which is data parallelism
-                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
+                # mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+            tt_input = self.tt_model[model_id].prepare_input(patch_input, window_index, seq_len)
 
             # --- TT Model Execution ---
-            tt_out = self.tt_model(
+            tt_out = self.tt_model[model_id](
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
                 cu_seqlens=ttnn.from_torch(
-                    cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
+                    cu_seqlens,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.model_args[model_id].mesh_device,
                 ),
                 cu_window_seqlens=ttnn.from_torch(
                     cu_window_seqlens,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.model_args.mesh_device,
+                    device=self.model_args[model_id].mesh_device,
                 ),
             )
 
@@ -306,15 +314,13 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor
-            tt_output_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )
+            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))
 
             # deallocate TT output
             ttnn.deallocate(tt_out)
 
             # 2. Extract the relevant output part and adjust shape (matching test logic)
-            out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
+            out_hidden_size = self.model_args[model_id].hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
 

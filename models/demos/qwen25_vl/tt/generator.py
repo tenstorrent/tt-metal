@@ -43,31 +43,39 @@ class Generator:
     def processor(self):
         return self._ttt_generator.processor
 
-    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(
+        self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+    ):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+
+        if empty_slots is None:
+            empty_slots = list(range(batch))
 
         if page_table is not None:
             assert isinstance(
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        for user_id in range(batch):
-            logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // self.model_args[0].max_batch_size
+            group_user_id = user_id % self.model_args[0].max_batch_size if page_table is not None else 0
+            seq_len = prompt_lens[idx]
             last_token_idx = seq_len - 1
 
             if page_table is not None:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+            logger.info(f"Prefilling User {user_id + 1}")
 
             logits = self.__prefill_forward_single_user_text(
-                tokens[user_id : user_id + 1],
+                tokens[idx : idx + 1],
                 page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
+                user_id=group_user_id,
                 last_token_idx=last_token_idx,
                 rot_mats=rot_mats,
                 kv_cache=kv_cache,
+                model_id=model_id,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -77,20 +85,14 @@ class Generator:
 
         return output_logits
 
-    def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
-        self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
-
-    def update_cos_sin_rows(self, rot_mats_seq_ids):
-        for i, (cos, sin) in enumerate(rot_mats_seq_ids):
-            self.model.rope_setup.cos_matrix_pt[i] = cos[0]
-            self.model.rope_setup.sin_matrix_pt[i] = sin[0]
-        self.update_cos_sin()
-
     def update_rope_deltas(self, rope_deltas_list: list):
         # pad rope_deltas_list to the batch size
         rope_deltas_list = rope_deltas_list + [0] * (self.model.rope_setup.batch_size - len(rope_deltas_list))
-        # convert to torch tensor
-        self.model.rope_setup.rope_deltas = torch.tensor(rope_deltas_list)
+
+        for model_id, model in enumerate(self.model):
+            # convert to torch tensor
+            torch_rope_deltas = torch.tensor(rope_deltas_list).reshape(self.model[0].rope_setup.batch_size, -1)
+            self.model[model_id].rope_setup.rope_deltas = torch_rope_deltas[model_id, :]
 
     def decode_forward_text(
         self,
@@ -112,7 +114,9 @@ class Generator:
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
+    def __prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, model_id=0
+    ):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
@@ -130,7 +134,7 @@ class Generator:
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
             block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
@@ -156,14 +160,14 @@ class Generator:
                     chunk_rot_mats_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
-                ) = self.model.prepare_inputs_prefill(
+                ) = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     rot_mats=rot_mats,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                 )
-                tt_logits = self.model.ttnn_prefill_forward(
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
@@ -175,18 +179,20 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
+                    logits = self.model[model_id].process_output_prefill(
+                        tt_logits, last_token_idx=(last_token_idx_in_chunk % 32)
+                    )
                     return logits
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 rot_mats=rot_mats,
                 page_table=page_table,
             )
 
-            tt_logits = self.model.ttnn_prefill_forward(
+            tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
@@ -194,8 +200,8 @@ class Generator:
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
-
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            # might need to change this for data parallelism
+            logits = self.model[model_id].process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
 
             # deallocate device tensors that are not needed by decode
             # [INFO] logits is a torch tensor
