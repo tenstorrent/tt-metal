@@ -275,22 +275,54 @@ std::shared_ptr<Llama> create(const YAML::Node& config) {
 }
 
 void Llama::load_from_safetensors(const std::filesystem::path& model_path) {
+    std::vector<std::filesystem::path> safetensor_files;
     for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
         if (entry.path().extension() == ".safetensors") {
-            auto path = entry.path();
-            fmt::print("Loading model from: {}\n", path.string());
-            auto parameters = this->parameters();
-            load_model_from_safetensors(path, parameters, m_config);
+            safetensor_files.push_back(entry.path());
         }
+    }
+    std::sort(safetensor_files.begin(), safetensor_files.end());
+
+    std::set<std::string> used_parameters_global;
+    std::set<std::string> ignored_parameters_global;
+    auto parameters = this->parameters();
+
+    for (size_t i = 0; i < safetensor_files.size(); ++i) {
+        const auto& path = safetensor_files[i];
+        fmt::print("Loading model from: {} ({}/{})\n", path.string(), i + 1, safetensor_files.size());
+        load_model_from_safetensors(path, parameters, m_config, used_parameters_global, ignored_parameters_global);
+        fmt::print("Completed loading file {}/{}\n", i + 1, safetensor_files.size());
+    }
+
+    std::vector<std::string> unused_parameters;
+    for (const auto& [param_name, _] : parameters) {
+        if (used_parameters_global.find(param_name) == used_parameters_global.end())
+            unused_parameters.push_back(param_name);
+    }
+
+    if (!unused_parameters.empty()) {
+        fmt::print("\nWarning: The following parameters were not used during loading:\n");
+        for (const auto& param_name : unused_parameters) fmt::print("  - {}\n", param_name);
+        fmt::print("Total unused parameters: {}\n", unused_parameters.size());
+    } else {
+        fmt::print("\nAll {} parameters were successfully loaded and used.\n", parameters.size());
+    }
+
+    if (!ignored_parameters_global.empty()) {
+        fmt::print("\nNote: The following parameters were ignored during loading:\n");
+        for (const auto& param_name : ignored_parameters_global) fmt::print("  - {}\n", param_name);
+        fmt::print("Total ignored parameters: {}\n", ignored_parameters_global.size());
     }
 }
 
 void load_model_from_safetensors(
-    const std::filesystem::path& path, serialization::NamedParameters& parameters, const LlamaConfig& config) {
-    // Keep your working setting
+    const std::filesystem::path& path,
+    serialization::NamedParameters& parameters,
+    const LlamaConfig& config,
+    std::set<std::string>& used_parameters,
+    std::set<std::string>& ignored_parameters) {
     const bool meta_style = false;
 
-    // --- helpers -------------------------------------------------------------
     auto transpose_flat_ = [](const std::vector<float>& x, int64_t r, int64_t c) -> std::vector<float> {
         std::vector<float> y(x.size());
         for (int64_t i = 0; i < r; ++i)
@@ -305,11 +337,11 @@ void load_model_from_safetensors(
                                   int64_t tgt_c,
                                   const std::string& dbg) -> std::vector<float> {
         if (src_r == tgt_r && src_c == tgt_c) {
-            return src;  // as-is fits
+            return src;
         }
         if (src_c == tgt_r && src_r == tgt_c) {
             fmt::print("[{}] transposing weights\n", dbg);
-            return transpose_flat_(src, src_r, src_c);  // transposed fits
+            return transpose_flat_(src, src_r, src_c);
         }
         throw std::runtime_error(fmt::format(
             "[{}] shape mismatch: src=({}x{}), src^T=({}x{}), tgt=({}x{})",
@@ -321,10 +353,6 @@ void load_model_from_safetensors(
             tgt_r,
             tgt_c));
     };
-    // ------------------------------------------------------------------------
-
-    std::set<std::string> used_parameters;
-    std::set<std::string> ignored_parameters;
 
     // Stage K/V for row-wise concat into kv_linear
     std::map<int, std::vector<float>> k_weights, v_weights;
@@ -596,25 +624,5 @@ void load_model_from_safetensors(
         };
 
     serialization::SafetensorSerialization::visit_safetensors_file(path, loading_callback);
-
-    // Report unused parameters
-    std::vector<std::string> unused_parameters;
-    for (const auto& [param_name, _] : parameters) {
-        if (used_parameters.find(param_name) == used_parameters.end())
-            unused_parameters.push_back(param_name);
-    }
-
-    if (!unused_parameters.empty()) {
-        fmt::print("Warning: The following parameters were not used during loading:\n");
-        for (const auto& param_name : unused_parameters) fmt::print("  - {}\n", param_name);
-        fmt::print("Total unused parameters: {}\n", unused_parameters.size());
-    } else {
-        fmt::print("All {} parameters were successfully loaded and used.\n", parameters.size());
-    }
-    if (!ignored_parameters.empty()) {
-        fmt::print("Note: The following parameters were ignored during loading:\n");
-        for (const auto& param_name : ignored_parameters) fmt::print("  - {}\n", param_name);
-        fmt::print("Total ignored parameters: {}\n", ignored_parameters.size());
-    }
 }
 }  // namespace ttml::models::llama

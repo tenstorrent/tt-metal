@@ -105,7 +105,10 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
     {
         auto py_base_transformer =
             static_cast<nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>>(m.attr("BaseTransformer"));
-        py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
+        py_base_transformer.def(
+            "load_from_safetensors",
+            &models::BaseTransformer::load_from_safetensors,
+            nb::call_guard<nb::gil_scoped_release>());
     }
 
     {

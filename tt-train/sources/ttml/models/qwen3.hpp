@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <set>
+#include <string>
+
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
@@ -82,6 +85,10 @@ public:
 [[nodiscard]] std::shared_ptr<Qwen3> create(const YAML::Node& config);
 
 void load_model_from_safetensors(
-    const std::filesystem::path& path, serialization::NamedParameters& parameters, const Qwen3Config& config);
+    const std::filesystem::path& path,
+    serialization::NamedParameters& parameters,
+    const Qwen3Config& config,
+    std::set<std::string>& used_parameters,
+    std::set<std::string>& ignored_parameters);
 
 }  // namespace ttml::models::qwen3
