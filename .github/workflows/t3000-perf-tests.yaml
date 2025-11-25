@@ -1,4 +1,4 @@
-name: "(T3K) T3000 model perf tests"
+name: "(T3K) T3000 perf tests"
 
 on:
   workflow_dispatch:
@@ -33,10 +33,10 @@ jobs:
       version: 22.04
       build-wheel: true
       tracy: true
-  t3000-model-perf-tests:
+  t3000-perf-tests:
     needs: [build-artifact]
     secrets: inherit
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

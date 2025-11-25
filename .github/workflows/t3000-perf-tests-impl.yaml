@@ -1,4 +1,4 @@
-name: "[internal] T3000 model perf tests impl"
+name: "[internal] T3000 perf tests impl"
 
 on:
   workflow_call:
@@ -22,7 +22,7 @@ on:
         default: "in-service"
 
 jobs:
-  t3000-model-perf-tests:
+  t3000-perf-tests:
     strategy:
       fail-fast: false
       matrix:
