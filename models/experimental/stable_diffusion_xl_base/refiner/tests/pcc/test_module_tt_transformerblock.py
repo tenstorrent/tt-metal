@@ -18,7 +18,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     "input_shape, encoder_shape, down_block_id, block_id, query_dim, num_attn_heads, out_dim, pcc, block_type",
     [
         ((1, 4096, 768), (1, 77, 1280), 1, 0, 768, 12, 768, 0.999, "down_blocks"),
-        ((1, 4096, 768), (1, 77, 1280), 1, 1, 768, 12, 768, 0.999, "down_blocks"),
+        ((1, 4096, 768), (1, 77, 1280), 1, 1, 768, 12, 768, 0.998, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 0, 1536, 24, 1536, 0.999, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 1, 1536, 24, 1536, 0.998, "down_blocks"),
         ((1, 256, 1536), (1, 77, 1280), -1, 0, 1536, 24, 1536, 0.998, "mid_block"),

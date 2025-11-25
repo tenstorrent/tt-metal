@@ -4,13 +4,14 @@
 
 #include "all_to_all_async_program_factory.hpp"
 #include "all_to_all_async_device_operation_types.hpp"
+
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/constants.hpp>
 #include <algorithm>
 #include <sstream>

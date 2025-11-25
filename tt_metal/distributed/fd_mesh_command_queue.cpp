@@ -9,7 +9,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -50,6 +50,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -534,12 +535,12 @@ void FDMeshCommandQueue::write_shard_to_device(
         return;
     }
 
-    in_use_ = true;
-    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
-
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
+
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -560,12 +561,12 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    in_use_ = true;
-    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
-
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
+
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
