@@ -32,23 +32,38 @@ void kernel_main() {
 
         // Send out writes with transaction ids
         // Avoid using transaction id 0 in case fast dispatch breaks it in the future
-        for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
-            noc_async_read_set_trid(i);
-            noc_async_read(sub1_src_noc_addr, tmp_local_addr, bytes_per_transaction);
-            tmp_local_addr += bytes_per_transaction;
-            sub1_src_noc_addr += bytes_per_transaction;
+        {
+            DeviceZoneScopedN("Reads");
+            for (uint32_t i = 1; i <= num_of_transactions;
+                 i++) {  // Using 1-(num_of_transactions) as the transaction ids
+                noc_async_read_set_trid(i);
+                noc_async_read(sub1_src_noc_addr, tmp_local_addr, bytes_per_transaction);
+                tmp_local_addr += bytes_per_transaction;
+                sub1_src_noc_addr += bytes_per_transaction;
+            }
         }
 
         tmp_local_addr = l1_local_addr;
-
-        // Wait for reads with transaction ids to finish
-        for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
-            noc_async_read_barrier_with_trid(i);
-            noc_async_write(tmp_local_addr, sub0_dst_noc_addr, bytes_per_transaction);
-            tmp_local_addr += bytes_per_transaction;
-            sub0_dst_noc_addr += bytes_per_transaction;
+        {
+            DeviceZoneScopedN("Barriers");
+            for (uint32_t i = 1; i <= num_of_transactions;
+                 i++) {  // Using 1-(num_of_transactions) as the transaction ids
+                noc_async_read_barrier_with_trid(i);
+            }
         }
-        noc_async_write_barrier();
+        // Wait for reads with transaction ids to finish
+        {
+            DeviceZoneScopedN("Writes");
+            for (uint32_t i = 1; i <= num_of_transactions;
+                 i++) {  // Using 1-(num_of_transactions) as the transaction ids
+                {
+                    noc_async_write(tmp_local_addr, sub0_dst_noc_addr, bytes_per_transaction);
+                    tmp_local_addr += bytes_per_transaction;
+                    sub0_dst_noc_addr += bytes_per_transaction;
+                }
+            }
+            noc_async_write_barrier();
+        }
     }
 
     DeviceTimestampedData("Test id", test_id);
