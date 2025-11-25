@@ -22,6 +22,24 @@
 
 namespace ckernel {
 
+// clang-format off
+/**
+ * Performs the complete hardware and software initialization for unary broadcast operations for provided circular buffer identifiers (CB IDs).
+ * This function configures the unpacker, math, and packer threads for broadcast operations. In order for broadcast operations to be performed,
+ * this function call must be followed by calls to `unary_bcast`.
+ *
+ * NOTE: This function is a so-called "full init" which will be deprecated in the futuree in favor of using `unary_bcast_init_short` preceded
+ * by `ompute_kernel_hw_startup`.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                                                      | Type      | Valid Range | Required |
+ * |------------|-----------|----------------------------------------------------------------------------------|-----------|-------------|----------|
+ * | Template   | bcast_type| The type of broadcast - NONE (no broadcast), ROW, COL, or SCALAR               | BroadcastType | {NONE, ROW, COL, SCALAR} | True |
+ * | Function   | icb       | The identifier of the input circular buffer (CB) containing operand             | uint32_t  | 0 to 31     | True     |
+ * | Function   | ocb       | The identifier of the output circular buffer (CB)                               | uint32_t  | 0 to 31     | True     |
+ */
+// clang-format on
 template <BroadcastType bcast_type>
 ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
     // Pass through uses A2D and potentially direct unpack to dest.
@@ -43,6 +61,63 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
+// clang-format off
+/**
+ * Performs a minimal hardware and software initialization for unary broadcast operations for provided circular buffer identifier (CB ID).
+ * This function configures only the unpacker and math threads for broadcast operations, without touching the packer or destination buffer
+ * addressing state. This is the preferred init function when mixing broadcast operations with other operations like `copy_tile` in loops.
+* The broadcast operation copies/expands data according to the specified broadcast type:
+ * - BroadcastType::NONE: No broadcast (direct copy)
+ * - BroadcastType::ROW: Broadcast along rows (repeat row data across columns)
+ * - BroadcastType::COL: Broadcast along columns (repeat column data across rows)
+ * - BroadcastType::SCALAR: Broadcast single value to entire tile
+ *
+ *
+ * Note: Since this function doesn't configure the packer, make sure the packer is configured elsewhere in your kernel if needed.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                                                      | Type      | Valid Range | Required |
+ * |------------|-----------|----------------------------------------------------------------------------------|-----------|-------------|----------|
+ * | Template   | bcast_type| The type of broadcast - NONE (no broadcast), ROW, COL, or SCALAR               | BroadcastType | {NONE, ROW, COL, SCALAR} | True |
+ * | Function   | icb       | The identifier of the input circular buffer (CB) containing operand             | uint32_t  | 0 to 31     | True     |
+ */
+// clang-format on
+template <BroadcastType bcast_type>
+ALWI void unary_bcast_init_short(uint32_t icb) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
+        false, false /*transpose within 16x16 face*/, icb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+}
+
+// clang-format off
+/**
+ * Performs a unary broadcast operation on a tile from the input circular buffer and writes the result to the DEST register.
+ * The broadcast operation copies/expands data according to the specified broadcast type:
+ * - BroadcastType::NONE: No broadcast (direct copy)
+ * - BroadcastType::ROW: Broadcast along rows (repeat row data across columns)
+ * - BroadcastType::COL: Broadcast along columns (repeat column data across rows)
+ * - BroadcastType::SCALAR: Broadcast single value to entire tile
+ *
+ * This function must be preceded by either `unary_bcast_init` or `unary_bcast_init_short` to configure the hardware properly.
+ * The DEST register buffer must be in acquired state via `tile_regs_acquire` call.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name           | Description                                                                      | Type      | Valid Range | Required |
+ * |------------|----------------|----------------------------------------------------------------------------------|-----------|-------------|----------|
+ * | Template   | bcast_type     | The type of broadcast - NONE (no broadcast), ROW, COL, or SCALAR               | BroadcastType | {NONE, ROW, COL, SCALAR} | True |
+ * | Function   | icb            | The identifier of the input circular buffer (CB) containing operand             | uint32_t  | 0 to 31     | True     |
+ * | Function   | in_tile_index  | The index of the tile within the input CB                                       | uint32_t  | Must be less than the size of the CB | True |
+ * | Function   | dst_tile_index | The index of the tile within the DEST register                                  | uint32_t  | Must be less than the acquired size of DEST REG | True     |
+ */
+// clang-format on
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
     // Pass through uses A2D and potentially direct unpack to dest.

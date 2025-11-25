@@ -120,7 +120,8 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 
 // clang-format off
 /**
- * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
+ * Performs a math-only reduction operation on a tile in the SrcA register. Assumes that the operand tile is already in the SrcA register and that
+ * the scaler is already in the SrcB register.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
