@@ -82,8 +82,13 @@ Tensor ProdOperation::invoke(
 
     // If no dim is provided, compute the prod across all dimensions
     if (!dim.has_value()) {
-        TT_FATAL(!keepdim, "Not possible to keepdim with all dimensions enabled, as this returns a scalar");
-        return prod_all(input_a, output_mem_config);
+        Tensor result = prod_all(input_a, output_mem_config);
+        if (keepdim) {
+            // Reshape to have all dimensions (as many as the input rank) set to 1.
+            ttnn::SmallVector<uint32_t> output_shape(old_rank, 1);
+            result = ttnn::reshape(result, ttnn::Shape{output_shape});
+        }
+        return result;
     }
 
     TT_FATAL(size > 0, "Tensor has no dimensions");

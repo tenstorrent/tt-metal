@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
 #include "ttnn/run_operation.hpp"
 #include "device/moe_routing_remap_device_operation.hpp"
 #include "moe_routing_remap.hpp"
