@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement {
 struct ReshapeDeviceOperation {
     using operation_attributes_t = ReshapeOperationAttributes;
     using tensor_args_t = ReshapeTensorArgs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::operations::data_movement::tensor_return_value_t;
     using program_factory_t = std::variant<detail::ReshapeTileProgramFactory, detail::ReshapeRMProgramFactory>;
 
@@ -39,8 +39,8 @@ struct ReshapeDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const ttnn::Shape& logical_output_shape,
-        const ttnn::Shape& padded_output_shape,
+        const tt::tt_metal::Shape& logical_output_shape,
+        const tt::tt_metal::Shape& padded_output_shape,
         const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 

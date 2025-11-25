@@ -15,9 +15,9 @@ struct ReshapeOperationAttributes {
 };
 
 struct ReshapeTensorArgs {
-    Tensor input_tensor;
+    tt::tt_metal::Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
+using tensor_return_value_t = tt::tt_metal::Tensor;
 
 }  // namespace ttnn::operations::data_movement
