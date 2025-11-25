@@ -29,23 +29,30 @@ mkdir -p "$OUTPUT_DIR"
 
 OWNER="tenstorrent"
 REPO="tt-metal"
+TEMP=$(mktemp)
 
 echo -e "${GREEN}Fetching annotations for job ${JOB_ID}${NC}"
-ANNOTATIONS=$(gh api "repos/${OWNER}/${REPO}/actions/jobs/${JOB_ID}/annotations" 2>/dev/null || echo "[]")
-
-if [ -z "$ANNOTATIONS" ]; then
-    ANNOTATIONS="[]"
+if gh api "repos/${OWNER}/${REPO}/actions/jobs/${JOB_ID}/annotations" > "$TEMP" 2>/dev/null; then
+    mv "$TEMP" "$OUTPUT_FILE"
+else
+    rm -f "$TEMP"
+    echo "[]" > "$OUTPUT_FILE"
+    echo -e "${YELLOW}No annotations returned for job ${JOB_ID}.${NC}"
+    cat "$OUTPUT_FILE"
+    exit 0
 fi
 
-echo "$ANNOTATIONS" | jq '.' > "$OUTPUT_FILE"
-COUNT=$(echo "$ANNOTATIONS" | jq 'length' 2>/dev/null || echo 0)
-CLEAN_COUNT=$(echo "$COUNT" | tr -cd '0-9')
-if [ -z "$CLEAN_COUNT" ]; then CLEAN_COUNT=0; fi
+if ! jq empty "$OUTPUT_FILE" >/dev/null 2>&1; then
+    echo "[]" > "$OUTPUT_FILE"
+    echo -e "${YELLOW}Annotations response was not valid JSON for job ${JOB_ID}.${NC}"
+fi
 
-if [ "$CLEAN_COUNT" -eq 0 ]; then
+COUNT=$(jq 'length' "$OUTPUT_FILE" 2>/dev/null || echo 0)
+
+if [ "$COUNT" -eq 0 ]; then
     echo -e "${YELLOW}No annotations returned for job ${JOB_ID}.${NC}"
 else
-    echo -e "${GREEN}Saved ${CLEAN_COUNT} annotation(s) to ${OUTPUT_FILE}.${NC}"
+    echo -e "${GREEN}Saved ${COUNT} annotation(s) to ${OUTPUT_FILE}.${NC}"
     echo "Annotations:"
     cat "$OUTPUT_FILE"
 fi
