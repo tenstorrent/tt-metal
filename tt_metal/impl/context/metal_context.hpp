@@ -7,7 +7,7 @@
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include "tt-metalium/routing_table_generator.hpp"
+#include "tt-metalium/experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_fabric {
