@@ -9,7 +9,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.tt_sampling import TTSampling
+from models.common.sampling.generator import SamplingGenerator
 from models.common.utils import LogProbsCalculator
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -137,9 +137,13 @@ class Transformer(LightweightModule):
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
         self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
-            self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=self.tt_ccl, args=args)
+            self.sampling = SamplingGenerator(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+            )
         else:
-            self.tt_sampling = None
+            self.sampling = None
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
@@ -407,6 +411,7 @@ class Transformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -425,11 +430,16 @@ class Transformer(LightweightModule):
             kv_cache=kv_cache,
         )
 
-        if sampling_on_device and self.tt_sampling is not None:
-            # Perform on-device sampling using TTSampling
-            tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
-            # Update device tensors for the next iteration
+        if sampling_on_device and self.sampling is not None:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if capture_sampling_trace:
+                return tt_logits
+            tt_toks = self.sampling.sample(
+                tt_logits,
+                tt_out_tok=x,
+                enable_trace=False,
+                batch_size=self.args.max_batch_size,
+            )
 
             # Calculate log-prob stats
             self.log_probs_calculator.compute_global_stats(tt_logits)

@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
     get_block_size,
 )
-from models.common.tt_sampling import format_sampling_params
+from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
@@ -69,6 +69,12 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self.enable_split_sampling = True
+
+    def _set_sampling_trace_mode(self, enabled: bool):
+        sampling_module = getattr(self.model, "sampling", None)
+        if sampling_module is not None:
+            sampling_module.enable_internal_trace = enabled
 
     def warmup_prefill_traces(
         self,
@@ -409,6 +415,9 @@ class Generator:
             reset_inputs = True
         else:
             return_logits = False
+        sampling_on_device = not return_logits
+        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
+        self._set_sampling_trace_mode(split_sampling_enabled)
 
         if self.prev_page_table is None:
             self.prev_page_table = (
@@ -435,20 +444,35 @@ class Generator:
         if reset_inputs and sampling_params is not None:
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
-            self.model.tt_sampling.reset_params(
-                k=sampling_params.top_k,
-                p=sampling_params.top_p,
-                temp=sampling_params.temperature,
-            )
+            sampling_module = getattr(self.model, "sampling", None)
+            if sampling_module is not None:
+                sampling_module.reset_sampling_params(
+                    k=sampling_params.top_k,
+                    p=sampling_params.top_p,
+                    temp=sampling_params.temperature,
+                )
+                if sampling_module.tt_penalties is not None:
+                    sampling_module.reset_penalty_params(
+                        presence=sampling_params.presence_penalty,
+                        frequency=sampling_params.frequency_penalty,
+                        repetition=sampling_params.repetition_penalty,
+                    )
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
             tt_tok = self._decode_easy_trace_text(
-                **decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits
+                **decode_kwargs,
+                reset_inputs=reset_inputs,
+                return_logits=return_logits,
+                sampling_on_device=sampling_on_device,
             )
         else:
-            tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
+            tt_tok = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+                return_logits=return_logits,
+                sampling_on_device=sampling_on_device,
+            )
 
         if read_from_device:
             tt_out = self.read_decode_output(tt_tok, async_read=async_read)
@@ -470,6 +494,7 @@ class Generator:
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        sampling_on_device=False,
     ):
         """
         Performs text decode step.
@@ -487,6 +512,8 @@ class Generator:
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            sampling_on_device=sampling_on_device,
+            capture_sampling_trace=self.enable_split_sampling,
         )
         return tt_tok
 
@@ -499,6 +526,7 @@ class Generator:
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        sampling_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -513,6 +541,7 @@ class Generator:
             is_cur_pos_sharded=is_cur_pos_sharded,
             is_page_table_sharded=is_page_table_sharded,
             return_logits=return_logits,
+            sampling_on_device=sampling_on_device,
         )
         logger.info("Done Compiling Model")
 
@@ -523,6 +552,7 @@ class Generator:
 
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        split_sampling = bool(self.enable_split_sampling and sampling_on_device)
         tt_out_tok = self.model.ttnn_decode_forward(
             tokens_tt,
             current_pos_tt,
@@ -531,11 +561,26 @@ class Generator:
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            sampling_on_device=sampling_on_device,
+            capture_sampling_trace=split_sampling,
         )
 
         # Try allocating our persistent tensors here and verifying it matches the address that trace captured
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
+
+        if split_sampling:
+            sampling_module = self.model.sampling
+            sampling_module.reset_trace()
+            logits_tensor = tt_out_tok[0] if isinstance(tt_out_tok, list) else tt_out_tok
+            tokens_buffer = tokens_tt[0] if isinstance(tokens_tt, list) else tokens_tt
+            sampling_module.capture_trace(
+                logits_tensor,
+                tt_out_tok=tokens_buffer,
+                batch_size=self.model_args.max_batch_size,
+                num_outputs=1,
+            )
+
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
@@ -546,11 +591,17 @@ class Generator:
         tokens,
         current_pos,
         page_table=None,
+        sampling_on_device=False,
     ):
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
+        if sampling_on_device:
+            sampling_module = getattr(self.model, "sampling", None)
+            if sampling_module is not None and getattr(sampling_module, "enable_internal_trace", False):
+                return sampling_module.execute_trace(num_outputs=1)
 
         return tt_out_trace
 
@@ -564,6 +615,7 @@ class Generator:
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
+        sampling_on_device=False,
     ):
         """
         Run decode forward text with tracing
@@ -579,6 +631,7 @@ class Generator:
                 is_cur_pos_sharded=is_cur_pos_sharded,
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
+                sampling_on_device=sampling_on_device,
             )
             self.trace_ids_decode[return_logits] = trace_id
             self.trace_inputs_decode[return_logits] = device_inputs
@@ -600,6 +653,7 @@ class Generator:
             tokens,
             current_pos,
             page_table=page_table,
+            sampling_on_device=sampling_on_device,
         )
 
         return trace_tok_rm
