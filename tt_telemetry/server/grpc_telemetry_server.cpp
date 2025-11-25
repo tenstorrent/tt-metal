@@ -9,8 +9,12 @@
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cerrno>
+#include <csignal>
+#include <cstdlib>
 #include <grpcpp/grpcpp.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <atomic>
 #include <map>
 
@@ -22,6 +26,10 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
+
+/**************************************************************************************************
+ Telemetry Service
+**************************************************************************************************/
 
 template <bool UseFilter>
 static size_t populate_metrics(
@@ -309,6 +317,70 @@ private:
 }  // namespace telemetry
 }  // namespace tt
 
+/**************************************************************************************************
+ Socket Cleanup
+
+ We attempt to clean up the UNIX socket if the application crashes, is terminated, or prematurely
+ exits (e.g. via a call to exit() from the watchdog thread). We cannot handle *all* cases, namely
+ SIGKILL, so the startup code attempts to initially unlink the socket as well.
+
+ We enforce the condition that the gRPC server can only be run once per program session.
+**************************************************************************************************/
+
+// Tracks whether the gRPC server has been started (enforces single instance, no restart)
+static std::atomic<bool> g_grpc_server_started{false};
+
+// Signal handler for all signals (graceful shutdown and fatal crashes)
+// Must be async-signal-safe - only unlink() is safe to call
+static void signal_cleanup_handler(int signum) {
+    // Clean up socket file (async-signal-safe, idempotent)
+    unlink(GRPC_TELEMETRY_SOCKET_PATH);
+
+    // Re-raise signal with default handler to allow normal termination/crash behavior
+    std::signal(signum, SIG_DFL);
+    std::raise(signum);
+}
+
+// atexit() handler for normal exit() calls (e.g., from watchdog)
+static void atexit_cleanup_handler() {
+    // Clean up socket file (safe in exit context, idempotent)
+    unlink(GRPC_TELEMETRY_SOCKET_PATH);
+}
+
+// Install signal handlers and atexit cleanup (called once from start())
+static void install_cleanup_handlers() {
+    // Enforce single instance, no restart policy
+    if (g_grpc_server_started.exchange(true)) {
+        TT_FATAL(
+            false,
+            "GrpcTelemetryServer::start() called but server has already been started! "
+            "Only one GrpcTelemetryServer instance can exist and it cannot be restarted.");
+    }
+
+    // Graceful shutdown signals
+    std::signal(SIGINT, signal_cleanup_handler);   // ^C
+    std::signal(SIGTERM, signal_cleanup_handler);  // kill command
+    std::signal(SIGHUP, signal_cleanup_handler);   // terminal closed
+
+    // Fatal crash signals
+    std::signal(SIGSEGV, signal_cleanup_handler);  // Segmentation fault
+    std::signal(SIGABRT, signal_cleanup_handler);  // Abort
+    std::signal(SIGBUS, signal_cleanup_handler);   // Bus error
+    std::signal(SIGFPE, signal_cleanup_handler);   // Floating point exception
+    std::signal(SIGILL, signal_cleanup_handler);   // Illegal instruction
+
+    // Register atexit handler for normal exit() calls (e.g., from watchdog)
+    std::atexit(atexit_cleanup_handler);
+
+    log_info(tt::LogAlways, "[gRPC] Installed signal handlers and atexit cleanup for UNIX socket");
+}
+
+/**************************************************************************************************
+ Telemetry Subscriber
+
+ Starts the gRPC telemetry service and forwards metric updates to it.
+**************************************************************************************************/
+
 GrpcTelemetryServer::GrpcTelemetryServer() :
     TelemetrySubscriber(),
     service_impl_(std::make_unique<tt::telemetry::TelemetryServiceImpl>(telemetry_state_, state_mutex_)) {}
@@ -316,8 +388,21 @@ GrpcTelemetryServer::GrpcTelemetryServer() :
 GrpcTelemetryServer::~GrpcTelemetryServer() { stop(); }
 
 void GrpcTelemetryServer::start() {
+    // Install signal and atexit handlers (enforces single instance, no restart)
+    install_cleanup_handlers();
+
     // Remove existing socket file if it exists
-    unlink(GRPC_TELEMETRY_SOCKET_PATH);
+    if (unlink(GRPC_TELEMETRY_SOCKET_PATH) == 0) {
+        log_info(tt::LogAlways, "[gRPC] Removed stale UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+    } else if (errno != ENOENT) {
+        // ENOENT is expected (file doesn't exist), but other errors are problems
+        log_warning(
+            tt::LogAlways,
+            "[gRPC] Failed to unlink socket {} (errno={}). This may indicate a permission issue from a previous "
+            "run with elevated privileges. The socket creation may fail.",
+            GRPC_TELEMETRY_SOCKET_PATH,
+            errno);
+    }
 
     ServerBuilder builder;
 
@@ -360,8 +445,10 @@ void GrpcTelemetryServer::stop() {
 
         server_.reset();
 
-        // Clean up socket file
+        // Clean up socket file (idempotent - safe even if signal handler already called it)
         unlink(GRPC_TELEMETRY_SOCKET_PATH);
+
+        log_info(tt::LogAlways, "[gRPC] Server stopped and socket cleaned up");
     }
 }
 
