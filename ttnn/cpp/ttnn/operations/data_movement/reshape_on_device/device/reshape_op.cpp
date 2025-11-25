@@ -107,8 +107,8 @@ ReshapeDeviceOperation::invoke(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     return {
-        ReshapeOperationAttributes{logical_output_shape, padded_output_shape, output_mem_config},
-        ReshapeTensorArgs{input_tensor}};
+        reshape_on_device::operation_attributes_t{logical_output_shape, padded_output_shape, output_mem_config},
+        reshape_on_device::tensor_args_t{input_tensor}};
 }
 
 }  // namespace ttnn::operations::data_movement

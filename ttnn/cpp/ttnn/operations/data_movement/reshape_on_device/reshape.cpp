@@ -83,7 +83,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             input_tensor.device(),
             output_mem_config);
     }
-    return ttnn::prim::reshape(input_tensor, logical_output_shape, padded_output_shape, output_mem_config);
+    return ttnn::prim::reshape_on_device(input_tensor, logical_output_shape, padded_output_shape, output_mem_config);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(

@@ -6,18 +6,18 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
-struct ReshapeOperationAttributes {
+struct operation_attributes_t {
     tt::tt_metal::Shape logical_output_shape;
     tt::tt_metal::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
-struct ReshapeTensorArgs {
+struct tensor_args_t {
     tt::tt_metal::Tensor input_tensor;
 };
 
 using tensor_return_value_t = tt::tt_metal::Tensor;
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshape_on_device

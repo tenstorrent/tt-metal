@@ -13,10 +13,10 @@
 namespace ttnn::operations::data_movement {
 
 struct ReshapeDeviceOperation {
-    using operation_attributes_t = ReshapeOperationAttributes;
-    using tensor_args_t = ReshapeTensorArgs;
+    using operation_attributes_t = reshape_on_device::operation_attributes_t;
+    using tensor_args_t = reshape_on_device::tensor_args_t;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = ttnn::operations::data_movement::tensor_return_value_t;
+    using tensor_return_value_t = reshape_on_device::tensor_return_value_t;
     using program_factory_t = std::variant<detail::ReshapeTileProgramFactory, detail::ReshapeRMProgramFactory>;
 
     static program_factory_t select_program_factory(
@@ -47,6 +47,6 @@ struct ReshapeDeviceOperation {
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
-constexpr auto reshape =
-    ttnn::register_operation<"ttnn::prim::reshape", ttnn::operations::data_movement::ReshapeDeviceOperation>();
+constexpr auto reshape_on_device = ttnn::
+    register_operation<"ttnn::prim::reshape_on_device", ttnn::operations::data_movement::ReshapeDeviceOperation>();
 }
