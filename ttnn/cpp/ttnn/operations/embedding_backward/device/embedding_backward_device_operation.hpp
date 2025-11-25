@@ -5,11 +5,11 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "embedding_backward_device_operation_types.hpp"
 #include "embedding_backward_program_factory.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::embedding_backward {
 
