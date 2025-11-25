@@ -282,6 +282,76 @@ def test_log_probs_calculation(shape, mesh_device):
     "shape",
     [
         # [1, 1, 256, 256],  # llama on TG and T3K
+        [1, 1, 32, 8 * 18992],  # llama on N300
+        # [1, 1, 32, 128256],  # llama on T3K with 8 chips
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_log_probs_calculation2(shape, mesh_device):
+    seed = 1234
+    torch.manual_seed(seed)
+
+    log_probs_calculator = LogProbsCalculator(shape[-1], mesh_device)
+
+    torch_tensor = torch.arange(0, shape[-1]).repeat(1, 1, 32, 1)
+    # shuffle the tensor in last 2 dimensions
+    for i in range(shape[-2]):
+        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
+
+    # torch_tensor = torch_tensor[:, :, :, torch.randperm(shape[-1])]
+
+    logits_tensor = ttnn.from_torch(
+        torch_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    log_probs_calculator.compute_global_stats(logits_tensor)
+
+    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    argmax_tensor = argmax_tensor.reshape(
+        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    )
+
+    ttnn_indices_tensor = ttnn.from_torch(
+        argmax_tensor,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # prepare correct logits
+    correct_logits_tensor = log_probs_calculator.prepare_correct_logits(logits_tensor, ttnn_indices_tensor)
+
+    tt_log_probs = log_probs_calculator.calculate_log_probs(correct_logits_tensor)
+
+    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    # slice from (1,1,32,256) -> (1,1,1,32)
+    log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
+    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
+
+    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
+
+    # comp pcc
+    assert comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # [1, 1, 256, 256],  # llama on TG and T3K
         [1, 1, 32, 256],  # llama on N300
     ],
 )
