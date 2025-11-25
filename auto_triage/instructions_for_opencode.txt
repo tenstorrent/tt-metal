@@ -94,7 +94,7 @@ Actions:
 1. Run `./download_data_between_commits.sh <good> <bad>` to gather metadata.
 2. Use Copilot summaries, changed files, and diffs to pick the most likely culprit. Record alternatives if the evidence is close.
 3. Prepare outputs under `./output/`:
-   - `chosen_commit.json`
+   - `chosen_commit.json` (must include: `commit` SHA, `commit_url`, `authors` (array of `{login,name,is_org_member}`), `approvers` (array of `{login,name,is_org_member}`), and a short `summary`).
    - `alternatives.json`
    - `explanation.md` covering:
      - Why the failure is deterministic.
@@ -102,7 +102,7 @@ Actions:
      - Exact code changes (file path + before/after hunk) from the suspected commit that plausibly trigger the observed error, with a clear explanation tying the change to the failure signature. At minimum: cite the old code (pre-commit), the new code (post-commit), and describe how the behavior change produces the observed test failure.
      - Detailed fix-forward suggestions (not just “revert”).
      - A “Who to contact” section listing names + GitHub handles + profile URLs, prioritizing the culprit commit author and relevant file owners (per `git log`, `git blame`, `.github/CODEOWNERS`).
-     - Direct links to the last successful job, the first failing job, each commit in the window, and the suspected culprit commit.
+     - Direct links to the last successful job, the first failing job, each commit in the window, and the suspected culprit commit (include the clickable commit URL in both `chosen_commit.json` and the report body).
 
 Case 2 – Deterministic Failure But Commit Unknown
 -------------------------------------------------
@@ -145,6 +145,7 @@ Contact Guidance (All Cases)
   1. Identified culprit commit author(s) (Case 1).
   2. Owners of files or tests implicated in the failure (from `git log`, `git blame`, `.github/CODEOWNERS`).
   3. Infra/test maintainers if Case 3 points outside tt-metal.
+- If a commit author is *not* a member of the `tenstorrent` organization (`gh api orgs/tenstorrent/members/<login>` returns non-204), treat them as an external contributor: mention them for attribution, but prioritize approved reviewers inside the org for contact/escalation.
 - Provide both the best-known real name (if visible) and the GitHub handle, plus a hyperlink `https://github.com/<handle>`.
 - Include this section in `explanation.md` for every case.
 
