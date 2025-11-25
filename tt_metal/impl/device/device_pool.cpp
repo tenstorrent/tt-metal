@@ -642,9 +642,9 @@ uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
     if (rtoptions.get_simulator_enabled()) {
         return 15000;  // Keep simulator timeout unchanged
     }
-    
+
     auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
-    
+
     // Return user override if set, otherwise use fabric default
     return timeout.value_or(10000);
 }
