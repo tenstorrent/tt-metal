@@ -89,6 +89,9 @@ class Generator:
 
         for model_id in range(self.data_parallel):
             for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
+                if not self.model_args[0].can_enable_trace(supported_length):
+                    continue
+
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
