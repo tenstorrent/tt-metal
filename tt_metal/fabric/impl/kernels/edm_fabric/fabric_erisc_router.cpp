@@ -1550,12 +1550,19 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             // currently only support processing one packet at a time, so we only decrement by 1
             invalidate_l1_cache();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            static_assert (!skip_src_ch_id_update, "skip_src_ch_id_update must be false when ENABLE_FIRST_LEVEL_ACK is true");
-            auto receiver_buffer_index = ack_counter.get_buffer_index();
-            tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-            uint8_t src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+
+            uint8_t src_ch_id;
+            if constexpr (skip_src_ch_id_update) {
+                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+                // sender channel so we don't dynamically fetch it off the packet header
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+            } else {
+                auto receiver_buffer_index = ack_counter.get_buffer_index();
+                tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+                    local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+            }
 
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
