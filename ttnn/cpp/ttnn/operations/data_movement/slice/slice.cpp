@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/slice_op.hpp"
+#include "device/slice_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/creation.hpp"

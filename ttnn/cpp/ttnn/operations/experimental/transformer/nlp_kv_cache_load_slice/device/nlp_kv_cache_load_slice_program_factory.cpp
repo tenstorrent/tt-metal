@@ -7,7 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

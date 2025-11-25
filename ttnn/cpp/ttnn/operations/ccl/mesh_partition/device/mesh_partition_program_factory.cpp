@@ -14,7 +14,7 @@
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
@@ -82,7 +82,6 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         ends,
         strides);
 
-    // Use the new prim::slice operation
     using SliceOp = ttnn::operations::data_movement::SliceDeviceOperation;
 
     auto [slice_attrs, slice_tensor_args] = SliceOp::invoke(
