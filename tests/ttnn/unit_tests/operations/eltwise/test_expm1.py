@@ -12,7 +12,8 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
 def flush_subnormal_values(tensor):
     # f32 and bf16 numbers are subnormals if exponent == 0
     # i.e. if  their value < 2**(-126)
-    mask = torch.abs(tensor) < 2 ** (-126)
+    SUBNORMAL_THRESHOLD = 2.0 ** (-126)
+    mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
 
