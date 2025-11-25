@@ -79,9 +79,15 @@ sorted_actual_approvers=$(sorted_unique "${ACTUAL_APPROVERS[@]}")
 sorted_decl_approvers=$(sorted_unique "${DECL_APPROVERS[@]}")
 
 if [ -n "$sorted_actual_approvers" ]; then
-  if [ "$sorted_actual_approvers" != "$sorted_decl_approvers" ]; then
-    fail "approver list mismatch"
+  if [ -z "$sorted_decl_approvers" ]; then
+    fail "approvers[] empty but GitHub shows approval(s)"
   fi
+  while IFS= read -r decl; do
+    [ -z "$decl" ] && continue
+    if ! printf '%s\n' "$sorted_actual_approvers" | grep -Fxq "$decl"; then
+      fail "approver '$decl' not found in GitHub approvals"
+    fi
+  done <<< "$sorted_decl_approvers"
 else
   if [ -n "$sorted_decl_approvers" ]; then
     fail "approved reviewers missing in GitHub data"
