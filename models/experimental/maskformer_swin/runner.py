@@ -241,7 +241,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     try:
         if args.patch_embed_parity or args.stage1_parity or args.stage2_parity or args.decoder_parity:
             require_ttnn("run patch embedding parity")
-            device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
+            device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
 
         backbone = MaskFormerSwinBackbone.from_huggingface(
             tt_state_dict,
@@ -668,7 +668,7 @@ def _run_fallback_inference(
             and isinstance(args.device, str)
             and args.device.lower().startswith(("wormhole", "blackhole"))
         ):
-            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
     except Exception:
         tt_device = None
     pipeline = MaskFormerFallbackPipeline.from_reference(ref_weights, state_dict, device=tt_device)
@@ -741,7 +741,7 @@ def _run_tt_inference(
     tt_device = None
     try:
         if ttnn is not None:
-            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
             os.environ["MASKFORMER_TT_MASK_PROJ"] = "1"
             os.environ["MASKFORMER_TT_DECODER"] = "1"
     except Exception:
@@ -942,7 +942,7 @@ def _run_coco_eval(args: argparse.Namespace, ref_weights: ReferenceWeights, stat
     tt_device = None
     try:
         if args.tt_run and ttnn is not None:
-            tt_device = ttnn.open_device(device_id=0, l1_small_size=2 * 1024 * 1024)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
             os.environ["MASKFORMER_TT_DECODER"] = "1"
             os.environ.setdefault("MASKFORMER_TT_MASK_PROJ", "1")
     except Exception:
@@ -1019,7 +1019,7 @@ def _run_decoder_parity(
     tt_device = None
     try:
         if ttnn is not None:
-            tt_device = ttnn.open_device(device_id=0)
+            tt_device = ttnn.open_device(device_id=0, l1_small_size=64 * 1024)
     except Exception:
         tt_device = None
 
