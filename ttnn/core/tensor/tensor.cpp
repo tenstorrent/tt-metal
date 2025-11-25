@@ -193,7 +193,16 @@ std::string Tensor::write_to_string() const { return get_materialized_tensor().w
 
 void Tensor::print() const { get_materialized_tensor().print(); }
 
-void Tensor::deallocate(bool force) { get_materialized_tensor().deallocate(force); }
+void Tensor::deallocate(bool force) {
+    auto can_deallocate = []<typename T>(const std::shared_ptr<T>& shared_resource, bool force) {
+        return shared_resource.use_count() == 1 || (shared_resource.use_count() > 1 && force);
+    };
+
+    if (can_deallocate(lazy_tensor_, force)) {
+        get_materialized_tensor().deallocate(force);
+    }
+    // TODO: add lazy deallocate
+}
 
 Tensor Tensor::extract_shard(const tt::tt_metal::CoreCoord& core) const {
     return Tensor(get_materialized_tensor().extract_shard(core));
@@ -642,13 +651,13 @@ Tensor set_tensor_id(const Tensor& tensor) {
 };
 
 namespace ops {
-    Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
-        return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
-    }
-    Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
-        return tensor_ops::tensor_view(input_tensor, new_shape);
-    }
-    Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
-    
+Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
+}
+Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape);
+}
+Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
+
 }  // namespace ops
 }  // namespace tt::tt_metal
