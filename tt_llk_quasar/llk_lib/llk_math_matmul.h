@@ -10,7 +10,7 @@ using namespace ckernel::math;
 
 /**
  * @brief Initializes addrmod for matrix multiply operation
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when math is Float32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, std::uint8_t CT_DIM, std::uint8_t RT_DIM>
 inline void _llk_math_matmul_addrmod_()
@@ -105,7 +105,7 @@ inline void _llk_math_matmul_di_addrmod_()
  * Input 1 dim = [1, ct_dim]
  * Output is a matrix block of dimension [rt_dim, ct_dim]
  * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when math is Float32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @tparam CT_DIM: number of tiles in the column dimension for a matrix multiply
  * @tparam RT_DIM: number of tiles in the row dimension for a matrix multiply
  */
@@ -117,7 +117,7 @@ inline void _llk_math_matmul_mop_config_()
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    constexpr int FIDELITY_PHASES = static_cast<uint32_t>(MATH_FIDELITY_TYPE) + 1;
+    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
 
     constexpr bool reuse_a = CT_DIM >= RT_DIM;
 
@@ -158,7 +158,7 @@ inline void _llk_math_matmul_mop_config_()
 
 /**
  * @brief Initializes mop config for matrix multiply operation with direct indexing matmul
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when math is Float32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @tparam CT_DIM: number of tiles in the column dimension for a matrix multiply
  * @tparam RT_DIM: number of tiles in the row dimension for a matrix multiply
  * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
@@ -171,7 +171,7 @@ inline void _llk_math_matmul_di_mop_config_()
     // Unpacker will always load faces in f0,f1,f2,f3 order
     // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
-    constexpr int FIDELITY_PHASES = static_cast<uint32_t>(MATH_FIDELITY_TYPE) + 1;
+    constexpr int FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
     constexpr bool reuse_a        = CT_DIM >= RT_DIM;
 
     constexpr std::uint32_t replay_buf_len = EN_X2 ? 8 - 1 : 16 - 1; // -1 since the last instruction for the Tile * Tile operation will come out of the MOP
@@ -250,7 +250,7 @@ inline void _llk_math_matmul_di_mop_config_()
  * Input 1 dim = [1, ct_dim]
  * Output is a matrix block of dimension [rt_dim, ct_dim]
  * ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when math is Float32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when math is Float32 format
  * @tparam CT_DIM: number of tiles in the column dimension for a matrix multiply
  * @tparam RT_DIM: number of tiles in the row dimension for a matrix multiply
  * @tparam EN_DI: Enable direct indexing matrix multiplication

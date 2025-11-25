@@ -16,7 +16,7 @@ using namespace ckernel::math;
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = [ELWADD, ELWSUB, ELWMUL]
  * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
  * BROADCAST only operates on SRCB register
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -39,7 +39,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TileShape& tile
     constexpr static uint eltwise_binary_op_clr_srcAB_valid =
         eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, EN_DST_ACC_EN, SRCB_BROADCAST_TYPE, ADDR_MOD_1>();
 
-    constexpr std::uint32_t replay_buf_len = static_cast<std::uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<std::uint32_t>(MATH_FIDELITY_TYPE) - 1;
 
     if constexpr (EN_DST_ACC_EN)
     {
@@ -141,7 +141,7 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * Result face 3 = face 3 SrcA [+,-,*] datums[0, 16, 32, 48, ...240] of face 2 SrcB register
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = [ELWADD, ELWSUB, ELWMUL]
  * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>

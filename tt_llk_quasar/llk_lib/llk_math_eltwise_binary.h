@@ -52,7 +52,7 @@ inline uint eltwise_di_binary_func(
 /**
  * @brief Sets up mop config for elementwise binary operations
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -60,7 +60,7 @@ inline void _llk_math_eltwise_binary_mop_config_(const TileShape& tile_shape)
 {
     const uint32_t total_num_rows_per_tile = tile_shape.num_faces * tile_shape.face_r_dim;
     const uint32_t MOP_OUTER_LOOP          = (total_num_rows_per_tile >> math_rows_log2(ELTWISE_MATH_ROWS));
-    const uint32_t MOP_INNER_LOOP          = static_cast<uint32_t>(MATH_FIDELITY_TYPE) + 1;
+    constexpr uint32_t MOP_INNER_LOOP      = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : static_cast<uint32_t>(MATH_FIDELITY_TYPE);
     constexpr bool math_fidelity_enable    = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     static_assert(!(math_fidelity_enable && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
     const uint32_t EN_DST_ACC_EN = math_fidelity_enable;
@@ -154,7 +154,7 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const TileShape& tile_shape)
 
 /**
  * @brief Sets up addrmods for elementwise binary operations
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_addrmod_()
@@ -201,7 +201,7 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY: 0 = LoFi, 1 = Hifi2, 2 = HiFi3, 3 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
  * @param tile_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI = false>
