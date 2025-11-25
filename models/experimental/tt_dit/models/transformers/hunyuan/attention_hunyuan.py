@@ -182,7 +182,7 @@ class HunyuanAttention:
 
         self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
 
-    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat):
+    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat, mode="gen_text", first_step=False, cur_pos=None):
         """
         x_1BSD: fractured N on SP, replicated D on TP
         rope_cos: fractured on SP, TP
@@ -217,3 +217,32 @@ class HunyuanAttention:
         # k_1KSH = ttnn.experimental.rotary_embedding_llama(
         #     k_1KSH, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
         # )
+
+        # TODO: Add KV cache logic for gen_text mode and gen_image mode
+
+        # Attention logic for text and image sections
+        if mode == "gen_text":
+            if not cur_pos:
+                # Prefill mode for text gen
+                attn_output_1QSH = ttnn.transformer.scaled_dot_product_attention(
+                    q_1QSH,
+                    k_1KSH,
+                    v_1VSH,
+                    is_causal=True,
+                    scale=1.0,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+            else:
+                # Decoding mode for text gen
+                attn_output_1QSH = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_1QSH,
+                    k_1KSH,
+                    v_1VSH,
+                    cur_pos_tensor=current_pos,
+                    scale=1.0,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.sdpa_program_config,
+                )
+        elif mode == "gen_image":
+            pass

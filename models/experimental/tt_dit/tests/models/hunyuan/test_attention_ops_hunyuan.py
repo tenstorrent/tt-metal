@@ -71,8 +71,8 @@ def test_hunyuan_attention(
 
     state_dict = {
         "to_q.weight": torch.ones(num_attention_heads * head_dim, hidden_dim),
-        "to_k.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
-        "to_v.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_k.weight": 0.5 * torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_v.weight": 0.25 * torch.ones(num_key_value_heads * head_dim, hidden_dim),
         "to_out.0.weight": torch.ones(hidden_dim, (num_attention_heads + 2 * num_key_value_heads) * head_dim),
         "norm_q.weight": torch.ones(head_dim),
         "norm_k.weight": torch.ones(head_dim),
