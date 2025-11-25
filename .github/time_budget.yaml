@@ -17,6 +17,10 @@ ops:
     skus:
       wh_llmbox:
         time_budget: 90
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 50
 fabric:
   integration:
     skus:
@@ -32,3 +36,7 @@ models:
     skus:
       wh_llmbox:
         time_budget: 10
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 35
