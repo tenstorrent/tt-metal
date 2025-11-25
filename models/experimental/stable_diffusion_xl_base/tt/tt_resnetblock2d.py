@@ -146,14 +146,14 @@ class TtResnetBlock2D(LightweightModule):
         )
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
-                device, conv_weights_3, conv_bias_3, model_config.conv_w_dtype
+                device, conv_weights_3, conv_bias_3, model_config.ff_weights_dtype
             )
             self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
         self.tt_time_emb_weights, self.tt_time_emb_bias = prepare_linear_params(
-            device, time_emb_weights, time_emb_bias, model_config.conv_w_dtype
+            device, time_emb_weights, time_emb_bias, model_config.ff_weights_dtype
         )
 
         mm_path = f"{module_path}.linear"
@@ -179,7 +179,6 @@ class TtResnetBlock2D(LightweightModule):
                 num_out_blocks=self.norm_blocks_1,
             )
         else:
-            hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
             grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
             shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
             shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
@@ -187,7 +186,11 @@ class TtResnetBlock2D(LightweightModule):
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
+            if not hidden_states.is_sharded():
+                if C == 320 or C == 960:
+                    hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+                hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
             hidden_states = ttnn.group_norm(
                 hidden_states,
@@ -202,9 +205,6 @@ class TtResnetBlock2D(LightweightModule):
             )
 
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
-        # TBD: reshard
-        if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
-            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         if self.split_conv:
             if self.input_negative_mask_1 is not None:
@@ -260,10 +260,6 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
 
-        # ToDo: move to implace version or even better fuse iwth conv2d.
-        # Currently both optinos have pcc issues.
-        temb = ttnn.silu(temb)
-
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
@@ -274,7 +270,7 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         # Note: moving this add to NG has perf impact, to be investigated
-        hidden_states = ttnn.add(hidden_states, temb, use_legacy=True)
+        hidden_states = ttnn.add_(hidden_states, temb, use_legacy=True)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
@@ -345,15 +341,13 @@ class TtResnetBlock2D(LightweightModule):
             )
             if not self.is_first_resnet_block:
                 ttnn.deallocate(input_tensor_pre_conv)
-            if input_tensor.memory_config() != hidden_states.memory_config():
-                input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
-        else:
-            if input_tensor.is_sharded():
-                input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+        if input_tensor.memory_config() != hidden_states.memory_config():
+            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
 
-            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         # Note: Moving this to NG results in error caused by shard shape, to be investigated
         ttnn.add_(hidden_states, input_tensor, use_legacy=True)
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+        if "up_blocks.2.resnets.2" not in self.module_path:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]
