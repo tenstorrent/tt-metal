@@ -45,7 +45,7 @@ inline void _llk_math_reduce_col_mop_config_(const TileShape& tile_shape)
     // 16)
     const uint32_t MOP_OUTER_LOOP      = 1;
     const uint32_t MOP_INNER_LOOP      = (tile_shape.num_faces >= 2) ? (tile_shape.num_faces >> 1) : tile_shape.num_faces;
-    constexpr uint NUM_FIDELITY_PHASES = static_cast<uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr uint NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<uint32_t>(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
     const uint replay_buf_len          = 2 + (2 * NUM_FIDELITY_PHASES);
 
@@ -100,7 +100,7 @@ template <PoolType POOL_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
 {
     constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr uint NUM_FIDELITY_PHASES = static_cast<uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr uint NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<uint32_t>(MATH_FIDELITY_TYPE) - 1;
     constexpr uint32_t MOP_OUTER_LOOP  = 1;
     constexpr uint32_t MOP_INNER_LOOP  = 1;
     // Replay buf max len is 32, NUM_FIDELITY_PHASES will be larger than 3, hypothetical limit of 19 + 12 = 31
@@ -216,7 +216,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
 {
     constexpr uint32_t MOP_OUTER_LOOP  = 1;
     constexpr uint32_t MOP_INNER_LOOP  = 1;
-    constexpr uint NUM_FIDELITY_PHASES = static_cast<uint32_t>(MATH_FIDELITY_TYPE);
+    constexpr uint NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : static_cast<uint32_t>(MATH_FIDELITY_TYPE) - 1;
     const uint replay_buf_len          = 6 + tile_shape.num_faces - 1 + ((tile_shape.num_faces - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES);
     constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
 
