@@ -57,7 +57,7 @@ public:
     void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
-    std::pair<std::vector<size_t>, size_t> get_fabric_router_addresses_to_clear() const;
+    std::vector<size_t> get_fabric_router_addresses_to_clear() const;
 
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
 
