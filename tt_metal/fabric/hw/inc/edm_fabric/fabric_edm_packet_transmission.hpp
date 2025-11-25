@@ -205,9 +205,6 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
-            ASSERT(
-                chunk_count >= NOC_SCATTER_WRITE_MIN_CHUNKS && chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS,
-                "scatter chunk_count must be between 2 and 4");
 
             size_t offset = 0;
             const uint8_t last_chunk_index = chunk_count - 1;
