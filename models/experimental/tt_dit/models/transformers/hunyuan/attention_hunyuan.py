@@ -184,7 +184,7 @@ class HunyuanAttention:
 
         self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
 
-    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat, mode="gen_text", first_step=False, cur_pos=None):
+    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat, mode="gen_image", first_step=True, cur_pos=None):
         """
         x_1BSD: fractured N on SP, replicated D on TP
         rope_cos: fractured on SP, TP
@@ -274,7 +274,7 @@ class HunyuanAttention:
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     program_config=self.sdpa_program_config,
                 )
-                attn_output_1QSH = torch.cat([text_attn_output, image_attn_output], dim=2)
+                attn_output_1QSH = ttnn.concat([text_attn_output, image_attn_output], dim=2)
             else:
                 timestep_q = q_1QSH[:, :, 0:1, :]
                 timestep_k = k_1KSH[:, :, :causal_len, :]
@@ -298,7 +298,7 @@ class HunyuanAttention:
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     program_config=self.sdpa_program_config,
                 )
-                attn_output_1QSH = torch.cat([timestep_attn_output, image_attn_output], dim=2)
+                attn_output_1QSH = ttnn.concat([timestep_attn_output, image_attn_output], dim=2)
 
         attn_output_1QSH = ttnn.reshape(attn_output_1QSH, [1, self.n_local_heads, -1, self.head_dim])
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
