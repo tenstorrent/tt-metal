@@ -196,7 +196,11 @@ class MaskFormerPixelDecoder:
                 return tt_to_torch_tensor(tensor)
             except Exception:
                 pass
+        # Move tensor from device to host before converting to torch
         if hasattr(tensor, "to_torch"):
+            # Always call from_device for TT tensors - handles device storage properly
+            if ttnn is not None:
+                tensor = ttnn.from_device(tensor)
             return tensor.to_torch()
         if hasattr(tensor, "cpu"):
             return torch.tensor(tensor.cpu().numpy())
