@@ -9,7 +9,7 @@
 
 #pragma once
 
-namespace norm::kernel_util::generic::policies {
+namespace norm::kernel_util::compute::policies {
 
 /**
  * @brief Control whether to cb_wait_front at the end
@@ -23,4 +23,4 @@ enum class WaitAtEndPolicy { WAIT, NO_WAIT };
  */
 enum class PopInputPolicy { POP, NO_POP };
 
-}  // namespace norm::kernel_util::generic::policies
+}  // namespace norm::kernel_util::compute::policies
