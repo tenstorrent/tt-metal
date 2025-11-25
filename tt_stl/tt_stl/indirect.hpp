@@ -94,7 +94,7 @@ public:
      */
     constexpr indirect(indirect&& other) noexcept {
         std::swap(this->p, other.p);
-        other.p.release();
+        other.p.reset();
     }
 
     /**
@@ -153,7 +153,7 @@ public:
         }
 
         if (other.valueless_after_move()) {
-            this->p.release();
+            this->p.reset();
         } else if (this->valueless_after_move()) {
             this->p = std::make_unique<T>(*other);
         } else {
