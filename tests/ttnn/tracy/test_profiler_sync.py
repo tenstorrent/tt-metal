@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_with_watcher
+from models.common.utility_functions import skip_with_watcher, is_watcher_enabled
 
 
 def test_with_ops(device):
