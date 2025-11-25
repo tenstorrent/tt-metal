@@ -251,51 +251,34 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
-    auto get_ln_kernel_type = []() {
-        const char* envValue = std::getenv("TT_METAL_LN_KERNEL_TYPE");
-        if (envValue != nullptr && *envValue != '\0') {  // Check if not null and not empty
-            return std::string(envValue);
-        } else {
-            return std::string("DEFAULT");
-        }
-    };
+
     bool large_tensor_needed = false;
-    const auto ln_kernel_type = get_ln_kernel_type();
-    if (std::string(ln_kernel_type) == "SMALL") {
-        large_tensor_needed = false;
-    } else if (std::string(ln_kernel_type) == "LARGE") {
-        large_tensor_needed = true;
-    } else if (std::string(ln_kernel_type) == "DEFAULT") {
-        bool cb_fits_in_L1 = CB_can_fit_in_L1(
-            in0_t * in_single_tile_size,
-            in1_t * inb_single_tile_size,
-            out0_t * out_single_tile_size,
-            im0_t * single_tile_size,
-            im3_t * single_tile_size,
-            in5_t * gamma_single_tile_size,
-            in6_t * beta_single_tile_size,
-            im6_t * single_tile_size,
-            im5_t * single_tile_size,
-            im4_t * single_tile_size,
-            im1_t * single_tile_size,
-            in2_t * bfloat16_tile_size,
-            in3_t * bfloat16_tile_size,
-            im2_t * single_tile_size,
-            reciprocal_CB_size_bytes,
-            a.device()->l1_size_per_core());
-        if (!rms_norm and !use_row_major_kernel) {
-            if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
-                !cb_fits_in_L1) {
-                // In the case that the required space is larger than what can be handeled by the single pass
-                large_tensor_needed = true;
-                WtB = 60;
-            } else if (!cb_fits_in_L1) {
-                large_tensor_needed = true;
-                WtB = 120;
-            }
+    bool cb_fits_in_L1 = CB_can_fit_in_L1(
+        in0_t * in_single_tile_size,
+        in1_t * inb_single_tile_size,
+        out0_t * out_single_tile_size,
+        im0_t * single_tile_size,
+        im3_t * single_tile_size,
+        in5_t * gamma_single_tile_size,
+        in6_t * beta_single_tile_size,
+        im6_t * single_tile_size,
+        im5_t * single_tile_size,
+        im4_t * single_tile_size,
+        im1_t * single_tile_size,
+        in2_t * bfloat16_tile_size,
+        in3_t * bfloat16_tile_size,
+        im2_t * single_tile_size,
+        reciprocal_CB_size_bytes,
+        a.device()->l1_size_per_core());
+    if (!rms_norm and !use_row_major_kernel) {
+        if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
+            // In the case that the required space is larger than what can be handeled by the single pass
+            large_tensor_needed = true;
+            WtB = 60;
+        } else if (!cb_fits_in_L1) {
+            large_tensor_needed = true;
+            WtB = 120;
         }
-    } else {
-        TT_THROW("Invalid kernel type");
     }
 
     if (large_tensor_needed) {
@@ -428,15 +411,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_args.push_back(winv.u);
     }
 
+    // The large-tensor non-Welford reduce kernel needs
+    // an intermediate Float32 CB that can be unpacked
+    // directly to dest (if doing a Float32 reduction)
+    constexpr auto large_tensor_im_fp32_cb = tt::CBIndex::c_26;
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (float32_reduction) {
-        // unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[tt::CBIndex::c_29] = UnpackToDestMode::UnpackToDestFp32;
-        // unpack_to_dest_mode[tt::CBIndex::c_16] = UnpackToDestMode::UnpackToDestFp32;
-        // unpack_to_dest_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;
-        // unpack_to_dest_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;
-        // unpack_to_dest_mode[tt::CBIndex::c_20] = UnpackToDestMode::UnpackToDestFp32;
-        // unpack_to_dest_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[large_tensor_im_fp32_cb] = UnpackToDestMode::UnpackToDestFp32;
     }
     auto compute_kernels_id = CreateKernel(
         program,
@@ -502,10 +483,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed4_config);
-    CircularBufferConfig c_fp32_config =
-        CircularBufferConfig(single_tile_size, {{tt::CBIndex::c_29, tt::DataFormat::Float32}})
-            .set_page_size(tt::CBIndex::c_29, single_tile_size);
-    CreateCircularBuffer(program, all_cores, c_fp32_config);
+    if (large_tensor_needed && !use_welford) {
+        CircularBufferConfig cb_fp32_config =
+            CircularBufferConfig(single_tile_size, {{large_tensor_im_fp32_cb, tt::DataFormat::Float32}})
+                .set_page_size(large_tensor_im_fp32_cb, single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_fp32_config);
+    }
     if (gamma.has_value() || beta.has_value()) {
         CircularBufferConfig c_intermed5_config =
             CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
