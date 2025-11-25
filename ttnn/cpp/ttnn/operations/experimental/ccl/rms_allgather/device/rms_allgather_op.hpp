@@ -15,45 +15,10 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/frmsnorm_multi_core_sharded_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/frmsnorm_post_multi_core_sharded_program_factory.hpp"
 
 namespace ttnn::operations::fused::normalization {
-
-tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
-    const Tensor& a,
-    const std::optional<const Tensor>& b,      // residual
-    const std::optional<const Tensor>& gamma,  // weight
-    const std::optional<const Tensor>& stats,  // stats
-    Tensor& output,
-    float eps,
-    CoreCoord compute_grid_size,
-    uint32_t subblock_wt,
-    uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config,
-    // New Parameters
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ::ttnn::ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool use_noc1_only);
-
-tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
-    const Tensor& a,
-    const std::optional<const Tensor>& gamma,  // weight
-    const std::optional<const Tensor>& stats,  // stats
-    Tensor& output,
-    float eps,
-    CoreCoord compute_grid_size,
-    uint32_t subblock_wt,
-    uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config,
-    const GlobalSemaphore& semaphore,
-    uint32_t ring_size,
-    uint32_t num_links);
 
 struct RMSAllGather {
     float eps;
