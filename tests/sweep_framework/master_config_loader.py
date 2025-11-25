@@ -176,65 +176,19 @@ class MasterConfigLoader:
     def _is_valid_sharding_config(self, memory_config: Dict, tensor_shape: list = None) -> bool:
         """
         Check if a sharding configuration is valid for the current hardware.
-        Validates that num_shards <= num_compute_banks and shard shape is tile-aligned.
+        Since traced configs come from real model runs that worked, we trust them as-is.
+        No validation is performed - all traced configs are considered valid.
 
         Args:
             memory_config: Memory config dictionary
             tensor_shape: Tensor shape (optional, for validation)
 
         Returns:
-            True if sharding config is valid, False otherwise
+            True - all traced configs are considered valid
         """
-        try:
-            shard_spec = memory_config.get("nd_shard_spec") or memory_config.get("shard_spec")
-            if not shard_spec or shard_spec == "std::nullopt":
-                return True  # Non-sharded configs are always valid
-
-            # Check if shard shape is tile-aligned (must be divisible by 32x32)
-            shape_data = shard_spec.get("shape", [])
-            if shape_data and isinstance(shape_data, list) and len(shape_data) >= 2:
-                height, width = shape_data[0], shape_data[1]
-                TILE_HEIGHT, TILE_WIDTH = 32, 32
-                if height % TILE_HEIGHT != 0 or width % TILE_WIDTH != 0:
-                    return False  # Shard shape not tile-aligned
-
-            grid_data = shard_spec.get("grid", [])
-            if not grid_data:
-                return True
-
-            # Calculate number of cores from grid
-            num_cores = 0
-            if isinstance(grid_data, list):
-                if isinstance(grid_data[0], list):
-                    # Multiple core ranges
-                    for range_pair in grid_data:
-                        if len(range_pair) >= 2:
-                            start = range_pair[0]
-                            end = range_pair[1]
-                            if isinstance(start, dict) and isinstance(end, dict):
-                                start_x, start_y = start.get("x", 0), start.get("y", 0)
-                                end_x, end_y = end.get("x", 0), end.get("y", 0)
-                                num_cores += (end_x - start_x + 1) * (end_y - start_y + 1)
-                else:
-                    # Single core range
-                    if len(grid_data) >= 2:
-                        start = grid_data[0]
-                        end = grid_data[1]
-                        if isinstance(start, dict) and isinstance(end, dict):
-                            start_x, start_y = start.get("x", 0), start.get("y", 0)
-                            end_x, end_y = end.get("x", 0), end.get("y", 0)
-                            num_cores = (end_x - start_x + 1) * (end_y - start_y + 1)
-
-            # For wormhole_b0, we have 56 compute banks
-            # Filter out configs that require more cores than available
-            MAX_COMPUTE_BANKS = 56
-            if num_cores > MAX_COMPUTE_BANKS:
-                return False
-
-            return True
-        except Exception:
-            # If we can't validate, assume it's valid (let it fail at runtime if needed)
-            return True
+        # Trust traced configs - they come from real model runs that worked
+        # No validation needed - use configs directly as requested by user
+        return True
 
     def _is_valid_ttnn_memory_config(self, mem_config, operation_name: str = None) -> bool:
         """
@@ -263,17 +217,9 @@ class MasterConfigLoader:
                     if height % 32 != 0 or width % 32 != 0:
                         return False
 
-                # Check number of cores
-                if core_range_set:
-                    num_cores = 0
-                    for core_range in core_range_set.core_ranges:
-                        start = core_range.start
-                        end = core_range.end
-                        num_cores += (end.x - start.x + 1) * (end.y - start.y + 1)
-
-                    MAX_COMPUTE_BANKS = 56
-                    if num_cores > MAX_COMPUTE_BANKS:
-                        return False
+                # Trust traced configs - no core count validation needed
+                # Traced configs come from real model runs that worked
+                pass
 
             return True
         except Exception:
@@ -992,12 +938,9 @@ class MasterConfigLoader:
                         # Traced configs come from real model runs, so use them as-is
                         pass
 
-                        # Check number of cores (report but don't filter)
-                        if hasattr(mem_config.shard_spec, "num_cores"):
-                            num_cores = mem_config.shard_spec.num_cores()
-                            MAX_COMPUTE_BANKS = 56
-                            if num_cores > MAX_COMPUTE_BANKS:
-                                invalid_reasons.append(f"too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
+                        # Trust traced configs - no core count validation needed
+                        # Traced configs come from real model runs that worked
+                        pass
 
                     # Check output memory config too
                     if output_mem_config and hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
@@ -1005,12 +948,9 @@ class MasterConfigLoader:
                         # Traced configs come from real model runs, so use them as-is
                         pass
 
-                        # Check number of cores for output too
-                        if hasattr(output_mem_config.shard_spec, "num_cores"):
-                            num_cores = output_mem_config.shard_spec.num_cores()
-                            MAX_COMPUTE_BANKS = 56
-                            if num_cores > MAX_COMPUTE_BANKS:
-                                invalid_reasons.append(f"output_too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
+                        # Trust traced configs - no core count validation needed
+                        # Traced configs come from real model runs that worked
+                        pass
 
                     # Check operation-specific requirements (report but don't convert)
                     # Note: tilize and upsample are hardcoded above, so these checks are just for reporting
