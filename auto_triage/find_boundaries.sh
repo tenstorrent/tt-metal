@@ -129,28 +129,48 @@ while true; do
         PROCESSED=$((PROCESSED + 1))
         echo -n "[${PROCESSED}] Checking run ${RUN_ID} (${RUN_COMPLETED_AT})... "
 
-        # Fetch jobs page by page, grabbing every completed attempt of the subjob
-        PAGE_J=1
-        FOUND_JOB=false
+        # Collect completed job attempts for this run across all workflow run attempts
+        RUN_ATTEMPT=$(echo "$RUN_DATA" | jq -r '.run_attempt // 1')
+        MATCHING_JOBS='[]'
+        ATTEMPT="$RUN_ATTEMPT"
+        while [ "$ATTEMPT" -ge 1 ]; do
+            PAGE_J=1
+            while true; do
+                if [ "$ATTEMPT" -eq "$RUN_ATTEMPT" ]; then
+                    ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${PER_PAGE}&page=${PAGE_J}"
+                else
+                    ENDPOINT="repos/${REPO}/actions/runs/${RUN_ID}/attempts/${ATTEMPT}/jobs?per_page=${PER_PAGE}&page=${PAGE_J}"
+                fi
+                PAGE_JOBS=$(gh api "$ENDPOINT" 2>/dev/null || echo "")
 
-        while [ "$FOUND_JOB" = false ]; do
-            PAGE_JOBS=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${PER_PAGE}&page=${PAGE_J}" 2>/dev/null || echo "")
+                if [ -z "$PAGE_JOBS" ]; then
+                    break
+                fi
+                JOB_ENTRIES=$(echo "$PAGE_JOBS" | jq '.jobs // []')
+                JOB_COUNT=$(echo "$JOB_ENTRIES" | jq 'length' 2>/dev/null || echo "0")
+                if [ "$JOB_COUNT" -eq 0 ]; then
+                    break
+                fi
 
-            if [ -z "$PAGE_JOBS" ]; then
-                break
-            fi
-            JOB_ENTRIES=$(echo "$PAGE_JOBS" | jq '.jobs // []')
-            JOB_COUNT=$(echo "$JOB_ENTRIES" | jq 'length' 2>/dev/null || echo "0")
-            if [ "$JOB_COUNT" -eq 0 ]; then
-                break
-            fi
+                FILTERED=$(echo "$JOB_ENTRIES" | jq --argjson attempt "$ATTEMPT" -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\") | (.run_attempt = (.run_attempt // $attempt))]" 2>/dev/null || echo "")
+                if [ "$FILTERED" != "[]" ]; then
+                    MATCHING_JOBS=$(jq -n --argjson acc "$MATCHING_JOBS" --argjson new "$FILTERED" '$acc + $new')
+                fi
 
-            MATCHING_JOBS=$(echo "$JOB_ENTRIES" | jq -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\")] | sort_by((.run_attempt // 0), (.completed_at // .started_at // .run_started_at // .created_at // \"\"))" 2>/dev/null || echo "")
-            MATCH_COUNT=$(echo "$MATCHING_JOBS" | jq 'length' 2>/dev/null || echo "0")
+                if [ "$JOB_COUNT" -lt "$PER_PAGE" ]; then
+                    break
+                fi
 
-            if [ "$MATCH_COUNT" -gt 0 ]; then
-                FOUND_JOB=true
-                while IFS= read -r SUBJOB; do
+                PAGE_J=$((PAGE_J + 1))
+            done
+            ATTEMPT=$((ATTEMPT - 1))
+        done
+
+        MATCH_COUNT=$(echo "$MATCHING_JOBS" | jq 'length' 2>/dev/null || echo "0")
+        if [ "$MATCH_COUNT" -gt 0 ]; then
+            FOUND_JOB=true
+            SORTED_JOBS=$(echo "$MATCHING_JOBS" | jq 'sort_by((.run_attempt // 0), (.completed_at // .started_at // .run_started_at // .created_at // ""))')
+            while IFS= read -r SUBJOB; do
                     JOB_CONCLUSION=$(echo "$SUBJOB" | jq -r '.conclusion // "null"')
                     JOB_STATUS=$(echo "$SUBJOB" | jq -r '.status')
                     JOB_ID=$(echo "$SUBJOB" | jq -r '.id')
@@ -236,16 +256,8 @@ while true; do
                     else
                         echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
                     fi
-                done < <(echo "$MATCHING_JOBS" | jq -c '.[]')
-                break
-            fi
-
-            if [ "$JOB_COUNT" -lt "$PER_PAGE" ]; then
-                break
-            fi
-
-            PAGE_J=$((PAGE_J + 1))
-        done
+            done < <(echo "$SORTED_JOBS" | jq -c '.[]')
+        fi
 
         if [ "$FOUND_JOB" = false ]; then
             echo -e "${YELLOW}Subjob not found${NC}"
