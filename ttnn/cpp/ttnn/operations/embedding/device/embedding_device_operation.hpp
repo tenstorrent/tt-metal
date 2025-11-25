@@ -21,7 +21,11 @@ struct EmbeddingsDeviceOperation {
     using tensor_args_t = embedding::tensor_args_t;
     using spec_return_value_t = embedding::spec_return_value_t;
     using tensor_return_value_t = embedding::tensor_return_value_t;
-    using program_factory_t = std::variant<program::EmbeddingsFusedProgramFactory, program::EmbeddingsRMProgramFactory, program::EmbeddingsTilizedIndicesProgramFactory>;
+    using program_factory_t = std::variant<
+        program::EmbeddingsFusedProgramFactory,
+        program::EmbeddingsRMProgramFactory,
+        program::EmbeddingsTilizedIndicesProgramFactory
+    >;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
