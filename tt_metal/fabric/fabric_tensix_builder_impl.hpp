@@ -361,8 +361,8 @@ private:
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
 
     // Upstream router coordinates for sync
-    std::vector<uint32_t> upstream_routers_noc_x_{};
-    std::vector<uint32_t> upstream_routers_noc_y_{};
+    std::vector<uint32_t> upstream_routers_noc_x_;
+    std::vector<uint32_t> upstream_routers_noc_y_;
 };
 
 /**
