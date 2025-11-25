@@ -337,7 +337,6 @@ void TestWorker::create_kernel(
     const std::vector<uint32_t>& local_args,
     uint32_t local_args_address,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
-    std::cout << "Creating kernel for core " << this->logical_core_.x << ", " << this->logical_core_.y << std::endl;
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
@@ -349,28 +348,20 @@ void TestWorker::create_kernel(
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
-    std::cout << "Setting runtime args for core " << this->logical_core_.x << ", " << this->logical_core_.y
-              << std::endl;
     tt::tt_metal::SetRuntimeArgs(
         this->test_device_ptr_->get_program_handle(), kernel_handle, this->logical_core_, rt_args);
 
     // Set local args to memory buffer
     if (!local_args.empty()) {
-        std::cout << "Setting local args for core " << this->logical_core_.x << ", " << this->logical_core_.y
-                  << std::endl;
         this->test_device_ptr_->set_local_runtime_args_for_core(
             device_coord, this->logical_core_, local_args_address, local_args);
     }
 
-    std::cout << "Getting device info provider" << std::endl;
     const auto device_info_provider_ptr = this->test_device_ptr_->get_device_info_provider();
-    std::cout << "Zeroing out buffers" << std::endl;
     for (const auto& [address, num_bytes] : addresses_and_size_to_clear) {
         if (address == 0 || num_bytes == 0) {
             continue;
         }
-        std::cout << "Zeroing out buffer for core " << this->logical_core_.x << ", " << this->logical_core_.y
-                  << std::endl;
         device_info_provider_ptr->zero_out_buffer_on_cores(device_coord, {this->logical_core_}, address, num_bytes);
     }
 }
@@ -705,7 +696,6 @@ void TestDevice::create_kernels() {
 
     this->create_mux_kernels();
 
-    std::cout << "Creating sync kernel" << std::endl;
     if (global_sync_) {
         this->create_sync_kernel();
     }
@@ -763,6 +753,12 @@ void TestDevice::create_sync_kernel() {
     bool has_mux_connections = sync_connection_manager.is_mux_client(sync_core);
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
+    // If the test is using the NeighborExchange topology, synchronization must use unicast packets
+    const auto topology = tt::tt_fabric::get_fabric_topology();
+    bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
+    if (use_unicast_sync_packets) {
+        log_debug(tt::LogTest, "NeighborExchange topology detected, using unicast packets for synchronization");
+    }
     // Compile-time args
     std::vector<uint32_t> ct_args = {
         is_2D_routing_enabled,
@@ -770,7 +766,8 @@ void TestDevice::create_sync_kernel() {
         static_cast<uint32_t>(senders_.size() + 1),          /* num local sync cores (all senders + sync core) */
         sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
         has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
-        num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
+        num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+        use_unicast_sync_packets                             /* USE_UNICAST_SYNC_PACKETS */
     };
 
     // Runtime args: memory map args, then sync fabric connection args
@@ -788,10 +785,6 @@ void TestDevice::create_sync_kernel() {
     // tt_fabric_test_context.hpp:process_traffic_config So we can just use the first sync config to get the sync val
     TT_FATAL(sync_worker.configs_.size() > 0, "No sync configs found for core {}", sync_core.str());
     const auto& sync_val = sync_worker.configs_.front().first.sync_val;
-    std::cout << "NUMBER OF SYNC CONFIGS: " << sync_worker.configs_.size() << std::endl;
-    for (const auto& [sync_config, _] : sync_worker.configs_) {
-        std::cout << "SYNC VAL: " << sync_config.sync_val << std::endl;
-    }
     local_args.push_back(sync_val);
 
     // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
@@ -852,7 +845,6 @@ void TestDevice::create_sync_kernel() {
     }
 
     // create sync kernel with local args
-    std::cout << "Creating sync kernel here" << std::endl;
     sync_worker.create_kernel(
         coord_,
         ct_args,
@@ -860,7 +852,6 @@ void TestDevice::create_sync_kernel() {
         local_args,
         sender_memory_map_->get_local_args_address(),
         addresses_and_size_to_clear);
-    std::cout << "Created sync kernel here" << std::endl;
     log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
@@ -1252,8 +1243,6 @@ void TestDevice::set_local_runtime_args_for_core(
     CoreCoord logical_core,
     uint32_t local_args_address,
     const std::vector<uint32_t>& args) const {
-    std::cout << "Writing to device_coord: (" << device_coord[0] << ", " << device_coord[1] << ")" << std::endl;
-    std::cout << "Core: (" << logical_core.x << ", " << logical_core.y << ")" << std::endl;
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 

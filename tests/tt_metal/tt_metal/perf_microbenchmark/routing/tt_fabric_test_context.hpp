@@ -226,11 +226,8 @@ public:
             for (const auto& sync_config : config.sync_configs) {
                 // currently initializing our sync configs to be on senders local to the current hos
                 const auto& sync_sender = sync_config.sender_config;
-                std::cout << "PROCESSING SYNC CONFIG FOR DEVICE " << sync_sender.device.chip_id << " WITH SYNC VAL "
-                          << sync_config.sync_val << std::endl;
                 if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
                     CoreCoord sync_core = sync_sender.core.value();
-                    std::cout << "SYNC CORE: " << sync_core.x << ", " << sync_core.y << std::endl;
                     const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
                     // Track global sync core for this device
@@ -292,8 +289,6 @@ public:
                         // Add sync config to the master sender on this device
                         this->test_devices_.at(device_coord)
                             .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
-                        std::cout << "ADDED SYNC CONFIG FOR DEVICE " << device_coord[0] << ", " << device_coord[1]
-                                  << " WITH SYNC VAL " << sync_traffic_sync_config.sync_val << std::endl;
                     }
                 }
             }
@@ -330,26 +325,6 @@ public:
                 // The allocator has already filled in all the necessary details.
                 // We just need to construct the TrafficConfig and pass it to add_traffic_config.
                 const auto& dest = pattern.destination.value();
-
-                std::cout << "Processing traffic pattern for device " << sender.device.chip_id << std::endl;
-                const auto dest_device = dest.device.value_or(sender.device);
-                if (dest_device != sender.device) {
-                    std::cout << "Destination device: " << dest_device.chip_id << std::endl;
-                }
-                const auto dest_hops = dest.hops.value_or(std::unordered_map<RoutingDirection, uint32_t>{});
-                if (!dest_hops.empty()) {
-                    std::cout << "Destination hops: " << dest_hops.size() << std::endl;
-                    for (const auto& [direction, hops] : dest_hops) {
-                        switch (direction) {
-                            case RoutingDirection::N: std::cout << "North"; break;
-                            case RoutingDirection::E: std::cout << "East"; break;
-                            case RoutingDirection::S: std::cout << "South"; break;
-                            case RoutingDirection::W: std::cout << "West"; break;
-                            default: std::cout << "Unknown direction"; break;
-                        }
-                        std::cout << " -> " << hops << " hops" << std::endl;
-                    }
-                }
 
                 TrafficParameters traffic_parameters = {
                     .chip_send_type = pattern.ftype.value(),
@@ -391,20 +366,15 @@ public:
     bool open_devices(const TestFabricSetup& fabric_setup) { return fixture_->open_devices(fabric_setup); }
 
     void compile_programs() {
-        std::cout << "Compiling programs" << std::endl;
         fixture_->setup_workload();
-        std::cout << "Finished setting up workload" << std::endl;
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
             test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
             test_device.set_global_sync(global_sync_);
-            std::cout << "Set global sync" << std::endl;
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
-            std::cout << "Set progress monitoring enabled" << std::endl;
 
             auto device_id = test_device.get_node_id();
             test_device.set_sync_core(device_global_sync_cores_[device_id]);
-            std::cout << "Set sync core" << std::endl;
 
             // Create kernels (latency or normal)
             if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
@@ -420,7 +390,6 @@ public:
             auto& program_handle = test_device.get_program_handle();
             if (program_handle.impl().num_kernels()) {
                 fixture_->enqueue_program(coord, std::move(program_handle));
-                std::cout << "Enqueued program" << std::endl;
             }
         }
     }
