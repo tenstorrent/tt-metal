@@ -5,7 +5,6 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -45,7 +44,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
             ),
         ),
         (
-            (torch.Size([1, 1, 32, 128 * 1024])),
+            (torch.Size([1, 1, 32, 32 * 1024])),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6)),

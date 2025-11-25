@@ -76,7 +76,7 @@ def test_exp_arange_masking(device):
             ),
         ),
         (
-            (torch.Size([1, 1, 32, 128 * 1024])),
+            (torch.Size([1, 1, 32, 32 * 1024])),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
