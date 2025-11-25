@@ -61,7 +61,7 @@ class TtAttention(LightweightModule):
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
-            if out_dim == 640:
+            if out_dim == 640 or out_dim == 1536:
                 self.sdpa_program_config.k_chunk_size = 512
             # TODO: 512 should be possible, latents base optimizations regressed this
             elif out_dim == 768:
