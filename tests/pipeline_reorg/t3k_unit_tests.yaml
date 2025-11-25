@@ -10,11 +10,7 @@
 #   label: Optional label for runner selection (e.g. pipeline-functional).
 
 - name: t3k_ttmetal_tests
-  cmd: |
-    set -e
-    echo "Sourcing library and running ttmetal tests..."
-    source tests/scripts/t3000/run_t3000_unit_tests.sh
-    run_t3000_ttmetal_tests
+  cmd: source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttmetal_tests
   sku: wh_llmbox
   owner_id: ULMEPM2MA # Sean Nijjar
   team: fabric
