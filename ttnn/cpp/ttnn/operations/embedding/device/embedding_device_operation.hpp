@@ -42,7 +42,7 @@ struct EmbeddingsDeviceOperation {
         const Tensor& weight_arg,
         bool tilized,
         EmbeddingsType embeddings_type,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
+        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
         const std::optional<uint32_t>& pad_token = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };

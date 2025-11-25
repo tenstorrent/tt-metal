@@ -58,9 +58,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
         }
     }
 
-    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto embeddings = ttnn::prim::embedding(
-        input_tensor, weight, fused_tilized, embeddings_type, output_mem_config, pad_token, optional_output_tensor);
+        input_tensor, weight, fused_tilized, embeddings_type, memory_config, pad_token, optional_output_tensor);
     // Don't include batch_size if there was none
     if (input_tensor_arg.logical_shape().rank() == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));

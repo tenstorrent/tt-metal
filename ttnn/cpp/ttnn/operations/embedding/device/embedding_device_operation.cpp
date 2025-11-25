@@ -101,12 +101,13 @@ EmbeddingsDeviceOperation::invoke(
     const Tensor& weight_arg,
     bool tilized,
     EmbeddingsType embeddings_type,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<uint32_t>& pad_token,
     const std::optional<Tensor>& optional_output_tensor) {
+    auto memory_config = output_mem_config.value_or(input_tensor_arg.memory_config());
     return {
         operation_attributes_t{
-            .output_mem_config = output_mem_config,
+            .output_mem_config = memory_config,
             .tilized = tilized,
             .embeddings_type = embeddings_type,
             .pad_token = pad_token,
