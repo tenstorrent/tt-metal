@@ -17,6 +17,10 @@ ops:
     skus:
       wh_llmbox:
         time_budget: 90
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 70
 fabric:
   e2e:
     skus:
@@ -49,3 +53,7 @@ models:
     skus:
       wh_llmbox:
         time_budget: 410
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 420
