@@ -30,6 +30,8 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids,
-    uint32_t max_tiles_per_block = 1);
-
+    const std::optional<GlobalSemaphore>& _internal_semaphore,
+    const std::optional<CoreRangeSet>& sync_core_grids,
+    uint32_t max_tiles_per_block=1);
+    
 }  // namespace ttnn::operations::data_movement::detail
