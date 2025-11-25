@@ -269,11 +269,9 @@ static bool test_sdpa_reduce_c_transposed(
     /**
      * Determine matmul blocking information
      */
-    const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    uint32_t out_subblock_h = std::min(k_chunk_size, dst_size);
-    uint32_t out_subblock_w = 1;
-    // (out_subblock_h == k_chunk_size) ? (std::min(q_chunk_size, dst_size / out_subblock_h)) : 1;
-
+    // const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    uint32_t out_subblock_h = 4;
+    uint32_t out_subblock_w = 2;
     // if (out_subblock_h == dst_size && out_subblock_w == 1 && k_chunk_size % 2 == 0 && q_chunk_size % 2 == 0) {
     //     // Hacky, try to get 4x2 output subblock if possible to optimize matmul util.
     //     out_subblock_h = out_subblock_h / 2;
@@ -456,13 +454,13 @@ int main(int argc, char** argv) {
     // sizes are in terms of tiles (32x32)
 
     // Passing sweep
-    std::vector<uint32_t> q_chunk_sizes = {1,2,4,8};
-    std::vector<uint32_t> k_chunk_sizes = {1,2,4,8,16};
-    std::vector<uint32_t> head_dim_sizes = {1,2,4};
+    // std::vector<uint32_t> q_chunk_sizes = {1,2,4,8};
+    // std::vector<uint32_t> k_chunk_sizes = {1,2,4,8,16};
+    // std::vector<uint32_t> head_dim_sizes = {1,2,4};
 
-    // std::vector<uint32_t> q_chunk_sizes = {8};
-    // std::vector<uint32_t> k_chunk_sizes = {16};
-    // std::vector<uint32_t> head_dim_sizes = {4};
+    std::vector<uint32_t> q_chunk_sizes = {8};
+    std::vector<uint32_t> k_chunk_sizes = {16};
+    std::vector<uint32_t> head_dim_sizes = {4};
 
     // Excluding fp32_dest_acc_en since SFPU reduce_max overlap will initially only support bf16 dst
     std::vector<bool> fp32_dest_acc_ens = {false};

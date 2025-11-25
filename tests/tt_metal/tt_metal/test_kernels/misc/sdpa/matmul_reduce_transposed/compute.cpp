@@ -61,8 +61,9 @@ void matmul_blocks(
     // Width-first traversal: iterate column subblocks outer, row subblocks inner
     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
         // Initialize reduce once per column (before processing any row blocks)
-        
-        sfpu_reduce_max_load_initial_values();
+        // sfpu_reduce_max_load_initial_values();
+        sfpu_reduce_max_prologue();              
+
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             tile_regs_acquire();
 
@@ -97,7 +98,8 @@ void matmul_blocks(
             if (in0_subblock == (in0_num_subblocks - 1)) {
                     sfpu_reduce_max_col_epilogue();
                     // Epilogue always writes result to dst[0], so pack from dst[0]
-                    pack_tile<true>(0, reduce_out_cb, out_col_offset);
+                    pack_tile<true>(0, reduce_out_cb, out_col_offset++);
+                    pack_tile<true>(1, reduce_out_cb, out_col_offset);
             }
 
             tile_regs_release();
@@ -142,5 +144,6 @@ void MAIN {
     // Ensure outputs are produced before exiting
     cb_wait_front(cb_matmul_out, k_chunk_size * q_chunk_size);
     cb_wait_front(reduce_out_cb, q_chunk_size);  // Expect q_chunk_size tiles from on-the-fly reduction
+
 }
 }  // namespace NAMESPACE
