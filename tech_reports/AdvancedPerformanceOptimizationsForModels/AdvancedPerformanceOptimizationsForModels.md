@@ -13,14 +13,16 @@
   - [2.1 Overview](#21-overview)
   - [2.2 APIs](#22-apis)
   - [2.3 Programming Examples](#23-programming-examples)
-    - [2.3.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1](#231-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
-    - [2.3.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1](#232-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
+    - [2.3.1 Opening and Configuring a Mesh Device](#231-opening-and-configuring-a-mesh-device)
+    - [2.3.2 Ops and Output Readback on CQ 0, Input Writes on CQ 1](#232-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
+    - [2.3.3 Ops on CQ 0, Input Writes and Output Readback on CQ 1](#233-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
 - [3. Putting Trace and Multiple Command Queues Together](#3-putting-trace-and-multiple-command-queues-together)
   - [3.1 Overview](#31-overview)
   - [3.2 APIs](#32-apis)
   - [3.3 Programming Examples](#33-programming-examples)
-    - [3.3.1 Trace with Non-Persistent L1 Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1](#331-trace-with-non-persistent-l1-input-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
-    - [3.3.2 Trace with Non-Persistent L1 Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1](#332-trace-with-non-persistent-l1-input-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
+    - [3.3.1 Trace with Persistent DRAM Input](#331-trace-with-persistent-dram-input)
+      - [3.3.1.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1](#3311-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
+      - [3.3.1.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1](#3312-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
 
 ## Introduction
 
@@ -188,7 +190,7 @@ For a single command queue only used for writing inputs, preallocate the input t
 
 ### 2.3 Programming Examples
 
-#### Opening and Configuring a Mesh Device
+#### 2.3.1 Opening and Configuring a Mesh Device
 
 The following code sample shows how to open a mesh device and configure memory allocation and command queues:
 
@@ -220,7 +222,7 @@ using namespace device;
 }  // namespace ttnn
 ```
 
-#### 2.3.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1
+#### 2.3.2 Ops and Output Readback on CQ 0, Input Writes on CQ 1
 
 To optimize performance allocate tensors to L1 memory. Many models do not have sufficient memory to fit in L1 memory if input tensors are also stored in L1 memory. Instead allocate the input tensors to DRAM to keep the tensor persistent in memory. Run an operation to move the tensor to L1 memory. Allocate the input as DRAM sharded and move it to L1 sharded memory with the reshard operation to optimize performance.
 
@@ -267,7 +269,7 @@ for iter in range(0, 2):
 ttnn.synchronize_device(device)
 ```
 
-#### 2.3.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1
+#### 2.3.3 Ops on CQ 0, Input Writes and Output Readback on CQ 1
 
 For using 2 command queues where one is for reads and writes, and one for running programs, we will need 2 persistent tensors, one for the input, and one for the output.
 We will also need to create and use 4 events for this setup. This is useful for when we can overlap reads and writes with op execution, such as when op time dominates over read/write time.
@@ -385,7 +387,9 @@ Refer to [1.2 Metal Trace APIs](#12-apis) and [2.2 Multiple Command Queues APIs]
 
 ### 3.3 Programming Examples
 
-#### 3.3.1 Trace with Persistent DRAM Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1
+#### 3.3.1 Trace with Persistent DRAM Input
+
+##### 3.3.1.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1
 
 The following example shows using 2 cqs with trace, where we use CQ 1 only for writing inputs, and CQ 0 for running programs/reading outputs.
 We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
@@ -465,7 +469,7 @@ for iter in range(0, 2):
 ttnn.synchronize_device(device)
 ```
 
-#### 3.3.2 Trace with Persistent DRAM Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1
+##### 3.3.1.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1
 
 The following example shows using 2 cqs with trace, where we use CQ 1 for writing inputs and reading outputs, and CQ 0 only for running programs.
 We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
