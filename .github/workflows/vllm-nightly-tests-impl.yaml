@@ -333,6 +333,46 @@ jobs:
         run: |
           mkdir -p output
 
+      - name: 🔍 Verify model availability
+        run: |
+          HF_MODEL="${{ matrix.test-group.model }}"
+
+          echo "Using HF_HUB_CACHE: $HF_HUB_CACHE"
+          echo "Using TT_CACHE_HOME: $TT_CACHE_HOME"
+          echo "Model to verify: $HF_MODEL"
+
+          # Check HuggingFace cache (models--<org>--<model> format)
+          HF_CACHE_DIR_NAME="models--${HF_MODEL//\//"--"}"
+          HF_FULL_PATH="${HF_HUB_CACHE}/${HF_CACHE_DIR_NAME}"
+
+          # Check TT cache (no models-- prefix)
+          TT_CACHE_DIR_NAME="${HF_MODEL//\//"--"}"
+          TT_FULL_PATH="${TT_CACHE_HOME}/${TT_CACHE_DIR_NAME}"
+
+          echo "Checking HuggingFace cache at: $HF_FULL_PATH"
+          if [ -d "$HF_FULL_PATH" ]; then
+            echo "✅ Model found in HuggingFace cache"
+            ls -la "$HF_FULL_PATH"
+          else
+            echo "❌ Model not found in HuggingFace cache"
+          fi
+
+          echo "Checking TT cache at: $TT_FULL_PATH"
+          if [ -d "$TT_FULL_PATH" ]; then
+            echo "✅ Model found in TT cache"
+            ls -la "$TT_FULL_PATH"
+          else
+            echo "❌ Model not found in TT cache"
+          fi
+
+          # Verify at least HF cache has the model (required for tokenizer)
+          if [ ! -d "$HF_FULL_PATH" ]; then
+            echo "❌ Model $HF_MODEL not found in HuggingFace cache directory"
+            echo "Available models in HF cache:"
+            ls -la "$HF_HUB_CACHE" | grep "models--" || echo "No models found"
+            exit 1
+          fi
+
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
@@ -356,6 +396,15 @@ jobs:
           MODEL_NAME="${HF_MODEL/\//--}"
           export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
 
+          # Temporarily allow HF hub access for tokenizer initialization
+          # The model files are cached, but vLLM needs to resolve the tokenizer
+          echo "Temporarily enabling HF Hub access for model loading..."
+          unset HF_HUB_OFFLINE
+
+          # Use the HF model name - let vLLM handle the cache resolution
+          MODEL_ARG="$HF_MODEL"
+          echo "Using HuggingFace model name: $MODEL_ARG"
+
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
           USE_V1="${{ matrix.test-group.use-vllm-v1 }}"
@@ -365,7 +414,7 @@ jobs:
 
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
-          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=(--model "$MODEL_ARG")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
           if [[ "${USE_V1}" == "true" ]]; then
