@@ -56,7 +56,7 @@ void MAIN {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     uint32_t cb_fusion = tt::CBIndex::c_22;        // stream gamma/beta
     constexpr auto scaler0 = 0;
-    constexpr auto cb_fp32 = tt::CBIndex::c_29;
+    constexpr auto cb_fp32 = tt::CBIndex::c_26;
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
