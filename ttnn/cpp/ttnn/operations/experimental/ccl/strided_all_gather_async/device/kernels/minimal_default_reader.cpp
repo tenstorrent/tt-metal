@@ -50,6 +50,17 @@ void kernel_main() {
     uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
+    uint32_t device_k_block_counts[ring_size];
+    uint32_t device_max_chunks = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t device_chunk_widths[ring_size][device_max_chunks];
+    for (uint32_t d = 0; d < ring_size; d++) {
+        device_k_block_counts[d] = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t device_chunk_count = get_arg_val<uint32_t>(arg_idx++);
+        for (uint32_t c = 0; c < device_chunk_count; c++) {
+            device_chunk_widths[d][c] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
     constexpr uint32_t ct_idx = 12;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
@@ -90,43 +101,15 @@ void kernel_main() {
     uint32_t sem_target = 0;
 
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
-    uint32_t padded_K_tiles = round_up(output_tensor_Wt, mm_block_wt);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
-    uint32_t K_blocks = padded_K_tiles / mm_block_wt;
     uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
-
-    uint32_t curr_device = 0;
-    uint32_t curr_device_start = 0;
-    uint32_t curr_device_end = input_tensor_Wt - 1;
-    uint32_t device_k_block_counts[ring_size] = {0};
-    for (uint32_t k_block_iter = 0; k_block_iter < K_blocks; k_block_iter++) {
-        uint32_t curr_k_block_start = k_block_iter * mm_block_wt;
-        uint32_t curr_k_block_end = (k_block_iter + 1) * mm_block_wt - 1;
-        if (curr_k_block_end < curr_device_end) {
-            device_k_block_counts[curr_device]++;
-        } else if (curr_k_block_end == curr_device_end) {
-            device_k_block_counts[curr_device]++;
-            curr_device++;
-            curr_device_start = curr_device_end + 1;
-            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
-        } else if (curr_k_block_end > curr_device_end) {
-            device_k_block_counts[curr_device]++;
-            if (curr_device + 1 < ring_size) {
-                device_k_block_counts[curr_device + 1]++;
-            }
-            curr_device++;
-            curr_device_start = curr_device_end + 1;
-            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
-        }
-    }
 
     for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
             // Send out local
             uint32_t input_chunk_start_tile = global_tile_index;
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
-                uint32_t actual_chunk_w =
-                    next_mm_aligned_chunk_width(input_chunk_start_tile, my_chip_id, input_tensor_Wt, mm_block_wt);
+                uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
                 uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
@@ -166,8 +149,7 @@ void kernel_main() {
 
                     if ((topology == Topology::Linear && writes_expected > 0) ||
                         (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
-                        uint32_t actual_chunk_w = next_mm_aligned_chunk_width(
-                            input_chunk_start_tile, actual_sender_chip_id, input_tensor_Wt, mm_block_wt);
+                        uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                             input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
                         uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;

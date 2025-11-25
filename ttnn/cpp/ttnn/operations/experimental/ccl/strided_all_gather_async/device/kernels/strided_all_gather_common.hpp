@@ -72,21 +72,6 @@ get_sender_id(uint32_t direction, uint32_t my_chip_id, uint32_t slices_received,
     }
 }
 
-FORCE_INLINE uint32_t next_mm_aligned_chunk_width(
-    uint32_t input_chunk_start_tile, uint32_t chip_id, uint32_t input_tensor_Wt, uint32_t mm_block_w) {
-    // Figure out the next largest multiple of mm_block_w in the global space
-    // First, get the output x index of chunk_start_tile (real_chunk_start)
-    // Then, find the next largest multiple of mm_block_w  (real_chunk_end)
-    // The difference (real_chunk_end - real_chunk_start) + 1 is the actual chunk width
-    uint32_t input_col = input_chunk_start_tile % input_tensor_Wt;
-    uint32_t output_col = input_col + chip_id * input_tensor_Wt;
-    uint32_t next_aligned_output_col = round_up(output_col + 1, mm_block_w);
-    uint32_t next_aligned_input_col = next_aligned_output_col - (chip_id * input_tensor_Wt);
-    uint32_t clipped_next_aligned_input_col = std::min(next_aligned_input_col, input_tensor_Wt);
-    uint32_t actual_chunk_w = clipped_next_aligned_input_col - input_col;
-    return actual_chunk_w;
-}
-
 FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
     uint32_t input_chunk_start_tile, uint32_t M_tiles_per_core, uint32_t input_tensor_Wt, uint32_t mm_block_h) {
     uint32_t input_row = input_chunk_start_tile / input_tensor_Wt;
