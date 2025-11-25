@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
+#include "untilize_with_halo_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
@@ -55,7 +55,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
     uint32_t nbatch = input_shape[0];
-    uint32_t total_nsticks = args.config_.num_cores_nhw * args.max_out_nsticks_per_core_;
+    uint32_t total_nsticks = args.config.num_cores_nhw * args.max_out_nsticks_per_core;
 
     // output_shape[0] remains same
     // output_shape[1] remains same
@@ -65,10 +65,10 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
 
     log_debug(
         tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
-    log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", args.max_out_nsticks_per_core_);
+    log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", args.max_out_nsticks_per_core);
     log_debug(
-        tt::LogOp, "size : {}", args.in_nsticks_per_core_ * input_tensor.memory_config().shard_spec()->shape[1] * 2);
-    log_debug(tt::LogOp, "num_cores_nhw: {}", args.config_.num_cores_nhw);
+        tt::LogOp, "size : {}", args.in_nsticks_per_core * input_tensor.memory_config().shard_spec()->shape[1] * 2);
+    log_debug(tt::LogOp, "num_cores_nhw: {}", args.config.num_cores_nhw);
 
     tt::tt_metal::DataType output_dtype;
     switch (input_tensor.dtype()) {
@@ -78,14 +78,14 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     }
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout() == args.output_memory_config_.memory_layout(),
+        input_tensor.memory_config().memory_layout() == args.output_memory_config.memory_layout(),
         "{} {}",
         input_tensor.memory_config(),
-        args.output_memory_config_);
+        args.output_memory_config);
 
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         auto input_core_range = *(input_tensor.memory_config().shard_spec()->grid.ranges().begin());
-        auto output_core_range = *(args.output_memory_config_.shard_spec()->grid.ranges().begin());
+        auto output_core_range = *(args.output_memory_config.shard_spec()->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
 
@@ -94,13 +94,13 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     }
 
     std::array<uint32_t, 2> shard_shape = {
-        tt::div_up(output_shape[0] * output_shape[2], args.config_.num_cores_nhw),
+        tt::div_up(output_shape[0] * output_shape[2], args.config.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
 
-    auto out_mem_config = args.output_memory_config_.with_shard_spec(ShardSpec{
-        args.output_memory_config_.shard_spec()->grid,
+    auto out_mem_config = args.output_memory_config.with_shard_spec(ShardSpec{
+        args.output_memory_config.shard_spec()->grid,
         shard_shape,
-        args.output_memory_config_.shard_spec()->orientation});
+        args.output_memory_config.shard_spec()->orientation});
     auto padded_output_shape = output_shape;
     padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
@@ -152,16 +152,16 @@ std::tuple<operation_attributes_t, tensor_args_t> HaloDeviceOperation::invoke(
 
     return {
         operation_attributes_t{
-            .config_ = config,
-            .parallel_config_ = p_config,
-            .pad_val_ = pad_val,
-            .remote_read_ = remote_read,
-            .transpose_mcast_ = transpose_mcast,
-            .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
-            .in_nsticks_per_core_ = in_nsticks_per_core,
-            .output_memory_config_ = output_memory_config,
-            .is_out_tiled_ = is_out_tiled,
-            .config_tensors_in_dram_ = config_tensors_in_dram},
+            .config = config,
+            .parallel_config = p_config,
+            .pad_val = pad_val,
+            .remote_read = remote_read,
+            .transpose_mcast = transpose_mcast,
+            .max_out_nsticks_per_core = max_out_nsticks_per_core,
+            .in_nsticks_per_core = in_nsticks_per_core,
+            .output_memory_config = output_memory_config,
+            .is_out_tiled = is_out_tiled,
+            .config_tensors_in_dram = config_tensors_in_dram},
         tensor_args_t{
             .input_tensor = input_tensor,
         }};

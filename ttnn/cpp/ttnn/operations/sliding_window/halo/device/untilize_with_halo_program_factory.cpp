@@ -66,25 +66,25 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const sliding_window::halo::tensor_args_t& tensor_args,
     sliding_window::halo::tensor_return_value_t& output_tensor) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& pad_val = operation_attributes.pad_val_;
+    const auto& pad_val = operation_attributes.pad_val;
     const int block_size = UNTILIZE_BLOCK_SIZE;
-    const uint32_t ncores_nhw = operation_attributes.config_.num_cores_nhw;
-    const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core_;
-    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram_;
-    const bool remote_read = operation_attributes.remote_read_;
-    const bool transpose_mcast = operation_attributes.transpose_mcast_;
+    const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
+    const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
+    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+    const bool remote_read = operation_attributes.remote_read;
+    const bool transpose_mcast = operation_attributes.transpose_mcast;
 
     auto device = input_tensor.device();
 
     bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto pad_metadata = sliding_window::generate_pad_metadata(operation_attributes.config_);
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config_);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(operation_attributes.config_);
+    auto pad_metadata = sliding_window::generate_pad_metadata(operation_attributes.config);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(operation_attributes.config);
     const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
     auto tensor_metadata =
-        sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config_, input_shard_height);
+        sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
     uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
 
@@ -105,41 +105,41 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const auto& gather_config1 = kernel_config.gather_config1;
 
     const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-        pad_config0, operation_attributes.parallel_config_, operation_attributes.config_tensors_in_dram_);
+        pad_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
     const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-        pad_config1, operation_attributes.parallel_config_, operation_attributes.config_tensors_in_dram_);
+        pad_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
     const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-        gather_config0, operation_attributes.parallel_config_, operation_attributes.config_tensors_in_dram_);
+        gather_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
     const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-        gather_config1, operation_attributes.parallel_config_, operation_attributes.config_tensors_in_dram_);
+        gather_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
 
     auto pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
         pad_config_tensor0,
-        operation_attributes.parallel_config_,
+        operation_attributes.parallel_config,
         is_block_sharded,
         device,
-        operation_attributes.config_tensors_in_dram_);
+        operation_attributes.config_tensors_in_dram);
     auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
         pad_config_tensor1,
-        operation_attributes.parallel_config_,
+        operation_attributes.parallel_config,
         is_block_sharded,
         device,
-        operation_attributes.config_tensors_in_dram_);
+        operation_attributes.config_tensors_in_dram);
     auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
         gather_config_tensor0,
-        operation_attributes.parallel_config_,
+        operation_attributes.parallel_config,
         is_block_sharded,
         device,
-        operation_attributes.config_tensors_in_dram_);
+        operation_attributes.config_tensors_in_dram);
     auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
         gather_config_tensor1,
-        operation_attributes.parallel_config_,
+        operation_attributes.parallel_config,
         is_block_sharded,
         device,
-        operation_attributes.config_tensors_in_dram_);
+        operation_attributes.config_tensors_in_dram);
 
     const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
-        kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config_);
+        kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);
 
     Program program = CreateProgram();
 
