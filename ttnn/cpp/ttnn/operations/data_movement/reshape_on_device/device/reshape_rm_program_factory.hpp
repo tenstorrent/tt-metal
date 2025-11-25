@@ -8,7 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "reshape_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 struct ReshapeRMProgramFactory {
     struct shared_variables_t {
@@ -31,4 +31,4 @@ struct ReshapeRMProgramFactory {
         reshape_on_device::tensor_return_value_t& output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::reshape_on_device

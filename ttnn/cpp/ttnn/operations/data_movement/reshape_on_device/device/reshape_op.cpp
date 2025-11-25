@@ -16,9 +16,9 @@ namespace ttnn::operations::data_movement {
 ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
-        return detail::ReshapeRMProgramFactory{};
+        return reshape_on_device::ReshapeRMProgramFactory{};
     } else {
-        return detail::ReshapeTileProgramFactory{};
+        return reshape_on_device::ReshapeTileProgramFactory{};
     }
 }
 

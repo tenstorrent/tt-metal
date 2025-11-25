@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 namespace {
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm_multi_core(
@@ -277,4 +277,4 @@ void ReshapeRMProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::reshape_on_device

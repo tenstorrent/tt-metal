@@ -17,7 +17,8 @@ struct ReshapeDeviceOperation {
     using tensor_args_t = reshape_on_device::tensor_args_t;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = reshape_on_device::tensor_return_value_t;
-    using program_factory_t = std::variant<detail::ReshapeTileProgramFactory, detail::ReshapeRMProgramFactory>;
+    using program_factory_t =
+        std::variant<reshape_on_device::ReshapeTileProgramFactory, reshape_on_device::ReshapeRMProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

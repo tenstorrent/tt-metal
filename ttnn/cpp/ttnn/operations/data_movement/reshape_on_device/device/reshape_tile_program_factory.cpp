@@ -11,7 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
 ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
     const reshape_on_device::operation_attributes_t& operation_attributes,
@@ -112,4 +112,4 @@ void ReshapeTileProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::reshape_on_device
