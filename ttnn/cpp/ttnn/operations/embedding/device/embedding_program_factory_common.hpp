@@ -25,6 +25,6 @@ struct CoreSplitResult {
     uint32_t units_per_core_group_2 = 0;
 };
 
-inline CoreSplitResult split_work_to_cores_aligned(
+CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment);
 }  // namespace ttnn::operations::embedding::program
