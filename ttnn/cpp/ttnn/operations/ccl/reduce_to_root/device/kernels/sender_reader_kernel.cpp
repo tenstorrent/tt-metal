@@ -12,9 +12,6 @@ void kernel_main() {
     const uint32_t num_tiles_l = get_arg_val<uint32_t>(1);
     const uint32_t src_addr_s = get_arg_val<uint32_t>(2);
     const uint32_t src_addr_m = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t core_noc_x = get_compile_time_arg_val(0);
-    constexpr uint32_t core_noc_y = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in_l = 0;
     constexpr uint32_t cb_id_in_s = 1;
     constexpr uint32_t cb_id_in_m = 2;
@@ -25,6 +22,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(4);  // should be the size of a tiny tile page
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(5);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(6);
 
     DPRINT << "num tiles l: " << (uint32_t)num_tiles_l << "\n";
     // for tensor l
