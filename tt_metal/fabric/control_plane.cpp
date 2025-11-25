@@ -1744,23 +1744,15 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
-    tt::tt_fabric::FabricTelemetryStaticInfo static_payload{};
-    static_payload.mesh_id = static_cast<std::uint16_t>(*fabric_node_id.mesh_id);
-    static_payload.device_id = static_cast<std::uint8_t>(fabric_node_id.chip_id);
-    static_payload.direction = 0;  // TODO: populate from routing direction when available.
-    static_payload.fabric_config =
-        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    static_payload.supported_stats = 0;
-
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
     auto telemetry_view = telemetry.view();
     auto static_view = telemetry_view.static_info();
-    static_view.mesh_id() = static_payload.mesh_id;
-    static_view.device_id() = static_payload.device_id;
-    static_view.direction() = static_payload.direction;
-    static_view.fabric_config() = static_payload.fabric_config;
-    static_view.supported_stats() =
-        static_cast<::tt::tt_fabric::fabric_telemetry::DynamicStatistics>(static_payload.supported_stats);
+    static_view.mesh_id() = static_cast<std::uint16_t>(*fabric_node_id.mesh_id);
+    static_view.device_id() = static_cast<std::uint8_t>(fabric_node_id.chip_id);
+    static_view.direction() = 0;  // TODO: populate from routing direction when available.
+    static_view.fabric_config() =
+        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    static_view.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
 
     for (const auto& active_ethernet_core : active_ethernet_cores) {
         auto chan_id = tt::tt_metal::MetalContext::instance()

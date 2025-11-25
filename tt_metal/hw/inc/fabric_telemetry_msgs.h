@@ -60,6 +60,7 @@ struct EriscDynamicEntry {
 struct DynamicInfo {
     BandwidthTelemetry tx_bandwidth;
     BandwidthTelemetry rx_bandwidth;
+    // max 2 ERISCs per router (BH has 2, WH has 1)
     EriscDynamicEntry erisc[2];
 };
 
