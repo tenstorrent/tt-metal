@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Validate C++ deprecation policy: items must age 30+ days before removal.
 
 Example: [[deprecated]] void oldFunc(); must exist 30+ days before deletion.
@@ -144,7 +146,9 @@ def print_report(existing: List[DeprecatedItem], removed: List[DeprecatedItem]) 
         for item in violations:
             if item.age_days is not None:
                 wait = Config.MIN_DEPRECATION_DAYS - item.age_days
-                print(f"  • {item.file_path}:{item.line_number} - {item.age_days:.1f} days old, wait {wait:.1f} more days")
+                print(
+                    f"  • {item.file_path}:{item.line_number} - {item.age_days:.1f} days old, wait {wait:.1f} more days"
+                )
             else:
                 print(f"  • {item.file_path}:{item.line_number} - unknown age")
 
