@@ -21,10 +21,10 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
@@ -94,10 +94,6 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
     {"Torus", Topology::Torus},
-});
-
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"LowLatency", RoutingType::LowLatency},
 });
 
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
@@ -1488,10 +1484,6 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
-    static std::string to_string(RoutingType rtype) {
-        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
-    }
-
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
@@ -1664,10 +1656,6 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "topology";
         out << YAML::Value << to_string(config.topology);
-        if (config.routing_type.has_value()) {
-            out << YAML::Key << "routing_type";
-            out << YAML::Value << to_string(config.routing_type.value());
-        }
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());

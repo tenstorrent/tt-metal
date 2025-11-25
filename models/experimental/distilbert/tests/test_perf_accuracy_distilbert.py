@@ -14,8 +14,6 @@ from models.common.utility_functions import (
     Profiler,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -31,7 +29,6 @@ BATCH_SIZE = 1
 
 def run_perf_distilbert(expected_inference_time, expected_compile_time, device, iterations):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_iter"
@@ -62,8 +59,6 @@ def run_perf_distilbert(expected_inference_time, expected_compile_time, device, 
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(inputs.input_ids, tt_attn_mask)
