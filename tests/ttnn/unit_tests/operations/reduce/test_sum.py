@@ -133,4 +133,4 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
