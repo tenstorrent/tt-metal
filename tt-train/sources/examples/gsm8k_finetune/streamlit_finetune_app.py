@@ -218,7 +218,6 @@ def create_training_yaml(
         "max_steps": config_dict["max_steps"],
         "gradient_accumulation_steps": config_dict["gradient_accumulation"],
         "eval_every": config_dict["eval_every"],
-        "transformer_config": {"max_sequence_length": config_dict["max_seq_length"]},
     }
 
     scheduler_config = {
@@ -233,6 +232,10 @@ def create_training_yaml(
         "mesh_shape": config_dict["mesh_shape"],
     }
 
+    transformer_config = {
+        "max_sequence_length": config_dict["max_seq_length"],
+    }
+
     # Write YAML with blank lines between top-level sections
     with open(output_path, "w") as f:
         f.write("training_config:\n")
@@ -241,6 +244,16 @@ def create_training_yaml(
         )
         # Indent each line
         for line in training_yaml.strip().split("\n"):
+            f.write(f"  {line}\n")
+
+        f.write("\n")  # Blank line between sections
+
+        f.write("transformer_config:\n")
+        transformer_yaml = yaml.dump(
+            transformer_config, default_flow_style=False, sort_keys=False
+        )
+        # Indent each line
+        for line in transformer_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
 
         f.write("\n")  # Blank line between sections

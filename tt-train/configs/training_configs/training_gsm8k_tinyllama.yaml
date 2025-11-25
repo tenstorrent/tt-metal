@@ -3,6 +3,7 @@ training_config:
   model_type: "llama"
   seed: 5489
   batch_size: 1
+  validation_batch_size: 4
   num_epochs: 1
   max_steps: 160
   learning_rate: 0.0003
@@ -14,7 +15,6 @@ training_config:
   gradient_accumulation_steps: 64
   eval_every: 20
   model_save_interval: 50
-  tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
   checkpoint_dir: "checkpoints_gsm8k"
   model_config: "model_configs/tinyllama.yaml"

@@ -292,7 +292,7 @@ def validate(
             val_file.write("\n====================================\n")
 
         val_file.write(
-            "Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses))
+            f"Last validation loss: {float(np.mean(cur_val_losses)):.4f}\n\n\n"
         )
 
     tt_model.train()
@@ -559,7 +559,7 @@ def train():
 
         with open("output.txt", "a") as f:
             f.write(
-                f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"
+                f"LR: {float(lr_now):.6f}, training_loss: {float(step_loss):.4f}, val_loss: {float(last_val_loss):.4f}, step: {total_steps}, epoch: 1\n"
             )
         total_steps += 1
 
