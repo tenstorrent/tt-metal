@@ -22,7 +22,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
     preprocess_nchw_input_tensor,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     create_panoptic_visualization,
@@ -52,7 +51,6 @@ def run_panoptic_deeplab_demo(
         output_dir: Directory to save outputs
         target_size: Input size as (height, width)
     """
-    disable_persistent_kernel_cache()
 
     logger.info(f"Running Panoptic DeepLab demo on {image_path}")
     logger.info(f"Target size: {target_size}")

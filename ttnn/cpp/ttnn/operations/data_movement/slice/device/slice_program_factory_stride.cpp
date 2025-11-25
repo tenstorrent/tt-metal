@@ -5,7 +5,6 @@
 #include "optional"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -13,22 +12,10 @@
 #include <algorithm>
 
 #include "slice_op.hpp"
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
-
-/**
- * Core allocation result structure for multi-core slice operations.
- * Contains all the computed values for core grid layout and allocation.
- */
-struct CoreAllocation {
-    uint32_t grid_x;               // Grid width (number of cores in x direction)
-    uint32_t grid_y;               // Grid height (number of cores in y direction)
-    uint32_t num_cores;            // Total number of cores used (grid_x * grid_y)
-    uint32_t max_cores_available;  // Maximum cores available on device
-    uint32_t num_cores_needed;     // Number of cores needed for optimal allocation
-};
 
 /**
  * Calculate total output rows based on tensor rank - this is what we distribute across cores.
@@ -47,39 +34,6 @@ inline uint32_t calculate_total_output_rows(const ttnn::Shape& output_shape) {
 }
 
 /**
- * Core allocation and work distribution for multi-core slice operation.
- * This implements the key insight from Python: use only as many cores as we have work for.
- * Translated from Python get_multicore_slice_descriptor method.
- */
-inline CoreAllocation calculate_core_allocation(tt::tt_metal::IDevice* device, uint32_t total_output_rows) {
-    // Get hardware compute grid dimensions
-    auto compute_grid = device->compute_with_storage_grid_size();
-    uint32_t max_cores_available = compute_grid.x * compute_grid.y;
-
-    // CORE ALLOCATION DECISION:
-    // Use min(available_cores, rows_to_process) to avoid over-parallelization
-    // Each core processes at least one row, so more cores than rows is wasteful
-    uint32_t num_cores_needed = std::min(max_cores_available, total_output_rows);
-
-    // GRID LAYOUT OPTIMIZATION:
-    // Arrange cores in optimal rectangular grid for memory access patterns
-    uint32_t grid_x, grid_y;
-    if (num_cores_needed <= compute_grid.x) {
-        // Small workload: use single row of cores for simplicity
-        grid_x = num_cores_needed;
-        grid_y = 1;
-    } else {
-        // Large workload: use full grid width, calculate required height
-        grid_x = compute_grid.x;
-        grid_y = (num_cores_needed + grid_x - 1) / grid_x;  // Ceiling division
-    }
-
-    uint32_t num_cores = grid_x * grid_y;
-
-    return {grid_x, grid_y, num_cores, max_cores_available, num_cores_needed};
-}
-
-/**
  * Prepare runtime arguments for multi-core slice kernels.
  * Handles both 4D kernels and maintains compatibility with 2D kernels.
  * Translated from Python get_multicore_slice_descriptor method.
@@ -90,8 +44,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& slice_step,
-    uint32_t grid_x,
-    uint32_t grid_y,
     uint32_t num_cores,
     uint32_t total_output_rows,
     const std::string& reader_kernel_path,
@@ -242,7 +194,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
-    const ttnn::Shape& slice_step) {
+    const ttnn::Shape& slice_step,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -254,27 +207,20 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     // Calculate total output rows based on tensor rank - this is what we distribute across cores
     uint32_t total_output_rows = calculate_total_output_rows(output_shape);
 
-    // MULTI-CORE ALLOCATION STRATEGY:
-    // The key insight is to use only as many cores as we have work for
-    // This avoids the overhead of idle cores and optimizes resource utilization
-    auto core_allocation = calculate_core_allocation(device, total_output_rows);
-    uint32_t grid_x = core_allocation.grid_x;
-    uint32_t grid_y = core_allocation.grid_y;
-    uint32_t num_cores = core_allocation.num_cores;
+    // MULTI-CORE ALLOCATION:
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
+        sub_core_grids.has_value()
+            ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), total_output_rows)
+            : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_output_rows);
 
     // DEBUG OUTPUT: Show core allocation decisions for performance analysis
     log_debug(
         tt::LogOp,
-        "Multi-core slice allocation - Total output rows: {}, Available cores: {}",
+        "Multi-core slice allocation - Total output rows: {}, Used cores: {}",
         total_output_rows,
-        core_allocation.max_cores_available);
+        all_cores.num_cores());
     log_debug(tt::LogOp, "Tensor shape: {}D {}", input_shape.rank(), output_shape);
-    log_debug(tt::LogOp, "Using grid: {}x{} = {} cores", grid_x, grid_y, num_cores);
-
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {grid_x - 1, grid_y - 1};
-    CoreRange full_grid_range(start_core, end_core);
-    CoreRangeSet core_grid({full_grid_range});
 
     // Select kernels based on tensor rank for optimal performance
     std::string reader_kernel_path, writer_kernel_path;
@@ -313,7 +259,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_total_size, {{in_cb, cb_data_format}})
             .set_page_size(in_cb, cb_page_size_aligned);
-    tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // Prepare kernel compilation arguments using TensorAccessor
     std::vector<uint32_t> reader_compile_time_args = {in_cb, element_size};
@@ -324,10 +270,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
 
     // Create kernels
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, reader_kernel_path, core_grid, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        program, reader_kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program, writer_kernel_path, core_grid, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        program, writer_kernel_path, all_cores, tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get runtime arguments for all cores
     auto all_runtime_args = get_slice_runtime_args(
@@ -336,25 +282,20 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
         slice_start,
         slice_end,
         slice_step,
-        grid_x,
-        grid_y,
         num_cores,
         total_output_rows,
         reader_kernel_path,
         writer_kernel_path);
 
     // Set runtime arguments for each core
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        uint32_t x = core_idx % grid_x;
-        uint32_t y = core_idx / grid_x;
-        CoreCoord core = {x, y};
-
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[core_idx].first);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[core_idx].second);
+    auto all_cores_vec = corerange_to_cores(all_cores);
+    for (size_t i = 0; i < all_cores_vec.size(); ++i) {
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_vec[i], all_runtime_args[i].first);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_vec[i], all_runtime_args[i].second);
     }
 
     // Runtime arguments override callback for buffer address updates
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, grid_x, grid_y, num_cores](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, all_cores_vec](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -364,15 +305,11 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
         const auto& dst_tensor = output_tensors.at(0);
 
         // Update buffer addresses in runtime arguments for all cores
-        for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-            uint32_t x = core_idx % grid_x;
-            uint32_t y = core_idx / grid_x;
-            CoreCoord core = {x, y};
-
-            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+        for (size_t i = 0; i < all_cores_vec.size(); ++i) {
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, all_cores_vec[i]);
             reader_runtime_args[0] = src_tensor.buffer()->address();
 
-            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, all_cores_vec[i]);
             writer_runtime_args[0] = dst_tensor.buffer()->address();
         }
     };

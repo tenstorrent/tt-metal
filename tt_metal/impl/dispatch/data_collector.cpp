@@ -6,7 +6,7 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 
 using tt::tt_metal::detail::ProgramImpl;

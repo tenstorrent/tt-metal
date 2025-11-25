@@ -147,7 +147,6 @@ def test_ring_distributed_sdpa_main(device, q_chunk_size, k_chunk_size, s):
 
     if s / (2 * ring_size) < q_chunk_size:
         pytest.skip(f"Sequence length {s} not compatible with ring size {ring_size} and q_chunk_size {q_chunk_size}")
-    ttnn.device.DisablePersistentKernelCache()
     run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chunk_size)
 
 

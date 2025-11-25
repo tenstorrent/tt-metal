@@ -13,8 +13,6 @@
 #include "minimal_matmul.hpp"
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 
 void py_bind_minimal_matmul(py::module& module) {
@@ -22,7 +20,7 @@ void py_bind_minimal_matmul(py::module& module) {
         module,
         ttnn::experimental::minimal_matmul,
         R"doc(
-        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, compute_kernel_config=None)
+        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -83,6 +81,10 @@ void py_bind_minimal_matmul(py::module& module) {
             Memory configuration for the output tensor. If not provided, the output inherits the memory configuration
             of `input_tensor`. The output is produced in TILE layout.
 
+        dtype : Optional[ttnn.DataType], default: None
+            Data type of the output tensor. If not provided, the output inherits the data type
+            of `input_tensor`.
+
         compute_kernel_config : Optional[ttnn.operations.core.compute_kernel.DeviceComputeKernelConfig], default: None
             Compute kernel configuration. If omitted, defaults are selected via `init_device_compute_kernel_config`
             (e.g., MathFidelity::HiFi2, fp32 accumulation enabled, packer accumulation enabled).
@@ -90,7 +92,8 @@ void py_bind_minimal_matmul(py::module& module) {
         Returns
         -------
         ttnn.Tensor
-            Output tensor with shape [..., M, N], TILE layout, and the same dtype as `input_tensor`.
+            Output tensor with shape [..., M, N], TILE layout, and dtype specified by `dtype` parameter
+            (or same dtype as `input_tensor` if `dtype` is not provided).
 
         Shape Semantics
         ----------------
@@ -107,7 +110,8 @@ void py_bind_minimal_matmul(py::module& module) {
         - All tensors must be on the same device and allocated in device buffers.
         - All tensors must be in TILE layout (sharded tensors must be tile-aligned at shard boundaries).
         - Supported dtypes for inputs: BF16, BF8_B, BF4_B, FLOAT32. Bias (if present)
-          must be one of the supported dtypes. The dtype of the output is the same as the dtype of the inputs.
+          must be one of the supported dtypes. The dtype of the output can be specified via the `dtype` parameter,
+          otherwise it defaults to the dtype of `input_tensor`.
         - No implicit transpose flags are supported; provide `weight_tensor` with logical shape [..., K, N].
         - Weight and bias must have 1 in all leading dimensions (dims < -2). Activation may have arbitrary
           upper dimensions; these are broadcast across rows (internally folded into M for execution).
@@ -151,6 +155,7 @@ void py_bind_minimal_matmul(py::module& module) {
             py::arg("fused_activation") = std::nullopt,
             py::arg("config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 
     auto py_minimal_matmul_config = py::class_<MinimalMatmulConfig>(

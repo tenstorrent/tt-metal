@@ -19,7 +19,7 @@ Tests:
   # ======================================================================================
   # Test 1: A simple, fully specified unicast test for multi-host.
   # This demonstrates the most basic configuration using ChipIds.
-  # Fabric must be 2D Dynamic.
+  # Fabric must be 2D.
   # ======================================================================================
   - name: UnicastWithChipId
     fabric_setup:
@@ -94,7 +94,7 @@ Tests:
   # ======================================================================================
   # Test 2: A simple, fully specified unicast test for mult-host.
   # This demonstrates the most basic configuration using MeshCoordinates.
-  # Fabric must be 2D Dynamic.
+  # Fabric must be 2D.
   # ======================================================================================
   - name: UnicastWithMeshCoordinates
     fabric_setup:

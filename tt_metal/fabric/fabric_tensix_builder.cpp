@@ -369,16 +369,14 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     uint32_t noc_y,
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
     eth_chan_directions direction) :
+    FabricDatamoverBuilderBase(noc_x, noc_y, direction),
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
     ethernet_channel_id_(ethernet_channel_id),
     link_idx_(link_idx),
     risc_id_(risc_id),
-    noc_x_(noc_x),
-    noc_y_(noc_y),
-    fabric_mux_config_(std::move(fabric_mux_config)),
-    direction_(direction) {
+    fabric_mux_config_(std::move(fabric_mux_config)) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }

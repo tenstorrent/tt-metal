@@ -61,14 +61,6 @@ void bind_binary_backward_ops(
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
             {4}
-
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2)
-
-
         )doc",
 
         operation.base_name(),
@@ -143,16 +135,6 @@ void bind_binary_backward_concat(
                  - 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.rand([14, 1, 30, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.rand([12, 1, 30, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.rand([2, 1, 30, 32], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = {4}
-            >>> output = ttnn.concat_bw(grad_tensor, tensor1, tensor2, {2})
-
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -245,16 +227,6 @@ void bind_binary_backward_addalpha(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = {4}
-            >>> output = ttnn.addalpha_bw(grad_tensor, tensor1, tensor2, {2})
-
-
         )doc",
 
         operation.base_name(),
@@ -346,13 +318,6 @@ void bind_binary_backward_bias_gelu(
 
             {9}
 
-        Example:
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> approximate = "none"
-            >>> output = ttnn.bias_gelu_bw(grad_tensor, tensor1, tensor2, approximate)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -442,14 +407,6 @@ void bind_binary_backward_sub_alpha(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-        Example:
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> alpha = 1
-            >>> output = ttnn.subalpha_bw(grad_tensor, tensor1, tensor2, alpha)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -531,13 +488,6 @@ void bind_binary_backward_rsub(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-        Example:
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.rsub_bw(grad_tensor, tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -616,18 +566,6 @@ void bind_binary_bw_mul(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.mul_bw(grad_tensor, tensor1, tensor2)
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 4
-            >>> output = ttnn.mul_bw(grad_tensor, tensor1, scalar)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -741,18 +679,6 @@ void bind_binary_bw(
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
             {4}
-
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2)
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 2
-            >>> output = {1}(grad_tensor, tensor1, scalar)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -874,17 +800,6 @@ void bind_binary_bw_div(
 
             Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
 
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.div_bw(grad_tensor, tensor1, tensor2, round_mode = None)
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 2
-            >>> output = ttnn.div_bw(grad_tensor, tensor, scalar, round_mode = None)
-
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -999,18 +914,6 @@ void bind_binary_backward_overload(
                  - 2, 3, 4
 
             {4}
-
-        Example:
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2)
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> scalar = 2
-            >>> output = {1}(grad_tensor, tensor1, scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1089,15 +992,6 @@ void bind_binary_backward_assign(
                  - TILE
                  - 2, 3, 4
 
-        Example:
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.assign_bw(grad_tensor, tensor1, tensor2)
-
-            >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.assign_bw(grad_tensor, tensor1)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),

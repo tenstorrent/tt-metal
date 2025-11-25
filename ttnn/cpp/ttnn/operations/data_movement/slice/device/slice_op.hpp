@@ -22,6 +22,7 @@ struct SliceDeviceOperation {
     const bool use_tensor_args = false;
     const std::optional<uint32_t> slice_dim = std::nullopt;
     const std::optional<uint32_t> num_devices = std::nullopt;
+    const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;

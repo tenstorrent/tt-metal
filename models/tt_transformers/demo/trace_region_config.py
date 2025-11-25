@@ -65,7 +65,7 @@ def base_model_name_from_env():
     if LLAMA_DIR:
         model_name = LLAMA_DIR.strip("/").split("/")[-1]
     elif HF_MODEL:
-        model_name = HF_MODEL.split("/")[-1]
+        model_name = HF_MODEL.strip("/").split("/")[-1]
     else:
         return None
 
@@ -105,6 +105,10 @@ def get_supported_trace_region_size(request, mesh_device):
             "TG": 50000000,
         },
         "Qwen2.5-72B": {
+            "T3K": 70000000,
+            "TG": 70000000,
+        },
+        "gemma-3-27b": {
             "T3K": 70000000,
             "TG": 70000000,
         },

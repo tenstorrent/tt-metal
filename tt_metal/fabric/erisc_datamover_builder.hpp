@@ -11,34 +11,32 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
-#include <tt-metalium/edm_fabric_counters.hpp>
-#include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
+#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
 #include <optional>
 #include <cstdint>
 #include <vector>
 #include <array>
 #include <cstddef>
-#include <variant>
 #include <memory>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
-class FabricEriscDatamoverBuilder;
-class FabricTensixDatamoverBuilder;
+class FabricRouterBuilder;
 class MultiPoolChannelAllocator;
 class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
 
-// Type alias for any fabric datamover builder
-using FabricDatamoverBuilder = std::
-    variant<std::reference_wrapper<FabricEriscDatamoverBuilder>, std::reference_wrapper<FabricTensixDatamoverBuilder>>;
+class FabricEriscDatamoverBuilder;
+class FabricTensixDatamoverBuilder;
 
 /**
  * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
@@ -439,7 +437,9 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
  *   two ERISCs on the Ethernet core and Fabric Tensix MUX is enabled. Decisions such as ERISC count and
  *   TXQ selection are derived from this effective mode. A presence-based disable env exists to force-disable.
  */
-class FabricEriscDatamoverBuilder {
+class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
+    friend class FabricRouterBuilder;
+
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
@@ -496,7 +496,7 @@ public:
         bool has_tensix_extension = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const override;
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
@@ -505,13 +505,10 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
-    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
+    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
 
-    eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
-    size_t get_noc_x() const;
-    size_t get_noc_y() const;
 
     void dump_to_log() const {
         // TODO
@@ -530,8 +527,6 @@ public:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
-    size_t my_noc_x = 0;
-    size_t my_noc_y = 0;
 
     FabricEriscDatamoverConfig config;
 
@@ -554,7 +549,6 @@ public:
     size_t edm_local_sync_ptr = 0;
     size_t edm_local_tensix_sync_ptr = 0;
     size_t edm_status_ptr = 0;
-    eth_chan_directions direction = eth_chan_directions::EAST;
     size_t downstream_edms_connected = 0;
 
     // Semaphore IDs
@@ -570,7 +564,7 @@ public:
     std::array<size_t, builder_config::num_sender_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id =
         {};
 
-    std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
+    mutable std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
@@ -584,13 +578,12 @@ public:
 
 private:
     // Shared helper for setting up VC connections
-    template <typename BuilderType>
     void setup_downstream_vc_connection(
-        BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
+        FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(
-        FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+        FabricDatamoverBuilderBase *downstream_builder, FabricDatamoverBuilderBase *vc1_edm_builder);
 };
 
 }  // namespace tt::tt_fabric
