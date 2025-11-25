@@ -140,7 +140,7 @@ tt::tt_metal::operation::Hash TilizeDeviceOperation::compute_program_hash(
 std::tuple<TilizeDeviceOperation::operation_attributes_t, TilizeDeviceOperation::tensor_args_t>
 TilizeDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const tt::tt_metal::MemoryConfig output_mem_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType output_dtype,
     const bool use_multicore,
     const bool enough_space_width,

@@ -42,7 +42,7 @@ struct TilizeDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensors,
-        const tt::tt_metal::MemoryConfig output_mem_config,
+        const tt::tt_metal::MemoryConfig& output_mem_config,
         const tt::tt_metal::DataType output_dtype,
         const bool use_multicore,
         const bool enough_space_width,
