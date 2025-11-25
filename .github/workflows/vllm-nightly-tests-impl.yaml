@@ -452,6 +452,11 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
+          # Disable offline mode for tokenizer loading
+          unset HF_HUB_OFFLINE
+          export HF_HOME="/mnt/MLPerf/huggingface"
+          export TRANSFORMERS_OFFLINE=0
+
           vllm bench serve \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
@@ -477,6 +482,11 @@ jobs:
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
+          # Disable offline mode for tokenizer loading
+          unset HF_HUB_OFFLINE
+          export HF_HOME="/mnt/MLPerf/huggingface"
+          export TRANSFORMERS_OFFLINE=0
+
           python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
