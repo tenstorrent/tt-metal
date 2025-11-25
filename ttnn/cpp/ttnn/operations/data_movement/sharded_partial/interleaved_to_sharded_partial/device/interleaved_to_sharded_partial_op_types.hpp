@@ -1,0 +1,31 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <tt-metalium/core_coord.hpp>
+
+namespace ttnn::operations::data_movement::detail {
+
+struct InterleavedToShardedPartialOperationTypes {
+    struct operation_attributes_t {
+        CoreCoord grid_size;
+        tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec(tt::tt_metal::CoreRangeSet(), {0, 0});
+        uint32_t num_slices;
+        uint32_t slice_index;
+        tt::tt_metal::MemoryConfig output_mem_config;
+        tt::tt_metal::DataType output_dtype;
+    };
+
+    struct tensor_args_t {
+        const tt::tt_metal::Tensor& input_tensor;
+    };
+
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+};
+
+}  // namespace ttnn::operations::data_movement::detail

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "interleaved_to_sharded_program_factory.hpp"
+#include "interleaved_to_sharded_partial_program_factory.hpp"
 
 #include <math.h>
 
@@ -22,18 +22,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const InterleavedToShardedOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedOperationTypes::tensor_return_value_t& tensor_return_value) {
+InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToShardedPartialProgramFactory::create(
+    const InterleavedToShardedPartialOperationTypes::operation_attributes_t& operation_attributes,
+    const InterleavedToShardedPartialOperationTypes::tensor_args_t& tensor_args,
+    InterleavedToShardedPartialOperationTypes::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
-    // Keep explicit bool init to match legacy behavior which forced it true
-    bool keep_l1_aligned = true;
+    // Partial op behavior
+    bool keep_l1_aligned = false;
 
-    // Hardcoded for non-partial op
-    uint32_t num_slices = 1;
-    uint32_t slice_index = 0;
+    uint32_t num_slices = operation_attributes.num_slices;
+    uint32_t slice_index = operation_attributes.slice_index;
 
     tt::tt_metal::Program program{};
 
@@ -377,19 +376,18 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices}};
 }
 
-void InterleavedToShardedProgramFactory::override_runtime_arguments(
+void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const InterleavedToShardedOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedOperationTypes::tensor_return_value_t& tensor_return_value) {
+    const InterleavedToShardedPartialOperationTypes::operation_attributes_t& operation_attributes,
+    const InterleavedToShardedPartialOperationTypes::tensor_args_t& tensor_args,
+    InterleavedToShardedPartialOperationTypes::tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    // Hardcoded for non-partial op
-    uint32_t num_slices = 1;
-    uint32_t slice_index = 0;
+    uint32_t num_slices = operation_attributes.num_slices;
+    uint32_t slice_index = operation_attributes.slice_index;
     bool partial_op = num_slices > 1;
     uint32_t starting_idx_h = 0;
     if (partial_op) {
@@ -409,7 +407,6 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
         runtime_args[0] = src_buffer->address();
         if (partial_op) {
-            // This block is unreachable with num_slices=1 but keeping structure
             runtime_args[7] = starting_idx_h;
         }
     }
