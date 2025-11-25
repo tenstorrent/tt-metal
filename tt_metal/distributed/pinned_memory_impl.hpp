@@ -13,6 +13,7 @@
 #include <deque>
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/mesh_event.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
