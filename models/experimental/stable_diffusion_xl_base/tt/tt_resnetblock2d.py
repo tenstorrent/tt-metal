@@ -260,7 +260,6 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
 
-
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
