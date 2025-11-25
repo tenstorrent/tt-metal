@@ -10,6 +10,7 @@
         "cacheVariables": {
           "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
           "TTNN_BUILD_TESTS": {"value": "TRUE"},
+          "EXPERIMENTAL_NANOBIND_BINDINGS": {"value": "TRUE"},
           "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
           "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "TRUE"},

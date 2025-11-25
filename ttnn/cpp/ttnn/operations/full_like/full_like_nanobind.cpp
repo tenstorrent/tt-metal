@@ -37,7 +37,6 @@ void bind_full_like_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::arg("fill_value"),
-            nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("layout") = nb::none(),
             nb::arg("memory_config") = nb::none()});

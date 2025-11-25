@@ -278,23 +278,36 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
 
-    m_device.def(
+    m_device.def(  // afuller
         "SetDefaultDevice",
-        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
+        [](std::optional<MeshDevice*> device) {
+            if (device.has_value()) {
+                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device.value());
+            } else {
+                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr);
+            }
+        },
         R"doc(
-            Sets the default device to use for operations when inputs are not on the device.
+                Set the default device to given device.
 
-            Args:
-                device (ttnn.Device): The TT device to use.
+                Args:
+                    device (ttnn.Device): the device to set as default.
 
-            Note:
-                This functionality is planned for deprecation in the future.
+                Example:
+                    >>> device_id = 0
+                    >>> device = ttnn.open_device(device_id)
+                    >>> ttnn.SetDefaultDevice(device)
+            )doc");
+
+    m_device.def(  // afuller
+        "ClearDefaultDevice",
+        []() { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr); },
+        R"doc(
+            Clears the default device (sets it to None).
 
             Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id = device_id)
-                >>> ttnn.SetDefaultDevice(device)
-        )doc");
+                >>> ttnn.ClearDefaultDevice()
+         )doc");
 
     m_device.def(
         "GetDefaultDevice",

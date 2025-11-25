@@ -9,12 +9,17 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include "device/matmul_op.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
+
+// is a variant. revisit afuller change to see if that fixes things
+NB_MAKE_OPAQUE(ttnn::operations::matmul::MatmulProgramConfig);
 
 namespace ttnn::operations::matmul {
 

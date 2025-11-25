@@ -584,7 +584,6 @@ void py_module(nb::module_& mod) {
     mod.def(
         "get_device_tensors",
         &get_device_tensors,
-        nb::kw_only(),
         nb::arg("tensor"),
         R"doc(
        Get a list of tensor shards from a multidevice tensor.

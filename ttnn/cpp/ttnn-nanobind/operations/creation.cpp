@@ -32,10 +32,17 @@ auto create_nanobind_full_overload() {
            const fill_value_t fill_value,
            const std::optional<DataType>& dtype,
            const std::optional<Layout>& layout,
-           const std::optional<std::reference_wrapper<MeshDevice>> device,
+           const std::optional<MeshDevice*> device,
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-            return self(ttnn::Shape(shape), fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            return self(  // afuller
+                ttnn::Shape(shape),
+                fill_value,
+                dtype,
+                layout,
+                device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt,
+                memory_config,
+                optional_output_tensor);
         },
         nb::arg("shape"),
         nb::arg("fill_value"),
@@ -214,9 +221,14 @@ void bind_full_operation_with_hard_coded_value(
                const std::vector<uint32_t>& shape,
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{shape}, dtype, layout, device, memory_config);
+                return self(
+                    ttnn::Shape{shape},
+                    dtype,
+                    layout,
+                    device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt,
+                    memory_config);
             },
             nb::arg("shape"),
             nb::arg("dtype") = nb::none(),
@@ -354,10 +366,11 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
                const int64_t end,
                const int64_t step,
                const DataType dtype,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
-               const Layout layout) -> ttnn::Tensor {
-                return self(start, end, step, dtype, device, memory_config, layout);
+               const Layout layout) -> ttnn::Tensor {  // afuller
+                auto dev_ref = device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt;
+                return self(start, end, step, dtype, dev_ref, memory_config, layout);
             },
             nb::arg("start"),
             nb::arg("end"),
@@ -371,9 +384,12 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
             [](const creation_operation_t& self,
                const int64_t end,
                const DataType dtype,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
-               const Layout layout) -> ttnn::Tensor { return self(end, dtype, device, memory_config, layout); },
+               const Layout layout) -> ttnn::Tensor {  // afuller
+                auto dev_ref = device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt;
+                return self(end, dtype, dev_ref, memory_config, layout);
+            },
             nb::arg("end"),
             nb::kw_only(),
             nb::arg("dtype") = DataType::BFLOAT16,

@@ -77,7 +77,6 @@ void bind_copy(nb::module_& mod) {
             [](const decltype(ttnn::copy)& self, const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
                 return self(input_a, input_b);
             },
-            nb::kw_only(),
             nb::arg("input_a").noconvert(),
             nb::arg("input_b").noconvert(),
         });

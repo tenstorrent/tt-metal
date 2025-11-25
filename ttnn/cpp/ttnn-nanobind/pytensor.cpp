@@ -402,6 +402,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
     TT_THROW("Unreachable");
 }
 
+// NANOBIND_TODO: replace with ndarray
 nb::object convert_tt_tensor_to_torch_tensor(const RowMajorHostBuffer& row_major_host_buffer) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", row_major_host_buffer);
