@@ -33,7 +33,7 @@ static_assert(
 void kernel_main() {
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;  // Initialize local args index
-
+    DPRINT << "SENDER: starting kernel" << ENDL();
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
     uint32_t kernel_config_address = common_memory_map.kernel_config_base;
@@ -46,11 +46,11 @@ void kernel_main() {
     // Build mux termination manager from local args (uses advanced local_args_idx)
     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
         local_args_idx, common_memory_map.mux_termination_sync_address);
-
+    DPRINT << "SENDER: built mux termination manager" << ENDL();
     // Clear test results area and mark as started
     clear_test_results(sender_config->get_result_buffer_address(), sender_config->get_result_buffer_size());
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
-
+    DPRINT << "SENDER: cleared test results area and marked as started" << ENDL();
     // Local sync (as participant, not master)
     uint8_t sync_iter = 0;
     if constexpr (LINE_SYNC) {
@@ -58,15 +58,15 @@ void kernel_main() {
     }
 
     sender_config->open_connections();
-
+    DPRINT << "SENDER: opened connections" << ENDL();
     bool packets_left_to_send = true;
     uint64_t total_packets_sent = 0;
     uint32_t loop_count = 0;
-
+    DPRINT << "SENDER: initialized loop variables" << ENDL();
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
-
+    DPRINT << "SENDER: initialized progress update interval" << ENDL();
     while (packets_left_to_send) {
         packets_left_to_send = false;
 
@@ -105,29 +105,29 @@ void kernel_main() {
     }
 
     sender_config->close_connections();
-
+    DPRINT << "SENDER: closed connections" << ENDL();
     // Local sync (as participant, not master) for end of sync first sync tells sync core to start global sync, second
     // sync is waiting for global sync done
     if constexpr (LINE_SYNC) {
         sender_config->local_sync(sync_iter++);
         sender_config->local_sync(sync_iter++);
     }
-
+    DPRINT << "SENDER: performed local sync" << ENDL();
     uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
-
+    DPRINT << "SENDER: terminated muxes" << ENDL();
     // Collect results from all traffic configs
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
         auto* traffic_config = sender_config->traffic_config_ptrs[i];
         total_packets_sent += traffic_config->num_packets_processed;
     }
-
+    DPRINT << "SENDER: collected results from all traffic configs" << ENDL();
     // Write test results
     write_test_cycles(sender_config->get_result_buffer_address(), total_elapsed_cycles_outer_loop);
     write_test_packets(sender_config->get_result_buffer_address(), total_packets_sent);
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);
-
+    DPRINT << "SENDER: wrote test results" << ENDL();
     noc_async_full_barrier();
 }

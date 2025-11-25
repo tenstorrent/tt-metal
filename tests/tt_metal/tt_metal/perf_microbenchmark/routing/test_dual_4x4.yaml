@@ -10,12 +10,11 @@ Tests:
   - name: InterMeshCrossTraffic
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
     defaults:
       ftype: unicast
       ntype: unicast_write
-      size: 2048
-      num_packets: 250
+      size: 1024
+      num_packets: 10000
     senders:
       - device: [0, [2, 3]]
         patterns:
@@ -29,12 +28,11 @@ Tests:
   - name: InterMeshCrossTrafficCyclic
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
     defaults:
       ftype: unicast
       ntype: unicast_write
-      size: 2048
-      num_packets: 250
+      size: 1024
+      num_packets: 10000
     senders:
       - device: [0, 14]
         patterns:
@@ -52,3 +50,20 @@ Tests:
         patterns:
           - destination:
               device: [0, 15]
+
+  # - name: "FlowControlMultiMesh"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   parametrization_params:
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #     size: [1024, 2048, 4096]
+
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 10000
+
+  #   patterns:
+  #     - type: sequential_all_to_all
