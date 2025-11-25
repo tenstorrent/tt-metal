@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.demos.mobilenetv2.tt.common import TtInvertedResidual, TtMobileNetV2Conv2D
+from models.demos.vision.classification.mobilenetv2.tt.common import TtInvertedResidual, TtMobileNetV2Conv2D
 
 
 class TtMobileNetV2:

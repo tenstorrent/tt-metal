@@ -10,14 +10,18 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import profiler, run_for_wormhole_b0
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
-from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
-from models.demos.mobilenetv2.tt.model_preprocessing import (
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, get_mesh_mappers, load_imagenet_dataset
+from models.demos.vision.classification.mobilenetv2.common import (
+    MOBILENETV2_BATCH_SIZE,
+    MOBILENETV2_L1_SMALL_SIZE,
+    load_torch_model,
+)
+from models.demos.vision.classification.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.vision.classification.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.vision.classification.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
 )
-from models.demos.utils.common_demo_utils import get_batch, get_data_loader, get_mesh_mappers, load_imagenet_dataset
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
     create_pipeline_from_config,

@@ -10,8 +10,8 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.utils.common_demo_utils import get_data_loader, load_imagenet_dataset
+from models.demos.vision.classification.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.experimental.efficientnetb0.common import EFFICIENTNETB0_L1_SMALL_SIZE
 from models.experimental.swin_s.common import SWIN_S_L1_SMALL_SIZE
 from models.experimental.swin_v2.common import SWIN_V2_L1_SMALL_SIZE
@@ -349,14 +349,14 @@ def test_resnet50_image_classification_eval_dp(
 def run_mobilenetv2_image_classification_eval(
     device, model_type, batch_size_per_device, res, model_location_generator, reset_seeds
 ):
-    from models.demos.mobilenetv2.common import load_torch_model
-    from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-    from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
-    from models.demos.mobilenetv2.tt.model_preprocessing import (
+    from models.demos.utils.common_demo_utils import get_batch, get_mesh_mappers
+    from models.demos.vision.classification.mobilenetv2.common import load_torch_model
+    from models.demos.vision.classification.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+    from models.demos.vision.classification.mobilenetv2.tt import ttnn_mobilenetv2
+    from models.demos.vision.classification.mobilenetv2.tt.model_preprocessing import (
         create_mobilenetv2_input_tensors,
         create_mobilenetv2_model_parameters,
     )
-    from models.demos.utils.common_demo_utils import get_batch, get_mesh_mappers
     from models.tt_cnn.tt.pipeline import (
         PipelineConfig,
         create_pipeline_from_config,
