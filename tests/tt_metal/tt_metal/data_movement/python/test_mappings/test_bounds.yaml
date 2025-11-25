@@ -317,3 +317,11 @@
   wormhole_b0:
     riscv_1:
       bandwidth: 10.5
+
+"PCIe Read Bandwidth":
+  blackhole:
+    riscv_0:
+      bandwidth: 42.5
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 20.1

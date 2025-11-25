@@ -51,6 +51,7 @@ Both API versions run the same test cases but use different underlying implement
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
 | Transaction ID              | 600-602                         | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 
 
 ## Running Tests
