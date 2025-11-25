@@ -76,8 +76,32 @@ class CheckResult:
 
 
 @dataclass
+class DeviceDescription:
+    """
+    Wrapper for Device that determines whether to use unique_id for display
+    based on Metal/Exalens ID mismatch.
+    """
+
+    device: Device
+    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
+
+    def __init__(self, device: Device, metal_device_id_mapping: MetalDeviceIdMapping):
+        self.device = device
+        # Check if exalens device._id maps to the same unique_id as device.unique_id
+        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
+        self.use_unique_id = inspector_unique_id != device.unique_id
+
+
+def device_description_serializer(device_desc: DeviceDescription) -> str:
+    if device_desc.use_unique_id:
+        return str(device_desc.device.unique_id)
+    else:
+        return str(device_desc.device._id)
+
+
+@dataclass
 class PerDeviceCheckResult(CheckResult):
-    device_description: DeviceDescription = triage_field("Dev", DeviceDescription.device_description_serializer)
+    device_description: DeviceDescription = triage_field("Dev", device_description_serializer)
 
 
 @dataclass
@@ -119,39 +143,6 @@ def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[
             return device.get_block_locations(block_type)
 
 
-@dataclass
-class DeviceDescription:
-    """
-    Wrapper for Device that determines whether to use unique_id for display
-    based on Metal/Exalens ID mismatch.
-    """
-
-    device: Device
-    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
-
-    @classmethod
-    def create(cls, device: Device, metal_device_id_mapping: MetalDeviceIdMapping) -> "DeviceDescription":
-        """Create a DeviceDescription from a Device object."""
-        use_unique_id = False
-
-        # Check if exalens device._id maps to the same unique_id as device.unique_id
-        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
-        if inspector_unique_id != device.unique_id:
-            use_unique_id = True
-
-        return cls(
-            device=device,
-            use_unique_id=use_unique_id,
-        )
-
-    @staticmethod
-    def device_description_serializer(device_desc: DeviceDescription) -> str:
-        if device_desc.use_unique_id:
-            return str(device_desc.device.unique_id)
-        else:
-            return str(device_desc.device._id)
-
-
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
@@ -179,8 +170,7 @@ def get_devices(
 class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
-        # Pre-compute block locations for all devices and block types
-        self._device_descriptions = [DeviceDescription.create(device, metal_device_id_mapping) for device in devices]
+        self.metal_device_id_mapping = metal_device_id_mapping
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
@@ -216,7 +206,12 @@ class RunChecks:
         for device in self.devices:
             check_result = check(device)
             # Use the common result collection helper
-            self._collect_results(result, check_result, PerDeviceCheckResult, device=device_desc)
+            self._collect_results(
+                result,
+                check_result,
+                PerDeviceCheckResult,
+                device_description=DeviceDescription(device, self.metal_device_id_mapping),
+            )
         return result if len(result) > 0 else None
 
     def run_per_block_check(
@@ -227,10 +222,9 @@ class RunChecks:
             BLOCK_TYPES if block_filter is None else [block_filter] if isinstance(block_filter, str) else block_filter
         )
 
-        def per_device_blocks_check(device_desc: DeviceDescription) -> list[PerBlockCheckResult] | None:
+        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
             """Check all block locations for a single device."""
             result: list[PerBlockCheckResult] = []
-            device = device_desc.device
             for block_type in block_types_to_check:
                 for location in self.block_locations[device][block_type]:
                     check_result = check(location)
@@ -239,7 +233,7 @@ class RunChecks:
                         result,
                         check_result,
                         PerBlockCheckResult,
-                        device=device_desc,
+                        device_description=DeviceDescription(device, self.metal_device_id_mapping),
                         location=location,
                     )
             return result if len(result) > 0 else None
@@ -283,7 +277,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device=location._device,
+                    device_description=DeviceDescription(location._device, self.metal_device_id_mapping),
                     location=location,
                     risc_name=risc_name,
                 )

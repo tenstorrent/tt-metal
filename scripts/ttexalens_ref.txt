@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 6cd17a6dc384178f59472ee111dfbbef8b1e27c7
+=======
+06c8eb99bc9bba042921bac5375fee1ef927180b
+>>>>>>> 3af888921c (fixing DeviceDescription wrapper)

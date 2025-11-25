@@ -15,7 +15,7 @@ Description:
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import MemoryAccess
-from ttexalens.tt_exalens_lib import read_tensix_register
+from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
@@ -52,7 +52,7 @@ def check_noc_status(
         reg = var_to_reg_map[var]
         # If reading fails, write error message and skip to next core
         try:
-            reg_val = read_tensix_register(location=location, register=reg, noc_id=noc_id)
+            reg_val = read_register(location=location, register=reg, noc_id=noc_id)
             var_val = fw_elf.get_global(var, loc_mem_access)[noc_id]
         except Exception as e:
             message += "    " + str(e) + "\n"
