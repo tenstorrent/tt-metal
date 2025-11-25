@@ -9,13 +9,13 @@
 namespace ttnn::operations::data_movement {
 
 struct ReshapeOperationAttributes {
-    const ttnn::Shape logical_output_shape;
-    const ttnn::Shape padded_output_shape;
-    const tt::tt_metal::MemoryConfig output_mem_config;
+    ttnn::Shape logical_output_shape;
+    ttnn::Shape padded_output_shape;
+    tt::tt_metal::MemoryConfig output_mem_config;
 };
 
 struct ReshapeTensorArgs {
-    const Tensor& input_tensor;
+    Tensor input_tensor;
 };
 
 using tensor_return_value_t = Tensor;
