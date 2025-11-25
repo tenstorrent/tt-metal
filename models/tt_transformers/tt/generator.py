@@ -1668,3 +1668,11 @@ def create_submeshes(mesh_device, data_parallel):
         return submeshes
 
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+
+
+def mstojko_create_submeshes(mesh_device, data_parallel):
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(data_parallel, 1))
+
+    submeshes[0].reshape(ttnn.MeshShape(1, data_parallel))
+
+    return submeshes[0]

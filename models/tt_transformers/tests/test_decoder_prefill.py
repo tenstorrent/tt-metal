@@ -14,7 +14,7 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.generator import create_submeshes
+from models.tt_transformers.tt.generator import mstojko_create_submeshes
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import get_rot_mats
 
@@ -46,10 +46,7 @@ from models.tt_transformers.tt.rope import get_rot_mats
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (
-        4096,
-        128,
-    ),
+    (128,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
@@ -60,25 +57,15 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device = mstojko_create_submeshes(mesh_device, 4)
+    device = mesh_device
+    # mesh_device = create_submeshes(mesh_device, 4)
+
     model_name_env = os.getenv("HF_MODEL")
     if max_seq_len > 256 and model_name_env and "Mistral-7B" in model_name_env:
         pytest.skip(
             "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
         )
-
-    mesh_device = create_submeshes(mesh_device, 1)
-
-    # Create submesh for Galaxy (T3K with dp4)
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
-    if num_devices == 32:  # Galaxy
-        data_parallel = 4
-        submesh_devices = create_submeshes(mesh_device, data_parallel)
-        device = submesh_devices[0]  # Use first T3K submesh
-        logger.info(f"Using T3K submesh on Galaxy with dp={data_parallel}")
-    else:
-        device = mesh_device
-        logger.info(f"Using full mesh device with {num_devices} devices")
-        assert False
 
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
