@@ -632,11 +632,11 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 
 uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
     // Return user-configured timeout or default value
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_simulator_enabled()) {
         return 15000;  // Keep simulator timeout unchanged
     }
     
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
     
     // Return user override if set, otherwise use fabric default

@@ -109,7 +109,7 @@ private:
     tt_metal::IDevice* get_device(ChipId id) const;
     void teardown_fd(const std::unordered_set<ChipId>& devices_to_close);
     
-    // Helper to calculate fabric router sync timeout based on system size
+    // Retrieves the fabric router sync timeout value from configuration or returns a default
     static uint32_t get_fabric_router_sync_timeout_ms();
 
     static DevicePool* _inst;

@@ -1051,7 +1051,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=8000
         case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS:
             try {
-                this->fabric_router_sync_timeout_ms = std::stoi(value);
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS must be non-negative: {}", value);
+                }
+                this->fabric_router_sync_timeout_ms = static_cast<uint32_t>(parsed_value);
             } catch (const std::invalid_argument& ia) {
                 TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
             } catch (const std::out_of_range&) {
