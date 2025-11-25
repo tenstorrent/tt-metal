@@ -116,7 +116,7 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_info(tt::LogOp, "Where LLK - TTT");
+    log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),

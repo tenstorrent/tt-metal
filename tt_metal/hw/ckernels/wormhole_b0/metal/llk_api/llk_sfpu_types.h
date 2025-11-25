@@ -133,4 +133,5 @@ enum class SfpuType {
     hardmish,
     reduce,
     add_top_row,
+    rdiv,
 };
