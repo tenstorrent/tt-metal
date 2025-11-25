@@ -352,6 +352,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
+
 
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
@@ -408,9 +411,8 @@ class LlamaForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, page_table, kv_cache, enable_trace=True):
-        logger.info("LlamaForCausalLM warmup_model called")
-        self.warmup_prefill_traces(page_table, kv_cache, enable_trace)
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
 
 
 class QwenForCausalLM(Generator):
@@ -455,6 +457,9 @@ class QwenForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
+
 
 class MistralForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
@@ -497,6 +502,9 @@ class MistralForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
 
 
 class MultiModalProcessor(BaseMultiModalProcessor):
@@ -628,6 +636,9 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
 
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
+
 
 class GptOssForCausalLM(Generator):
     """GPT-OSS model for vLLM integration"""
@@ -687,3 +698,6 @@ class GptOssForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+    def warmup_model(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)

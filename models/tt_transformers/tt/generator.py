@@ -81,9 +81,8 @@ class Generator:
 
     def warmup_prefill_traces(
         self,
-        page_table,
         kv_cache,
-        enable_trace=True,
+        enable_trace,
     ):
         if not enable_trace:
             return
@@ -95,6 +94,8 @@ class Generator:
                 warmup_empty_slots = list(range(1))
 
                 logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
+                # The page table will get padded properly in the prefill_forward method later
+                page_table = torch.zeros(1, 1, dtype=torch.int32)
                 self.prefill_forward_text(
                     warmup_tokens,
                     page_table,
