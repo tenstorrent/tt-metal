@@ -108,7 +108,7 @@ void py_bind_reshape_view(pybind11::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
                 * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
-                * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced data movement control. Default is None.
+                * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
 
 
             Returns:
