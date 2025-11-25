@@ -95,6 +95,7 @@ def create_optimizer(model, yaml_config: dict):
     else:
         return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
+
 def get_loss_over_devices(loss):
     """Aggregate loss over all devices and return mean."""
     device = ttml.autograd.AutoContext.get_instance().get_device()

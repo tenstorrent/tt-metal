@@ -19,10 +19,23 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 import ttml
-from ttml.common.config import TrainingConfig, DeviceConfig, SchedulerConfig, load_config
+from ttml.common.config import (
+    TrainingConfig,
+    DeviceConfig,
+    SchedulerConfig,
+    load_config,
+)
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.schedulers import SpeedrunScheduler, OptimParamSetter
-from ttml.common.utils import round_up_to_tile, initialize_device, create_optimizer, get_loss_over_devices, build_logits_mask, no_grad, get_tt_metal_home
+from ttml.common.utils import (
+    round_up_to_tile,
+    initialize_device,
+    create_optimizer,
+    get_loss_over_devices,
+    build_logits_mask,
+    no_grad,
+    get_tt_metal_home,
+)
 from ttml.common.data import build_causal_mask
 
 # Configuration
@@ -237,7 +250,7 @@ def validate(
     reduce = ttml.ops.ReduceType.NONE
 
     tt_model.eval()
-    
+
     with no_grad():
         eval_batch_count = 4
         cur_val_losses = []
@@ -316,7 +329,9 @@ def train():
         "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     )
 
-    yaml_config = load_config(CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs")
+    yaml_config = load_config(
+        CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
+    )
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
     override_config_path = (
@@ -569,4 +584,4 @@ def train():
 
 
 if __name__ == "__main__":
-    train() 
+    train()

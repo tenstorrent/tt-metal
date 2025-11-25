@@ -6,6 +6,7 @@
 from ttml.common.config import SchedulerConfig
 from typing import Optional
 
+
 class SpeedrunScheduler:
     """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
 

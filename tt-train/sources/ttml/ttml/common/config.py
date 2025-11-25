@@ -147,9 +147,7 @@ class TransformerConfig:
             self.high_freq_factor = self.rope.get("high_freq_factor", None)
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get(
-                
                 "original_context_length", None
-            
             )
 
     def update_config(self, yaml_config: dict):
