@@ -263,6 +263,11 @@ void MAIN {
                         //     pre_tilize_cb_id)));
                         tensix_sync();
                         UNPACK(tilizeA_B_uninit(pre_tilize_cb_id));
+                        // nops
+                        for (uint32_t i = 0; i < 4; i++) {
+                            TTI_NOP;
+                            asm volatile("nop");
+                        }
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
