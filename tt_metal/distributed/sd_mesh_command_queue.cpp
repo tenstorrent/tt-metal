@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <utility>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::distributed {
 

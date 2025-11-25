@@ -27,6 +27,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 
