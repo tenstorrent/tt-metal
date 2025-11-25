@@ -200,7 +200,7 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
 }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
