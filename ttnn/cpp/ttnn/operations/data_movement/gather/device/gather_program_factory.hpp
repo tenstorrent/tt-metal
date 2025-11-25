@@ -17,7 +17,7 @@ struct GatherProgramFactorySingleRowSingleCore {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id{};
         KernelHandle gather_writer_kernel_id{};
-        std::vector<CoreCoord> cores;
+        std::vector<CoreCoord> cores{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -32,7 +32,7 @@ struct GatherProgramFactorySingleRowMultiCore {
     struct shared_variables_t {
         KernelHandle gather_reader_kernel_id{};
         KernelHandle gather_writer_kernel_id{};
-        std::vector<CoreCoord> cores;
+        std::vector<CoreCoord> cores{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
