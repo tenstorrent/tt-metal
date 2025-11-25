@@ -444,6 +444,12 @@ nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
     //         int device_id = 0,
     //         char order = Order) {
 
+    // whose sign bit is it anyway
+    nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
+    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
+        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
+    }
+
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
     auto torch_tensor = nb::ndarray<nb::pytorch>(
@@ -452,7 +458,7 @@ nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
         shape_vec.data(),
         owner,
         nullptr,
-        get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type),
+        dt,
         nb::device::cpu::value,
         0,
         nb::c_contig::value);
@@ -513,6 +519,11 @@ nb::ndarray<nb::numpy> convert_tt_tensor_to_numpy_tensor(
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
+    // whose sign bit is it anyway
+    nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
+    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
+        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
+    }
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
     auto np_tensor = nb::ndarray<nb::numpy>(
@@ -521,7 +532,7 @@ nb::ndarray<nb::numpy> convert_tt_tensor_to_numpy_tensor(
         shape_vec.data(),
         owner,
         nullptr,
-        get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type),
+        dt,
         nb::device::cpu::value,
         0,
         nb::c_contig::value);
