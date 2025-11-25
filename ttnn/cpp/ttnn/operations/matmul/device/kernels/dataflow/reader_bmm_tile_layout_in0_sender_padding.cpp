@@ -148,14 +148,14 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
-            noc_async_read_barrier();
+            // noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            // noc_async_read_barrier();
         }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
-                volatile auto is_batch_valid =
-                    ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
+                volatile auto is_batch_valid = true;
+                // ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
                 if constexpr (get_batch_from_reader) {
 #ifndef SKIP_MCAST

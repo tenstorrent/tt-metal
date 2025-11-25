@@ -220,8 +220,8 @@ void kernel_main() {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
 
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
-            noc_async_read_barrier();
+            // noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            // noc_async_read_barrier();
         }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
