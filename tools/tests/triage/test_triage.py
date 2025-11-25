@@ -48,6 +48,13 @@ def cause_hang_with_app(request):
 
         # Check if the process has exited
         if proc.returncode != 0:
+            # Print process output for debugging
+            print("The application did not hang as expected.")
+            stdout, stderr = proc.communicate(input=None, timeout=0)
+            print("\n=== Process stdout ===")
+            print(stdout.decode("utf-8") if stdout else "(empty)")
+            print("\n=== Process stderr ===")
+            print(stderr.decode("utf-8") if stderr else "(empty)")
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
@@ -63,8 +70,9 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
 
-        # TODO: Reset the device state after the hang
-        # subprocess.run(["tt-smi", "-r"], check=True)
+        # Reset the device state after the hang if set in environment
+        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+            subprocess.run(["tt-smi", "-r"], check=True)
 
 
 @pytest.mark.parametrize(
@@ -88,7 +96,7 @@ def cause_hang_with_app(request):
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
                 },
             },
-            5,
+            20,
         ),
     ],
     indirect=True,
