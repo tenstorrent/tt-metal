@@ -11,10 +11,10 @@
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedPartialDeviceOperation {
-    using operation_attributes_t = detail::InterleavedToShardedPartialOperationTypes::operation_attributes_t;
-    using tensor_args_t = detail::InterleavedToShardedPartialOperationTypes::tensor_args_t;
-    using spec_return_value_t = detail::InterleavedToShardedPartialOperationTypes::spec_return_value_t;
-    using tensor_return_value_t = detail::InterleavedToShardedPartialOperationTypes::tensor_return_value_t;
+    using operation_attributes_t = interleaved_to_sharded_partial::operation_attributes_t;
+    using tensor_args_t = interleaved_to_sharded_partial::tensor_args_t;
+    using spec_return_value_t = interleaved_to_sharded_partial::spec_return_value_t;
+    using tensor_return_value_t = interleaved_to_sharded_partial::tensor_return_value_t;
     using program_factory_t = std::variant<detail::InterleavedToShardedPartialProgramFactory>;
 
     static program_factory_t select_program_factory(

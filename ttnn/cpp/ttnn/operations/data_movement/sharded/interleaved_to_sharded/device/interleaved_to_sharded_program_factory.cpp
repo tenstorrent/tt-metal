@@ -20,12 +20,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::interleaved_to_sharded {
 
 InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const InterleavedToShardedOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedOperationTypes::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
     // Keep explicit bool init to match legacy behavior which forced it true
@@ -192,7 +192,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -379,9 +379,9 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
 
 void InterleavedToShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const InterleavedToShardedOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedOperationTypes::tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
 
@@ -394,7 +394,7 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     uint32_t starting_idx_h = 0;
     if (partial_op) {
         uint32_t runtime_slice_index = slice_index;
-        starting_idx_h = calculate_starting_idx_h(tensor_args.input_tensor, num_slices, runtime_slice_index);
+        starting_idx_h = detail::calculate_starting_idx_h(tensor_args.input_tensor, num_slices, runtime_slice_index);
     }
 
     auto& shared_variables = cached_program.shared_variables;
@@ -425,4 +425,4 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::interleaved_to_sharded

@@ -23,9 +23,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToShardedPartialProgramFactory::create(
-    const InterleavedToShardedPartialOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedPartialOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedPartialOperationTypes::tensor_return_value_t& tensor_return_value) {
+    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
+    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
+    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
     // Partial op behavior
@@ -378,9 +378,9 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
 
 void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const InterleavedToShardedPartialOperationTypes::operation_attributes_t& operation_attributes,
-    const InterleavedToShardedPartialOperationTypes::tensor_args_t& tensor_args,
-    InterleavedToShardedPartialOperationTypes::tensor_return_value_t& tensor_return_value) {
+    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
+    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
+    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
 

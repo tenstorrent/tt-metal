@@ -7,22 +7,20 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::interleaved_to_sharded {
 
-struct InterleavedToShardedOperationTypes {
-    struct operation_attributes_t {
-        tt::tt_metal::MemoryConfig output_mem_config;
-        tt::tt_metal::DataType output_dtype;
-        bool keep_l1_aligned;
-    };
-
-    struct tensor_args_t {
-        tt::tt_metal::Tensor input_tensor;
-        std::optional<tt::tt_metal::Tensor> preallocated_output;
-    };
-
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+struct operation_attributes_t {
+    tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::DataType output_dtype;
+    bool keep_l1_aligned;
 };
 
-}  // namespace ttnn::operations::data_movement::detail
+struct tensor_args_t {
+    tt::tt_metal::Tensor input_tensor;
+    std::optional<tt::tt_metal::Tensor> preallocated_output;
+};
+
+using spec_return_value_t = tt::tt_metal::TensorSpec;
+using tensor_return_value_t = tt::tt_metal::Tensor;
+
+}  // namespace ttnn::operations::data_movement::interleaved_to_sharded
