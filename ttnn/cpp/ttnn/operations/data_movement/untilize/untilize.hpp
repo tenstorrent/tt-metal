@@ -17,7 +17,8 @@ struct ExecuteUntilize {
         bool use_multicore = true,
         bool use_pack_untilize = true,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        bool _internal_row_wise = false);
+        bool _internal_row_wise = false,
+        const std::optional<GlobalSemaphore> & _internal_semaphore = std::nullopt);
 };
 
 }  // namespace operations::data_movement

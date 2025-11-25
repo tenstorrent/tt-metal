@@ -239,6 +239,8 @@ operation::ProgramWithCallbacks Untilize::create_program(
             output_tensor,
             this->use_pack_untilize,
             this->fp32_dest_acc_en,
+            this->sub_core_grids.value(),
+            this->_internal_semaphore,
             this->sub_core_grids.value());
     }
     if (this->sub_core_grids.has_value()) {
