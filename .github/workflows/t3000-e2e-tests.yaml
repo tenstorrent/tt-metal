@@ -1,9 +1,9 @@
 name: "(T3K) T3000 e2e tests"
 
 on:
-  push:
-    branches:
-      ["roseli/30675-reorg-t3k-pipelines"]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *" # runs every day at 9pm UTC
 
 jobs:
   build-artifact:
