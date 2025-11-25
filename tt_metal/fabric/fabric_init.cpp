@@ -486,7 +486,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 }
 
 void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    std::vector<uint32_t> router_zero_buf(1, 0);
+    std::vector<uint32_t> router_zero_buf(8, 0);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
