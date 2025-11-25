@@ -10,7 +10,6 @@
 #include "modules/llama_block.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
-#include "ops/unary_ops.hpp"
 #include "serialization/safetensors.hpp"
 
 namespace {
@@ -125,6 +124,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
+    fmt::print("    Inference mode (KV cache): {}\n", config.inference ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -183,20 +183,106 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     register_module(fc, "fc");
 
     common::transformer::initialize_weights_gpt2(*this);
+
+    // Initialize KV cache if in inference mode
+    if (config.inference) {
+        initialize_kv_cache(1);  // Default batch size of 1 for inference
+    }
+}
+
+void Llama::initialize_kv_cache(uint32_t batch_size) {
+    if (!m_config.inference) {
+        fmt::print("Warning: Attempting to initialize KV cache but inference mode is disabled\n");
+        return;
+    }
+
+    uint32_t head_dim = m_config.embedding_dim / m_config.num_heads;
+    uint32_t max_seq_len = m_config.max_sequence_length;
+    uint32_t num_groups = m_config.num_groups;
+
+    fmt::print("Initializing KV cache:\n");
+    fmt::print("    Batch size: {}\n", batch_size);
+    fmt::print("    Num layers: {}\n", m_config.num_blocks);
+    fmt::print("    Num groups: {}\n", num_groups);
+    fmt::print("    Max sequence length: {}\n", max_seq_len);
+    fmt::print("    Head dim: {}\n", head_dim);
+
+    m_kv_cache.clear();
+    m_kv_cache.reserve(m_config.num_blocks);
+
+    // Create cache tensors in DRAM for persistence across operations
+    // Shape: [batch_size, num_groups, max_seq_len, head_dim]
+    auto dram_memory_config = ttnn::MemoryConfig{ttnn::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM};
+
+    for (uint32_t layer_idx = 0; layer_idx < m_config.num_blocks; ++layer_idx) {
+        auto k_cache_shape = ttnn::Shape({batch_size, num_groups, max_seq_len, head_dim});
+        auto v_cache_shape = ttnn::Shape({batch_size, num_groups, max_seq_len, head_dim});
+
+        auto k_cache = autograd::create_tensor(ttnn::zeros(
+            k_cache_shape,
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            std::ref(autograd::ctx().get_device()),
+            dram_memory_config));
+        auto v_cache = autograd::create_tensor(ttnn::zeros(
+            v_cache_shape,
+            ttnn::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            std::ref(autograd::ctx().get_device()),
+            dram_memory_config));
+
+        m_kv_cache.emplace_back(k_cache, v_cache);
+    }
+
+    m_cache_position = 0U;
+    fmt::print("KV cache initialized successfully\n");
 }
 
 ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
-    for (auto& block : blocks) {
-        if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(*block, out, mask);
-        } else if (runner_type == RunnerType::Default) {
-            out = (*block)(out, mask);
+
+    if (m_config.inference && !m_kv_cache.empty()) {
+        // Inference mode with KV cache
+        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
+            auto& block = blocks[block_idx];
+            auto& [k_cache, v_cache] = m_kv_cache[block_idx];
+
+            // Cast block to LlamaBlock to access the cache-aware operator
+            auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
+            if (llama_block) {
+                out = (*llama_block)(out, mask, k_cache, v_cache, m_cache_position);
+            } else {
+                throw std::runtime_error("Block is not a LlamaBlock");
+            }
+        }
+
+        // Update cache position
+        // Note: Caller must pass the actual sequence length, not padded length
+        // Prefill (cache_position == 0): increment by prompt length
+        // Decode (cache_position > 0): increment by 1 (single token)
+        if (m_cache_position == 0) {
+            // Prefill mode - will be set correctly by caller after this forward pass
+            // Don't increment automatically here since we don't know the actual (non-padded) length
+            // This will be fixed in the inference script
         } else {
-            throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+            // Decode: always increment by 1 (single token)
+            m_cache_position += 1;
+        }
+
+    } else {
+        // Training mode or inference without cache
+        for (auto& block : blocks) {
+            if (runner_type == RunnerType::MemoryEfficient) {
+                out = common::transformer::memory_efficient_runner(*block, out, mask);
+            } else if (runner_type == RunnerType::Default) {
+                out = (*block)(out, mask);
+            } else {
+                throw std::runtime_error("Unknown runner type. Supported runner types ['default', 'memory_efficient']");
+            }
         }
     }
+
     out = (*ln_fc)(out);
     auto logits = (*fc)(out);
     return logits;
