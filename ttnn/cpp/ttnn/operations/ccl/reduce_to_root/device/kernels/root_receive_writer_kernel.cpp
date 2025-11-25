@@ -65,17 +65,17 @@ void kernel_main() {
     uint32_t final_dst_addr_s = get_arg_val<uint32_t>(5);
     uint32_t final_dst_addr_m = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t core_noc_x = get_compile_time_arg_val(0);
-    constexpr uint32_t core_noc_y = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(2);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     uint32_t input_num_tiles = 4;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(8);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(9);
 
     DPRINT << "BEFORE writing first output to intermediate buffer\n";
 

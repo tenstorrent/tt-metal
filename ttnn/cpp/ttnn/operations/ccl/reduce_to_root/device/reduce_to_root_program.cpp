@@ -10,7 +10,107 @@
 #include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
+// ASSUMING ROOT ID ALWAYS DEVICE 1
+// CHANGE HARDCODED VALUES IF DEVICE 2 IS ROOT INSTEAD
+
 namespace ttnn::operations::ccl {
+
+inline bool mux_connection_valid(uint32_t dir, bool is_leftmost, bool is_sender_device) {
+    if (is_sender_device) {
+        return (dir && !is_leftmost) || (!dir && is_leftmost);
+    }
+    return true;
+};
+
+inline std::vector<MeshCoordinate> find_send_recv(
+    uint32_t dir,
+    bool is_leftmost,
+    bool is_sender_device,
+    bool is_root_device,
+    bool is_root2_device,
+    const MeshCoordinate& device_coordinate) {
+    std::vector<MeshCoordinate> transfer_coords;
+    MeshCoordinate send_coord = device_coordinate;
+    MeshCoordinate receive_coord = device_coordinate;
+    if (is_sender_device) {
+        if (is_leftmost) {  // left
+            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            receive_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+        } else {  // right
+            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
+        }
+    } else if (is_root_device) {
+        receive_coord = device_coordinate;
+        auto sender_coord_1 = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
+        auto sender_coord_2 = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+        if (dir == 0) {
+            send_coord = sender_coord_2;
+        } else {
+            send_coord = sender_coord_1;
+        }
+    } else if (is_root2_device) {
+        receive_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+        send_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+        if (dir) {
+            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
+            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
+        }
+    }
+    transfer_coords.push_back(send_coord);
+    transfer_coords.push_back(receive_coord);
+    return transfer_coords;
+}
+
+inline void fabric_mux_ct_args(
+    const uint32_t num_workers_per_direction,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args) {
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
+    worker_ct_args.push_back(
+        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
+    worker_ct_args.push_back(
+        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
+    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
+}
+
+inline void fabric_mux_rt_args(
+    const bool is_forward,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args) {
+    worker_rt_args.push_back(is_forward);             // is_forward direction
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address
+    worker_rt_args.push_back(
+        mux_kernel_config.get_connection_info_address(channel_type, worker_id));  // fabric_mux_connection_info_address
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_fabric_mux_status_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_flow_control_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_teardown_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_buffer_index_address
+    worker_rt_args.push_back(termination_master_virtual_core.x);                    // termination_master_noc_x
+    worker_rt_args.push_back(termination_master_virtual_core.y);                    // termination_master_noc_y
+}
 
 ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t> reduce_to_root_program_factory(
     const ReduceToRootOp::tensor_args_t& tensor_args,
@@ -20,7 +120,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
-    const auto& topology = operation_attributes.topology;
+    // const auto& topology = operation_attributes.topology;
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -95,12 +195,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     //  device 1 has three buffers for the output results
     //  all devices except device 1 have buffers for packet headers and packets
 
-    // basic accounting
-    const uint32_t input_l_num_pages = data_movement::get_num_pages(input_tensor_l);
+    uint32_t num_shard_cores = 4;  // 8 for 2 links and get the value from the tensor
+    uint32_t input_l_total_num_pages = data_movement::get_num_pages(input_tensor_l);
+    uint32_t input_l_num_pages = input_l_total_num_pages / num_shard_cores;
+    printf("input l total num pages: %u, per core num pages: %u\n", input_l_total_num_pages, input_l_num_pages);
 
     const uint32_t input_page_size_bytes =
         input_tensor_l.tensor_spec().compute_page_size_bytes();  // same page size: assuming all are tiny tiles
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    printf("input page size bytes: %u\n", input_page_size_bytes);
 
     // figure out packets
     const auto [packet_size_bytes_initial, num_pages_per_packet, num_page_segments, total_packets] =
@@ -111,10 +214,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // HERE TODO TO DO MAKE SURE THIS IS CORRECT FOR BLACKHOLE CHANGE IT TO 8192
     uint32_t packet_size_bytes = 2048;  // 8192 = (8 * 512 * 2)
     // eventually add more cores for multi-link
-    const CoreCoord use_cores = {1, 1};
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(use_cores, total_packets);
+    // const CoreCoord use_cores = {1, 1};
+    // const auto
+    //    [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2]
+    //    =
+    //        tt::tt_metal::split_work_to_cores(use_cores, total_packets);
+    const auto all_coord_cores = {CoreCoord(0, 0), CoreCoord(0, 1), CoreCoord(0, 2), CoreCoord(0, 3)};
+    const CoreRangeSet all_cores = CoreRangeSet(all_coord_cores);
+    const uint32_t num_cores = 4;
+    // TO DO HERE change above to 8 cores for 2 link
 
     printf("num cores: %u \n", num_cores);
     printf("total packets: %u \n", total_packets);
@@ -459,33 +567,27 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     }
 
     printf("after creating circular buffers\n");
-
-    auto data_core = CoreCoord(0, 0);  // depends where the data is located
-    auto data_core_coord = device->worker_core_from_logical_core(data_core);
-    auto core_noc_x = data_core_coord.x;
-    auto core_noc_y = data_core_coord.y;
     // Create different kernels
     tt::tt_metal::KernelHandle reader_kernel = 0;
     tt::tt_metal::KernelHandle writer_kernel = 0;
     std::vector<uint32_t> reader_ct_args;
     std::vector<uint32_t> writer_ct_args;
     std::vector<uint32_t> compute_ct_args;
-    /*
-    const CoreCoord mux_core = {2, 1}; //change based on mega kernel divisions and add an extra one for 2 links
 
+    // 1. Setup muxes for each device type
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto num_full_size_channels = num_workers_per_direction;
-    constexpr auto num_header_only_channels = 0;
+    const uint32_t num_workers_per_direction = 1;  // change it to 4 when adding all cores;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_full_size_channels,
-        num_header_only_channels,
-        num_buffers_full_size_channels,
-        0,
-        buffer_size_bytes_full_size_channel,
-        mux_base_l1_address);
+
+    const std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};  // to be modified based on device type
+    // TODO here change above to 4 cores for 2 links
+
+    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
+
+    tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -497,29 +599,22 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-            */
     if (is_sender_device) {
         printf("is sender device satrt\n");
-        reader_ct_args = {data_core_coord.x, data_core_coord.y};
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/sender_reader_kernel.cpp",
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-        writer_ct_args = {
-            0,
-            sender_cb_l,
-            sender_cb_s,
-            sender_cb_m,
-            packet_header_cb_id,
-            packet_cb_id,
-            l1_alignment,
-            core_noc_x,
-            core_noc_y};
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(writer_ct_args);
+        writer_ct_args = {0, sender_cb_l, sender_cb_s, sender_cb_m, packet_header_cb_id, packet_cb_id, l1_alignment};
         writer_ct_args[0] = writer_ct_args.size();
-        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
+
+        fabric_mux_ct_args(
+            num_workers_per_direction,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            writer_ct_args);
 
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -541,12 +636,14 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             l1_alignment,
             compute_cb_2_l,
             compute_cb_2_s,
-            compute_cb_2_m,
-            core_noc_x,
-            core_noc_y};
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
+            compute_cb_2_m};
         reader_ct_args[0] = reader_ct_args.size();
-        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
+
+        fabric_mux_ct_args(
+            num_workers_per_direction,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            reader_ct_args);
 
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
@@ -555,8 +652,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
         writer_ct_args = {
-            core_noc_x,
-            core_noc_y,
             compute_out_cb_l,
             compute_out_cb_s,
             compute_out_cb_m,
@@ -579,12 +674,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             l1_alignment,
             compute_cb_2_l,
             compute_cb_2_s,
-            compute_cb_2_m,
-            core_noc_x,
-            core_noc_y};
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(reader_ct_args);
+            compute_cb_2_m};
         reader_ct_args[0] = reader_ct_args.size();
-        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(reader_ct_args);
+
+        fabric_mux_ct_args(
+            num_workers_per_direction,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            reader_ct_args);
+
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root2_receive_reader_kernel.cpp",
@@ -592,18 +690,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
         writer_ct_args = {
-            0,
-            compute_out_cb_l,
-            compute_out_cb_s,
-            compute_out_cb_m,
-            packet_header_cb_id_2,
-            packet_cb_id_2,
-            l1_alignment,
-            core_noc_x,
-            core_noc_y};
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor_l.buffer()).append_to(writer_ct_args);
+            compute_out_cb_l, compute_out_cb_s, compute_out_cb_m, packet_header_cb_id_2, packet_cb_id_2, l1_alignment};
         writer_ct_args[0] = writer_ct_args.size();
-        // tt::tt_metal::TensorAccessorArgs(intermediate_tensor_sm.buffer()).append_to(writer_ct_args);
+
+        fabric_mux_ct_args(
+            num_workers_per_direction,
+            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            mux_kernel_config,
+            writer_ct_args);
+
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root2_writer_kernel.cpp",
@@ -639,224 +734,260 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     printf("before setting runtime args\n");
     // set runtime args
-    MeshCoordinate send_coord = {0, 0};
-    MeshCoordinate receive_coord = {0, 0};
-    if (is_sender_device) {
-        if (device_coordinate.coords()[0] == 0) {
-            // left sender
-            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            receive_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
-        } else {
-            // right sender
-            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
-        }
+    bool is_leftmost = true;
+    if (is_sender_device && device_coordinate.coords()[0] != 0) {
+        is_leftmost = false;
     }
-    constexpr auto link_idx = 0;  // for single link implementation
+
+    constexpr auto num_links = 1;  // for now TODO change to 2
 
     // uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> sender_cores;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        /*
-        uint32_t increment = 0;
-        if (core_group_1.contains(c)) {
-            increment = num_packets_per_core_group_1 * num_pages_per_packet;
-        } else if (core_group_2.contains(c)) {
-            increment = num_packets_per_core_group_2 * num_pages_per_packet;
-        } else {
-            continue;
+    std::vector<CoreRangeSet> cores_per_link;
+    std::vector<CoreCoord> cores_link_1 = {CoreCoord(0, 0), CoreCoord(0, 1), CoreCoord(0, 2), CoreCoord(0, 3)};
+    std::vector<CoreCoord> cores_link_2 = {CoreCoord(1, 0), CoreCoord(1, 1), CoreCoord(1, 2), CoreCoord(1, 3)};
+    cores_per_link.push_back(CoreRangeSet(cores_link_1));
+    cores_per_link.push_back(CoreRangeSet(cores_link_2));
+    CoreCoord termination_master = CoreCoord(0, 0);
+
+    for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+        CoreCoord virtual_core = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 1))
+                                               : mesh_device->worker_core_from_logical_core(CoreCoord(1, 1));
+        CoreCoord opposite_core_coord = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 2))
+                                                      : mesh_device->worker_core_from_logical_core(CoreCoord(1, 2));
+        uint32_t start_ix = link_idx == 0 ? 0 : 2;
+        if (link_idx == 1) {
+            termination_master = CoreCoord(1, 0);
         }
-        increment = std::min(increment, input_num_pages - page_idx_start);
-        page_idx_end += increment;
-        */
-
-        std::vector<uint32_t> reader_runtime_args;
-        std::vector<uint32_t> writer_runtime_args;
-        if (is_sender_device) {
-            const auto this_fabric_id = mesh_device->get_fabric_node_id(send_coord);
-
-            const auto [num_hops, dst_is_forward, next_fabric_id] =
-                detail::fabric_routing(mesh_device, send_coord, receive_coord, topology);
-
-            reader_runtime_args = {
-                input_tensor_l.buffer()->address(),
-                input_l_num_pages,
-                input_tensor_s.buffer()->address(),
-                input_tensor_m.buffer()->address(),
-                input_page_size_bytes};
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
-
-            writer_runtime_args = {
-                intermediate_tensor_l.buffer()->address(),
-                // intermediate_tensor_sm.buffer()->address(),
-                0,                  // page_idx_start,
-                input_l_num_pages,  // page_idx_end,
-                input_page_size_bytes,
-                packet_size_bytes,
-                num_page_segments,
-                semaphore_round1.address(),
-                dst_is_forward,
-            };
-
-            if (dst_is_forward) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
+        for (uint32_t dir = 0; dir < 2; dir++) {
+            CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_ix) : CoreCoord(2, start_ix + 1);
+            if (mux_connection_valid(dir, is_leftmost, is_sender_device)) {
+                std::vector<uint32_t> mux_rt_args = {};
+                auto transfer_coords = find_send_recv(
+                    dir, is_leftmost, is_sender_device, is_root_device, is_root2_device, device_coordinate);
+                auto send_coord = transfer_coords[0];
+                auto receive_coord = transfer_coords[1];
+                printf("send coord here is: %u %u \n", send_coord.coords()[0], send_coord.coords()[1]);
+                printf("receive coord here is: %u %u \n", receive_coord.coords()[0], receive_coord.coords()[1]);
+                const auto src_node_id = mesh_device->get_fabric_node_id(send_coord);
+                const auto dst_node_id = mesh_device->get_fabric_node_id(receive_coord);
+                mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
+                tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
-            writer_runtime_args.emplace_back(!dst_is_forward);
-            if (!dst_is_forward) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
-            }
-
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
-
-        } else if (is_root_device) {
-            printf("is root device setting rt args\n");
-            auto receive_coord = root_coord;
-            auto sender_coord_1 = MeshCoordinate(root_coord.coords()[0] - 1, root_coord.coords()[1]);
-            auto sender_coord_2 = MeshCoordinate(root_coord.coords()[0] + 1, root_coord.coords()[1]);
-            const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
-
-            const auto [num_hops_1, dst_is_forward_1, next_fabric_id_1] =
-                detail::fabric_routing(mesh_device, receive_coord, sender_coord_1, topology);
-
-            const auto [num_hops_2, dst_is_forward_2, next_fabric_id_2] =
-                detail::fabric_routing(mesh_device, receive_coord, sender_coord_2, topology);
-            printf("before setting reader rt args\n");
-            reader_runtime_args = {
-                0,  // fabric_2_idx,
-                input_tensor_l.buffer()->address(),
-                input_tensor_s.buffer()->address(),
-                input_tensor_m.buffer()->address(),
-                // intermediate buffers
-                intermediate_cb_l,
-                intermediate_cb_s,
-                intermediate_cb_m,
-                0,                  // page_idx_start,
-                input_l_num_pages,  // page_idx_end,
-                num_pages_per_packet,
-                intermediate_tensor_l.buffer()->address(),
-                // intermediate_tensor_sm.buffer()->address(),
-                packet_size_bytes,
-                input_page_size_bytes,
-                num_page_segments,
-                semaphore_round1.address(),
-                semaphore_round2.address(),
-                1,  // num_hops,
-                dst_is_forward_1,
-            };
-            printf("before adding fabric rt args\n");
-            if (dst_is_forward_1) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id_1, link_idx, program, c, reader_runtime_args);
-            }
-            reader_runtime_args.emplace_back(!dst_is_forward_1);
-            if (!dst_is_forward_1) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id_1, link_idx, program, c, reader_runtime_args);
-            }
-            reader_runtime_args[0] = reader_runtime_args.size();
-            printf("reader_rt_args size for fabric  2: %zu\n", reader_ct_args.size());
-            reader_runtime_args.emplace_back(dst_is_forward_2);
-            if (dst_is_forward_2) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id_2, link_idx, program, c, reader_runtime_args);
-            }
-            reader_runtime_args.emplace_back(!dst_is_forward_2);
-            if (!dst_is_forward_2) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id_2, link_idx, program, c, reader_runtime_args);
-            }
-
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
-            printf("before setting writer rt args\n");
-            printf("intermediate_cb_l: %u\n", intermediate_cb_l);
-            printf("input_l_num_pages: %u\n", input_l_num_pages);
-            printf("intermediate_cb_s: %u\n", intermediate_cb_s);
-            printf("intermediate_cb_m: %u\n", intermediate_cb_m);
-            printf("output_tensor_l addr: %u\n", output_tensor_l.buffer()->address());
-            printf("output_tensor_s addr: %u\n", output_tensor_s.buffer()->address());
-            printf("output_tensor_m addr: %u\n", output_tensor_m.buffer()->address());
-            printf("input_page_size_bytes: %u\n", input_page_size_bytes);
-            writer_runtime_args = {
-                intermediate_cb_l,
-                input_l_num_pages,
-                intermediate_cb_s,
-                intermediate_cb_m,
-                output_tensor_l.buffer()->address(),
-                output_tensor_s.buffer()->address(),
-                output_tensor_m.buffer()->address(),
-                input_page_size_bytes,
-            };
-            printf("is root device end of setting rt args\n");
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
-        } else if (is_root2_device) {
-            auto receive_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            auto sender_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
-            const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
-
-            const auto [num_hops, dst_is_forward, next_fabric_id] =
-                detail::fabric_routing(mesh_device, receive_coord, sender_coord, topology);
-
-            reader_runtime_args = {
-                input_tensor_l.buffer()->address(),
-                input_tensor_s.buffer()->address(),
-                input_tensor_m.buffer()->address(),
-                0,  // page_idx_start,
-                input_l_num_pages,
-                num_pages_per_packet,
-                intermediate_tensor_l.buffer()->address(),
-                // intermediate_tensor_sm.buffer()->address(),
-                packet_size_bytes,
-                input_page_size_bytes,
-                num_page_segments,
-                semaphore_round1.address(),
-                1,  // num_hops,
-                dst_is_forward,
-            };
-            if (dst_is_forward) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id, link_idx, program, c, reader_runtime_args);
-            }
-            reader_runtime_args.emplace_back(!dst_is_forward);
-            if (!dst_is_forward) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id, next_fabric_id, link_idx, program, c, reader_runtime_args);
-            }
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
-
-            auto receive_coord_writer = root_coord;
-            auto sender_coord_writer = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            const auto this_fabric_id_writer = mesh_device->get_fabric_node_id(sender_coord_writer);
-
-            const auto [num_hops_writer, dst_is_forward_writer, next_fabric_id_writer] =
-                detail::fabric_routing(mesh_device, sender_coord_writer, receive_coord_writer, topology);
-
-            writer_runtime_args = {
-                intermediate_tensor_l.buffer()->address(),
-                // intermediate_tensor_sm.buffer()->address(),
-                0,                  // page_idx_start,
-                input_l_num_pages,  // page_idx_end,
-                input_page_size_bytes,
-                packet_size_bytes,
-                num_page_segments,
-                semaphore_round2.address(),
-                dst_is_forward_writer,
-            };
-            if (dst_is_forward_writer) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id_writer, next_fabric_id_writer, link_idx, program, c, writer_runtime_args);
-            }
-            writer_runtime_args.emplace_back(!dst_is_forward_writer);
-            if (!dst_is_forward_writer) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    this_fabric_id_writer, next_fabric_id_writer, link_idx, program, c, writer_runtime_args);
-            }
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
         }
-        // page_idx_start += increment;
-        sender_cores.push_back(c);
-        printf("after setting runtime args for core (%zu, %zu)\n", c.x, c.y);
+
+        uint32_t worker_id = 0;
+        for (auto c : corerange_to_cores(cores_per_link[link_idx], std::nullopt)) {
+            std::vector<uint32_t> reader_runtime_args;
+            std::vector<uint32_t> writer_runtime_args;
+
+            auto data_core_coord = device->worker_core_from_logical_core(c);
+            auto core_noc_x = data_core_coord.x;
+            auto core_noc_y = data_core_coord.y;
+
+            if (is_sender_device) {
+                reader_runtime_args = {
+                    input_tensor_l.buffer()->address(),
+                    input_l_num_pages,
+                    input_tensor_s.buffer()->address(),
+                    input_tensor_m.buffer()->address(),
+                    input_page_size_bytes,
+                    core_noc_x,
+                    core_noc_y};
+                tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
+
+                writer_runtime_args = {
+                    intermediate_tensor_l.buffer()->address(),
+                    // intermediate_tensor_sm.buffer()->address(),
+                    0,                  // page_idx_start,
+                    input_l_num_pages,  // page_idx_end,
+                    input_page_size_bytes,
+                    packet_size_bytes,
+                    num_page_segments,
+                    semaphore_round1.address(),
+                    core_noc_x,
+                    core_noc_y,
+                    is_leftmost ? virtual_core.x : opposite_core_coord.x,
+                    is_leftmost ? virtual_core.y : opposite_core_coord.y};
+                // if leftmost: device 0:
+                // only backward direction is valid so start_idx + 1
+                // if rightmost: device 3
+                // only forward direction is valid so start_idx
+                CoreCoord mux_virtual_core =
+                    mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + !is_leftmost));
+
+                fabric_mux_rt_args(
+                    is_leftmost,
+                    c == termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core,
+                    worker_id,
+                    c,
+                    mux_kernel_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(termination_master),
+                    writer_runtime_args);
+                tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
+
+            } else if (is_root_device) {
+                printf("is root device setting rt args\n");
+
+                printf("before setting reader rt args\n");
+
+                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
+                CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + 1));
+
+                reader_runtime_args = {
+                    0,  // fabric_2_idx,
+                    input_tensor_l.buffer()->address(),
+                    input_tensor_s.buffer()->address(),
+                    input_tensor_m.buffer()->address(),
+                    // intermediate buffers
+                    intermediate_cb_l,
+                    intermediate_cb_s,
+                    intermediate_cb_m,
+                    0,                  // page_idx_start,
+                    input_l_num_pages,  // page_idx_end,
+                    num_pages_per_packet,
+                    intermediate_tensor_l.buffer()->address(),
+                    // intermediate_tensor_sm.buffer()->address(),
+                    packet_size_bytes,
+                    input_page_size_bytes,
+                    num_page_segments,
+                    semaphore_round1.address(),
+                    semaphore_round2.address(),
+                    1,  // num_hops,
+                    core_noc_x,
+                    core_noc_y,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y,
+                    virtual_core.x,
+                    virtual_core.y,
+                };
+                printf("before adding fabric rt args\n");
+
+                // first receiving from device on the left
+                fabric_mux_rt_args(
+                    0,  // first bwd
+                    c == termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_bwd,
+                    worker_id,
+                    c,
+                    mux_kernel_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(termination_master),
+                    reader_runtime_args);
+
+                reader_runtime_args[0] = reader_runtime_args.size();
+                printf("reader_rt_args size for fabric  2: %zu\n", reader_ct_args.size());
+
+                // then receiving from device on the right
+                fabric_mux_rt_args(
+                    1,  // then forward
+                    c == termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_fwd,
+                    worker_id,
+                    c,
+                    mux_kernel_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(termination_master),
+                    reader_runtime_args);
+
+                tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
+                printf("before setting writer rt args\n");
+                printf("intermediate_cb_l: %u\n", intermediate_cb_l);
+                printf("input_l_num_pages: %u\n", input_l_num_pages);
+                printf("intermediate_cb_s: %u\n", intermediate_cb_s);
+                printf("intermediate_cb_m: %u\n", intermediate_cb_m);
+                printf("output_tensor_l addr: %u\n", output_tensor_l.buffer()->address());
+                printf("output_tensor_s addr: %u\n", output_tensor_s.buffer()->address());
+                printf("output_tensor_m addr: %u\n", output_tensor_m.buffer()->address());
+                printf("input_page_size_bytes: %u\n", input_page_size_bytes);
+                writer_runtime_args = {
+                    intermediate_cb_l,
+                    input_l_num_pages,
+                    intermediate_cb_s,
+                    intermediate_cb_m,
+                    output_tensor_l.buffer()->address(),
+                    output_tensor_s.buffer()->address(),
+                    output_tensor_m.buffer()->address(),
+                    input_page_size_bytes,
+                    core_noc_x,
+                    core_noc_y};
+                printf("is root device end of setting rt args\n");
+                tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
+            } else if (is_root2_device) {
+                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
+                CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + 1));
+
+                reader_runtime_args = {
+                    input_tensor_l.buffer()->address(),
+                    input_tensor_s.buffer()->address(),
+                    input_tensor_m.buffer()->address(),
+                    0,  // page_idx_start,
+                    input_l_num_pages,
+                    num_pages_per_packet,
+                    intermediate_tensor_l.buffer()->address(),
+                    // intermediate_tensor_sm.buffer()->address(),
+                    packet_size_bytes,
+                    input_page_size_bytes,
+                    num_page_segments,
+                    semaphore_round1.address(),
+                    1,  // num_hops,
+                    core_noc_x,
+                    core_noc_y,
+                    virtual_core.x,
+                    virtual_core.y,
+                };
+
+                fabric_mux_rt_args(
+                    1,  // first forward
+                    c == termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_fwd,
+                    worker_id,
+                    c,
+                    mux_kernel_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(termination_master),
+                    reader_runtime_args);
+
+                tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
+                writer_runtime_args = {
+                    intermediate_tensor_l.buffer()->address(),
+                    // intermediate_tensor_sm.buffer()->address(),
+                    0,                  // page_idx_start,
+                    input_l_num_pages,  // page_idx_end,
+                    input_page_size_bytes,
+                    packet_size_bytes,
+                    num_page_segments,
+                    semaphore_round2.address(),
+                    core_noc_x,
+                    core_noc_y,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y};
+                fabric_mux_rt_args(
+                    0,  // then backward
+                    c == termination_master,
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    mux_virtual_core_bwd,
+                    worker_id,
+                    c,
+                    mux_kernel_config,
+                    program,
+                    mesh_device->worker_core_from_logical_core(termination_master),
+                    writer_runtime_args);
+
+                tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
+            }
+            // page_idx_start += increment;
+            sender_cores.push_back(c);
+            printf("after setting runtime args for core (%zu, %zu)\n", c.x, c.y);
+        }  // end of loop
+        worker_id++;
     }
 
     return {

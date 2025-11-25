@@ -14,28 +14,30 @@ def test_reduce_to_root_basic(mesh_device):
     root_coord = (1, 0)
     num_devices = 4
     # currently change shape to fit tile, change later to tiny tile, make same shape in terms of number of packets
-    l_shape = [8, 128]  # should be tiny tile (8,256)
-    s_shape = [8, 32]  # should be tiny tile (8,1)
-    m_shape = [8, 32]  # should be tiny tile (8,1)
-    intermediate_shapes = [[8, 192], [2, 8, 32]]  # should be (8,256) and (2,8,1)  (8, 320) = (8, 256 + 64)
+    l_shape = [8, 128 * 4]  # should be tiny tile (8,256)
+    s_shape = [8, 32 * 4]  # should be tiny tile (8,1)
+    m_shape = [8, 32 * 4]  # should be tiny tile (8,1)
+    intermediate_shapes = [[8, 192 * 4], [2, 8, 32 * 4]]  # should be (8,256) and (2,8,1)  (8, 320) = (8, 256 + 64)
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((8, 32))
     shard_spec_l_shape = (8, 192)
     shard_spec_sm_shape = (16, 32)
+    shard_l_shape = [8, 128]
+    shard_s_shape = [8, 32]
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
 
     # Shard spec: all tensors sharded on core (0,0)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
     shard_spec_l = ttnn.ShardSpec(
         shard_grid,
-        l_shape,
+        shard_l_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     shard_spec_s = ttnn.ShardSpec(
         shard_grid,
-        s_shape,
+        shard_s_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
