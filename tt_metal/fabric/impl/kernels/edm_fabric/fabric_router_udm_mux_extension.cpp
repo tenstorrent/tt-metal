@@ -100,15 +100,7 @@ void forward_data(
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
-    bool is_persistent_channel,
-
-    // Note that while `channel_id` is unused and can be deleted, there was a severe performance impact when that
-    // was tried. Time has not been spent yet to root cause but the current suspicion is some pathalogical codegen
-    // issue. Given that the inclusion of the arg is functionally harmless (if only slightly visually noisy), and
-    // the substantial performance loss (> 1GB/s), when removed, it's being kept for now. The performance drop was
-    // measured in the mux bandwidth tests and was root caused to the isolated change of simply removing this arg.
-    // To be root-caused in the future.
-    uint8_t channel_id) {
+    bool is_persistent_channel) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
@@ -144,16 +136,8 @@ void forward_data(
 void kernel_main() {
     size_t rt_args_idx = 0;
 
-    std::array<uint8_t, num_upstream_routers> upstream_noc_x;
-    std::array<uint8_t, num_upstream_routers> upstream_noc_y;
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_x[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_y[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-    }
+    // In UDM mode, we don't need upstream router coordinates since the relay handles signaling
+    // The mux only signals to the local fabric router via the fabric_connection
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
@@ -194,6 +178,10 @@ void kernel_main() {
     constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
         fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
 
+    // Relay termination signal address (for mux to signal relay during teardown)
+    constexpr size_t RELAY_TERMINATION_SIGNAL_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr size_t relay_termination_signal_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX);
+
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
@@ -232,13 +220,8 @@ void kernel_main() {
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
-    // signal the upstream routers the mux is ready
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            auto noc_addr = get_noc_addr(upstream_noc_x[i], upstream_noc_y[i], fabric_router_sync_address);
-            noc_semaphore_inc(noc_addr, 1);
-        }
-    }
+    // In UDM mode, mux does NOT signal upstream routers - the relay will do that
+    // (upstream routers connect to relay, not mux)
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {
@@ -249,8 +232,9 @@ void kernel_main() {
             local_fabric_router_status_address);
     }
 
-    constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
-    fabric_connection.open<use_worker_allocated_credit_address>();
+    fabric_connection.open<false>();
+
+    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         if (is_persistent_channels[i]) {
@@ -265,28 +249,7 @@ void kernel_main() {
         }
     }
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
-
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    uint32_t heartbeat = 0;
-#endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            bool all_channels_drained = true;
-            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
-            }
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
-            }
-
-            if (all_channels_drained) {
-                break;
-            }
-        }
-
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
                 for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
@@ -296,8 +259,7 @@ void kernel_main() {
                         fabric_connection,
                         full_size_channel_connection_established[channel_id],
                         StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id],
-                        channel_id);
+                        is_persistent_channels[channel_id]);
                 }
             }
 
@@ -308,14 +270,17 @@ void kernel_main() {
                     fabric_connection,
                     header_only_channel_connection_established[channel_id],
                     StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    channel_id + NUM_FULL_SIZE_CHANNELS);
+                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS]);
             }
         }
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
     }
+
+    // wait for relay close connection
+
+    // Signal relay to terminate (mux and relay are on the same core, so just write to L1 directly)
+    volatile auto relay_termination_signal_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(relay_termination_signal_address);
+    *relay_termination_signal_ptr = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
 
     fabric_connection.close();
     noc_async_write_barrier();

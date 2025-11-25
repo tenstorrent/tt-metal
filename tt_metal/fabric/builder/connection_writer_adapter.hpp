@@ -13,6 +13,16 @@
 
 namespace tt::tt_fabric {
 
+// Local tensix (relay) connection info for UDM mode
+struct LocalTensixRelayConnectionInfo {
+    CoreCoord noc_xy = {0, 0};
+    size_t buffer_base_address = 0;
+    size_t worker_registration_address = 0;
+    size_t worker_location_info_address = 0;
+    size_t free_slots_stream_id = 0;
+    bool is_connected = false;
+};
+
 struct SenderWorkerAdapterSpec {
     size_t edm_noc_x = 0;
     size_t edm_noc_y = 0;
@@ -55,7 +65,11 @@ public:
         bool is_vc1) = 0;
 
     virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
+    virtual void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const = 0;
     virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
+
+    // Add connection to local tensix (relay in UDM mode)
+    virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, CoreCoord) = 0;
 
 protected:
     ~ChannelConnectionWriterAdapter() = default;
@@ -86,7 +100,13 @@ public:
         bool is_2D_routing,
         bool is_vc1) override;
 
+    void add_local_tensix_connection(
+        const SenderWorkerAdapterSpec& adapter_spec,
+        eth_chan_directions tensix_direction,
+        CoreCoord tensix_noc_xy) override;
+
     void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
+    void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
 
     uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const;
 
@@ -99,7 +119,8 @@ private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
     uint32_t encode_noc_ord_for_2d(
-        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
+        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>&
+            downstream_edms_connected_by_vc,
         uint32_t vc_idx,
         const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
 
@@ -108,7 +129,8 @@ private:
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels> downstream_edms_connected_by_vc = {};
+    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>
+        downstream_edms_connected_by_vc = {};
 
     // holds the number of buffer slots per downstream sender channel
     std::array<std::optional<size_t>, builder_config::num_sender_channels> sender_channels_num_buffers = {};
@@ -141,6 +163,9 @@ private:
 
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;
+
+    // Local tensix (relay) connection info for UDM mode
+    LocalTensixRelayConnectionInfo relay_connection_info;
 };
 
 
