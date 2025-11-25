@@ -19,7 +19,6 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/reduce_custom.h"
-#include "compute_kernel_api/transpose_wh.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -57,34 +56,52 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Postcondition: out_cb has rows produced
 
     constexpr uint32_t num_tiles = rows * cols;
+
+    constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
+    constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
+
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
     max_tile_init();
-    constexpr uint32_t reduce_dst_idx = 0;
-    constexpr uint32_t prev_max_dst_idx = 1;
 
-    for (uint32_t i = 0; i < rows; i++) {
+    // Hardcoding some granularity constants
+    uint32_t row_start_idx = 0;
+    for (uint32_t g = 0; g < granularity; g++) {
         acquire_dst();
 
-        if (do_eltwise_max) {
-            transpose_wh_init_short(prev_cb);
-            transpose_wh_tile(prev_cb, i, reduce_dst_idx);
-            // max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
-        }
-
+        /**
+         * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
+         */
         reduce_block_max_row_init<cols>();
-        reduce_block_max_row<cols>(in0_cb, scale_cb, i * cols, reduce_dst_idx);
+        for (uint32_t i = 0; i < dst_tiles; i++) {
+            const uint32_t reduce_dst_idx = i * 2;  // Need to save odd indices for input to eltwise max later.
+            reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
+        }
         reduce_block_max_row_uninit();
-        // if (do_eltwise_max) {
-        //     copy_tile_to_dst_init_short(prev_cb);
-        //     copy_tile(prev_cb, i, prev_max_dst_idx);
-        //     max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
-        // }
 
-        pack_tile(reduce_dst_idx, out_cb);
+        if (do_eltwise_max) {
+            /**
+             * Copy previous max values into the odd indices of the DST register.
+             */
+            copy_tile_to_dst_init_short(prev_cb);
+            for (uint32_t i = 0; i < dst_tiles; i++) {
+                // Indices are set up like this because `max_tile` requires the second index to be `id0+1`, and it saves
+                // the result in `id0`.
+                const uint32_t cur_max_dst_idx = i * 2;
+                const uint32_t prev_max_dst_idx = i * 2 + 1;
+                copy_tile(prev_cb, (row_start_idx + i), prev_max_dst_idx);
+                max_tile(cur_max_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+            }
+        }
+        for (uint32_t i = 0; i < dst_tiles; i++) {
+            const uint32_t cur_max_dst_idx = i * 2;
+            pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
+        }
         release_dst();
+
+        row_start_idx += dst_tiles;
     }
 
     cb_push_back(out_cb, rows);
@@ -177,6 +194,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
+    if constexpr (write_result_inplace) {
+        cb_pop_front(in0_cb, rows * cols);
+        // cb_reserve_back(in0_cb, rows * cols);
+    }
+
     constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
     uint32_t in0_index = 0;
@@ -195,6 +217,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
+                cb_push_back(in0_cb, dst_tiles);
             }
 
             // While we have results in DST, take advantage of L1 accumulation
@@ -215,9 +238,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
         }
     }
     if constexpr (write_result_inplace) {
-        cb_pop_front(in0_cb, rows * cols);
-        cb_reserve_back(in0_cb, rows * cols);
-        cb_push_back(in0_cb, rows * cols);
+        // cb_pop_front(in0_cb, rows * cols);
+        // cb_reserve_back(in0_cb, rows * cols);
+        // cb_push_back(in0_cb, rows * cols);
     }
     cb_push_back(reduce_cb, rows);
 }
@@ -610,11 +633,15 @@ void matmul_blocks(
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
+    const uint32_t in0_subblock_num_tiles = subblock_h * in0_block_w;
+    uint32_t in0_wait_tiles = in0_subblock_num_tiles;
+
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
     cb_reserve_back(out_cb, output_num_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        cb_wait_front(in0_cb, in0_wait_tiles);
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
@@ -645,6 +672,7 @@ void matmul_blocks(
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
+        in0_wait_tiles += in0_subblock_num_tiles;
     }
     cb_pop_front(in1_cb, K * N);
     cb_push_back(out_cb, output_num_tiles);
