@@ -130,11 +130,14 @@ public:
     std::pair<uint32_t, uint32_t> get_noc_xy_for_direction(
         tt::tt_metal::IDevice* device, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
-    // Get the worker-to-tensix core mapping (UDM mode only)
-    // Returns the per-device map: [worker coord] -> [tensix core coord]
-    const std::unordered_map<ChipId, std::map<CoreCoord, CoreCoord>>& get_worker_to_tensix_core_map() const {
-        return worker_to_tensix_core_map_;
-    }
+    // UDM mode: Worker assignment info
+    struct WorkerTensixInfo {
+        CoreCoord tensix_core;   // The tensix mux core assigned to this worker
+        uint32_t channel_index;  // The channel index on that tensix mux core
+    };
+
+    // Get worker assignment info (tensix core + channel index) for a specific worker (UDM mode only)
+    WorkerTensixInfo get_worker_tensix_info(ChipId device_id, const CoreCoord& worker_coord) const;
 
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
@@ -212,10 +215,9 @@ private:
     std::unordered_map<ChipId, std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, size_t>>>
         direction_to_core_index_;
 
-    // [device_id][worker coord] -> [tensix core coord] mapping for UDM mode
-    // Maps each worker in the compute grid to the tensix core that handles its traffic
-    // Workers are assigned by column (y first) to distribute evenly across routing planes
-    std::unordered_map<ChipId, std::map<CoreCoord, CoreCoord>> worker_to_tensix_core_map_;
+    // [device_id][worker coord] -> [WorkerTensixInfo] mapping for UDM mode
+    // Maps each worker to its assigned tensix mux core and channel index
+    std::unordered_map<ChipId, std::map<CoreCoord, WorkerTensixInfo>> worker_to_tensix_info_map_;
 
     // Helper methods for initialization
 

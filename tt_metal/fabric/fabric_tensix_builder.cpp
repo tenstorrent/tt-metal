@@ -410,21 +410,20 @@ void FabricTensixDatamoverConfig::assign_workers_to_tensix_cores(
     const std::vector<CoreCoord>& workers_by_column,
     const std::vector<CoreCoord>& tensix_cores_for_workers,
     uint32_t num_worker_channels) {
-    auto& device_map = worker_to_tensix_core_map_[device_id];
-    device_map.clear();
+    auto& info_map = worker_to_tensix_info_map_[device_id];
+    info_map.clear();
 
     for (size_t i = 0; i < workers_by_column.size(); i++) {
         size_t tensix_idx = i / num_worker_channels;
-        // Handle case where last tensix may have fewer workers
-        if (tensix_idx >= tensix_cores_for_workers.size()) {
-            tensix_idx = tensix_cores_for_workers.size() - 1;
-        }
-        device_map[workers_by_column[i]] = tensix_cores_for_workers[tensix_idx];
+        CoreCoord tensix_core = tensix_cores_for_workers[tensix_idx];
+        uint32_t channel_index = i % num_worker_channels;
+        // Store tensix core and channel index together
+        info_map[workers_by_column[i]] = WorkerTensixInfo{tensix_core, channel_index};
     }
 }
 
 // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
-// Also builds worker_to_tensix_core_map_ in UDM mode
+// Also builds worker_to_tensix_info_map_ in UDM mode
 std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_channel_counts(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     std::map<ChannelTypes, uint32_t> channel_counts;
@@ -818,6 +817,19 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_noc_xy_for_direct
     CoreCoord logical_core = get_core_for_direction(device->id(), routing_plane_id, direction);
     CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
     return {translated_core.x, translated_core.y};
+}
+
+FabricTensixDatamoverConfig::WorkerTensixInfo FabricTensixDatamoverConfig::get_worker_tensix_info(
+    ChipId device_id, const CoreCoord& worker_coord) const {
+    auto device_it = worker_to_tensix_info_map_.find(device_id);
+    TT_FATAL(device_it != worker_to_tensix_info_map_.end(), "Device {} not found in worker tensix info map", device_id);
+    auto worker_it = device_it->second.find(worker_coord);
+    TT_FATAL(
+        worker_it != device_it->second.end(),
+        "Worker {} not found in tensix info map for device {}",
+        worker_coord,
+        device_id);
+    return worker_it->second;
 }
 
 // FabricTensixDatamoverBuilder implementation
