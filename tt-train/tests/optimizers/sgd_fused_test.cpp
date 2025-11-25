@@ -201,7 +201,7 @@ TEST_P(SGDFusedParityTest, UpdateParity) {
     const auto& pc = GetParam();
 
     // Skip specific Nesterov test case with watcher enabled
-    if (tt::test_utils::is_watcher_enabled() && pc.nesterov && pc.name == "Nesterov" && pc.shape[0] == 1 &&
+    if (ttml::test_utils::is_watcher_enabled() && pc.nesterov && pc.name == "Nesterov" && pc.shape[0] == 1 &&
         pc.shape[1] == 2 && pc.shape[2] == 32 && pc.shape[3] == 64) {
         GTEST_SKIP() << "Test is not passing with watcher enabled";
     }
