@@ -180,8 +180,8 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     MeshCommandQueue::ShardDataTransfer read_transfer = {
         .shard_coord = coord,
         .host_data = aligned_ptr,
-        .pinned_memory = pinned_mem,
         .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
+        .pinned_memory = pinned_mem,
     };
     fmt::println(stderr, "Before enqueue read shards");
 

@@ -34,16 +34,12 @@ namespace tt::tt_metal {
 class IDevice;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-namespace experimental {
-class PinnedMemory;
-}
 namespace distributed {
 class MeshDevice;
 class MeshWorkload;
 }  // namespace distributed
 struct ProgramCommandSequence;
 }  // namespace tt::tt_metal
-
 
 namespace tt::tt_metal::distributed {
 
@@ -84,8 +80,8 @@ public:
     struct ShardDataTransfer {
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr;
         std::optional<BufferRegion> region;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr;
     };
 
     // MeshBuffer Write APIs
