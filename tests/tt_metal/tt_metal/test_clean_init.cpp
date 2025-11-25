@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <array>
 #include <exception>

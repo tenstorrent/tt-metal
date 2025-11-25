@@ -5,8 +5,6 @@
 #include <cstdint>
 #include <algorithm>
 #include "dataflow_api.h"
-#include <tt-metalium/constants.hpp>
-
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);

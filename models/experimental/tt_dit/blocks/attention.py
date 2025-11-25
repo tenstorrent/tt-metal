@@ -24,8 +24,6 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    K_CHUNK_SIZE = 512
-
     def __init__(
         self,
         *,
@@ -43,6 +41,8 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
+        k_chunk_size: int = 512,
+        q_chunk_size: int = 128,
     ) -> None:
         super().__init__()
 
@@ -60,6 +60,23 @@ class Attention(Module):
         common_args = dict(mesh_device=mesh_device)
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         padded_inner_dim = head_dim * self.padded_heads
+
+        self.sdpa_worker_grid = (
+            self.mesh_device.compute_with_storage_grid_size().x,
+            self.mesh_device.compute_with_storage_grid_size().y - 1,
+        )
+
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+        )
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
@@ -245,21 +262,6 @@ class Attention(Module):
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
 
-        full_grid = self.mesh_device.compute_with_storage_grid_size()
-        sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-
-        sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=sdpa_worker_grid,
-            q_chunk_size=128,
-            k_chunk_size=self.K_CHUNK_SIZE,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
-
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
@@ -276,8 +278,8 @@ class Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=sdpa_program_config,
-                compute_kernel_config=sdpa_compute_kernel_config,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -287,7 +289,7 @@ class Attention(Module):
                 mesh_device=self.mesh_device,
                 topology=self.ccl_manager.topology,
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
+                ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
             )
         else:
             assert (
@@ -302,8 +304,8 @@ class Attention(Module):
                 add_k,
                 add_v,
                 joint_strategy="rear",
-                program_config=sdpa_program_config,
-                compute_kernel_config=sdpa_compute_kernel_config,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
@@ -325,16 +327,18 @@ class Attention(Module):
         return spatial, prompt
 
     @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, k_chunk_size: int = 512) -> int:
         if sp_factor == 1:
             return 0
 
-        divisor = cls.K_CHUNK_SIZE * sp_factor
+        divisor = k_chunk_size * sp_factor
         return -length % divisor
 
     @classmethod
-    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
-        padding_len = cls.spatial_sequence_padding_length(length=x.shape[-2], sp_factor=sp_factor)
+    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int, k_chunk_size: int = 512) -> torch.Tensor:
+        padding_len = cls.spatial_sequence_padding_length(
+            length=x.shape[-2], sp_factor=sp_factor, k_chunk_size=k_chunk_size
+        )
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
 
 

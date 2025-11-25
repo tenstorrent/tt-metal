@@ -15,13 +15,13 @@
 
 #include "hc_sum_reduce_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 
 struct HCSumReduceDeviceOperation {
-    using operation_attributes_t = ssm::operation_attributes_t;
-    using tensor_args_t = ssm::tensor_args_t;
-    using spec_return_value_t = ssm::spec_return_value_t;
-    using tensor_return_value_t = ssm::tensor_return_value_t;
+    using operation_attributes_t = hc_sum_reduce::operation_attributes_t;
+    using tensor_args_t = hc_sum_reduce::tensor_args_t;
+    using spec_return_value_t = hc_sum_reduce::spec_return_value_t;
+    using tensor_return_value_t = hc_sum_reduce::tensor_return_value_t;
     using program_factory_t = std::variant<program::HCSumReduceProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -43,9 +43,10 @@ struct HCSumReduceDeviceOperation {
         std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce
 
 namespace ttnn::prim {
-constexpr auto hc_sum_reduce = ttnn::
-    register_operation<"ttnn::prim::hc_sum_reduce", ttnn::operations::experimental::ssm::HCSumReduceDeviceOperation>();
+constexpr auto hc_sum_reduce = ttnn::register_operation<
+    "ttnn::prim::hc_sum_reduce",
+    ttnn::operations::experimental::ssm::hc_sum_reduce::HCSumReduceDeviceOperation>();
 }  // namespace ttnn::prim

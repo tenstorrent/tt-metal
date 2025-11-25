@@ -5,7 +5,7 @@
 #include <cstring>
 #include "compressed_routing_path.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {

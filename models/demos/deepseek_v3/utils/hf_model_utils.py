@@ -8,11 +8,14 @@ from glob import glob
 from typing import Any, Callable
 
 import torch
+from loguru import logger
 from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_utils import no_init_weights
 
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.utils.config_helpers import dequantize
 
 
@@ -217,3 +220,71 @@ def add_model_io_logging_hooks(
         )
     model.register_forward_pre_hook(lambda _, args, model=model: model_pre_hook(model, logged_submodule_names))
     model.register_forward_hook(lambda _, args, output, model=model: model_hook(model))
+
+
+def prepare_model_state_dict(
+    hf_config: PretrainedConfig,
+    random_weights: bool = False,
+    model_path: str | None = None,
+    single_layer: str | None = None,
+) -> dict[str, torch.Tensor]:
+    """
+    Prepare model state dict from either random weights or loaded HuggingFace weights.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        random_weights: If True, generate random weights from reference model. If False, load from model_path.
+        model_path: Path to HuggingFace model directory containing safetensors files
+        single_layer: Optional single layer name (used for validation with random weights)
+
+    Returns:
+        Dictionary containing model state dict with keys filtered to model components
+        (embed_tokens, layers, norm, lm_head)
+    """
+    if random_weights:
+        if single_layer and single_layer.lower() == "moe":
+            raise NotImplementedError(
+                "Random weights with 'moe' single layer is not supported by RowBatchedModel demo yet. Use 'mlp' or disable random mode."
+            )
+        logger.info("Building random weights from HF reference model (ForCausalLM)...")
+        from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+
+        ref_model = DeepseekV3ForCausalLM(hf_config).eval()
+        # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
+        ref_model = ref_model.to(dtype=torch.bfloat16)
+        torch_state = ref_model.state_dict()
+        # Quantize MLP weights as expected by TT converters
+        torch_state = add_inv_scale_to_state_dict(
+            torch_state,
+            block_shape=hf_config.quantization_config["weight_block_size"],
+        )
+        model_state = {
+            k: v
+            for k, v in torch_state.items()
+            if k.startswith("model.embed_tokens.")
+            or k.startswith("model.layers.")
+            or k.startswith("model.norm.")
+            or k.startswith("lm_head.")
+        }
+    else:
+        if model_path is None:
+            raise ValueError("model_path must be provided when random_weights is False")
+        logger.info(f"Loading HF weights from {model_path} (this may take a while)...")
+        hf_weights = load_model_weights(model_path)
+        logger.info("HF weights loaded")
+
+        if "lm_head.weight" not in hf_weights:
+            raise RuntimeError(
+                "No HF safetensors found in model path or missing 'lm_head.weight'. "
+                "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
+            )
+        model_state = {
+            k: v
+            for k, v in hf_weights.items()
+            if k.startswith("model.embed_tokens.")
+            or k.startswith("model.layers.")
+            or k.startswith("model.norm.")
+            or k.startswith("lm_head.")
+        }
+
+    return model_state

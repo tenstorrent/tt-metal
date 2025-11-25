@@ -137,3 +137,7 @@ ttnn/ttnn/runtime
 ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
+
+.auto_triage/logs
+.auto_triage/data
+.auto_triage/output

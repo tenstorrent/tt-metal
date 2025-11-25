@@ -90,7 +90,6 @@ using DataLoader = ttml::datasets::DataLoader<
 
 struct TrainingConfig {
     std::string project_name;
-    std::string model_type;  // one of "gpt2", "llama"
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
@@ -107,6 +106,7 @@ struct TrainingConfig {
     std::string model_config;
     std::string data_path;
     std::string scheduler_type = "identity";
+    std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
 
@@ -116,7 +116,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
-    config.model_type = training_config["model_type"].as<std::string>();
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
     config.batch_size = training_config["batch_size"].as<uint32_t>();
@@ -135,6 +134,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
+    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
 
     return config;
 }
@@ -224,16 +224,17 @@ struct ModelConfig {
 
 ModelConfig parse_model_config(const YAML::Node &yaml_config) {
     ModelConfig config;
-    config.model_type = yaml_config["model_type"].as<std::string>();
-    config.model_path = yaml_config["model_path"].as<std::string>("");
+    auto model_config = yaml_config["transformer_config"];
+    config.model_type = model_config["model_type"].as<std::string>();
+    config.model_path = model_config["model_path"].as<std::string>("");
 
     if(config.model_type == "gpt2")
     {
-        config.transformer_config = ttml::models::gpt2::read_config(yaml_config);
+        config.transformer_config = ttml::models::gpt2::read_config(model_config);
     }
     else if(config.model_type == "llama")
     {
-        config.transformer_config = ttml::models::llama::read_config(yaml_config);
+        config.transformer_config = ttml::models::llama::read_config(model_config);
     }
     else
     {
@@ -303,9 +304,7 @@ int main(int argc, char **argv) {
 
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/training_configs/training_shakespeare_gpt2s.yaml";
-    std::string device_config_name = std::string(tt_metal_home) + "/tt-train/device_configs/n150.yaml";
-    std::string model_config_name = std::string(tt_metal_home) + "/tt-train/model_configs/gpt2s.yaml";
+    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -313,8 +312,7 @@ int main(int argc, char **argv) {
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
 
-    app.add_option("--training", training_config_name, "Training Config name")->default_val(training_config_name);
-    app.add_option("--device", device_config_name, "Device Config name")->default_val(device_config_name);
+    app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
 
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -325,11 +323,11 @@ int main(int argc, char **argv) {
         ->default_val(safetensors_path);
     CLI11_PARSE(app, argc, argv);
 
-    TrainingConfig training_config = parse_config(YAML::LoadFile(training_config_name));
-    DeviceConfig device_config = parse_device_config(YAML::LoadFile(device_config_name));
+    auto yaml_config = YAML::LoadFile(training_config_name);
 
-    model_config_name = std::string(tt_metal_home) + "/tt-train/configs/model_configs/" + training_config.model_config;
-    ModelConfig model_config = parse_model_config(YAML::LoadFile(model_config_name));
+    TrainingConfig training_config = parse_config(yaml_config);
+    DeviceConfig device_config = parse_device_config(yaml_config);
+    ModelConfig model_config = parse_model_config(YAML::LoadFile(training_config.model_config));
 
     MultihostConfig multihost_config;
     if (!multihost_config_name.empty())
@@ -384,19 +382,52 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
-    std::vector<uint32_t> tokens_vector;
+    std::variant<std::string, YAML::Node> text_or_tokens;
 
-    try
-    {
-        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+    try {
+        // check file extension:
+        if (training_config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(training_config.data_path);
+        } else {
+            auto yaml_data = YAML::LoadFile(training_config.data_path);
+            yaml_data["sequence_length"] = sequence_length;
+            text_or_tokens = yaml_data;
+        }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
-        std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
         return -1;
     }
 
-    auto dataset = ttml::datasets::InMemoryTokenDataset(
-        std::move(tokens_vector), sequence_length);
+    auto create_dataset =
+        [](const auto &data_source, const auto sequence_length, const auto &train_config, auto &model_config) {
+            std::string tokenizer_type = train_config.tokenizer_type;
+
+            if (tokenizer_type == "char") {
+                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<std::string>(data_source), sequence_length);
+
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
+
+                return dataset;
+            }
+            else if (tokenizer_type == "bpe") {
+
+                auto& yaml_node = std::get<YAML::Node>(data_source);
+
+                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); }, model_config.transformer_config);
+
+                return dataset;
+            }
+            else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
+
+    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
@@ -535,7 +566,7 @@ int main(int argc, char **argv) {
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::MsgPackFile serializer;
-        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "gpt2";
         ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
@@ -544,7 +575,7 @@ int main(int argc, char **argv) {
 
     // Load model parameters if in eval mode and model path exists
     if (!safetensors_path.empty() && !model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
-        std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
         fmt::print("Loading model parameters\n");
         load_model_parameters(model_config.model_path, model, model_name);
         fmt::print("Model loaded\n");
@@ -598,7 +629,7 @@ int main(int argc, char **argv) {
         // otherwise proceed with normal loading training state if necessary
         if (!model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
             fmt::print("Loading model from {}\n", model_config.model_path);
-            std::string model_name = (model_config.model_type == "llama") ? "llama" : "transformer";
+            std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
             fmt::print("Loading training state\n");
             std::string optimizer_name = "adamw";
             load_training_state(model_config.model_path, model, scheduler, model_name, optimizer_name);

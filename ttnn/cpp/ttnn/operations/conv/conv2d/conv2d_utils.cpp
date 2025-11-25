@@ -900,12 +900,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        // Set act_block_h_override to min value to be conservative with L1 memory usage;
-        // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
-        // and the bigger the act block height the better the reuse since we apply optimization within single act block
-        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
-            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-        }
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -953,13 +947,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             compute_grid_size);
 
-        if (conv_config.act_block_w_div == 1 && conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t width_sharded_num_cores = input_parallel_config.grid.num_cores();
-            // Set act_block_w_div to max value to
-            // be conservative with L1 memory usage.
-            // act_block_w_div == 1 is currently the default value.
-            conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
-        }
         SlidingWindowConfig sliding_window_config{
             .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
@@ -1585,6 +1572,7 @@ bool auto_enable_kernel_folding(
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
     MeshDevice* device,
+    uint32_t& batch_size,
     uint32_t& input_height,
     uint32_t& input_width,
     uint32_t& in_channels,
@@ -1611,7 +1599,8 @@ Tensor fold_input_tensor_if_required(
     if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
-        auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        auto folded_input_tensor = fold_tensor(
+            input_tensor, device, stride, kernel_size, padding_n4, batch_size, input_height, input_width, in_channels);
         if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
             auto tensor_to_deallocate = input_tensor;
             tensor_to_deallocate.deallocate(true);
@@ -1636,7 +1625,11 @@ ttnn::Tensor fold_tensor(
     MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4) {
+    std::array<uint32_t, 4> padding_n4,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels) {
     // Validation checks
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
@@ -1646,6 +1639,16 @@ ttnn::Tensor fold_tensor(
     ttnn::Tensor tensor_on_device = tensor;
     if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    // Reshape tensor from flattened 4D shape (e.g., [1, 1, N*H*W, C]) back to original 4D shape [N, H, W, C] before
+    // folding
+    const auto& current_shape = tensor_on_device.logical_shape();
+    bool needs_reshape =
+        (current_shape.rank() == 4 && (current_shape[1] != input_height || current_shape[2] != input_width));
+    if (needs_reshape) {
+        const auto unflattened_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
+        tensor_on_device = ttnn::reshape(tensor_on_device, unflattened_shape, unflattened_shape);
     }
 
     // Core folding operation

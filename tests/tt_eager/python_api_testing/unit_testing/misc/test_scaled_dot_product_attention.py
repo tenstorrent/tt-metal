@@ -248,7 +248,6 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("nkv must divide nh")
     if is_ci_env and (b == 1 or nh == 1 or s == 1 or q_chunk_size == 512 or k_chunk_size == 512):
         pytest.skip("Skipping to avoid CI timeout")
-    ttnn.device.DisablePersistentKernelCache()
     if is_causal:
         run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=0.033)
     else:
@@ -286,7 +285,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
     if memory_config == ttnn.L1_MEMORY_CONFIG and k_chunk_size > 128 and q_chunk_size > 128:
         pytest.skip("L1 memory config with large chunk sizes can cause OOM.")
     rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_tt(
         device,
         b,
@@ -316,7 +314,6 @@ def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_si
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
@@ -337,7 +334,6 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
 
 
@@ -355,7 +351,6 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.0094
     run_test_sdpa_tt(
         device,
@@ -392,7 +387,6 @@ def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtyp
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
@@ -439,7 +433,6 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if s > 2048 and (q_chunk_size == 128 or k_chunk_size == 128):
         pytest.skip("Bad PCC for small chunks")
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
@@ -459,7 +452,6 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
 def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_size, k_chunk_size, dtype):
     if (sq % q_chunk_size != 0) or (sk % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    ttnn.device.DisablePersistentKernelCache()
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
 
 
@@ -802,7 +794,6 @@ def run_test_joint_sdpa(
 def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
     if q_chunk_size == 512 and k_chunk_size == 512:
         pytest.skip("OOM config.")
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.013
     run_test_joint_sdpa(
         device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
@@ -1220,7 +1211,6 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     if sliding_window >= s:
         pytest.skip("sliding_window must be smaller than sequence length")
 
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.01
     run_test_sdpa_sliding_window(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, rmse_threshold=rmse_threshold
@@ -1601,7 +1591,6 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size,
     if nh % nkv != 0:
         pytest.skip("nkv must divide nh")
 
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.02
     run_test_sdpa_with_attention_sink(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
@@ -1628,7 +1617,6 @@ def test_sdpa_with_attention_sink_sliding_window(
     if nh % nkv != 0:
         pytest.skip("nkv must divide nh")
 
-    ttnn.device.DisablePersistentKernelCache()
     rmse_threshold = 0.01
     run_test_sdpa_with_attention_sink_sliding_window(
         device,

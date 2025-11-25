@@ -11,11 +11,11 @@
 #include <optional>
 #include <cstdint>
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -97,10 +97,6 @@ struct SenderConfig {
     uint32_t link_id = 0;  // Link ID for multi-link tests
 };
 
-enum class RoutingType {
-    LowLatency,
-};
-
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
@@ -117,7 +113,6 @@ enum class HighLevelTrafficPattern {
 
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
-    std::optional<RoutingType> routing_type;
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};

@@ -274,6 +274,7 @@ public:
 
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
+    bool in_use() override { return in_use_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed
