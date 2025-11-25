@@ -4,10 +4,36 @@
 
 #include <cstdint>
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_binary.h"
 
 namespace NAMESPACE {
+
+void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void MAIN {
     // Dummy compute kernel
+    constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
+    constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb_index");
     constexpr uint32_t sigmoid_input_cb_index = get_named_compile_time_arg_val("sigmoid_input_cb_index");
     constexpr uint32_t add_bias_cb_index = get_named_compile_time_arg_val("add_bias_cb_index");
     constexpr uint32_t weights_cb_index = get_named_compile_time_arg_val("weights_cb_index");
@@ -18,19 +44,22 @@ void MAIN {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-
-    binary_op_init_common(sigmoid_input_cb_index, add_bias_cb_index, weights_cb_index);
+    DPRINT_UNPACK(
+        DPRINT << "start_height_tile: " << start_height_tile << " end_height_tile: " << end_height_tile
+               << " width_tiles: " << width_tiles << ENDL());
+    binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        base_page = height_tile * width_tiles;
+        uint32_t base_page = height_tile * width_tiles;
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-            cb_wait_front(sigmoid_input_cb_index, 1);
-            cb_wait_front(add_bias_cb_index, 1);
+            cb_wait_front(scores_cb_index, 1);
+            cb_wait_front(bias_cb_index, 1);
 
-            // do stuff
+            // UNPACK(print_tile(scores_cb_index, width_tile));
+            // UNPACK(print_tile(bias_cb_index, width_tile));
 
-            cb_pop_front(sigmoid_input_cb_index, 1);
-            cb_pop_front(add_bias_cb_index, 1);
+            cb_pop_front(scores_cb_index, 1);
+            cb_pop_front(bias_cb_index, 1);
         }
     }
 }

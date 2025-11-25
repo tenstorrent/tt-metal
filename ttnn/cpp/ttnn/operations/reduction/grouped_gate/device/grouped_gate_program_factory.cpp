@@ -96,6 +96,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
 
     // Compute kernel compile time arguments
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"scores_cb_index", scores_cb_index},
+        {"bias_cb_index", bias_cb_index},
         {"sigmoid_input_cb_index", sigmoid_input_cb_index},
         {"add_bias_cb_index", add_bias_cb_index},
         {"weights_cb_index", weights_cb_index},
@@ -110,11 +112,15 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     std::vector<uint32_t> compute_compile_time_args = {};
 
     // Compute kernel
+    bool fp32_dest_acc_en = true;
     auto compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/compute/grouped_gate.cpp",
         all_cores,
-        ComputeConfig{.math_approx_mode = true, .compile_args = {}});
+        ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_compile_time_args,
+            .named_compile_args = compute_named_compile_time_args});
 
     // Writer kernel
     auto writer_kernel_id = CreateKernel(
@@ -143,6 +149,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         }
         start_height_tile = end_height_tile;
         end_height_tile = start_height_tile + workload_per_core;
+
         reader_runtime_args[2] = start_height_tile;
         reader_runtime_args[3] = end_height_tile;
 
@@ -151,7 +158,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
 
         writer_runtime_args[2] = start_height_tile;
         writer_runtime_args[3] = end_height_tile;
+
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 

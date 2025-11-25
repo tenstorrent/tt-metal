@@ -60,7 +60,7 @@ void py_bind_grouped_gate(py::module& module) {
             py::arg("topk_groups"),
             py::arg("n_activated_experts"),
             py::arg("route_scale") = 1.0f,
-            py::arg("epsilon") = 1e-5f,
+            py::arg("epsilon") = 1e-20f,
             py::arg("memory_config") = std::nullopt});
 }
 
