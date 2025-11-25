@@ -2415,7 +2415,7 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
 
-    // Bind bitcast operation (uses unary infrastructure but takes DataType parameter)
+    // Bind bitcast operation
     auto bitcast_doc = fmt::format(
         R"doc(
 Applies {0} to :attr:`input_tensor`.
