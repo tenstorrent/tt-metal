@@ -19,7 +19,6 @@ struct SliceRmProgramFactory {
         CoreCoord compute_with_storage_grid_size;
         std::optional<CoreRangeSet> sub_core_grids;
         tt::tt_metal::CBHandle cb_src0{};
-        ttnn::Shape slice_start;  // Store for runtime args callback
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -87,7 +86,6 @@ struct SliceTileProgramFactory {
         CoreCoord compute_with_storage_grid_size;
         std::optional<CoreRangeSet> sub_core_grids;
         std::vector<uint32_t> accumulated_total_per_dim;
-        ttnn::Shape slice_start;  // Store for runtime args callback
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

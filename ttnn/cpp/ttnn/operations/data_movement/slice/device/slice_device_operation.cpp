@@ -248,16 +248,6 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     }
 }
 
-tt::stl::hash::hash_t SliceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // auto program_factory = select_program_factory(args, tensor_args);
-
-    // Hash the operation attributes and program factory variant
-    operation::Hash hash = operation::hash_operation<SliceDeviceOperation>(args, tensor_args.input.tensor_spec());
-
-    return hash;
-}
-
 std::tuple<SliceDeviceOperation::operation_attributes_t, SliceDeviceOperation::tensor_args_t>
 SliceDeviceOperation::invoke(
     const Tensor& input,

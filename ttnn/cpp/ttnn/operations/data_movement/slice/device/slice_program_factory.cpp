@@ -749,12 +749,7 @@ program::SliceRmProgramFactory::cached_program_t program::SliceRmProgramFactory:
 
     return {
         std::move(program),
-        {unary_reader_kernel_id,
-         unary_writer_kernel_id,
-         compute_with_storage_grid_size,
-         args.sub_core_grids,
-         cb_src0,
-         args.slice_start}};
+        {unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, args.sub_core_grids, cb_src0}};
 }
 
 void program::SliceRmProgramFactory::override_runtime_arguments(
@@ -763,7 +758,7 @@ void program::SliceRmProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& src_tensor = tensor_args.input;
-    const auto& slice_start = cached_program.shared_variables.slice_start;
+    const auto& slice_start = args.slice_start;
     uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
@@ -1196,8 +1191,7 @@ program::SliceTileProgramFactory::cached_program_t program::SliceTileProgramFact
          unary_writer_kernel_id,
          compute_with_storage_grid_size,
          args.sub_core_grids,
-         accumulated_total_per_dim,
-         args.slice_start}};
+         accumulated_total_per_dim}};
 }
 
 void program::SliceTileProgramFactory::override_runtime_arguments(
@@ -1207,7 +1201,7 @@ void program::SliceTileProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output) {
     const Tensor& src_tensor = tensor_args.input;
     const Tensor& dst_tensor = output;
-    const auto& slice_start = cached_program.shared_variables.slice_start;
+    const auto& slice_start = args.slice_start;
     const auto& sub_core_grids = cached_program.shared_variables.sub_core_grids;
     const auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
     uint32_t num_unpadded_tiles = dst_tensor.physical_volume() / TILE_HW;
