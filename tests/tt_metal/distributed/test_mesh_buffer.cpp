@@ -633,7 +633,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
         tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinMemory(*mesh_device_,
+    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
@@ -694,7 +694,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
         tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinMemory(*mesh_device_,
+    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
