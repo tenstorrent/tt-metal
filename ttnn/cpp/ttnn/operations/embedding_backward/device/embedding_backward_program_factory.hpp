@@ -16,9 +16,9 @@ using namespace tt::tt_metal;
 
 struct EmbeddingBackwardProgramFactory {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
+        KernelHandle reader_kernel_id{};
         std::vector<CoreCoord> cores;
-        distributed::MeshDevice* device;
+        distributed::MeshDevice* device = nullptr;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

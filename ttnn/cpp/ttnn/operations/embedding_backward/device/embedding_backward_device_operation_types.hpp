@@ -12,8 +12,8 @@ namespace embedding_backward {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype;
-    uint32_t num_embeddings;
+    tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
+    uint32_t num_embeddings = 0;
 };
 
 struct tensor_args_t {
