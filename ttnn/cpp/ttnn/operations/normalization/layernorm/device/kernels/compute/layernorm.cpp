@@ -22,7 +22,7 @@ namespace NAMESPACE {
 void MAIN {
     namespace kutil = norm::kernel_util;
     namespace numeric = kutil::compute::numeric;
-    namespace policies = kutil::generic::policies;
+    namespace policies = kutil::compute::policies;
 
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);

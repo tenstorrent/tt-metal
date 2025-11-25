@@ -9,15 +9,15 @@
 
 #pragma once
 
-#include "ttnn/operations/normalization/kernel_util/generic/policies.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include <type_traits>
 #include <array>
 
-namespace policies = norm::kernel_util::generic::policies;
+namespace policies = norm::kernel_util::compute::policies;
 
 namespace norm::kernel_util::compute::numeric {
 
