@@ -164,9 +164,13 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
-        binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_unary_tile(block_size + block_idx, decay_factor);
+        // is weight decay != 1?
+        // 0x3F800000 is hexadecimal encoding of 1 in fp32
+        if (weight_decay != 0x3F800000) {
+            binop_with_scalar_tile_init();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                mul_unary_tile(block_size + block_idx, decay_factor);
+            }
         }
         sub_binary_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
