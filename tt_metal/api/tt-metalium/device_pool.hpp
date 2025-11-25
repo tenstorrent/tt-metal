@@ -17,7 +17,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/tt_metal.hpp>
