@@ -10,10 +10,10 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl::send_async {
 
 struct operation_attributes_t {
-    const tt::tt_metal::distributed::MeshSocket& mesh_socket;
+    const tt::tt_metal::distributed::MeshSocket mesh_socket;  // No default contructor
     operation_attributes_t(const tt::tt_metal::distributed::MeshSocket& mesh_socket) : mesh_socket(mesh_socket) {}
     // Add attributes method for reflection
     auto attributes() const {
@@ -26,11 +26,11 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
+    Tensor input_tensor;
 };
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
 using tensor_return_value_t = std::vector<Tensor>;
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::send_async

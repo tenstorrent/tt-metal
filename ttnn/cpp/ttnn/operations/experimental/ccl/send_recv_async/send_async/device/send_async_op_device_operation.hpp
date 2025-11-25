@@ -10,14 +10,14 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl::send_async {
 
 struct SendAsyncDeviceOperation {
-    using operation_attributes_t = ccl::operation_attributes_t;
-    using tensor_args_t = ccl::tensor_args_t;
-    using spec_return_value_t = ccl::spec_return_value_t;
-    using tensor_return_value_t = ccl::tensor_return_value_t;
-    using program_factory_t = std::variant<program::SendAsyncOpProgramFactory>;
+    using operation_attributes_t = send_async::operation_attributes_t;
+    using tensor_args_t = send_async::tensor_args_t;
+    using spec_return_value_t = send_async::spec_return_value_t;
+    using tensor_return_value_t = send_async::tensor_return_value_t;
+    using program_factory_t = std::variant<program::SendAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -35,9 +35,10 @@ struct SendAsyncDeviceOperation {
         const ttnn::Tensor&, const tt::tt_metal::distributed::MeshSocket&);
 };
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::send_async
 
 namespace ttnn::prim {
-constexpr auto send_async =
-    ttnn::register_operation<"ttnn::prim::send_async", ttnn::operations::experimental::ccl::SendAsyncDeviceOperation>();
+constexpr auto send_async = ttnn::register_operation<
+    "ttnn::prim::send_async",
+    ttnn::operations::experimental::ccl::send_async::SendAsyncDeviceOperation>();
 }  // namespace ttnn::prim
