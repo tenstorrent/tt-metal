@@ -673,6 +673,8 @@ def run_tt_iteration(
     ttnn_prompt_embeds,
     time_ids,
     text_embeds,
+    iteration=0,
+    slice_id=0,
 ):
     B, C, H, W = input_shape
 
@@ -684,6 +686,8 @@ def run_tt_iteration(
         encoder_hidden_states=ttnn_prompt_embeds,
         time_ids=time_ids,
         text_embeds=text_embeds,
+        iteration=iteration,
+        slice_id=slice_id,
     )
 
     return ttnn_noise_pred, output_shape
@@ -765,6 +769,8 @@ def run_tt_image_gen(
                     tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
                     tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
                     ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
+                    iteration=i,
+                    slice_id=unet_slice,
                 )
 
                 unet_outputs.append(noise_pred)

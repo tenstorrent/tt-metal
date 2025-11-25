@@ -38,7 +38,7 @@ class TtUNet2DConditionModel(LightweightModule):
 
         self.device = device
         self.model_config = model_config
-
+        self.deep_cache_N = 2
         self.stride = (1, 1)
         self.padding = (1, 1)
         self.dilation = (1, 1)
@@ -259,9 +259,10 @@ class TtUNet2DConditionModel(LightweightModule):
             self.device, norm_weights_out.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
-    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
+    def forward(
+        self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds, iteration=0, slice_id=0
+    ):
         B, C, H, W = input_shape
-
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
 
@@ -308,8 +309,53 @@ class TtUNet2DConditionModel(LightweightModule):
 
         temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
 
-        ttnn.ReadDeviceProfiler(self.device)
-        for i, down_block in enumerate(self.down_blocks):
+        if iteration % self.deep_cache_N == 0:
+            ttnn.ReadDeviceProfiler(self.device)
+            for i, down_block in enumerate(self.down_blocks):
+                if isinstance(down_block, TtDownBlock2D):
+                    sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
+                else:
+                    sample, [C, H, W], block_residuals = down_block.forward(
+                        sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
+                    )
+
+                residuals += block_residuals
+            ttnn.ReadDeviceProfiler(self.device)
+
+            sample, [C, H, W] = self.mid_block.forward(
+                sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
+            )
+            ttnn.ReadDeviceProfiler(self.device)
+
+            encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            for i, up_block in enumerate(self.up_blocks):
+                block_residuals = residuals[-len(up_block.resnets) :]
+                residuals = residuals[: -len(up_block.resnets)]
+
+                if isinstance(up_block, TtUpBlock2D):
+                    cache = i == len(self.up_blocks) - 1
+
+                    sample, [C, H, W] = up_block.forward(
+                        sample,
+                        block_residuals,
+                        [B, C, H, W],
+                        temb=temb,
+                        use_cache=False,
+                        cache=cache,
+                        slice_id=slice_id,
+                    )
+                else:
+                    sample, [C, H, W] = up_block.forward(
+                        sample,
+                        block_residuals,
+                        [B, C, H, W],
+                        temb=temb,
+                        encoder_hidden_states=encoder_hidden_states,
+                    )
+        else:
+            ttnn.ReadDeviceProfiler(self.device)
+            i, down_block = 0, self.down_blocks[0]
+
             if isinstance(down_block, TtDownBlock2D):
                 sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
             else:
@@ -317,25 +363,19 @@ class TtUNet2DConditionModel(LightweightModule):
                     sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
                 )
 
-            residuals += block_residuals
-        ttnn.ReadDeviceProfiler(self.device)
-
-        sample, [C, H, W] = self.mid_block.forward(
-            sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
-        )
-        ttnn.ReadDeviceProfiler(self.device)
-
-        encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        for i, up_block in enumerate(self.up_blocks):
-            block_residuals = residuals[-len(up_block.resnets) :]
-            residuals = residuals[: -len(up_block.resnets)]
-
+            encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            up_block = self.up_blocks[-1]
+            block_residuals = residuals
+            residuals = ()
             if isinstance(up_block, TtUpBlock2D):
                 sample, [C, H, W] = up_block.forward(
                     sample,
                     block_residuals,
                     [B, C, H, W],
                     temb=temb,
+                    use_cache=True,
+                    cache=False,
+                    slice_id=slice_id,
                 )
             else:
                 sample, [C, H, W] = up_block.forward(
