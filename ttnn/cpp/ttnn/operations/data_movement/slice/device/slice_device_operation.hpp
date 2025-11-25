@@ -47,12 +47,12 @@ struct SliceDeviceOperation {
         const ttnn::Shape& step,
         const tt::tt_metal::MemoryConfig& output_mem_config,
         bool use_tensor_args,
-        std::optional<Tensor> start_tensor,
-        std::optional<Tensor> end_tensor,
-        const std::optional<uint32_t>& slice_dim,
-        const std::optional<uint32_t>& num_devices,
-        const std::optional<CoreRangeSet>& sub_core_grids,
-        const std::optional<Tensor>& preallocated_output);
+        std::optional<Tensor> start_tensor = std::nullopt,
+        std::optional<Tensor> end_tensor = std::nullopt,
+        const std::optional<uint32_t>& slice_dim = std::nullopt,
+        const std::optional<uint32_t>& num_devices = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::data_movement
