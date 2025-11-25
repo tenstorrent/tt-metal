@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilizem_multi_core_block_program_factory.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
