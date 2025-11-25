@@ -167,7 +167,7 @@ Configuring multiple command queues requires the following APIs:
 
 * `num_command_queues`
 
-  This parameter sets the number of command queues to create. Default number of queues is one, two maximum. Pass pytest by using the `device_params` fixture:
+  This parameter sets the number of command queues to create. Default number of queues is one, two maximum. Configure in pytest by using the `device_params` fixture:
 
   `@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True)`
 * `event = ttnn.record_event(device, cq_id = 0)`
