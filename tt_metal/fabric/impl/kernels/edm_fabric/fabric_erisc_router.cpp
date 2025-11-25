@@ -1803,6 +1803,7 @@ FORCE_INLINE bool run_receiver_channel_step(
             routing_table,
             local_fabric_telemetry);
     }
+    return false;
 }
 
 /*

@@ -1760,8 +1760,8 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
                            .get_soc_desc(physical_chip_id)
                            .logical_eth_core_to_chan_map.at(active_ethernet_core);
 
-        auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
-        static_view.direction() = static_cast<std::uint8_t>(routing_direction);
+        // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
+        // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
 
         CoreCoord virtual_eth_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
