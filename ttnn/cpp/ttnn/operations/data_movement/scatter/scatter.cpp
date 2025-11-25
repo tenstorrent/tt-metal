@@ -88,19 +88,19 @@ void validate_inputs(
     }
 }
 
-// bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
+bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
 
 void check_support(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_dtype = input_tensor.dtype();
-    // const auto& index_dtype = index_tensor.dtype();
+    const auto& index_dtype = index_tensor.dtype();
     const auto& source_dtype = source_tensor.dtype();
     const auto& input_layout = input_tensor.layout();
-    // const auto& index_layout = index_tensor.layout();
+    const auto& index_layout = index_tensor.layout();
     const auto& source_layout = source_tensor.layout();
-    // const auto& input_shape = input_tensor.logical_shape();
-    // const auto& index_shape = index_tensor.logical_shape();
-    // const auto& source_shape = source_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& index_shape = index_tensor.logical_shape();
+    const auto& source_shape = source_tensor.logical_shape();
     // check if to_layout fp32 tiled precision case
     TT_FATAL(
         !(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE),
@@ -113,34 +113,34 @@ void check_support(
         source_dtype,
         source_layout);
     // check if to_layout int32 tiled row>256 garbage case
-    // constexpr uint32_t to_layout_int32_scatter_axis_max_length = 256;
-    // TT_FATAL(
-    //     !(is_i32(input_dtype) && input_layout == Layout::TILE &&
-    //       input_shape[dim] > to_layout_int32_scatter_axis_max_length),
-    //     "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of "
-    //     "type: {}, layout: {} and input_shape[scatter_axis] == {}",
-    //     to_layout_int32_scatter_axis_max_length,
-    //     enchantum::to_string(input_dtype),
-    //     enchantum::to_string(input_layout),
-    //     input_shape[dim]);
-    // TT_FATAL(
-    //     !(is_i32(index_dtype) && index_layout == Layout::TILE &&
-    //       index_shape[dim] > to_layout_int32_scatter_axis_max_length),
-    //     "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of "
-    //     "type: {}, layout: {} and index_shape[scatter_axis] == {}",
-    //     to_layout_int32_scatter_axis_max_length,
-    //     enchantum::to_string(index_dtype),
-    //     enchantum::to_string(index_layout),
-    //     index_shape[dim]);
-    // TT_FATAL(
-    //     !(is_i32(source_dtype) && source_layout == Layout::TILE &&
-    //       source_shape[dim] > to_layout_int32_scatter_axis_max_length),
-    //     "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of "
-    //     "type: {}, layout: {} and source_shape[scatter_axis] == {}",
-    //     to_layout_int32_scatter_axis_max_length,
-    //     enchantum::to_string(source_dtype),
-    //     enchantum::to_string(source_layout),
-    //     source_shape[dim]);
+    constexpr uint32_t to_layout_int32_scatter_axis_max_length = 256;
+    TT_FATAL(
+        !(is_i32(input_dtype) && input_layout == Layout::TILE &&
+          input_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of "
+        "type: {}, layout: {} and input_shape[scatter_axis] == {}",
+        to_layout_int32_scatter_axis_max_length,
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(input_layout),
+        input_shape[dim]);
+    TT_FATAL(
+        !(is_i32(index_dtype) && index_layout == Layout::TILE &&
+          index_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of "
+        "type: {}, layout: {} and index_shape[scatter_axis] == {}",
+        to_layout_int32_scatter_axis_max_length,
+        enchantum::to_string(index_dtype),
+        enchantum::to_string(index_layout),
+        index_shape[dim]);
+    TT_FATAL(
+        !(is_i32(source_dtype) && source_layout == Layout::TILE &&
+          source_shape[dim] > to_layout_int32_scatter_axis_max_length),
+        "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of "
+        "type: {}, layout: {} and source_shape[scatter_axis] == {}",
+        to_layout_int32_scatter_axis_max_length,
+        enchantum::to_string(source_dtype),
+        enchantum::to_string(source_layout),
+        source_shape[dim]);
 }
 
 Tensor pre_scatter_transform_tensor(

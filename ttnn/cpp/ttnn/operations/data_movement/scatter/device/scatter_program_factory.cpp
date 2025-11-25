@@ -117,15 +117,17 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
     auto device = input_tensor.device();
-    const auto compute_with_storage_grid_size = args.sub_core_grid.has_value()
-                                                    ? args.sub_core_grid->bounding_box().end_coord
-                                                    : device->compute_with_storage_grid_size();
-
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
+            args.sub_core_grid.has_value()
+                ? tt::tt_metal::split_work_to_cores(*args.sub_core_grid, work_units)
+                : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
+    const auto farthest_x_y =
+        args.sub_core_grid.has_value() ? args.sub_core_grid->bounding_box().end_coord : compute_with_storage_grid_size;
+    const uint32_t all_cores_in_bounding_box = (farthest_x_y.x + 1) * (farthest_x_y.y + 1);
     create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
     create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
     create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
@@ -136,21 +138,20 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto writer_kernel =
         create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
 
-    const uint32_t& num_cores_x = compute_with_storage_grid_size.x;
-    const uint32_t& num_cores_y = compute_with_storage_grid_size.y;
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-    uint32_t stick_offset = 0;
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core{i / num_cores_y, i % num_cores_y};
+    std::vector<CoreCoord> cores{};
 
+    uint32_t stick_offset = 0;
+    for (uint32_t i = 0; i < all_cores_in_bounding_box; ++i) {
+        const CoreCoord core{i / (farthest_x_y.y + 1), i % (farthest_x_y.y + 1)};
         uint32_t sticks_per_core;
         if (core_group_1.contains(core)) {
             sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             sticks_per_core = num_sticks_per_core_group_2;
         } else {
-            TT_THROW("Core not in any predefined core range.");
+            continue;
         }
+        cores.push_back(core);
 
         std::vector<uint32_t> reader_runtime_args{
             input_buffer->address(),
@@ -173,8 +174,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             sticks_per_core,
             input_and_output_chunk_size,
         };
-        // std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(writer_runtime_args));
-        // std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(writer_runtime_args));
 
         SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 
