@@ -142,6 +142,53 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     return ttnn::Shape(output_shape);
 }
 
+static ShardSpec compute_output_shard_spec(
+    const std::optional<ShardSpec>& shard_spec,
+    const std::optional<ShardSpec>& input_a_shard_spec,
+    const std::optional<ShardSpec>& input_b_shard_spec,
+    const std::optional<ShardSpec>& input_c_shard_spec,
+    const TernaryDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::Shape& output_shape) {
+    ShardSpec output_shard_spec{CoreRangeSet(), {0, 0}};
+    // Check if memory config was inherited from an input (needs adjustment)
+    // or explicitly provided by user (use as-is)
+    bool inherited_from_input_a =
+        input_a_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_a_shard_spec;
+    bool inherited_from_input_b =
+        input_b_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_b_shard_spec;
+    bool inherited_from_input_c =
+        input_c_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_c_shard_spec;
+
+    if (shard_spec.has_value() && !inherited_from_input_a && !inherited_from_input_b && !inherited_from_input_c) {
+        // User explicitly provided a shard spec that differs from all inputs - use as-is
+        output_shard_spec = *shard_spec;
+    } else if (input_a_shard_spec.has_value() && !inherited_from_input_b && !inherited_from_input_c) {
+        // A has a spec AND we're not using B's or C's spec → adjust from A
+        auto padded_output_shape =
+            tensor_args.input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+        output_shard_spec =
+            adjust_to_shape(*input_a_shard_spec, tensor_args.input_tensor_a.padded_shape(), padded_output_shape);
+    } else if (input_b_shard_spec.has_value() && !inherited_from_input_c) {
+        // B has a spec (either inherited from B or fallback to B) AND we're not using C's spec → adjust from B
+        TT_FATAL(tensor_args.input_tensor_b.has_value(), "Cannot adjust from input_b when tensor_b is not present");
+        auto padded_output_shape =
+            tensor_args.input_tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+        output_shard_spec =
+            adjust_to_shape(*input_b_shard_spec, tensor_args.input_tensor_b->padded_shape(), padded_output_shape);
+    } else if (input_c_shard_spec.has_value()) {
+        // C has a spec (either inherited from C or fallback to C) → adjust from C
+        TT_FATAL(tensor_args.input_tensor_c.has_value(), "Cannot adjust from input_c when tensor_c is not present");
+        auto padded_output_shape =
+            tensor_args.input_tensor_c->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+        output_shard_spec =
+            adjust_to_shape(*input_c_shard_spec, tensor_args.input_tensor_c->padded_shape(), padded_output_shape);
+    } else {
+        TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
+        output_shard_spec = *shard_spec;
+    }
+    return output_shard_spec;
+}
+
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
 TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
@@ -331,43 +378,8 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
                                              ? tensor_args.input_tensor_c->memory_config().shard_spec()
                                              : std::nullopt;
 
-        ShardSpec output_shard_spec{CoreRangeSet(), {0, 0}};
-        // Check if memory config was inherited from an input (needs adjustment)
-        // or explicitly provided by user (use as-is)
-        bool inherited_from_input_a =
-            input_a_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_a_shard_spec;
-        bool inherited_from_input_b =
-            input_b_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_b_shard_spec;
-        bool inherited_from_input_c =
-            input_c_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_c_shard_spec;
-
-        if (shard_spec.has_value() && !inherited_from_input_a && !inherited_from_input_b && !inherited_from_input_c) {
-            // User explicitly provided a shard spec that differs from all inputs - use as-is
-            output_shard_spec = *shard_spec;
-        } else if (input_a_shard_spec.has_value() && !inherited_from_input_b && !inherited_from_input_c) {
-            // A has a spec AND we're not using B's or C's spec → adjust from A
-            auto padded_output_shape =
-                tensor_args.input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            output_shard_spec =
-                adjust_to_shape(*input_a_shard_spec, tensor_args.input_tensor_a.padded_shape(), padded_output_shape);
-        } else if (input_b_shard_spec.has_value() && !inherited_from_input_c) {
-            // B has a spec (either inherited from B or fallback to B) AND we're not using C's spec → adjust from B
-            TT_FATAL(tensor_args.input_tensor_b.has_value(), "Cannot adjust from input_b when tensor_b is not present");
-            auto padded_output_shape =
-                tensor_args.input_tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            output_shard_spec =
-                adjust_to_shape(*input_b_shard_spec, tensor_args.input_tensor_b->padded_shape(), padded_output_shape);
-        } else if (input_c_shard_spec.has_value()) {
-            // C has a spec (either inherited from C or fallback to C) → adjust from C
-            TT_FATAL(tensor_args.input_tensor_c.has_value(), "Cannot adjust from input_c when tensor_c is not present");
-            auto padded_output_shape =
-                tensor_args.input_tensor_c->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
-            output_shard_spec =
-                adjust_to_shape(*input_c_shard_spec, tensor_args.input_tensor_c->padded_shape(), padded_output_shape);
-        } else {
-            TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
-            output_shard_spec = *shard_spec;
-        }
+        ShardSpec output_shard_spec = compute_output_shard_spec(
+            shard_spec, input_a_shard_spec, input_b_shard_spec, input_c_shard_spec, tensor_args, output_shape);
 
         return TensorSpec(
             output_shape,
