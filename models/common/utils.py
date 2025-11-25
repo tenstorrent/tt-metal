@@ -134,6 +134,10 @@ class LogProbsCalculator:
         )
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=-1, keepdim=True)
 
+        # reshape global_max and global_exp_sum to support same output shape as sampling output -> (1, 1, 1, 32)
+        self.global_max = ttnn.reshape(self.global_max, (1, 1, 1, 32))
+        self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32))
+
     def prepare_correct_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
         Prepare global idx tensor with correct values on all devices.
