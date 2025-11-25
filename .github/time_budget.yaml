@@ -25,21 +25,21 @@ fabric:
   unit:
     skus:
       wh_llmbox:
-        time_budget: 50
+        time_budget: 40
 ttnn:
   unit:
     skus:
       wh_llmbox:
-        time_budget: 50
+        time_budget: 45
 scaleout:
   e2e:
     skus:
       wh_llmbox:
-        time_budget: 30
+        time_budget: 20
   unit:
     skus:
       wh_llmbox:
-        time_budget: 20
+        time_budget: 15
 models:
   e2e:
     skus:
@@ -48,4 +48,4 @@ models:
   unit:
     skus:
       wh_llmbox:
-        time_budget: 35
+        time_budget: 410
