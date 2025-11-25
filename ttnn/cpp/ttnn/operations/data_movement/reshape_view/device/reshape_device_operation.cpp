@@ -60,10 +60,11 @@ ReshapeDeviceOperation::create_op_performance_model(
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     if (input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
-        return operations::data_movement::reshape::rm_reshape_preparer(input_tensors.at(0), output_tensors.at(0));
+        return operations::data_movement::reshape::rm_reshape_preparer(
+            input_tensors.at(0), output_tensors.at(0), this->sub_core_grid);
     } else {
         return operations::data_movement::reshape::reshape_tiled_program_factory(
-            input_tensors.at(0), output_tensors.at(0));
+            input_tensors.at(0), output_tensors.at(0), this->sub_core_grid);
     }
 }
 
