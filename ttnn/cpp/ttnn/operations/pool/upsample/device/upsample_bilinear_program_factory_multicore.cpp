@@ -64,9 +64,9 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
-    const auto& scale_factor_h = operation_attributes.scale_factor_h_;
-    const auto& scale_factor_w = operation_attributes.scale_factor_w_;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config_;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     Program program = tt::tt_metal::CreateProgram();
     IDevice* device = input.device();

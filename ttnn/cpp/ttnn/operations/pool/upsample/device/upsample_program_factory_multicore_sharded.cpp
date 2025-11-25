@@ -207,8 +207,8 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
     tensor_return_value_t& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     auto& output = output_tensor;
-    const auto& scale_factor_h = operation_attributes.scale_factor_h_;
-    const auto& scale_factor_w = operation_attributes.scale_factor_w_;
+    const auto& scale_factor_h = operation_attributes.scale_factor_h;
+    const auto& scale_factor_w = operation_attributes.scale_factor_w;
 
     Program program = CreateProgram();
     distributed::MeshDevice* device = input.device();

@@ -18,11 +18,11 @@ using namespace tt::tt_metal;
 UpsampleOperation::program_factory_t UpsampleOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor_0 = tensor_args.input_tensor;
-    if (args.mode_ == "bilinear") {
+    if (args.mode == "bilinear") {
         // Bilinear is only supported for sharded inputs
         // In case of interleaved input, autosharding had previously been performed
         return program::UpsampleBilinearProgramFactory{};
-    } else if (args.mode_ == "nearest") {
+    } else if (args.mode == "nearest") {
         if (input_tensor_0.is_sharded()) {
             return program::UpsampleMultiCoreShardedProgramFactory{};
         } else {
@@ -39,7 +39,7 @@ void UpsampleOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_FATAL(args.mode_ == "nearest", "Only nearest upsample mode is supported for tiled inputs");
+        TT_FATAL(args.mode == "nearest", "Only nearest upsample mode is supported for tiled inputs");
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only interleaved memory layout is supported for tiled input");
@@ -48,26 +48,25 @@ void UpsampleOperation::validate_on_program_cache_miss(
             "Only tile aligned tile input is currently supported");
     }
 
-    if (args.mode_ == "bilinear") {
+    if (args.mode == "bilinear") {
         TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Bilinear upsample requires BFLOAT16 input");
     }
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout() == args.output_mem_config_.memory_layout(),
+            input_tensor_a.memory_config().memory_layout() == args.output_mem_config.memory_layout(),
             "Input tensor memory layout should be same as output tensor memory layout");
-        if (args.mode_ == "nearest") {
+        if (args.mode == "nearest") {
             TT_FATAL(
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
                 "Input tensor memory layout should be HEIGHT or BLOCK sharded");
-        } else if (args.mode_ == "bilinear") {
+        } else if (args.mode == "bilinear") {
             TT_FATAL(
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Input tensor memory layout should be HEIGHT sharded");
         }
-        TT_FATAL(
-            args.mode_ == "bilinear" || args.mode_ == "nearest", "Upsample only supports bilinear or nearest mode");
+        TT_FATAL(args.mode == "bilinear" || args.mode == "nearest", "Upsample only supports bilinear or nearest mode");
         TT_FATAL(
             input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
             "Input buffer should be sharded in L1");
@@ -85,8 +84,8 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
     const auto& input_shape = input.logical_shape();
 
     const uint32_t out_n = input_shape[0];
-    const uint32_t out_h = input_shape[1] * args.scale_factor_h_;
-    const uint32_t out_w = input_shape[2] * args.scale_factor_w_;
+    const uint32_t out_h = input_shape[1] * args.scale_factor_h;
+    const uint32_t out_w = input_shape[2] * args.scale_factor_w;
     const uint32_t out_c = input_shape[3];
 
     const ttnn::Shape output_shape = ttnn::Shape({out_n, out_h, out_w, out_c});
@@ -95,7 +94,7 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
     const DataType output_data_type = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
 
-    if (args.output_mem_config_.is_sharded()) {
+    if (args.output_mem_config.is_sharded()) {
         TT_FATAL(
             input.memory_config().is_sharded(),
             "Output memory config is sharded but input memory config is not sharded");
@@ -108,14 +107,14 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
                 input.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED,
             "Block sharded input should have only one CoreRange");
 
-        auto shard_spec = args.output_mem_config_.shard_spec().value();
+        auto shard_spec = args.output_mem_config.shard_spec().value();
         shard_spec.shape = {
-            input.shard_spec()->shape[0] * args.scale_factor_h_ * args.scale_factor_w_, input.shard_spec()->shape[1]};
-        MemoryConfig mem_config = args.output_mem_config_.with_shard_spec(shard_spec);
+            input.shard_spec()->shape[0] * args.scale_factor_h * args.scale_factor_w, input.shard_spec()->shape[1]};
+        MemoryConfig mem_config = args.output_mem_config.with_shard_spec(shard_spec);
         return TensorSpec(output_shape, TensorLayout(output_data_type, PageConfig(output_layout), mem_config));
     }
 
-    return TensorSpec(output_shape, TensorLayout(output_data_type, PageConfig(output_layout), args.output_mem_config_));
+    return TensorSpec(output_shape, TensorLayout(output_data_type, PageConfig(output_layout), args.output_mem_config));
 }
 
 UpsampleOperation::tensor_return_value_t UpsampleOperation::create_output_tensors(
@@ -133,11 +132,11 @@ std::tuple<UpsampleOperation::operation_attributes_t, UpsampleOperation::tensor_
     const DeviceComputeKernelConfig& compute_kernel_config) {
     return {
         operation_attributes_t{
-            .scale_factor_h_ = scale_factor_h,
-            .scale_factor_w_ = scale_factor_w,
-            .mode_ = mode,
-            .output_mem_config_ = output_mem_config,
-            .compute_kernel_config_ = compute_kernel_config},
+            .scale_factor_h = scale_factor_h,
+            .scale_factor_w = scale_factor_w,
+            .mode = mode,
+            .output_mem_config = output_mem_config,
+            .compute_kernel_config = compute_kernel_config},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 }  // namespace ttnn::operations::pool::upsample
