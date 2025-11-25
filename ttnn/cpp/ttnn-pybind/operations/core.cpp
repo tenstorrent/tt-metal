@@ -354,6 +354,12 @@ void py_module(py::module& module) {
                 - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
         )doc");
 
     module.def(
@@ -382,6 +388,12 @@ void py_module(py::module& module) {
                 - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(core_rangeset, 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
         )doc");
 }
 
