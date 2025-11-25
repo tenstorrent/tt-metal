@@ -168,7 +168,7 @@ class Generator:
         # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
         if (
-            batch == 32
+            batch >= 2
             and len(set(prefill_seq_lens)) == 1
             and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None

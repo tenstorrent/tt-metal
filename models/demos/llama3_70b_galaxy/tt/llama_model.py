@@ -212,7 +212,7 @@ class TtTransformer(LightweightModule):
 
         if page_table is not None:
             if batch_size > 1:
-                assert batch_size == 32, "batch_size must be 32 for batched prefill"
+                assert batch_size % 4 == 0, "batch_size must be divisible by 4 for batched prefill"
                 # we only want to update the kv cache for 8 users per 4 devices
                 # pad with -1 for the seqlen of all other users
                 devices = 4
