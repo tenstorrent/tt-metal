@@ -146,6 +146,13 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
 
+      - name: Print tt-triage tests
+        run: |
+          echo "Current working directory: $(pwd)"
+          ls -la /opt/venv/bin/python3
+          ls -la /__w/tt-metal/tt-metal/docker-job/tools/tt-triage.py
+          /opt/venv/bin/python3 /__w/tt-metal/tt-metal/docker-job/tools/tt-triage.py --help
+
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
