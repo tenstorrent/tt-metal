@@ -886,7 +886,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+        device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
