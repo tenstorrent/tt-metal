@@ -192,6 +192,9 @@ private:
  */
 experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
 
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer);
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory);
+
 }  // namespace experimental
 
 }  // namespace tt::tt_metal

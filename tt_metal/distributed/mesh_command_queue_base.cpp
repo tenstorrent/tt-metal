@@ -331,7 +331,7 @@ void MeshCommandQueueBase::enqueue_read(
             shard_data_transfers.push_back(
                 {.shard_coord = coord,
                  .host_data = buf->view_bytes().data(),
-                 .pinned_memory = buf->get_pinned_memory(),
+                 .pinned_memory = experimental::HostBufferGetPinnedMemory(*buf),
                  .region = BufferRegion(0, buf->view_bytes().size())});
         }
     }

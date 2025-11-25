@@ -360,4 +360,11 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     return params;
 }
 
+void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
+    host_buffer.pinned_memory_ = pinned_memory;
+}
+
+std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) {
+    return host_buffer.pinned_memory_;
+}
 }  // namespace tt::tt_metal::experimental
