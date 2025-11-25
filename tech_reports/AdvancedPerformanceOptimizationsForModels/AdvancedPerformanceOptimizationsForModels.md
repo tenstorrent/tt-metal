@@ -73,7 +73,7 @@ In order to use trace, we need to use the following trace APIs:
 
   This will execute the captured trace with the specified trace id, and is equivalent to running all the operations that were captured between begin and end
 
-In addition, since trace requires the addresses of the used tensors to be the same, we need to statically preallocate our input tensor, and reuse this tensor instead of recreating our input tensor each iteration using the following apis:
+In addition, since trace requires the addresses of the used tensors to be the same, we need to statically preallocate our input tensor, and reuse this tensor instead of recreating our input tensor each iteration using the following APIs:
 
 * `device_tensor = ttnn.allocate_tensor_on_device(tensor_spec, device)`
 
@@ -508,7 +508,7 @@ read_event = ttnn.record_event(device, 1)
 ttnn.wait_for_event(1, first_op_event)
 # Write the next input tensor on CQ1
 ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
-# Signal that the write has finished on CQ 
+# Signal that the write has finished on CQ
 write_event = ttnn.record_event(device, 1)
 # Make CQ0 stall until CQ1 has signalled that the write has finished
 ttnn.wait_for_event(0, write_event)
