@@ -10,7 +10,7 @@ namespace ttnn::operations::dram_prefetcher::program {
 
 struct DramPrefetcherProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::CBHandle tensor_addrs_cb;
+        tt::tt_metal::CBHandle tensor_addrs_cb{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
