@@ -9,12 +9,12 @@
 namespace ttnn::operations::pool::grid_sample {
 
 struct operation_attributes_t {
-    const std::string mode_;
-    const std::string padding_mode_;
-    const bool align_corners_;
-    const bool use_precomputed_grid_;
-    const bool batch_output_channels_;
-    const tt::tt_metal::MemoryConfig output_mem_config_;
+    std::string mode;
+    std::string padding_mode;
+    bool align_corners;
+    bool use_precomputed_grid;
+    bool batch_output_channels;
+    tt::tt_metal::MemoryConfig output_mem_config;
 };
 
 struct tensor_args_t {
