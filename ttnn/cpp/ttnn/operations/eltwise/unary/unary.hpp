@@ -27,7 +27,8 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         const Tensor& input_tensor,
         bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type>
