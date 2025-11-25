@@ -5,6 +5,7 @@
 #include "concatenate_heads.hpp"
 
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,8 +32,9 @@ ttnn::Tensor ExecuteConcatenateHeads::invoke(
         "Head size ({}) cannot have tile padding. Ensure that the head size is not padded.",
         head_size);
 
-    // Use the new prim registration
-    return ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
+    auto output = ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
+
+    return ttnn::squeeze(output, 1);
 }
 
 }  // namespace ttnn::operations::transformer
