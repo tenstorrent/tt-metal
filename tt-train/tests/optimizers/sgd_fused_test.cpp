@@ -14,7 +14,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/sgd.hpp"
-#include "tt-train/tests/test_utils/env_utils.hpp"
+#include "test_utils/env_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
 struct ParityCase {
