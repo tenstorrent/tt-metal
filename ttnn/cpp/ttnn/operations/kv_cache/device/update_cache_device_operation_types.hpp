@@ -13,16 +13,16 @@ enum class UpdateCacheOpParallelizationStrategy { MULTI_CORE };
 enum class UpdateCacheOpType { FILL, UPDATE };
 
 struct operation_attributes_t {
-    const uint32_t batch_idx;
-    const uint32_t update_idx;
-    const uint32_t batch_offset;
-    const UpdateCacheOpType op_type;
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
+    uint32_t batch_idx = 0;
+    uint32_t update_idx = 0;
+    uint32_t batch_offset = 0;
+    UpdateCacheOpType op_type = UpdateCacheOpType::FILL;
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
 };
 
 struct tensor_args_t {
-    const Tensor cache;
-    const Tensor input;
+    Tensor cache;
+    Tensor input;
 };
 
 using tensor_return_value_t = Tensor;
