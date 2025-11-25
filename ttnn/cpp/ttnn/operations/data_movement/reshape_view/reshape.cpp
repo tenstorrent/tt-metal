@@ -69,14 +69,10 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
     auto temp_tensor2 =
-        tt::tt_metal::operation::run(
-            ttnn::ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config, false},
-            {temp_tensor},
-            {},
-            {})
-            .at(0);
+        ttnn::prim::reshape(temp_tensor, logical_shape, padded_shape, intermediate_out_memory_config, false);
+
     if (memory_config.is_sharded()) {
-    return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
+        return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
     } else {
         return temp_tensor2;
     }
@@ -89,9 +85,10 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config) {
-    //This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD using a 0 cost view
+    // This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD
+    // using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
-    //Collapse into the second last dimension
+    // Collapse into the second last dimension
     uint32_t second_dim = 1;
     for (int64_t i = 0; i < static_cast<int64_t>(logical_shape.rank()) - 1; ++i) {
         second_dim = second_dim * logical_shape[i];
@@ -159,13 +156,13 @@ ttnn::Tensor PerformView(
         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0)) {
         return ttnn::experimental::view(tensor, logical_shape, compute_padded_shape(logical_shape));
     }
-    //Perform a reshape (view)
+    // Perform a reshape (view)
     return ttnn::experimental::view(tensor, logical_shape, padded_shape);
 }
 
 std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-    //Correct the shape to account for inferred dimensions
+    // Correct the shape to account for inferred dimensions
     uint32_t input_volume = tensor.logical_volume();
     uint32_t output_volume = 1;
     uint32_t inferred_dim = -1;
@@ -179,12 +176,11 @@ std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
             output_volume = output_volume * logical_shape[i];
         }
     }
-    if (inferred_dim == -1)
-    {
+    if (inferred_dim == -1) {
         return {logical_shape, padded_shape};
     }
 
-    uint32_t implied_dim_value = (output_volume == 0) ? 0: input_volume/output_volume;
+    uint32_t implied_dim_value = (output_volume == 0) ? 0 : input_volume / output_volume;
     ttnn::Shape new_shape = logical_shape;
     new_shape[inferred_dim] = implied_dim_value;
     return {new_shape, new_shape};
@@ -230,14 +226,8 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    auto output_tensor_3d =
-        tt::tt_metal::operation::run(
-            ttnn::ReshapeDeviceOperation{
-                requested_shape_3d, requested_padded_shape_3d, working_output_memory_config, recreate_mapping_tensor},
-            {tensor3d},
-            {},
-            {})
-            .at(0);
+    auto output_tensor_3d = ttnn::prim::reshape(
+        tensor3d, requested_shape_3d, requested_padded_shape_3d, working_output_memory_config, recreate_mapping_tensor);
 
     if (memory_config.is_sharded()) {
         output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, memory_config, std::nullopt);
@@ -358,11 +348,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode) {
     return invoke(
-        tensor,
-        tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
-        memory_config,
-        pad_value,
-        reshape_map_mode);
+        tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value, reshape_map_mode);
 }
 
 }  // namespace ttnn::operations::data_movement

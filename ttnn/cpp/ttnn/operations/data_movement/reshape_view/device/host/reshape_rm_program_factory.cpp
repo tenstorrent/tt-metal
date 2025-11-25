@@ -2,36 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include "ttnn/operations/data_movement/reshape_view/device/reshape_row_major_program_factory.hpp"
 
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
-
-#include <optional>
-#include <variant>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
-
-#include "reshape_program_factory.hpp"
 
 #define MASK_64 0xFFFFFFFFFFFFFFC0
-#define OFFSET_64 0x000000000000003F
 #define MASK_16 0xFFFFFFFFFFFFFFF0
-#define OFFSET_16 0x000000000000000F
 
 namespace ttnn::operations::data_movement::reshape {
 
-tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
-    const Tensor& input, const Tensor& output) {
+ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -45,10 +32,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto input_log_shape = input.logical_shape();
     auto output_log_shape = output.logical_shape();
-    log_debug(tt::LogOp, "row major reshape");
-    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
-    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
-    log_debug(tt::LogOp, "data size: {}", data_size);
+
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
@@ -58,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
+    // write page Since the logical volumes match, we are guaranteed to be working 2D->2D in this function
     uint32_t responsibility = ((input_log_shape[-2] - 1) / num_cores_total) + 1;
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
@@ -192,41 +176,46 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
             }
         }
     }
-    auto override_runtime_args_callback =
-        [reader_kernel_id, reader_kernel_id2, can_use_dual_kernel, num_cores_x, num_cores_y](
-            const void* operation,
-            const tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            tt::tt_metal::Buffer* src_buffer = input_tensors.at(0).buffer();
-            tt::tt_metal::Buffer* dst_buffer = output_tensors.at(0).buffer();
 
-            for (int core_x = 0; core_x < num_cores_x; core_x++) {
-                for (int core_y = 0; core_y < num_cores_y; core_y++) {
-                    CoreCoord core = {core_x, core_y};
+    return {std::move(program), {reader_kernel_id, reader_kernel_id2, can_use_dual_kernel, num_cores_x, num_cores_y}};
+}
 
-                    // Update buffer addresses for primary kernel
-                    {
-                        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                        runtime_args[0] = src_buffer->address();  // src_buffer address
-                        runtime_args[1] = dst_buffer->address();  // dst_buffer address
-                    }
+void ReshapeRMProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& shared_variables = cached_program.shared_variables;
+    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
+    const auto& reader_kernel_id2 = shared_variables.reader_kernel_id2;
+    const auto& can_use_dual_kernel = shared_variables.can_use_dual_kernel;
+    const auto& num_cores_x = shared_variables.num_cores_x;
+    const auto& num_cores_y = shared_variables.num_cores_y;
 
-                    // Update buffer addresses for dual kernel if enabled
-                    if (can_use_dual_kernel) {
-                        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id2, core);
-                        runtime_args[0] = src_buffer->address();  // src_buffer address
-                        runtime_args[1] = dst_buffer->address();  // dst_buffer address
-                    }
-                }
+    tt::tt_metal::Buffer* src_buffer = tensor_args.input.buffer();
+    tt::tt_metal::Buffer* dst_buffer = tensor_return_value.buffer();
+
+    auto& program = cached_program.program;
+
+    for (int core_x = 0; core_x < num_cores_x; core_x++) {
+        for (int core_y = 0; core_y < num_cores_y; core_y++) {
+            CoreCoord core = {core_x, core_y};
+
+            // Update buffer addresses for primary kernel
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();  // src_buffer address
+                runtime_args[1] = dst_buffer->address();  // dst_buffer address
             }
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+
+            // Update buffer addresses for dual kernel if enabled
+            if (can_use_dual_kernel) {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id2, core);
+                runtime_args[0] = src_buffer->address();  // src_buffer address
+                runtime_args[1] = dst_buffer->address();  // dst_buffer address
+            }
+        }
+    }
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const Tensor& output) {
-    return rm_reshape_preparer_single_risk(input, output);
-}
-
-};  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::operations::data_movement::reshape

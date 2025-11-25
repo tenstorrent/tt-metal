@@ -1,27 +1,19 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/data_movement/reshape_view/device/reshape_tiled_program_factory.hpp"
+
 #include <math.h>
+#include <numeric>
 
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include <tt-metalium/hal.hpp>
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
-
-#include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
-#include "reshape_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
 
@@ -103,7 +95,7 @@ struct TileIterator {
         tile_idx_w(0),
         tile_end_h(in_end_h - 1),
         tile_end_w(in_end_w - 1),
-        first(true) {};
+        first(true){};
 
     bool next() {
         if (first) {
@@ -265,28 +257,13 @@ Tensor compute_reshape_mapping_host_tensor(
 }
 }  // namespace detail
 
-// Algorithm overview:
-// The host computes the mapping between input shape and the output shapes as a series of data segments that are
-// contiguous for both input and output tensors. The mapping data is stored as 4 integers per segment: input page index,
-// offset of the segment in the input page, offset of the segment in the output page, number of elements in the segment;
-// the ordering of the segments in the map are concomitant with the ordering of the output tensor pages. The mapping
-// data is stored as an auxiliary integer tensor where each page corresponds to a page of the output tensor.
+ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor = tensor_args.input;
+    const auto& output_tensor = tensor_return_value;
 
-// The device operation is parallelized over output tensor pages, where each core operates on a range of pages.
-
-// The reader kernel loads the mapping tensor page that corresponds to the current output tensor page on which it is
-// operating and pushes it on to the circular buffer. The reader kernel loops over all of the data segments represented
-// by the map and loads the specified input pages, avoiding redundant loads of pages for segments that come from the
-// same input page, and pushes them to the circular buffer.
-
-// The writer kernel pops mapping pages off the circular buffer, corresponding to the current page. It loops through
-// the input tensor pages specified by the map and, as necessary, pops input pages off the circular buffer, again
-// accounting for consecutive segments that come from the same input page. Using the offsets and size supplied by the
-// map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
-// the scratch page is copied to its output destination.
-
-tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
-    const Tensor& input_tensor, const Tensor& output_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
@@ -414,55 +391,53 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         utilized_cores.push_back(c);
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id,
-         writer_kernel_id,
-         utilized_cores,
-         // capture this to cache the computed mapping tensor. Cheap copy since data is on device.
-         mapping_tensor](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) mutable {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& output_tensor = output_tensors.at(0);
-
-            const auto& op = *reinterpret_cast<const ttnn::ReshapeDeviceOperation*>(operation);
-            if (op.recreate_mapping_tensor) {
-                const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-                const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
-                const uint32_t num_input_pages =
-                    tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
-                const uint32_t num_output_pages =
-                    tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
-
-                mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                     num_input_pages,
-                                     num_output_pages,
-                                     input_tensor.logical_shape(),
-                                     output_tensor.logical_shape(),
-                                     tile_shape,
-                                     face_shape)
-                                     .to_device(input_tensor.device());
-            }
-
-            const auto input_buffer_addr = input_tensor.buffer()->address();
-            const auto output_buffer_addr = output_tensor.buffer()->address();
-
-            for (const auto& core : utilized_cores) {
-                auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
-                reader_runtime_args_core.at(0) = input_buffer_addr;
-                if (op.recreate_mapping_tensor) {
-                    reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
-                }
-
-                auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
-                writer_runtime_args_core.at(0) = output_buffer_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, utilized_cores, mapping_tensor}};
 }
 
-};  // namespace ttnn::operations::data_movement::reshape
+void ReshapeTiledProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& shared_variables = cached_program.shared_variables;
+    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
+    const auto& utilized_cores = shared_variables.utilized_cores;
+    auto& mapping_tensor = shared_variables.mapping_tensor;
+
+    const auto& input_tensor = tensor_args.input;
+    const auto& output_tensor = tensor_return_value;
+
+    if (operation_attributes.recreate_mapping_tensor) {
+        const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+        const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
+        const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+        const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+
+        mapping_tensor = detail::compute_reshape_mapping_host_tensor(
+                             num_input_pages,
+                             num_output_pages,
+                             input_tensor.logical_shape(),
+                             output_tensor.logical_shape(),
+                             tile_shape,
+                             face_shape)
+                             .to_device(input_tensor.device());
+    }
+
+    const auto input_buffer_addr = input_tensor.buffer()->address();
+    const auto output_buffer_addr = output_tensor.buffer()->address();
+    auto& program = cached_program.program;
+
+    for (const auto& core : utilized_cores) {
+        auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_runtime_args_core.at(0) = input_buffer_addr;
+        if (operation_attributes.recreate_mapping_tensor) {
+            reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
+        }
+
+        auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
+        writer_runtime_args_core.at(0) = output_buffer_addr;
+    }
+}
+
+}  // namespace ttnn::operations::data_movement::reshape
