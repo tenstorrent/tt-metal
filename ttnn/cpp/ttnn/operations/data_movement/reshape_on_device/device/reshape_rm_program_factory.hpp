@@ -12,9 +12,9 @@ namespace ttnn::operations::data_movement::reshape_on_device {
 
 struct ReshapeRMProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        CoreCoord compute_with_storage_grid_size;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
