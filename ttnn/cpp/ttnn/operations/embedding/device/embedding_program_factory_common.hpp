@@ -6,7 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "embedding_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -25,6 +25,5 @@ struct CoreSplitResult {
     uint32_t units_per_core_group_2 = 0;
 };
 
-CoreSplitResult split_work_to_cores_aligned(
-    const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment);
+CoreSplitResult split_work_to_cores_aligned(CoreCoord grid_size, uint32_t units_to_divide, uint32_t alignment);
 }  // namespace ttnn::operations::embedding::program

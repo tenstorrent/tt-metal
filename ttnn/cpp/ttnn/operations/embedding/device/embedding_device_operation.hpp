@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/operations/embedding/device/embedding_device_operation_types.hpp"
+#include "embedding_device_operation_types.hpp"
 #include "embeddings_fused_program_factory.hpp"
 #include "embeddings_rm_program_factory.hpp"
 #include "embeddings_tilized_indices_program_factory.hpp"

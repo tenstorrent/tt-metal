@@ -6,7 +6,7 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
