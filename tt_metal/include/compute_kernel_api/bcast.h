@@ -28,8 +28,8 @@ namespace ckernel {
  * This function configures the unpacker, math, and packer threads for broadcast operations. In order for broadcast operations to be performed,
  * this function call must be followed by calls to `unary_bcast`.
  *
- * NOTE: This function is a so-called "full init" which will be deprecated in the futuree in favor of using `unary_bcast_init_short` preceded
- * by `ompute_kernel_hw_startup`.
+ * NOTE: This function is a so-called "full init" which will be deprecated in the future in favor of using `unary_bcast_init_short` preceded
+ * by `compute_kernel_hw_startup`.
  *
  * Return value: None
  *
@@ -66,7 +66,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
  * Performs a minimal hardware and software initialization for unary broadcast operations for provided circular buffer identifier (CB ID).
  * This function configures only the unpacker and math threads for broadcast operations, without touching the packer or destination buffer
  * addressing state. This is the preferred init function when mixing broadcast operations with other operations like `copy_tile` in loops.
-* The broadcast operation copies/expands data according to the specified broadcast type:
+ * The broadcast operation copies/expands data according to the specified broadcast type:
  * - BroadcastType::NONE: No broadcast (direct copy)
  * - BroadcastType::ROW: Broadcast along rows (repeat row data across columns)
  * - BroadcastType::COL: Broadcast along columns (repeat column data across rows)
