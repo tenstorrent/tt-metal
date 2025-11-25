@@ -11,8 +11,8 @@
 #include <chrono>
 #include <random>
 #include "gmock/gmock.h"
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"

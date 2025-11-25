@@ -14,7 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

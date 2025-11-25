@@ -7,10 +7,10 @@
 #include <unordered_set>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 

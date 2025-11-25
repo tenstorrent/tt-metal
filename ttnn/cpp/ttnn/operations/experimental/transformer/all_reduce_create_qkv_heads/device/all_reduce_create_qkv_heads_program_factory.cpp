@@ -4,7 +4,7 @@
 ///
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 namespace ttnn {
 
 using namespace ccl;

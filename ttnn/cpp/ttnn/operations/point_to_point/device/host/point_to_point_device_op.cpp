@@ -7,7 +7,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "point_to_point_device_op.hpp"

@@ -11,7 +11,7 @@
 #include <filesystem>
 
 #include "fabric_fixture.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace {

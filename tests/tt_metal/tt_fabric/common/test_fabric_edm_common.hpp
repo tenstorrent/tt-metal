@@ -13,7 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "erisc_datamover_builder_helper.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -21,7 +21,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_stl/small_vector.hpp"
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/sub_device.hpp>
