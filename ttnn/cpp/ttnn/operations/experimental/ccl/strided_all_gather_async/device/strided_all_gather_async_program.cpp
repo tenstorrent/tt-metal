@@ -86,7 +86,6 @@ uint32_t strided_default_workers(
         "Not enough cores available on the subdevice or device for the requested match the number of links {}",
         num_links);
 }
-}  // namespace detail
 
 void strided_fabric_mux_connection_ct_args(
     const bool is_termination_master,
@@ -127,6 +126,7 @@ void strided_fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);
     worker_rt_args.push_back(num_workers_per_direction);
 }
+}  // namespace detail
 
 StridedAllGatherAsyncProgramFactory::cached_mesh_workload_t StridedAllGatherAsyncProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -369,11 +369,66 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 
+    uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+
+    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+    TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+    uint32_t TILE_WIDTH = 32;
+
+    uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
+
+    uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+
+    uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
+    uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
+    uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
+    uint32_t mm_block_wt_val = mm_block_wt.value_or(0);
+    if (fuse_op) {
+        tiles_per_chunk_val = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
+    }
+
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
 
     // KERNEL CREATION
     /* All gather fusion */
+    std::vector<std::vector<uint32_t>> device_chunk_widths(ring_size);
+    std::vector<uint32_t> device_k_block_counts(ring_size, 0);
+    uint32_t padded_K_tiles = tt::round_up(output_tensor_Wt, mm_block_wt_val);
+    uint32_t K_blocks = padded_K_tiles / mm_block_wt_val;
+
+    uint32_t curr_device = 0;
+    uint32_t curr_device_end = input_tensor_Wt - 1;
+    uint32_t device_max_chunks = 0;
+    for (uint32_t k_block_iter = 0; k_block_iter < K_blocks; k_block_iter++) {
+        uint32_t curr_k_block_start = k_block_iter * mm_block_wt_val;
+        uint32_t curr_k_block_end = (k_block_iter + 1) * mm_block_wt_val - 1;
+        if (curr_k_block_end < curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            device_chunk_widths[curr_device].push_back(curr_k_block_end - curr_k_block_start + 1);
+        } else if (curr_k_block_end == curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            device_chunk_widths[curr_device].push_back(curr_k_block_end - curr_k_block_start + 1);
+            curr_device++;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        } else if (curr_k_block_end > curr_device_end) {
+            device_k_block_counts[curr_device]++;
+            device_chunk_widths[curr_device].push_back(curr_device_end - curr_k_block_start + 1);
+            if (curr_device + 1 < ring_size) {
+                device_k_block_counts[curr_device + 1]++;
+                device_chunk_widths[curr_device + 1].push_back(curr_k_block_end - curr_device_end);
+            }
+            curr_device++;
+            curr_device_end = (curr_device + 1) * input_tensor_Wt - 1;
+        }
+    }
+    for (uint32_t d = 0; d < ring_size; d++) {
+        device_max_chunks = std::max(device_max_chunks, (uint32_t)device_chunk_widths[d].size());
+    }
+
     if (fuse_op) {
         fused_op_signaler_forward->init_all_gather(
             program, mesh_device, sender_forward_core_ranges, sender_forward_cores);
@@ -389,19 +444,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
-        uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
-
-        uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-        TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-        uint32_t TILE_WIDTH = 32;
-
-        uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-        uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-
-        uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-        uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
             uint32_t mux_core_offset = (link * num_cores_per_link) +
@@ -460,16 +502,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 uint32_t remainder = single_batch_head_num_pages % global_worker_count;
                 uint32_t tiles_per_core = base_pages_per_worker + ((global_worker_id < remainder) ? 1 : 0);
 
-                uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
-                uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
-                uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
-                uint32_t mm_block_wt_val = mm_block_wt.value_or(0);
-                log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
-
-                if (fuse_op) {
-                    tiles_per_chunk_val = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
-                }
-
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                       // my_chip_id
@@ -509,6 +541,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     mm_block_wt_val,
                     mm_block_ht_val,
                     mm_cores_y_val};
+                reader_rt_args.push_back(device_max_chunks);
+                for (uint32_t d = 0; d < ring_size; d++) {
+                    reader_rt_args.push_back(device_k_block_counts[d]);
+                    reader_rt_args.push_back(device_chunk_widths[d].size());
+                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
+                        reader_rt_args.push_back(device_chunk_widths[d][c]);
+                    }
+                }
                 if (fuse_op) {
                     if (dir) {
                         fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
@@ -547,7 +587,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     global_worker_count,
                     global_worker_id,
                 };
-                strided_fabric_mux_connection_ct_args(
+                detail::strided_fabric_mux_connection_ct_args(
                     worker == 0,
                     mux_virtual_core,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -588,7 +628,15 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     mm_block_wt_val,
                     mm_block_ht_val,
                     mm_cores_y_val};
-                strided_fabric_mux_connection_rt_args(
+                writer_rt_args.push_back(device_max_chunks);
+                for (uint32_t d = 0; d < ring_size; d++) {
+                    writer_rt_args.push_back(device_k_block_counts[d]);
+                    writer_rt_args.push_back(device_chunk_widths[d].size());
+                    for (uint32_t c = 0; c < device_chunk_widths[d].size(); c++) {
+                        writer_rt_args.push_back(device_chunk_widths[d][c]);
+                    }
+                }
+                detail::strided_fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,
                     program,
