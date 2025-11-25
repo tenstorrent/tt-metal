@@ -10,7 +10,6 @@ import pytest
 import math
 
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -82,7 +81,6 @@ def run_max_pool2d(
         padded_input_w = in_w + pad_l + pad_r
         if effective_kernel_h > padded_input_h or effective_kernel_w > padded_input_w:
             pytest.skip("Effective kernel size cannot exceed padded input size")
-    # skips to speed up nightly test
     if nightly_skips:
         if in_dtype == ttnn.bfloat8_b:
             if stride == (2, 2) or padding == (1, 1):
@@ -91,8 +89,6 @@ def run_max_pool2d(
                 pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
             if stride == (1, 1):
-                # note we would normally always skip this not just for nightly, but some sweep test include this
-                # combo and we want to test all the sweeps
                 pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
@@ -182,23 +178,20 @@ def run_max_pool2d(
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
     # test for equivalance
-    pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.997
         atol = 0.35
     if out_dtype == ttnn.bfloat4_b:
-        pcc_thresh = 0.93
         atol = 0.5
         rtol = 1.0
-    assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     if out_dtype != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
-    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-    assert allclose
     if in_dtype == ttnn.bfloat16 and out_dtype == ttnn.bfloat16:
         isequal = torch.equal(ttnn_output, torch_output)
         assert isequal
+    else:
+        allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+        assert allclose
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -706,9 +699,10 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc)
     ttnn_output_torch_nchw = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
-    passed, pcc_score = assert_with_pcc(ttnn_output_torch_nchw, torch_output, pcc=0.999)
-    logger.info(f"PCC Score: {pcc_score}")
-    assert passed, f"PCC check failed. PCC: {pcc_score}"
+
+    atol = 0.35
+    allclose = torch.allclose(ttnn_output_torch_nchw, torch_output, atol=atol)
+    assert allclose
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

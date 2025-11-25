@@ -11,7 +11,6 @@ import math
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
 
@@ -72,7 +71,7 @@ parameters = {
 @pytest.mark.parametrize("input_spec", parameters["max_pool2d_short_sweep_suite"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_localrun(device, dtype, input_spec, tensor_map):
+def test_ttnn_pytorch_sweep(device, dtype, input_spec, tensor_map):
     (
         in_n,
         in_c,
