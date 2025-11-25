@@ -6,7 +6,6 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
-#include "device_pool.hpp"
 #include "llrt/hal.hpp"
 #include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"

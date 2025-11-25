@@ -10,9 +10,9 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
-namespace ttnn::operations::experimental::cnn::detail {
-
 using namespace tt::constants;
+
+namespace ttnn::operations::experimental::cnn::detail {
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     const uint32_t element_size_bytes = input_tensor.element_size();
@@ -20,8 +20,71 @@ uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     return l1_alignment_bytes / element_size_bytes;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
+}  // namespace ttnn::operations::experimental::cnn::detail
+
+namespace ttnn::operations::experimental::cnn::program {
+
+namespace {
+
+void set_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    bool is_input_in_dram,
+    const std::vector<tt::tt_metal::CoreCoord>& l1_input_cores,
+    const std::vector<std::vector<ttnn::operations::data_movement::detail::WidthShardingReshardSegment>>&
+        runtime_args_for_each_core,
+    tt::tt_metal::KernelHandle writer_kernel_id0,
+    tt::tt_metal::KernelHandle writer_kernel_id1,
+    uint32_t total_num_sticks_kernel_0,
+    uint32_t dram_read_stride_bytes,
+    uint32_t dram_write_stride_bytes,
+    uint32_t remote_address,
+    tt::tt_metal::CBHandle cb_in,
+    tt::tt_metal::CBHandle cb_out) {
+    if (is_input_in_dram) {
+        for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
+            const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
+            std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
+            std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
+            for (const auto& args : args_for_all_segments) {
+                const std::vector<uint32_t> segment_kernel_0 = {
+                    args.write_size, args.read_offset, args.bank_id, args.write_offset};
+                runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+
+                // Adjust read and write offsets to the correct stick address because we are splitting work across 2
+                // kernels
+                const uint32_t adjusted_read_offset =
+                    args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
+                const uint32_t adjusted_write_offset =
+                    args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
+
+                const std::vector<uint32_t> segment_kernel_1 = {
+                    args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
+                runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
+            }
+            SetRuntimeArgs(program, writer_kernel_id0, l1_input_cores[core_idx], runtime_args_0);
+            SetRuntimeArgs(program, writer_kernel_id1, l1_input_cores[core_idx], runtime_args_1);
+        }
+    } else {
+        tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
+        UpdateDynamicCircularBufferAddress(program, cb_in, *input_buffer);
+    }
+
+    tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
+    UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+}
+
+}  // namespace
+
+ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    const auto& a = tensor_args.input;
+    auto& output = tensor_return_value;
 
     // If we are pulling from DRAM we infer the shard shape by using the output shard spec
     const bool is_input_in_dram = a.buffer()->core_type() == tt::CoreType::DRAM;
@@ -41,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         l1_input_shard_width % TILE_WIDTH == 0,
         "Shard width must be multiple of tile width (was {})",
         l1_input_shard_width);
-    const auto alignment_elements = compute_alignment_requirement_in_elements(output);
+    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(output);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_shard_width % alignment_elements == 0,
@@ -184,63 +247,66 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args = [cb_in,
-                             cb_out,
-                             is_input_in_dram,
-                             l1_input_cores,
-                             runtime_args_for_each_core,
-                             writer_kernel_id0,
-                             writer_kernel_id1,
-                             total_num_sticks_kernel_0,
-                             total_num_sticks_kernel_1,
-                             remote_address,
-                             dram_read_stride_bytes,
-                             dram_write_stride_bytes](
-                                tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-        if (is_input_in_dram) {
-            for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
-                const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
-                std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
-                std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
-                for (const auto& args : args_for_all_segments) {
-                    const std::vector<uint32_t> segment_kernel_0 = {
-                        args.write_size, args.read_offset, args.bank_id, args.write_offset};
-                    runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+    // Set runtime arguments during program creation (required to prevent hangs)
+    set_runtime_arguments(
+        program,
+        a,
+        output,
+        is_input_in_dram,
+        l1_input_cores,
+        runtime_args_for_each_core,
+        writer_kernel_id0,
+        writer_kernel_id1,
+        total_num_sticks_kernel_0,
+        dram_read_stride_bytes,
+        dram_write_stride_bytes,
+        remote_address,
+        cb_in,
+        cb_out);
 
-                    // Adjust read and write offsets to the correct stick address because we are splitting work across 2
-                    // kernels
-                    const uint32_t adjusted_read_offset =
-                        args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
-                    const uint32_t adjusted_write_offset =
-                        args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
+    // Store shared variables
+    shared_variables_t shared_variables{
+        .cb_in = cb_in,
+        .cb_out = cb_out,
+        .is_input_in_dram = is_input_in_dram,
+        .l1_input_cores = l1_input_cores,
+        .runtime_args_for_each_core = runtime_args_for_each_core,
+        .writer_kernel_id0 = writer_kernel_id0,
+        .writer_kernel_id1 = writer_kernel_id1,
+        .total_num_sticks_kernel_0 = total_num_sticks_kernel_0,
+        .total_num_sticks_kernel_1 = total_num_sticks_kernel_1,
+        .dram_read_stride_bytes = dram_read_stride_bytes,
+        .dram_write_stride_bytes = dram_write_stride_bytes,
+        .remote_address = remote_address};
 
-                    const std::vector<uint32_t> segment_kernel_1 = {
-                        args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
-                    runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
-                }
-                SetRuntimeArgs(program, writer_kernel_id0, l1_input_cores[core_idx], runtime_args_0);
-                SetRuntimeArgs(program, writer_kernel_id1, l1_input_cores[core_idx], runtime_args_1);
-            }
-        } else {
-            tt::tt_metal::Buffer* a_buffer = a.buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
-        }
-        tt::tt_metal::Buffer* output_buffer = output.buffer();
-        UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
-    };
-    set_runtime_args(program, a, output);
-
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   tt::tt_metal::Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto& output_tensor = output_tensors.at(0);
-        set_runtime_args(program, input_tensors.at(0), output_tensor);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {std::move(program), std::move(shared_variables)};
 }
 
-}  // namespace ttnn::operations::experimental::cnn::detail
+void ConvertToHWCProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    const auto& shared_vars = cached_program.shared_variables;
+    const auto& a = tensor_args.input;
+    auto& output = tensor_return_value;
+
+    set_runtime_arguments(
+        program,
+        a,
+        output,
+        shared_vars.is_input_in_dram,
+        shared_vars.l1_input_cores,
+        shared_vars.runtime_args_for_each_core,
+        shared_vars.writer_kernel_id0,
+        shared_vars.writer_kernel_id1,
+        shared_vars.total_num_sticks_kernel_0,
+        shared_vars.dram_read_stride_bytes,
+        shared_vars.dram_write_stride_bytes,
+        shared_vars.remote_address,
+        shared_vars.cb_in,
+        shared_vars.cb_out);
+}
+
+}  // namespace ttnn::operations::experimental::cnn::program

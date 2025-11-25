@@ -144,6 +144,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       gtest_filter: "*NIGHTLY_*"
+      nightly-run: true
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}

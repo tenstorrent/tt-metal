@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
 #include "all_to_all_combine.hpp"
 #include "device/all_to_all_combine_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/full/full.hpp"
@@ -62,7 +60,12 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
             output_shape.push_back(output_spec.logical_shape()[i]);
         }
         auto output_tensor = ttnn::moreh_full(
-            output_shape, 0.0f, input_tensor, input_tensor.dtype(), input_tensor.layout(), output_spec.memory_config());
+            output_shape,
+            0.0f,
+            input_tensor.device(),
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            output_spec.memory_config());
         // set optional_output_tensor to the output tensor
         optional_output_tensor_ = output_tensor;
     }

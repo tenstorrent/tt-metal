@@ -30,6 +30,7 @@ enum class KernelName {
     ReaderRowBcastTTT,
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
+    WriterNoBcastTernary,
     WriterColBcastTTT,
     ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
     ComputeBcastTTT,         // TTT : column and scalar bcast cases
