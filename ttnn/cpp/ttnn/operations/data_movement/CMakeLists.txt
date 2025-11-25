@@ -181,7 +181,7 @@ target_sources(
         split/split.cpp
         squeeze/squeeze.cpp
         stack/stack.cpp
-        tilize/device/tilize_op.cpp
+        tilize/device/tilize_device_operation.cpp
         tilize/device/tilize_program_factory.cpp
         tilize/tilize.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_op.cpp
