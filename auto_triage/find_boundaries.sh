@@ -152,7 +152,7 @@ while true; do
                     break
                 fi
 
-                FILTERED=$(echo "$JOB_ENTRIES" | jq --argjson attempt "$ATTEMPT" -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\") | (.run_attempt = (.run_attempt // $attempt))]" 2>/dev/null || echo "")
+                FILTERED=$(echo "$JOB_ENTRIES" | jq --argjson attempt "$ATTEMPT" -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\") | (.run_attempt = (.run_attempt // \$attempt))]" 2>/dev/null || echo "")
                 if [ "$FILTERED" != "[]" ]; then
                     MATCHING_JOBS=$(jq -n --argjson acc "$MATCHING_JOBS" --argjson new "$FILTERED" '$acc + $new')
                 fi
