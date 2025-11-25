@@ -516,7 +516,10 @@ Tensor hash includes:
 - Alignment dimensions (vector of uint32_t)
 
 **If the legacy operation does not implement `compute_program_hash`**,
-Simply hash operation_attributes and tensors_args
+Do not implement `compute_program_hash` in the newly-migrated operation, because we want to mimic how the legacy was hashed.
+
+**If the legacy operation implements `compute_program_hash`**,
+Include everything that was in the legacy into the new hash. Make sure to include `tensor_args` as a whole.
 
 **What must be included in hash:**
 Anything that affects the compiled kernel binary:
@@ -614,7 +617,7 @@ Great examples of operations migrated to TMP:
 To build the project with debug symbols (without Python bindings for faster builds during development):
 
 ```bash
-./build_metal.sh -c -e --debug --without-python-bindings
+./build_metal.sh -c -e --debug
 ```
 
 ### Running Tests
