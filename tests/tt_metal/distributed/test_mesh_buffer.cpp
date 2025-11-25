@@ -621,8 +621,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .pinned_memory = nullptr,
         .region = BufferRegion(0, bytes_per_device),
+        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -645,8 +645,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = static_cast<void*>(dst_ptr_aligned),
-        .pinned_memory = pinned_shared,
         .region = BufferRegion(0, bytes_per_device),
+        .pinned_memory = pinned_shared,
     };
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
@@ -681,8 +681,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .pinned_memory = nullptr,
         .region = BufferRegion(0, bytes_per_device),
+        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -742,8 +742,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = src.data(),
-        .pinned_memory = nullptr,
         .region = BufferRegion(0, bytes_per_device),
+        .pinned_memory = nullptr,
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
@@ -767,8 +767,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = static_cast<void*>(dst_ptr_unaligned),
-        .pinned_memory = pinned_shared,
         .region = BufferRegion(0, bytes_per_device),
+        .pinned_memory = pinned_shared,
     };
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
 
