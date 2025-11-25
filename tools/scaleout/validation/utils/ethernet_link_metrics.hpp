@@ -32,11 +32,14 @@ struct EthChannelIdentifier {
     tt::tt_metal::TrayID tray_id;
     tt::tt_metal::ASICLocation asic_location;
     uint8_t channel = 0;
+    uint32_t port_id = 0;    // Physical port ID
+    uint32_t port_type = 0;  // Port type enum value
 };
 
 inline bool operator==(const EthChannelIdentifier& lhs, const EthChannelIdentifier& rhs) {
     return lhs.host == rhs.host && lhs.asic_id == rhs.asic_id && lhs.tray_id == rhs.tray_id &&
-           lhs.asic_location == rhs.asic_location && lhs.channel == rhs.channel;
+           lhs.asic_location == rhs.asic_location && lhs.channel == rhs.channel && lhs.port_id == rhs.port_id &&
+           lhs.port_type == rhs.port_type;
 }
 
 namespace std {
@@ -44,7 +47,13 @@ template <>
 struct hash<EthChannelIdentifier> {
     size_t operator()(const EthChannelIdentifier& identifier) const {
         return ttsl::hash::hash_objects_with_default_seed(
-            identifier.host, identifier.asic_id, identifier.tray_id, identifier.asic_location, identifier.channel);
+            identifier.host,
+            identifier.asic_id,
+            identifier.tray_id,
+            identifier.asic_location,
+            identifier.channel,
+            identifier.port_id,
+            identifier.port_type);
     }
 };
 }  // namespace std

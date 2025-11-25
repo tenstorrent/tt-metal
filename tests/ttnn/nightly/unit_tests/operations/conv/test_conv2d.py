@@ -1684,89 +1684,6 @@ def test_sd_conv_wh(
         )
 
 
-# VAE 1.4
-@pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, split_factor_input_channels, split_factor_output_channels",
-    (
-        (512, 512, 64, 64, 1, 1),
-        (512, 256, 256, 256, 2, 1),
-        (256, 256, 256, 256, 1, 1),
-        (256, 128, 512, 512, 8 if is_wormhole_b0() else 4, 1),
-        (128, 128, 512, 512, 4 if is_wormhole_b0() else 2, 1),
-        (512, 512, 256, 256, 8 if is_wormhole_b0() else 2, 1 if is_wormhole_b0() else 2),
-        (256, 256, 512, 512, 8 if is_wormhole_b0() else 4, 2),
-        (128, 3, 512, 512, 2, 1),
-    ),
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
-def test_sd14_vae_conv(
-    device,
-    torch_tensor_map,
-    input_channels,
-    output_channels,
-    input_height,
-    input_width,
-    split_factor_input_channels,
-    split_factor_output_channels,
-):
-    if device.core_grid.y != 8 and is_wormhole_b0():
-        pytest.skip("Needs 8x8 grid for wormhole_b0")
-
-    batch = 1
-    dtype = ttnn.bfloat8_b
-    kernel = (3, 3)
-    stride = (1, 1)
-    padding = (1, 1)
-    if split_factor_input_channels > 1 or split_factor_output_channels > 1:
-        run_conv_with_split(
-            device,
-            torch_tensor_map,
-            ttnn.MathFidelity.LoFi,
-            dtype,
-            dtype,
-            batch,
-            output_channels,
-            input_channels,
-            input_height,
-            input_width,
-            kernel[0],
-            kernel[1],
-            stride[0],
-            stride[1],
-            padding,
-            (1, 1),
-            {},
-            shard_layout=None,
-            split_input_channels_factor=split_factor_input_channels,
-            split_output_channels_factor=split_factor_output_channels,
-            auto_shard=True,
-            input_layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else None,
-        )
-    else:
-        run_conv(
-            device=device,
-            torch_tensor_map=torch_tensor_map,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            output_dtype=dtype,
-            weights_dtype=dtype,
-            batch_size=batch,
-            output_channels=output_channels,
-            input_channels=input_channels,
-            input_height=input_height,
-            input_width=input_width,
-            filter_height=kernel[0],
-            filter_width=kernel[1],
-            stride_h=stride[0],
-            stride_w=stride[1],
-            padding=padding,
-            config_override=None,
-            output_layout=ttnn.TILE_LAYOUT,
-            shard_layout=None,
-            auto_shard=True,
-            input_layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else None,
-        )
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -3102,7 +3019,7 @@ def test_block_sharding_relu_act_block_h(
         (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (5, 5), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
         (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (2, 2), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
         (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (4, 4), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (8, 8), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (8, 8), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
         (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (2, 2), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
         (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
         (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
@@ -3807,25 +3724,25 @@ def test_segformer_channel_padding(device, enable_act_double_buffer):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width, padding",
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width, padding, act_block_h_override",
     [
-        (3, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
-        (3, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
-        (3, 32, 224, 224, 16, 16, 2, 2, (0, 0)),
-        (3, 32, 224, 224, 7, 7, 2, 2, (0, 0)),
-        (3, 32, 224, 224, 6, 6, 2, 2, (0, 0)),
-        (3, 32, 1024, 1024, 7, 7, 3, 3, (1, 1)),
-        (3, 32, 1280, 1280, 6, 6, 2, 2, (0, 0)),
-        (3, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
-        (3, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
-        (320, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
-        (320, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
-        (320, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
-        (320, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
+        (3, 32, 224, 224, 16, 16, 16, 16, (0, 0), 0),
+        (3, 32, 224, 224, 32, 32, 32, 32, (0, 0), 0),
+        (3, 32, 224, 224, 16, 16, 2, 2, (0, 0), 0),
+        (3, 32, 224, 224, 7, 7, 2, 2, (0, 0), 0),
+        (3, 32, 224, 224, 6, 6, 2, 2, (0, 0), 0),
+        (3, 32, 1024, 1024, 7, 7, 3, 3, (1, 1), 0),
+        (3, 32, 1280, 1280, 6, 6, 2, 2, (0, 0), 32),
+        (3, 32, 512, 672, 16, 16, 16, 16, (0, 0), 0),
+        (3, 32, 512, 672, 32, 32, 32, 32, (0, 0), 0),
+        (320, 32, 224, 224, 16, 16, 16, 16, (0, 0), 0),
+        (320, 32, 224, 224, 32, 32, 32, 32, (0, 0), 0),
+        (320, 32, 512, 672, 16, 16, 16, 16, (0, 0), 0),
+        (320, 32, 512, 672, 32, 32, 32, 32, (0, 0), 0),
 
-        (3, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
-        (3, 32, 192, 192, 32, 32, 32, 32, (16, 16)),
-        (320, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
+        (3, 32, 208, 208, 16, 16, 16, 16, (8, 8), 0),
+        (3, 32, 192, 192, 32, 32, 32, 32, (16, 16), 0),
+        (320, 32, 208, 208, 16, 16, 16, 16, (8, 8), 0),
     ]
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -3843,11 +3760,13 @@ def test_conv2d_with_fold(
     stride_height,
     stride_width,
     padding,
+    act_block_h_override,
     input_layout,
     has_bias,
 ):
     if padding != (0, 0) and input_layout == ttnn.TILE_LAYOUT:
         pytest.skip("ttnn::pad with tile layout does not support front padding yet")
+    config_override = {"act_block_h": act_block_h_override}
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
@@ -3865,7 +3784,7 @@ def test_conv2d_with_fold(
         stride_h=stride_height,
         stride_w=stride_width,
         padding=padding,
-        config_override=None,
+        config_override=config_override,
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,

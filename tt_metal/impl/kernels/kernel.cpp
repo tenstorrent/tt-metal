@@ -34,6 +34,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include "kernel.hpp"
+#include <impl/debug/watcher_server.hpp>
 
 namespace tt {
 
