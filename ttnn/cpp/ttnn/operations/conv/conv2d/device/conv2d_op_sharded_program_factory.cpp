@@ -1332,18 +1332,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         }
     }
 
-    if (input_cores != output_cores) {
         CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
         uint32_t end_coord_x = bottom_right_core_out.x;
         uint32_t end_coord_y = bottom_right_core_out.y;
+        CoreCoord bottom_right_core_all = all_cores.bounding_box().end_coord;
+        uint32_t end_coord_y_all = bottom_right_core_all.y;
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
                 SetRuntimeArgs(
-                    program, compute_kernel_id, core, std::vector<uint32_t>{static_cast<uint32_t>(skip_compute)});
+                    program,
+                    compute_kernel_id,
+                    core,
+                    std::vector<uint32_t>{(end_coord_y_all - core.y) * 100, static_cast<uint32_t>(skip_compute)});
             }
         }
-    }
 
     std::vector<CoreCoord> mcast_sender_cores_vec;
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
