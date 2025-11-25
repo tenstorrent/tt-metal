@@ -206,14 +206,14 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
 
-    nb::detail::ndarray_handle* converted_tensor = nanobind::detail::ndarray_import(
+    nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         // py_tensor.cast(nb::rv_policy::copy, nb::handle()).ptr(),  // new handle manages ownership
-        py_tensor.cast().ptr(),
+        py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
         &config,
         true /*convert*/,
         nullptr);
 
-    return {.contiguous_py_tensor = converted_tensor, .data_type = data_type};
+    return {.contiguous_py_tensor = converted_tensor_handle, .data_type = data_type};
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
