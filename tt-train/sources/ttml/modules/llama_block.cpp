@@ -81,4 +81,24 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
     return x;
 }
 
+autograd::TensorPtr LlamaBlock::operator()(
+    const autograd::TensorPtr& input,
+    const autograd::TensorPtr& mask,
+    const autograd::TensorPtr& k_cache,
+    const autograd::TensorPtr& v_cache,
+    uint32_t cache_position) {
+    auto residual = input;
+    auto h = (*m_attention_norm)(input);
+    h = (*m_attention)(h, mask, k_cache, v_cache, cache_position);
+    h = ops::add(h, residual);
+
+    residual = h;
+    auto x = (*m_mlp_norm)(h);
+    x = (*m_mlp)(x);
+    x = ops::add(x, residual);
+    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "llama_block");
+
+    return x;
+}
+
 }  // namespace ttml::modules
