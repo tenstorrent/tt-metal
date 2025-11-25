@@ -37,8 +37,9 @@ void kernel_main() {
     constexpr auto src_b_cb = get_compile_time_arg_val(1);  // TTS: true_value is src_b; TST: false_value is src_b
 
     // Compile-time args layout mirrors no-bcast reader: 2 CB ids, then 2 TensorAccessorArgs blocks
-    constexpr auto src0_args = TensorAccessorArgs<2>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto src0_args = TensorAccessorArgs<2, 0>();
+    constexpr auto src1_args =
+        TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
     // #if SRC_SHARDED_A
     //     cb_reserve_back(predicate_cb, srcA_num_tiles);
