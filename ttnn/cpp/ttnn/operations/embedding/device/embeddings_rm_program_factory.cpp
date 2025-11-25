@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "embeddings_rm_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 #include <tt-metalium/tt_align.hpp>
