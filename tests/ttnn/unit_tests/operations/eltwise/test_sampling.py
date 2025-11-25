@@ -344,8 +344,10 @@ def test_log_probs_calculation2(shape, mesh_device):
 
     log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
 
-    # comp pcc
-    assert comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
+    print(f"pcc={pcc}")
+
+    assert passing, f"Assertion failed, PCC={pcc}"
 
 
 @pytest.mark.parametrize(
