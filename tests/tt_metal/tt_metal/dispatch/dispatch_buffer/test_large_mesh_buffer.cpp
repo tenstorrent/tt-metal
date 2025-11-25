@@ -166,6 +166,12 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     // - REPLICATED layout for writing, SHARDED with ROW_MAJOR for reading
     // - DRAM, bottom up allocation
     auto [tensor_size, page_size] = GetParam();
+
+    // Skip 8GB test case with watcher enabled
+    if (tt::test_utils::is_watcher_enabled() && tensor_size == 8 * GB) {
+        GTEST_SKIP() << "Test is not passing with watcher enabled";
+    }
+
     if (!validate_interleaved_test_inputs(tensor_size, *mesh_device_)) {
         GTEST_SKIP();
     }

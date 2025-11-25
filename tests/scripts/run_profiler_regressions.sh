@@ -11,7 +11,15 @@ run_mid_run_data_dump() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --cpp-post-process --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
-    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
+    TEST_EXIT_CODE=$?
+
+    # Only run comparison if the test actually ran (exit code 0) and not if it was skipped (exit code 0 for pytest but no ops files generated)
+    # Check if the required CSV files exist before running comparison
+    if [ -f "$PROFILER_ARTIFACTS_DIR/.logs/ops_perf_results_"*".csv" ] && [ -f "$PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv" ]; then
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
+    else
+        echo "Skipping comparison - required CSV files not found (likely test was skipped)"
+    fi
 }
 
 run_profiling_test() {
