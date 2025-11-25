@@ -5,12 +5,27 @@
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <algorithm>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
-// NLP ConcatHeads op for decode
-void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+NLPConcatHeadsDecodeDeviceOperation::program_factory_t NLPConcatHeadsDecodeDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.on_subcoregrids) {
+        return program::NLPConcatHeadsDecodeSubcoregridsProgramFactory{};
+    } else {
+        return program::NLPConcatHeadsDecodeProgramFactory{};
+    }
+}
+
+void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
     // input tensor and shape
@@ -27,7 +42,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
-    TT_FATAL(input_shape[2] >= this->num_heads, "head_dim must be multiple of TILE_WIDTH");
+    TT_FATAL(input_shape[2] >= args.num_heads, "head_dim must be multiple of TILE_WIDTH");
 
     // input tensor shard spec
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
@@ -48,17 +63,21 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         input_tensor.padded_shape()[-2]);
     auto num_cores = shard_spec.grid.num_cores();
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
-    if (this->on_subcoregrids) {
-        TT_FATAL(num_cores >= this->num_heads, "For subcoregrid inputs, we only support num_heads<=num_cores");
+    if (args.on_subcoregrids) {
+        TT_FATAL(num_cores >= args.num_heads, "For subcoregrid inputs, we only support num_heads<=num_cores");
     }
 }
 
-std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+spec_return_value_t NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output->tensor_spec();
+    }
+
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
-    auto num_heads = this->num_heads;
+    auto num_heads = args.num_heads;
     auto sequence_length = input_shape[0];
     auto batch = input_shape[1];
     auto head_dim = input_shape[3];
@@ -70,7 +89,7 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
 
     CoreRangeSet output_core_grid;
-    if (this->on_subcoregrids) {
+    if (args.on_subcoregrids) {
         const auto input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
         CoreRangeSet input_core_grid = input_tensor.shard_spec().value().grid;
         const auto start_coord = input_core_ranges[0].start_coord;
@@ -85,21 +104,40 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     auto mem_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
-    return {TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config))};
+    return TensorSpec(
+        output_shape, tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, mem_config));
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    if (this->on_subcoregrids) {
-        return multi_core_nlp_concat_heads_decode_subcoregrids(
-            input_tensor, output_tensor, compute_with_storage_grid_size);
+tensor_return_value_t NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return *tensor_args.preallocated_output;
     }
-    return multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+std::tuple<
+    NLPConcatHeadsDecodeDeviceOperation::operation_attributes_t,
+    NLPConcatHeadsDecodeDeviceOperation::tensor_args_t>
+NLPConcatHeadsDecodeDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    uint32_t num_heads,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& preallocated_output) {
+    bool on_subcoregrids = false;
+    if (input_tensor.is_sharded()) {
+        const auto& input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
+        if (input_core_ranges.size() > 1 || !(input_core_ranges[0].start_coord == CoreCoord{0, 0})) {
+            on_subcoregrids = true;
+        }
+    }
+
+    return {
+        operation_attributes_t{
+            .num_heads = num_heads,
+            .on_subcoregrids = on_subcoregrids,
+        },
+        tensor_args_t{.input = input_tensor, .preallocated_output = preallocated_output}};
+}
+
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode

@@ -4,16 +4,20 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include "nlp_concat_heads_decode_program_factory.hpp"
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
 
 using namespace tt;
 using namespace tt::constants;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
-    const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
     tt_metal::Program program = tt_metal::CreateProgram();
 
     const auto& input_shape = input_tensor.padded_shape();
@@ -113,40 +117,52 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id, writer_kernel_id, num_cores, cb_q_output, cores, element_size, sub_tile_line_bytes](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-
-            UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
-
-            uint32_t q_base_addr = input_tensors[0].buffer()->address();
-
-            uint32_t q_start_addr = q_base_addr;
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                uint32_t in_tile_offset_by_batch =
-                    i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
-                const auto& core = cores[i];
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = in_tile_offset_by_batch;
-                runtime_args[1] = q_start_addr;
-
-                auto& runtime_args_writer = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args_writer[0] = in_tile_offset_by_batch;
-                runtime_args_writer[1] = q_start_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {/* reader_kernel_id     = */ reader_kernel_id,
+         /* writer_kernel_id     = */ writer_kernel_id,
+         /* cores                = */ cores,
+         /* element_size         = */ element_size,
+         /* sub_tile_line_bytes  = */ sub_tile_line_bytes,
+         /* num_cores            = */ num_cores,
+         /* cb_q_output          = */ cb_q_output}};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
-    const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
+    auto& program = cached_program.program;
+    auto& shared_variables = cached_program.shared_variables;
+
+    auto dst_buffer_query = output.buffer();
+    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *dst_buffer_query);
+
+    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_start_addr = q_base_addr;
+
+    for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
+        uint32_t in_tile_offset_by_batch =
+            i < 16 ? i * shared_variables.sub_tile_line_bytes
+                   : ((i - 16) * shared_variables.sub_tile_line_bytes) + (512 * shared_variables.element_size);
+        const auto& core = shared_variables.cores[i];
+        auto& runtime_args = GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+        runtime_args[0] = in_tile_offset_by_batch;
+        runtime_args[1] = q_start_addr;
+
+        auto& runtime_args_writer = GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
+        runtime_args_writer[0] = in_tile_offset_by_batch;
+        runtime_args_writer[1] = q_start_addr;
+    }
+}
+
+NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsDecodeSubcoregridsProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
     tt_metal::Program program = tt_metal::CreateProgram();
 
     const auto& input_shape = input_tensor.padded_shape();
@@ -251,44 +267,49 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id,
-         writer_kernel_id,
-         num_cores,
-         cb_q_output,
-         cores,
-         element_size,
-         sub_tile_line_bytes,
-         face_h,
-         tile_w](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-
-            UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
-
-            uint32_t q_start_addr = input_tensors[0].buffer()->address();
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                uint32_t in_tile_offset_by_batch =
-                    i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
-                const auto& core = cores[i];
-                auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
-                runtime_args_reader[0] = in_tile_offset_by_batch;
-                runtime_args_reader[1] = q_start_addr;
-
-                auto& runtime_args_writer = writer_args_by_core[core.x][core.y];
-                runtime_args_writer[0] = in_tile_offset_by_batch;
-                runtime_args_writer[1] = q_start_addr;
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {/* reader_kernel_id     = */ reader_kernel_id,
+         /* writer_kernel_id     = */ writer_kernel_id,
+         /* cores                = */ cores,
+         /* element_size         = */ element_size,
+         /* sub_tile_line_bytes  = */ sub_tile_line_bytes,
+         /* num_cores            = */ num_cores,
+         /* cb_q_output          = */ cb_q_output,
+         /* face_h               = */ face_h,
+         /* tile_w               = */ tile_w}};
 }
-}  // namespace ttnn::operations::experimental::transformer
+
+void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
+    auto& program = cached_program.program;
+    auto& shared_variables = cached_program.shared_variables;
+
+    auto dst_buffer_query = output.buffer();
+    UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *dst_buffer_query);
+
+    uint32_t q_start_addr = input_tensor.buffer()->address();
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, shared_variables.reader_kernel_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
+
+    for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
+        uint32_t in_tile_offset_by_batch = i < shared_variables.face_h
+                                               ? i * shared_variables.sub_tile_line_bytes
+                                               : (i + shared_variables.face_h) * shared_variables.sub_tile_line_bytes;
+        const auto& core = shared_variables.cores[i];
+        auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
+        runtime_args_reader[0] = in_tile_offset_by_batch;
+        runtime_args_reader[1] = q_start_addr;
+
+        auto& runtime_args_writer = writer_args_by_core[core.x][core.y];
+        runtime_args_writer[0] = in_tile_offset_by_batch;
+        runtime_args_writer[1] = q_start_addr;
+    }
+}
+
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::program
