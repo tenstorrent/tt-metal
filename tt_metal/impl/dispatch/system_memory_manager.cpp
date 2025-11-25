@@ -570,20 +570,6 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-static void restore_stdout_stderr() {
-    // Reopen stdout and stderr to /dev/tty (the terminal)
-    FILE* tty = fopen("/dev/tty", "w");
-    if (tty) {
-        dup2(fileno(tty), STDOUT_FILENO);
-        dup2(fileno(tty), STDERR_FILENO);
-        fclose(tty);
-    } else {
-        // fallback: reopen to /dev/null if terminal unavailable
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
-    }
-}
-
 void SystemMemoryManager::on_timeout_detected() const {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
@@ -597,7 +583,6 @@ void SystemMemoryManager::on_timeout_detected() const {
     std::string command = rtoptions.get_dispatch_timeout_command_to_execute();
     if (!command.empty()) {
         log_info(LogAlways, "Timeout detected - executing command: {}", command);
-        restore_stdout_stderr();
         std::system(command.c_str());
     }
 }
