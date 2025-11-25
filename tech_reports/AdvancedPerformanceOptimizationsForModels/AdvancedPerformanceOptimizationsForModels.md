@@ -181,7 +181,7 @@ For a single command queue only used for writing inputs, preallocate the input t
 
 * `device_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, input_mem_config)`
 
-  Allocate a tensor with specific parameters on the device. The tensor data is uninitialized:
+  Allocate a tensor with specific parameters on the device. The tensor data is uninitialized.
 * `ttnn.copy_host_to_device_tensor(host_tensor, device_tensor, cq_id=0)`
 
   Data is copied from the input host tensor to the allocated on device tensor.
