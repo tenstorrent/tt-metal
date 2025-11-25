@@ -10,14 +10,14 @@ namespace ttnn::operations::conv::conv2d::program {
 
 struct Conv2dWidthShardedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_sharded_act;
-        tt::tt_metal::CBHandle cb_output;
-        tt::tt_metal::CBHandle cb_partials;
-        bool partials_cb_uses_output;
-        bool has_bias;
+        tt::tt_metal::CBHandle cb_sharded_act{};
+        tt::tt_metal::CBHandle cb_output{};
+        tt::tt_metal::CBHandle cb_partials{};
+        bool partials_cb_uses_output = false;
+        bool has_bias = false;
         CoreCoord full_core_grid;
-        tt::tt_metal::KernelHandle weights_kernel_id;
-        uint32_t total_num_active_cores;
+        tt::tt_metal::KernelHandle weights_kernel_id{};
+        uint32_t total_num_active_cores = 0;
         tt::tt_metal::DeviceStorage conv_reader_indices_storage;
     };
 
