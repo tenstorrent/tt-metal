@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         input_tensor.storage());
 }
 
-static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -107,13 +107,7 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
-    auto output = operation::run(
-                      MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy},
-                      {input_tensor, output_tensor},
-                      {},
-                      {})
-                      .at(0);
-    return output;
+    return ttnn::prim::move(input_tensor, output_tensor, output_mem_config, move_op_parallelization_strategy);
 }
 
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
@@ -154,17 +148,15 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         return {output_tensor};
     }
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
-    return operation::run(
-               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
-               {input_tensor, output_tensor})
-        .at(0);
+    return ttnn::prim::move(
+        input_tensor, output_tensor, output_tensor.memory_config(), move_op_parallelization_strategy);
 }
 
 ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
         return move_sharded(input_tensor, output_mem_config);
     }
-    return move(input_tensor, output_mem_config);
+    return move_impl(input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement
