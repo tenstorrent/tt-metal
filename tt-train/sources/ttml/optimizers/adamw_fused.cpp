@@ -16,9 +16,6 @@ namespace ttml::optimizers {
 
 AdamWFused::AdamWFused(ttml::serialization::NamedParameters parameters, const AdamWFusedConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    if (m_config.weight_decay != 0.0F) {
-        throw std::runtime_error("AdamWFused: weight_decay is not supported. Use default AdamW instead.");
-    }
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_exp_avg.emplace(
@@ -44,9 +41,6 @@ void AdamWFused::zero_grad() {
 }
 
 void AdamWFused::step() {
-    if (m_config.weight_decay != 0.0F) {
-        throw std::runtime_error("AdamWFused: weight_decay is not supported. Use default AdamW instead.");
-    }
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
