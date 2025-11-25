@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -41,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t c_batch_size = get_batch_size(cshape);
+    uint32_t c_batch_size = ttnn::get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
     auto
         [num_cores,
@@ -57,7 +58,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     // C = A*B*...
     // MN = MK*KN
-    uint32_t B = get_batch_size(ashape);
+    uint32_t B = ttnn::get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / TILE_WIDTH;
     uint32_t Nt = bshape[-1] / TILE_WIDTH;
