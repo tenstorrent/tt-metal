@@ -393,6 +393,7 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        print(f"L396 Attention.forward_decode: BEFORE wqkv matmul")
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -402,6 +403,7 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
+        print(f"L404 Attention.forward_decode: AFTER wqkv matmul")
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -425,12 +427,14 @@ class Attention(LightweightModule):
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
+            print(f"L428 Attention.forward_decode: BEFORE slice matmul")
             xqkv_fused = ttnn.matmul(
                 self.slice_mat,
                 xqkv_fused,
                 dtype=ttnn.bfloat16,
                 memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             )
+            print(f"L433 Attention.forward_decode: AFTER slice matmul")
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
             xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
@@ -606,6 +610,7 @@ class Attention(LightweightModule):
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
                 # user_selection_matrix = [1, 1, 32, 128]
                 # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
+                print(f"L609 Attention.forward_decode: BEFORE user_selection matmul")
                 attn_output = ttnn.matmul(
                     self.user_selection_matrix,
                     attn_output,
@@ -613,8 +618,10 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
+                print(f"L615 Attention.forward_decode: AFTER user_selection matmul")
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
+            print(f"L618 Attention.forward_decode: BEFORE wo matmul")
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
@@ -624,6 +631,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
+            print(f"L626 Attention.forward_decode: AFTER wo matmul")
 
             ttnn.deallocate(attn_output_cat)
 
@@ -680,6 +688,7 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        print(f"L683 Attention.forward_prefill: BEFORE wqkv linear")
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -688,6 +697,7 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+        print(f"L690 Attention.forward_prefill: AFTER wqkv linear")
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:
@@ -858,6 +868,7 @@ class Attention(LightweightModule):
 
         # Non fused All Gather Matmul
         if self.use_fused_all_gather_matmul:  # is true for Ring topology
+            print(f"L861 Attention.forward_prefill: BEFORE all_gather_async")
             attn_output_11SH = ttnn.experimental.all_gather_async(
                 attn_output_11SH,
                 persistent_output_buffer=None,
@@ -871,7 +882,9 @@ class Attention(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            print(f"L873 Attention.forward_prefill: AFTER all_gather_async")
 
+        print(f"L875 Attention.forward_prefill: BEFORE wo linear")
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -880,6 +893,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
+        print(f"L882 Attention.forward_prefill: AFTER wo linear")
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])

@@ -83,6 +83,7 @@ class TtMixtralMLP(LightweightModule):
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
 
+            print(f"L86 TtMixtralMLP.forward: BEFORE w1 linear mode={mode}")
             w1_out = ttnn.linear(
                 x,
                 self.w1,
@@ -92,7 +93,9 @@ class TtMixtralMLP(LightweightModule):
                 activation="silu" if not pc_1 else None,
                 program_config=pc_1,
             )
+            print(f"L94 TtMixtralMLP.forward: AFTER w1 linear mode={mode}")
 
+            print(f"L96 TtMixtralMLP.forward: BEFORE w3 linear mode={mode}")
             w3_out = ttnn.linear(
                 x,
                 self.w3,
@@ -101,6 +104,7 @@ class TtMixtralMLP(LightweightModule):
                 dtype=ttnn.bfloat16,
                 program_config=pc_3,
             )
+            print(f"L103 TtMixtralMLP.forward: AFTER w3 linear mode={mode}")
 
             ttnn.deallocate(x)
 
@@ -109,6 +113,7 @@ class TtMixtralMLP(LightweightModule):
             ttnn.deallocate(w3_out)
             ttnn.deallocate(w1_out)
 
+            print(f"L112 TtMixtralMLP.forward: BEFORE w2 linear mode={mode}")
             w2_out = ttnn.linear(
                 w2_in,
                 self.w2,
@@ -117,12 +122,14 @@ class TtMixtralMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2,
             )
+            print(f"L119 TtMixtralMLP.forward: AFTER w2 linear mode={mode}")
 
             ttnn.deallocate(w2_in)
 
             w2_out = ttnn.reshape(w2_out, original_shape)
 
         else:  # Decode
+            print(f"L126 TtMixtralMLP.forward: BEFORE w1 matmul mode={mode}")
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
@@ -133,6 +140,8 @@ class TtMixtralMLP(LightweightModule):
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
+            print(f"L135 TtMixtralMLP.forward: AFTER w1 matmul mode={mode}")
+            print(f"L136 TtMixtralMLP.forward: BEFORE w3 matmul mode={mode}")
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
@@ -141,10 +150,12 @@ class TtMixtralMLP(LightweightModule):
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
+            print(f"L143 TtMixtralMLP.forward: AFTER w3 matmul mode={mode}")
 
             w2_in = ttnn.mul(w1_out, w3_out)
             w1_out.deallocate(True)
             w3_out.deallocate(True)
+            print(f"L148 TtMixtralMLP.forward: BEFORE w2 matmul mode={mode}")
             w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
@@ -153,6 +164,7 @@ class TtMixtralMLP(LightweightModule):
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
+            print(f"L155 TtMixtralMLP.forward: AFTER w2 matmul mode={mode}")
             w2_in.deallocate(True)
             mc = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1)
             w2_out = ttnn.to_memory_config(w2_out, mc)

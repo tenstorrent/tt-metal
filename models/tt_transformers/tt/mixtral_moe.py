@@ -100,6 +100,7 @@ class TtMoeLayer(LightweightModule):
         input_i_1SBH = inputs
         expert_i_HH = self.experts
         # get logits for the experts
+        print(f"L103 TtMoeLayer.forward: BEFORE gate matmul mode={mode}")
         gate_logits_1SB8 = ttnn.matmul(
             input_i_1SBH,
             self.gates_H8,
@@ -108,6 +109,7 @@ class TtMoeLayer(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
+        print(f"L110 TtMoeLayer.forward: AFTER gate matmul mode={mode}")
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 

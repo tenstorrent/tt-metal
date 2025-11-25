@@ -122,6 +122,7 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        print(f"L125 MLP.forward: BEFORE w1 linear mode={mode}")
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -131,7 +132,9 @@ class MLP(LightweightModule):
             program_config=pc_1,
             memory_config=memory_config,
         )
+        print(f"L133 MLP.forward: AFTER w1 linear mode={mode}")
 
+        print(f"L135 MLP.forward: BEFORE w3 linear mode={mode}")
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -141,6 +144,7 @@ class MLP(LightweightModule):
             program_config=pc_3,
             memory_config=memory_config,
         )
+        print(f"L143 MLP.forward: AFTER w3 linear mode={mode}")
         ttnn.deallocate(x)
 
         if TG:
@@ -242,6 +246,7 @@ class MLP(LightweightModule):
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
+        print(f"L245 MLP.forward: BEFORE w2 linear mode={mode}")
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
@@ -251,6 +256,7 @@ class MLP(LightweightModule):
             memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
+        print(f"L253 MLP.forward: AFTER w2 linear mode={mode}")
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
