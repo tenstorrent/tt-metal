@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include <tt-metalium/fabric_telemetry.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric {

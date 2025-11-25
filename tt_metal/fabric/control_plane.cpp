@@ -32,7 +32,7 @@
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/fabric_telemetry.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>

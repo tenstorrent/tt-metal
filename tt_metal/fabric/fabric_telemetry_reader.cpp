@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/fabric_telemetry_reader.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
 
 #include <cstddef>
 #include <vector>
 
 #include "tt_metal/fabric/fabric_telemetry_converter.hpp"
 
-#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"

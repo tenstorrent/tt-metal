@@ -109,8 +109,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
-    api/tt-metalium/fabric_telemetry.hpp
-    api/tt-metalium/fabric_telemetry_reader.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
 )
 target_sources(
     tt_metal

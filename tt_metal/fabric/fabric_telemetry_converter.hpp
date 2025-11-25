@@ -5,7 +5,7 @@
 #pragma once
 
 #include <algorithm>
-#include <tt-metalium/fabric_telemetry.hpp>
+#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 
 namespace tt::tt_fabric::fabric_telemetry_converter {
 namespace detail {
