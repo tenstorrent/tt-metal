@@ -9,11 +9,11 @@
 namespace ttnn::operations::pool::grid_sample {
 
 struct operation_attributes_t {
-    std::string mode;
-    std::string padding_mode;
-    bool align_corners;
-    bool use_precomputed_grid;
-    bool batch_output_channels;
+    std::string mode = "bilinear";
+    std::string padding_mode = "zeros";
+    bool align_corners = false;
+    bool use_precomputed_grid = false;
+    bool batch_output_channels = false;
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 
