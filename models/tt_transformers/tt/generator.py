@@ -4,7 +4,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 import torch
 from loguru import logger
@@ -1456,6 +1456,76 @@ class Generator:
         )
 
         return trace_logits_rm
+
+    def forward_mixed(
+        self,
+        tokens: torch.Tensor,
+        is_prefill: torch.Tensor,  # Boolean tensor indicating prefill vs decode
+        prompt_lens: Optional[torch.Tensor] = None,  # For prefill requests
+        start_pos: Optional[torch.Tensor] = None,  # For decode requests
+        page_table: Optional[torch.Tensor] = None,
+        kv_cache=None,
+        **kwargs,
+    ):
+        """
+        Unified forward method that handles mixed prefill/decode batches.
+
+        Args:
+            tokens: Input tokens, shape [batch_size, seq_len]
+                - For prefill: full prompt sequences (variable length, padded)
+                - For decode: single tokens per request (shape [batch_size, 1])
+            is_prefill: Boolean tensor [batch_size] indicating which requests are prefill
+            prompt_lens: Sequence lengths for prefill requests [num_prefill]
+            start_pos: Position indices for decode requests [num_decode]
+        """
+        # Split batch into prefill and decode portions
+        prefill_mask = is_prefill.bool()
+        decode_mask = ~prefill_mask
+
+        num_prefill = prefill_mask.sum().item()
+        num_decode = decode_mask.sum().item()
+
+        output_logits = torch.zeros(tokens.shape[0], 1, self.model_args[0].vocab_size)
+
+        # Process prefill requests
+        if num_prefill > 0:
+            prefill_tokens = tokens[prefill_mask]
+            prefill_prompt_lens = prompt_lens[prefill_mask] if prompt_lens is not None else None
+            prefill_page_table = page_table[prefill_mask] if page_table is not None else None
+            prefill_kv_cache = [kv_cache[i] for i in range(len(kv_cache))] if kv_cache else None
+
+            prefill_logits = self.prefill_forward_text(
+                tokens=prefill_tokens,
+                page_table=prefill_page_table,
+                kv_cache=prefill_kv_cache,
+                prompt_lens=prefill_prompt_lens,
+                **kwargs,
+            )
+
+            # Map prefill outputs back to original batch positions
+            prefill_indices = torch.where(prefill_mask)[0]
+            output_logits[prefill_indices] = prefill_logits
+
+        # Process decode requests
+        if num_decode > 0:
+            decode_tokens = tokens[decode_mask]
+            decode_start_pos = start_pos[decode_mask] if start_pos is not None else None
+            decode_page_table = page_table[decode_mask] if page_table is not None else None
+            decode_kv_cache = [kv_cache[i] for i in range(len(kv_cache))] if kv_cache else None
+
+            decode_logits = self.decode_forward_text(
+                tokens=decode_tokens,
+                start_pos=decode_start_pos,
+                page_table=decode_page_table,
+                kv_cache=decode_kv_cache,
+                **kwargs,
+            )
+
+            # Map decode outputs back to original batch positions
+            decode_indices = torch.where(decode_mask)[0]
+            output_logits[decode_indices] = decode_logits
+
+        return output_logits
 
     def generate(
         self,

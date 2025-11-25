@@ -408,6 +408,46 @@ class LlamaForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        is_prefill: torch.Tensor,
+        prompt_lens: Optional[torch.Tensor] = None,
+        start_pos: Optional[torch.Tensor] = None,
+        page_table: Optional[torch.Tensor] = None,
+        kv_cache=None,
+        **kwargs,
+    ):
+        """
+        Unified forward method supporting mixed batches.
+        Falls back to separate methods if batch is pure prefill or decode.
+        """
+        # Check if batch is pure (all prefill or all decode)
+        all_prefill = is_prefill.all().item()
+        all_decode = (~is_prefill).all().item()
+
+        if all_prefill:
+            # Pure prefill batch - use existing method
+            return self.prefill_forward(
+                tokens=tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens, **kwargs
+            )
+        elif all_decode:
+            # Pure decode batch - use existing method
+            return self.decode_forward(
+                tokens=tokens, start_pos=start_pos, page_table=page_table, kv_cache=kv_cache, **kwargs
+            )
+        else:
+            # Mixed batch - use new unified method
+            return super().forward_mixed(
+                tokens=tokens,
+                is_prefill=is_prefill,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                **kwargs,
+            )
+
 
 class QwenForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
