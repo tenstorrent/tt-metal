@@ -10,11 +10,11 @@
 namespace ttnn::operations::pool::upsample {
 
 struct operation_attributes_t {
-    const int scale_factor_h_;
-    const int scale_factor_w_;
-    const std::string mode_;
-    const tt::tt_metal::MemoryConfig output_mem_config_;
-    const DeviceComputeKernelConfig compute_kernel_config_;
+    int scale_factor_h;
+    int scale_factor_w;
+    std::string mode;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct tensor_args_t {
