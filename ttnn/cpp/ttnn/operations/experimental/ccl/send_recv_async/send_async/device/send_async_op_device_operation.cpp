@@ -10,11 +10,11 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::experimental::ccl::send_async {
 
 SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::SendAsyncOpProgramFactory{};
+    return program::SendAsyncMeshWorkloadFactory{};
 }
 
 void SendAsyncDeviceOperation::validate_on_program_cache_hit(
@@ -40,6 +40,7 @@ SendAsyncDeviceOperation::spec_return_value_t SendAsyncDeviceOperation::compute_
 
 SendAsyncDeviceOperation::tensor_return_value_t SendAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Op does not return any output tensors
     return {};
 }
 
@@ -57,4 +58,4 @@ SendAsyncDeviceOperation::invoke(
     return {operation_attributes_t(mesh_socket), tensor_args_t{.input_tensor = input_tensor}};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::experimental::ccl::send_async

@@ -19,47 +19,33 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::program {
+namespace ttnn::operations::experimental::ccl::send_async::program {
 
 SendAsyncMeshWorkloadFactory::cached_mesh_workload_t SendAsyncMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            auto single_device_program = SendAsyncOpProgramFactory::create(args, tensor_args, output);
-            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
-        }
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& args,
+ttnn::device_operation::CachedProgram<SendAsyncMeshWorkloadFactory::shared_variables_t>
+SendAsyncMeshWorkloadFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto cached_program_proxy = SendAsyncOpProgramFactory::cached_program_t::proxy(
-            program, cached_workload.shared_variables.at(mesh_coord_range));
-        SendAsyncOpProgramFactory::override_runtime_arguments(
-            cached_program_proxy, args, tensor_args, tensor_return_value);
-    }
-}
-
-SendAsyncOpProgramFactory::cached_program_t SendAsyncOpProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
-    auto mesh_socket = args.mesh_socket;
+    auto mesh_socket = operation_attributes.mesh_socket;
     const auto& input_tensor = tensor_args.input_tensor;
-    auto* target_device = input_tensor.device();
-
-    // auto mesh_device = input_tensors[0].device();
-    // IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    auto* mesh_device = input_tensor.device();
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : tensor_args.input_tensor.device();
 
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -258,7 +244,7 @@ SendAsyncOpProgramFactory::cached_program_t SendAsyncOpProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, sender_core_coord, writer_rt_args);
     }
 
-    return cached_program_t{
+    return {
         std::move(program),
         shared_variables_t{
             .sender_core_coords = sender_core_coords,
@@ -267,28 +253,34 @@ SendAsyncOpProgramFactory::cached_program_t SendAsyncOpProgramFactory::create(
         }};
 }
 
-void SendAsyncOpProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_vars = cached_program.shared_variables;
-    auto& sender_core_coords = shared_vars.sender_core_coords;
-    const auto& reader_kernel_id = shared_vars.reader_kernel_id;
-    const auto& writer_kernel_id = shared_vars.writer_kernel_id;
+    // Update runtime arguments for each program in the mesh workload
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        (void)coordinate_range;     // Suppress unused variable warning
+        (void)tensor_return_value;  // Suppress unused variable warning
+        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-    const auto& mesh_socket = operation_attributes.mesh_socket;
-    const auto& input_tensor = tensor_args.input_tensor;
+        // auto& shared_vars = cached_workload.shared_variables;
+        auto& sender_core_coords = shared_vars.sender_core_coords;
+        const auto& reader_kernel_id = shared_vars.reader_kernel_id;
+        const auto& writer_kernel_id = shared_vars.writer_kernel_id;
 
-    for (uint32_t core_idx = 0; core_idx < sender_core_coords.size(); ++core_idx) {
-        const auto& sender_core_coord = sender_core_coords[core_idx];
-        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
-        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, sender_core_coord);
+        const auto& mesh_socket = operation_attributes.mesh_socket;
+        const auto& input_tensor = tensor_args.input_tensor;
 
-        reader_runtime_args[0] = input_tensor.buffer()->address();
-        writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+        for (uint32_t core_idx = 0; core_idx < sender_core_coords.size(); ++core_idx) {
+            const auto& sender_core_coord = sender_core_coords[core_idx];
+            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
+            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, sender_core_coord);
+
+            reader_runtime_args[0] = input_tensor.buffer()->address();
+            writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+        }
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::program
+}  // namespace ttnn::operations::experimental::ccl::send_async::program

@@ -7,28 +7,12 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::program {
+namespace ttnn::operations::experimental::ccl::send_async::program {
 
 struct SendAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> sender_core_coords;
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
-};
-
-struct SendAsyncOpProgramFactory {
-    using shared_variables_t = SendAsyncSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
 };
 
 struct SendAsyncMeshWorkloadFactory {
@@ -41,6 +25,12 @@ struct SendAsyncMeshWorkloadFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
+    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+        const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coordinate,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
@@ -48,4 +38,4 @@ struct SendAsyncMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::program
+}  // namespace ttnn::operations::experimental::ccl::send_async::program
