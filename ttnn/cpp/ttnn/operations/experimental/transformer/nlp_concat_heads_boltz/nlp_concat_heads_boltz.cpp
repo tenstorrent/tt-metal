@@ -14,12 +14,8 @@ ttnn::Tensor NLPConcatHeadsBoltzOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return tt::tt_metal::operation::run(
-               NLPConcatHeadsBoltzDeviceOperation{memory_config.value_or(input_tensor.memory_config())},
-               {input_tensor},
-               {},
-               {std::move(optional_output_tensor)})
-        .at(0);
+    return ttnn::prim::nlp_concat_heads_boltz(
+        input_tensor, memory_config.value_or(input_tensor.memory_config()), std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::experimental::transformer
