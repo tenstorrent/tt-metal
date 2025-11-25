@@ -4,6 +4,28 @@
 
 #include <cstdint>
 
+void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     // Dummy reader kernel
     constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
@@ -23,8 +45,6 @@ void kernel_main() {
 
     const auto scores_accessor = TensorAccessor(scores_args, scores_addr, scores_page_size);
     const auto bias_accessor = TensorAccessor(bias_args, bias_addr, bias_page_size);
-    DPRINT << "start_height_tile: " << start_height_tile << " end_height_tile: " << end_height_tile
-           << " width_tiles: " << width_tiles << ENDL();
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;

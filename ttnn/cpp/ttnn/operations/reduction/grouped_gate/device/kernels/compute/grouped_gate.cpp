@@ -5,6 +5,8 @@
 #include <cstdint>
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -44,22 +46,33 @@ void MAIN {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
-    DPRINT_UNPACK(
-        DPRINT << "start_height_tile: " << start_height_tile << " end_height_tile: " << end_height_tile
-               << " width_tiles: " << width_tiles << ENDL());
     binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;
+        // Perform sigmoid on scores
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             cb_wait_front(scores_cb_index, 1);
-            cb_wait_front(bias_cb_index, 1);
 
-            // UNPACK(print_tile(scores_cb_index, width_tile));
-            // UNPACK(print_tile(bias_cb_index, width_tile));
+            tile_regs_acquire();
+            // copy tile from scores cb to destination register 0
+            copy_tile_to_dst_init_short(scores_cb_index);
+            copy_tile(scores_cb_index, width_tile, 0);
+
+            sigmoid_tile_init();
+            sigmoid_tile(0);
+            if (width_tile == 0) {
+                dprint_tensix_dest_reg(0);
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(sigmoid_input_cb_index, 1);
+            tile_regs_wait();
+            pack_tile<true>(0, sigmoid_input_cb_index, width_tile);
+            tile_regs_release();
+            cb_push_back(sigmoid_input_cb_index, 1);
 
             cb_pop_front(scores_cb_index, 1);
-            cb_pop_front(bias_cb_index, 1);
         }
     }
 }

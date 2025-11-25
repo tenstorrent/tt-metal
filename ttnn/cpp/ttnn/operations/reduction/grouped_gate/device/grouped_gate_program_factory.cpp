@@ -59,12 +59,24 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
-    tt::tt_metal::create_cb(scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
-    tt::tt_metal::create_cb(bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2, bias_data_format);
     tt::tt_metal::create_cb(
-        weights_cb_index, program, all_cores, output_weights.buffer()->page_size(), 2, weights_data_format);
+        scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        indices_cb_index, program, all_cores, output_indices.buffer()->page_size(), 2, indices_data_format);
+        bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2 * width_tiles, bias_data_format);
+    tt::tt_metal::create_cb(
+        weights_cb_index,
+        program,
+        all_cores,
+        output_weights.buffer()->page_size(),
+        2 * width_tiles,
+        weights_data_format);
+    tt::tt_metal::create_cb(
+        indices_cb_index,
+        program,
+        all_cores,
+        output_indices.buffer()->page_size(),
+        2 * width_tiles,
+        indices_data_format);
 
     // sigmoid input + add bias block CBs
     auto sigmoid_input_cb_index = tt::CBIndex::c_4;
