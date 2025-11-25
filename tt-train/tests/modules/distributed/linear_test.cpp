@@ -70,7 +70,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     xt::xarray<float> test_data = xt::empty<float>({in_features});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::legacy::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         seed);
@@ -527,7 +527,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::legacy::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         seed);
@@ -605,7 +605,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::legacy::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         seed);
