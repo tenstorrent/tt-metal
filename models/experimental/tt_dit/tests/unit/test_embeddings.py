@@ -11,10 +11,12 @@ from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
 )
 
+from ...utils import tensor
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
 from ...utils.substate import substate
 from ...layers.embeddings import (
+    Embedding,
     TimestepEmbedding,
     PixartAlphaTextProjection,
     SD35CombinedTimestepTextProjEmbeddings,
@@ -639,3 +641,32 @@ def test_wan_patch_embed(
     assert_quality(
         torch_output, tt_output_batch, pcc=0.999_991, relative_rmse=0.006
     )  # Lower PCC due to conv3d approximation
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    ("dictionary_size", "embedding_size", "batch_size", "sequence_length"),
+    [
+        (152064, 3584, 2, 512),  # Qwen-2.5-VL
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_embedding(
+    mesh_device: ttnn.MeshDevice, dictionary_size: int, embedding_size: int, batch_size: int, sequence_length: int
+) -> None:
+    torch.manual_seed(0)
+
+    torch_model = torch.nn.Embedding(dictionary_size, embedding_size)
+    torch_model.eval()
+
+    tt_model = Embedding(dictionary_size, embedding_size, device=mesh_device, mesh_axis=1)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    inp = torch.randint(0, dictionary_size, [batch_size, sequence_length])
+    tt_inp = tensor.from_torch(inp, device=mesh_device, dtype=ttnn.uint32)
+
+    out = torch_model.forward(inp)
+    tt_out = tt_model.forward(tt_inp)
+
+    tt_output_torch = tensor.to_torch(tt_out, mesh_axes=[None, None, 1])
+    assert_quality(out, tt_output_torch, pcc=0.999998, relative_rmse=0.003)
