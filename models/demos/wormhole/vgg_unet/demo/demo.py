@@ -10,9 +10,9 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.vgg_unet.common import load_torch_model
-from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
+from models.demos.vision.classification.vgg_unet.common import load_torch_model
+from models.demos.vision.classification.vgg_unet.reference.vgg_unet import UNetVGG19
+from models.demos.vision.classification.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
 from models.demos.wormhole.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 
 for dirname, _, filenames in os.walk("/kaggle/input"):

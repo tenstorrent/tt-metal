@@ -12,7 +12,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache
-from models.demos.vgg.tt import ttnn_vgg
+from models.demos.vision.classification.vgg.tt import ttnn_vgg
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
