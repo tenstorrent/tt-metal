@@ -2,6 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+allocation_policies:
+    receiver:
+      max_configs_per_core: 2
+
 Tests:
   # ======================================================================================
   # Routing within a superpod (cluster of 4 loudboxes)
@@ -12,9 +16,11 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
 
+    top_level_iterations: 3
+
     parametrization_params:
       size: [64, 128]
-      num_packets: [64, 128, 256]
+      num_packets: [50]
 
     defaults:
       ftype: unicast
@@ -39,9 +45,11 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
 
+    top_level_iterations: 3
+
     parametrization_params:
       size: [64, 128]
-      num_packets: [64, 128, 256]
+      num_packets: [50]
 
     defaults:
       ftype: unicast
@@ -72,7 +80,7 @@ Tests:
     parametrization_params:
       ntype: [unicast_write]
       size: [128]
-      num_packets: [256]
+      num_packets: [250]
 
     patterns:
       - type: sequential_all_to_all
