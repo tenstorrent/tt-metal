@@ -98,6 +98,6 @@ runs:
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling slow dispatch auto-triage"
-        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=\"python3 $(pwd)/tools/tt-triage.py\"" >> $GITHUB_ENV
+        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=\"/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py\"" >> $GITHUB_ENV
         echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.slow-dispatch-timeout }}" >> $GITHUB_ENV
       shell: bash
