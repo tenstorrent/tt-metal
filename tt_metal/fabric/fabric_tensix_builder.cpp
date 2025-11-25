@@ -19,8 +19,10 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_align.hpp"
+#include <array>
 #include <bit>
 #include <algorithm>
+#include <set>
 #include <utility>
 
 namespace tt::tt_fabric {
@@ -45,7 +47,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
     auto device_id = all_active_devices.front()->id();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device_id);
+    has_dispatch_tunnel_ = device_has_dispatch_tunnel(device_id);
 
     for (const auto& device : all_active_devices) {
         std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
@@ -75,13 +77,13 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
         std::vector<chan_id_t> non_dispatch_active_channels;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-            uint32_t dispatch_link_idx =
+            dispatch_link_idx_ =
                 tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
 
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
 
-                if (!(has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                if (!(has_dispatch_tunnel_ && link_idx == dispatch_link_idx_)) {
                     non_dispatch_active_channels.push_back(eth_chan);
                 }
             }
@@ -107,7 +109,6 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
-
         // Get all active ethernet channels for this device
         auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
@@ -116,22 +117,33 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
         eth_chan_to_core_id_[dev_id] = std::unordered_map<size_t, FabricTensixCoreType>();
 
         // Create round-robin mapping using the actual ethernet channel IDs from active_channels
+        // Skip dispatch link channels - they don't get tensix builders
         size_t channel_index = 0;
         for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-            size_t core_index = channel_index % logical_fabric_mux_cores_.size();
-            eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
+            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+            eth_chan_to_core_index_[dev_id][eth_chan_id] = channel_index;
+
+            // Also populate direction_to_core_index_ for active directions
+            direction_to_core_index_[dev_id][routing_plane_id][eth_chan_dir] = channel_index;
 
             // Determine core type: In both MUX and UDM modes, all worker channels go to MUX (core type 0)
             // The RELAY (core type 1) in UDM mode handles fabric-to-fabric routing, not worker channels
             FabricTensixCoreType core_id = FabricTensixCoreType::MUX;  // Always assign to MUX
             eth_chan_to_core_id_[dev_id][eth_chan_id] = core_id;
 
-            channel_index++;
+            if (!(has_dispatch_tunnel_ && routing_plane_id == dispatch_link_idx_)) {
+                channel_index++;
+            }
+        }
+
+        // In UDM mode, track missing directions for inter-mux communication
+        if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+            track_missing_directions_for_udm(device, fabric_node_id, active_channels, channel_index);
         }
     }
 }
 
-void FabricTensixDatamoverConfig::build_fabric_router_noc_coords_map(
+void FabricTensixDatamoverConfig::build_fabric_tensix_noc_coords_map(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -152,8 +164,10 @@ void FabricTensixDatamoverConfig::build_fabric_router_noc_coords_map(
             // Get the tensix NOC coordinates for this channel
             auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
 
-            // Record this direction's router/tensix NOC coordinates for this fabric node + routing plane
-            fabric_router_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
+            // Record in both maps - fabric_tensix_noc_coords_map_ (all) and fabric_active_tensix_noc_coords_map_
+            // (active only)
+            fabric_tensix_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
+            fabric_active_tensix_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
         }
     }
 }
@@ -165,6 +179,103 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
     }
     calculate_buffer_allocations();
     create_configs();  // Mode-aware config creation
+}
+
+void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
+    tt::tt_metal::IDevice* device,
+    const FabricNodeId& fabric_node_id,
+    const std::set<std::pair<chan_id_t, eth_chan_directions>>& active_channels,
+    size_t& channel_index) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    ChipId dev_id = device->id();
+
+    // Collect all active (routing_plane_id, direction) pairs from active_channels
+    // Skip dispatch routing planes (using pre-calculated dispatch link info)
+    std::set<std::pair<routing_plane_id_t, eth_chan_directions>> active_plane_directions;
+    std::set<routing_plane_id_t> active_routing_planes;
+    for (const auto& [eth_chan_id, eth_chan_dir] : active_channels) {
+        routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+
+        // Skip dispatch routing plane
+        if (has_dispatch_tunnel_ && routing_plane_id == dispatch_link_idx_) {
+            continue;
+        }
+
+        active_plane_directions.insert({routing_plane_id, eth_chan_dir});
+        active_routing_planes.insert(routing_plane_id);
+    }
+
+    // For each active routing plane, check which of the 4 directions (E, W, N, S) are missing
+    std::set<std::pair<routing_plane_id_t, eth_chan_directions>> missing_plane_dirs;
+    for (auto routing_plane_id : active_routing_planes) {
+        for (uint8_t dir_idx = 0; dir_idx < eth_chan_directions::COUNT; dir_idx++) {
+            auto dir = static_cast<eth_chan_directions>(dir_idx);
+            if (active_plane_directions.find({routing_plane_id, dir}) == active_plane_directions.end()) {
+                missing_plane_dirs.insert({routing_plane_id, dir});
+            }
+        }
+    }
+
+    if (!missing_plane_dirs.empty()) {
+        // Calculate how many cores are remaining
+        // channel_index represents the number of active directions already assigned
+        size_t total_cores = logical_fabric_mux_cores_.size();
+        size_t cores_used = channel_index;
+        size_t cores_remaining = (cores_used < total_cores) ? (total_cores - cores_used) : 0;
+
+        // Only add as many missing directions as we have remaining cores
+        size_t missing_dirs_to_add = std::min(missing_plane_dirs.size(), cores_remaining);
+
+        if (missing_dirs_to_add == 0) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: No remaining cores for missing directions. "
+                "Total cores: {}, cores used by active channels: {}, missing directions: {}",
+                dev_id,
+                total_cores,
+                cores_used,
+                missing_plane_dirs.size());
+            return;
+        }
+
+        if (missing_dirs_to_add < missing_plane_dirs.size()) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: Not enough cores for all missing directions. "
+                "Adding {} out of {} missing directions. Total cores: {}, cores used: {}",
+                dev_id,
+                missing_dirs_to_add,
+                missing_plane_dirs.size(),
+                total_cores,
+                cores_used);
+        }
+
+        // Only store the missing directions we're actually adding
+        std::set<std::pair<routing_plane_id_t, eth_chan_directions>> added_missing_dirs;
+        size_t added_count = 0;
+
+        for (const auto& [routing_plane_id, missing_dir] : missing_plane_dirs) {
+            if (added_count >= missing_dirs_to_add) {
+                break;
+            }
+
+            size_t core_index = channel_index;
+            direction_to_core_index_[dev_id][routing_plane_id][missing_dir] = core_index;
+
+            // Also populate fabric_tensix_noc_coords_map_ for missing directions
+            CoreCoord logical_core = logical_fabric_mux_cores_[core_index];
+            CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+            fabric_tensix_noc_coords_map_[fabric_node_id][routing_plane_id][missing_dir] = {
+                translated_core.x, translated_core.y};
+
+            added_missing_dirs.insert({routing_plane_id, missing_dir});
+            channel_index++;
+            added_count++;
+        }
+
+        // Store only the missing directions that were actually added
+        missing_directions_per_device_[dev_id] = added_missing_dirs;
+    }
 }
 
 bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
@@ -240,7 +351,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     build_per_device_channel_mappings(all_active_devices);
 
     // Third pass: Build the fabric_router_noc_coords_map_
-    build_fabric_router_noc_coords_map(all_active_devices);
+    build_fabric_tensix_noc_coords_map(all_active_devices);
 
     return true;
 }
@@ -519,10 +630,10 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
         config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
-const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_router_noc_coords(
+const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_tensix_noc_coords(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
-    auto node_it = fabric_router_noc_coords_map_.find(fabric_node_id);
-    if (node_it == fabric_router_noc_coords_map_.end()) {
+    auto node_it = fabric_tensix_noc_coords_map_.find(fabric_node_id);
+    if (node_it == fabric_tensix_noc_coords_map_.end()) {
         return nullptr;
     }
 
@@ -539,6 +650,81 @@ const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_router_noc
     return &(dir_it->second);
 }
 
+const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_active_tensix_noc_coords(
+    const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    auto node_it = fabric_active_tensix_noc_coords_map_.find(fabric_node_id);
+    if (node_it == fabric_active_tensix_noc_coords_map_.end()) {
+        return nullptr;
+    }
+
+    auto plane_it = node_it->second.find(routing_plane_id);
+    if (plane_it == node_it->second.end()) {
+        return nullptr;
+    }
+
+    auto dir_it = plane_it->second.find(direction);
+    if (dir_it == plane_it->second.end()) {
+        return nullptr;
+    }
+
+    return &(dir_it->second);
+}
+
+const std::set<std::pair<routing_plane_id_t, eth_chan_directions>>& FabricTensixDatamoverConfig::get_missing_directions(
+    ChipId device_id) const {
+    auto it = missing_directions_per_device_.find(device_id);
+    if (it == missing_directions_per_device_.end()) {
+        return empty_directions_set_;
+    }
+    return it->second;
+}
+
+bool FabricTensixDatamoverConfig::has_missing_directions(ChipId device_id) const {
+    auto it = missing_directions_per_device_.find(device_id);
+    return it != missing_directions_per_device_.end() && !it->second.empty();
+}
+
+size_t FabricTensixDatamoverConfig::get_core_index_for_direction(
+    ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    auto dev_it = direction_to_core_index_.find(device_id);
+    TT_FATAL(dev_it != direction_to_core_index_.end(), "Device {} not found in direction_to_core_index_", device_id);
+
+    auto plane_it = dev_it->second.find(routing_plane_id);
+    TT_FATAL(
+        plane_it != dev_it->second.end(),
+        "Routing plane {} not found for device {} in direction_to_core_index_",
+        routing_plane_id,
+        device_id);
+
+    auto dir_it = plane_it->second.find(direction);
+    TT_FATAL(
+        dir_it != plane_it->second.end(),
+        "Direction {} not found for device {}, routing plane {} in direction_to_core_index_",
+        static_cast<uint32_t>(direction),
+        device_id,
+        routing_plane_id);
+
+    return dir_it->second;
+}
+
+CoreCoord FabricTensixDatamoverConfig::get_core_for_direction(
+    ChipId device_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    size_t core_index = get_core_index_for_direction(device_id, routing_plane_id, direction);
+    TT_FATAL(
+        core_index < logical_fabric_mux_cores_.size(),
+        "Core index {} out of bounds for logical_fabric_mux_cores_ (size {})",
+        core_index,
+        logical_fabric_mux_cores_.size());
+    return logical_fabric_mux_cores_[core_index];
+}
+
+std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_noc_xy_for_direction(
+    tt::tt_metal::IDevice* device, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
+    CoreCoord logical_core = get_core_for_direction(device->id(), routing_plane_id, direction);
+    CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
+    return {translated_core.x, translated_core.y};
+}
+
 // FabricTensixDatamoverBuilder implementation
 
 template <typename BuilderType, typename ConfigType>
@@ -552,7 +738,8 @@ std::unique_ptr<BuilderType> FabricTensixDatamoverBuilder::create_builder(
     uint32_t link_idx,
     uint32_t noc_x,
     uint32_t noc_y,
-    eth_chan_directions direction) {
+    eth_chan_directions direction,
+    bool has_fabric_router) {
     // Check if the core type is active (for relay, may return nullptr)
     if (!tensix_config.is_core_id_active(core_type)) {
         return nullptr;
@@ -574,7 +761,8 @@ std::unique_ptr<BuilderType> FabricTensixDatamoverBuilder::create_builder(
         noc_x,
         noc_y,
         config,
-        direction);
+        direction,
+        has_fabric_router);
 }
 
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
@@ -618,6 +806,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     uint32_t link_idx = control_plane.get_routing_plane_id(local_fabric_node_id, ethernet_channel_id);
 
     // Create mux builder (always needed in both MUX and UDM modes)
+    // has_fabric_router = true because this is a normal build with an actual eth channel/router
     auto mux_builder = create_builder<FabricTensixDatamoverMuxBuilder, FabricTensixDatamoverMuxConfig>(
         FabricTensixCoreType::MUX,
         tensix_config,
@@ -628,7 +817,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         link_idx,
         noc_x,
         noc_y,
-        direction);
+        direction,
+        true /* has_fabric_router */);
 
     // Create relay builder (only in UDM mode if relay core is active)
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder = nullptr;
@@ -643,7 +833,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
             link_idx,
             noc_x,
             noc_y,
-            direction);
+            direction,
+            true /* has_fabric_router - not used for relay*/);
     }
 
     auto builder = FabricTensixDatamoverBuilder(
@@ -662,6 +853,75 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     }
 
     return builder;
+}
+
+FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_direction(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& /*program*/,
+    tt::tt_fabric::FabricNodeId local_fabric_node_id,
+    routing_plane_id_t routing_plane_id,
+    eth_chan_directions direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    // This method is only valid for UDM mode
+    TT_FATAL(
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM,
+        "build_for_missing_direction is only valid in UDM mode");
+
+    // Get core for this (routing_plane_id, direction) pair (assigned in initialize_channel_mappings)
+    CoreCoord my_core_logical = tensix_config.get_core_for_direction(device->id(), routing_plane_id, direction);
+
+    // Get NOC coordinates for this (routing_plane_id, direction) pair
+    auto [noc_x, noc_y] = tensix_config.get_noc_xy_for_direction(device, routing_plane_id, direction);
+
+    // Use the routing_plane_id as the link_idx
+    uint32_t link_idx = routing_plane_id;
+
+    // For missing directions, get remote_fabric_node_id from any valid neighbor direction
+    // We need a valid remote_fabric_node_id even for missing directions
+    FabricNodeId remote_fabric_node_id = local_fabric_node_id;
+    for (const auto& routing_dir : tt::tt_fabric::FabricContext::routing_directions) {
+        auto neighbors = control_plane.get_chip_neighbors(local_fabric_node_id, routing_dir);
+        if (!neighbors.empty()) {
+            remote_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+            break;
+        }
+    }
+
+    // For missing directions, we don't have a real eth channel
+    // Use 0 as a placeholder - it's not used for anything meaningful in this case
+    uint32_t ethernet_channel_id = 0;
+
+    // Create mux builder only (no relay for missing directions since there's no router)
+    // has_fabric_router = false because this is a missing direction with no actual router
+    auto mux_builder = create_builder<FabricTensixDatamoverMuxBuilder, FabricTensixDatamoverMuxConfig>(
+        FabricTensixCoreType::MUX,
+        tensix_config,
+        my_core_logical,
+        local_fabric_node_id,
+        remote_fabric_node_id,
+        ethernet_channel_id,
+        link_idx,
+        noc_x,
+        noc_y,
+        direction,
+        false /* has_fabric_router */);
+
+    // No relay builder for missing directions - these are purely for inter-mux forwarding
+    std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder = nullptr;
+
+    return FabricTensixDatamoverBuilder(
+        std::move(mux_builder),
+        std::move(relay_builder),
+        my_core_logical,
+        local_fabric_node_id,
+        remote_fabric_node_id,
+        noc_x,
+        noc_y,
+        direction);
 }
 
 void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::Program& program) {

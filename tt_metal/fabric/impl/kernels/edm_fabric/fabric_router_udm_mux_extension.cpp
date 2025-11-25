@@ -350,8 +350,12 @@ void kernel_main() {
     constexpr size_t RELAY_TERMINATION_SIGNAL_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
     constexpr size_t relay_termination_signal_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX);
 
-    // Direction (last compile-time argument)
+    // Direction
     constexpr size_t direction = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 1);
+
+    // Whether this mux has a fabric router to connect to
+    // False for missing directions (inter-mux forwarding only, no actual router)
+    constexpr bool has_fabric_router = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 2) == 1;
 
     // ========== Setup worker channels (WORKER_CHANNEL) ==========
     size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];
@@ -449,18 +453,30 @@ void kernel_main() {
     // In UDM mode, mux does NOT signal upstream routers - the relay will do that
     // (upstream routers connect to relay, not mux)
 
-    // wait for fabric router to be ready before setting up the connection
-    if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_connection.edm_noc_x,
-            fabric_connection.edm_noc_y,
-            fabric_router_status_address,
-            local_fabric_router_status_address);
+    auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    uint16_t my_chip_id = routing_table->my_device_id;
+    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " has_fabric_router " <<
+    // (uint)has_fabric_router <<ENDL();
+
+    // Only wait for and open fabric router connection if we have a router
+    if constexpr (has_fabric_router) {
+        // wait for fabric router to be ready before setting up the connection
+        if constexpr (wait_for_fabric_endpoint) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                fabric_connection.edm_noc_x,
+                fabric_connection.edm_noc_y,
+                fabric_router_status_address,
+                local_fabric_router_status_address);
+        }
+
+        fabric_connection.open<false>();
     }
 
-    fabric_connection.open<false>();
+    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " Done " <<ENDL();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+
+    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " Done " <<ENDL();
 
     // Before connecting to downstream muxes, wait for their status to turn into READY_FOR_TRAFFIC
     // Use status_address (our own status address) as the readback location
@@ -551,7 +567,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(relay_termination_signal_address);
     *relay_termination_signal_ptr = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE;
 
-    fabric_connection.close();
+    if constexpr (has_fabric_router) {
+        fabric_connection.close();
+    }
     noc_async_write_barrier();
     noc_async_posted_writes_flushed();
     noc_async_atomic_barrier();

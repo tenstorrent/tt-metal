@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <umd/device/types/arch.hpp>
+#include <set>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -266,9 +267,42 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     // Compile all fabric tensix builders through router builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Track which directions have been built (for UDM mode finalization)
+        std::set<tt::tt_fabric::eth_chan_directions> built_directions;
+
+        // First pass: compile all existing tensix builders (from active eth channels)
         for (auto& [eth_chan, router_builder] : router_builders) {
             if (router_builder->has_tensix_builder()) {
                 router_builder->get_tensix_builder().create_and_compile(*fabric_program_ptr);
+
+                // Register the direction of this tensix builder
+                auto direction = router_builder->get_tensix_builder().get_direction();
+                built_directions.insert(direction);
+            }
+        }
+
+        // Second pass (UDM mode only): build and compile tensix builders for missing directions
+        // Edge devices (e.g., top-left corner of a 4x2 mesh) only have east/south builders,
+        // leaving north/west empty. We need to build and compile them for inter-mux communication.
+        if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+            tt::tt_fabric::FabricTensixConfig::UDM) {
+            const auto& tensix_config = fabric_context.get_tensix_config();
+            if (tensix_config.has_missing_directions(device->id())) {
+                const auto& missing_directions = tensix_config.get_missing_directions(device->id());
+                auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+                for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
+                        fabric_node_id,
+                        routing_plane_id,
+                        static_cast<uint32_t>(missing_dir));
+                    // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build_for_missing_direction(
+                        device, *fabric_program_ptr, fabric_node_id, routing_plane_id, missing_dir);
+                    tensix_builder.create_and_compile(*fabric_program_ptr);
+                }
             }
         }
     }
