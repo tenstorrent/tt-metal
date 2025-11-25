@@ -11,7 +11,7 @@
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -52,7 +52,6 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> fabric_header_rb_entries;
     std::optional<uint32_t> my_fabric_sync_status_addr;
     std::optional<bool> is_2d_fabric;
-    std::optional<bool> is_2d_fabric_dynamic;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;

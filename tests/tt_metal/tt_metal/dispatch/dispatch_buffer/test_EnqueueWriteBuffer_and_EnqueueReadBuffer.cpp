@@ -48,6 +48,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {

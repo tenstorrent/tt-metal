@@ -8,15 +8,16 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -225,19 +226,7 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric2DDynamicFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
-
-class NightlyFabric2DDynamicFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC); }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
-
-class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
+class CustomMeshGraphFabric2DFixture : public BaseFabricFixture {
 public:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -247,7 +236,7 @@ public:
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
 private:
@@ -259,8 +248,8 @@ private:
     }
 };
 
-class T3kCustomMeshGraphFabric2DDynamicFixture
-    : public CustomMeshGraphFabric2DDynamicFixture,
+class T3kCustomMeshGraphFabric2DFixture
+    : public CustomMeshGraphFabric2DFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
