@@ -120,7 +120,6 @@ def split_conv_and_run(
                 return_weights_and_bias=return_weights_and_bias,
                 dtype=conv_output_dtype,
             )
-            hidden_states_slice.deallocate(True)
 
             if return_weights_and_bias:
                 # First time we call this function, weights and biases are passed in on host;
