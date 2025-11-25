@@ -10,13 +10,13 @@ namespace ttnn::operations::kv_cache::program {
 
 struct UpdateCacheMultiCoreProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id {};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id {};
         std::vector<CoreCoord> cores;
-        uint32_t Wbytes;
-        uint32_t Wt;
+        uint32_t Wbytes = 0;
+        uint32_t Wt = 0;
         std::vector<uint32_t> cache_start_ids;
-        tt::tt_metal::CBHandle cb_src1;
+        tt::tt_metal::CBHandle cb_src1 {};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
