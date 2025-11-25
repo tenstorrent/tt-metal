@@ -4,15 +4,15 @@
 
 #include <stdint.h>
 
-#include "dram_prefetcher_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/global_circular_buffer.hpp>
+#include "dram_prefetcher_program_factory.hpp"
 
-namespace ttnn::operations::dram_prefetcher {
+namespace ttnn::operations::dram_prefetcher::program {
 
 using std::vector;
 
@@ -31,11 +31,17 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
     return {page_size, num_pages};
 }
 
-operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& input_tensors,
-    const uint32_t num_layers,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
-    const bool enable_performance_mode) {
+DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensors = tensor_args.input_tensors;
+    TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
+    TT_FATAL(operation_attributes.global_cb.has_value(), "Global circular buffer must be provided");
+    const auto& global_cb = *(operation_attributes.global_cb);
+    const uint32_t num_layers = operation_attributes.num_layers;
+    const bool enable_performance_mode = operation_attributes.enable_performance_mode;
+
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
@@ -115,7 +121,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
-    const uint32_t total_num_blocks_in_buffer = 3;        // reader cb is triple buffered
+    const uint32_t total_num_blocks_in_buffer = 3;  // reader cb is triple buffered
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
 
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
@@ -227,9 +233,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
         uint32_t block_width_in_tiles = tensor_shapes[t][1];
         auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
-            max_page_size,
-            block_width_in_tiles / num_receivers_per_reader,
-            tt::tile_size(tensor_data_formats[t]));
+            max_page_size, block_width_in_tiles / num_receivers_per_reader, tt::tile_size(tensor_data_formats[t]));
         coalesced_page_sizes.push_back(coalesced_page_size);
         coalesced_num_pages.push_back(coalesced_num_page);
     }
@@ -276,21 +280,20 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [tensor_addrs_cb](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            TT_ASSERT(output_tensors.size() == 1);
-
-            const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-            auto tensor_addrs_buffer = tensor_addrs.buffer();
-            UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{std::move(program), {tensor_addrs_cb}};
 }
 
-}  // namespace ttnn::operations::dram_prefetcher
+void DramPrefetcherProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+    const auto& tensor_addrs_cb = cached_program.shared_variables.tensor_addrs_cb;
+    const auto& input_tensors = tensor_args.input_tensors;
+    const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+    auto tensor_addrs_buffer = tensor_addrs.buffer();
+    UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
+}
+
+}  // namespace ttnn::operations::dram_prefetcher::program
