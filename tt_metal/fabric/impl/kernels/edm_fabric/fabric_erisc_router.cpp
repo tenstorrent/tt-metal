@@ -789,9 +789,11 @@ FORCE_INLINE void receiver_forward_packet(
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
+                WATCHER_RING_BUFFER_PUSH(0x00001111);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-            case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
+                case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
+                WATCHER_RING_BUFFER_PUSH(0x00002222);
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -799,6 +801,7 @@ FORCE_INLINE void receiver_forward_packet(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
+                WATCHER_RING_BUFFER_PUSH(0x00003333);
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -1356,7 +1359,6 @@ FORCE_INLINE void establish_edm_connection(
 }
 
 template <
-    bool ENABLE_FIRST_LEVEL_ACK,
     bool enable_deadlock_avoidance,
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     typename EdmChannelWorkerIFs>
@@ -1384,6 +1386,7 @@ FORCE_INLINE void send_credits_to_upstream_workers(
         }
     }
 }
+
 
 ////////////////////////////////////
 ////////////////////////////////////
@@ -1424,6 +1427,7 @@ FORCE_INLINE void run_sender_channel_step_impl(
         can_send = can_send && !sender_backpressured_from_sender_side;
     }
     if (can_send) {
+        WATCHER_RING_BUFFER_PUSH(0x55550000 | sender_channel_index);
         did_something = true;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
@@ -1451,7 +1455,8 @@ FORCE_INLINE void run_sender_channel_step_impl(
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
         // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
         if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
-            send_credits_to_upstream_workers<ENABLE_FIRST_LEVEL_ACK, enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+            WATCHER_RING_BUFFER_PUSH(0xdeaddead);
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface,
                 completions_since_last_check,
                 channel_connection_established);
@@ -1464,27 +1469,12 @@ FORCE_INLINE void run_sender_channel_step_impl(
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
         if (acks_since_last_check > 0) {
-            send_credits_to_upstream_workers<ENABLE_FIRST_LEVEL_ACK, enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+            WATCHER_RING_BUFFER_PUSH((0xBBBB << 16) | sender_channel_index);
+            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface,
                 acks_since_last_check,
                 channel_connection_established);
-            // if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-            //     local_sender_channel_worker_interface
-            //         .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
-            // } else {
-            //     if (channel_connection_established) {
-            //         local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
-            //     } else {
-            //         ASSERT(
-            //             local_sender_channel_worker_interface.local_write_counter.counter >
-            //             (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
-            //         ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
-            //         auto new_val = local_sender_channel_worker_interface.local_write_counter.counter -
-            //                        (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
-            //         local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter = new_val;
-            //     }
-            // }
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
         }
     }
 
@@ -1562,36 +1552,37 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
         auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
-        ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
         bool can_send_ack = pkts_received;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
             can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
-        if (pkts_received) {
+        if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            uint8_t src_ch_id;
-            if constexpr (skip_src_ch_id_update) {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id();
-            } else {
-                src_ch_id = receiver_channel_pointers.get_src_chan_id(ack_counter.get_buffer_index());
-            }
+            // WATCHER_RING_BUFFER_PUSH(0xABCD0001);
+            static_assert (!skip_src_ch_id_update, "skip_src_ch_id_update must be false when ENABLE_FIRST_LEVEL_ACK is true");
+            auto receiver_buffer_index = ack_counter.get_buffer_index();
+            tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+                local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+                uint8_t src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+            WATCHER_RING_BUFFER_PUSH(0xAAAA | (ack_counter.get_buffer_index() << 24) | (src_ch_id << 16) | (receiver_channel << 20));
+
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
-
             ack_counter.increment();
         }
         unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+        
     } else {
         unwritten_packets = pkts_received_since_last_check != 0;
     }
-
-
+        
     // Code profiling timer for receiver channel forward
     NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
     receiver_forward_timer.set_should_dump(unwritten_packets);
     receiver_forward_timer.open();
-
+        
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1602,7 +1593,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-        if constexpr (!skip_src_ch_id_update) {
+        if constexpr (!skip_src_ch_id_update && !ENABLE_FIRST_LEVEL_ACK) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
         uint32_t hop_cmd;
@@ -1644,6 +1635,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
         if (can_send_to_all_local_chip_receivers) {
+            WATCHER_RING_BUFFER_PUSH(0x50505050);
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
@@ -1670,7 +1662,13 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            if constexpr (!ENABLE_FIRST_LEVEL_ACK) {
+                increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            }
+        } else {
+            // WATCHER_RING_BUFFER_PUSH(0x88882255);
+            // WATCHER_RING_BUFFER_PUSH(downstream_edm_interfaces_vc0[receiver_channel].worker_credits_stream_id);
+            // WATCHER_RING_BUFFER_PUSH(get_ptr_val(downstream_edm_interfaces_vc0[receiver_channel].worker_credits_stream_id));
         }
     }
 

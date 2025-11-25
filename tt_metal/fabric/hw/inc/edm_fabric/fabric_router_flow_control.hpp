@@ -42,11 +42,17 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
+        // WATCHER_RING_BUFFER_PUSH(reinterpret_cast<uint32_t>(ack_counters_base_ptr));
+        // WATCHER_RING_BUFFER_PUSH(src_id);
+        // WATCHER_RING_BUFFER_PUSH(round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)));
+        WATCHER_RING_BUFFER_PUSH(0xc0ffee00 | src_id);
+
         internal_::eth_send_packet_bytes_unsafe(
             receiver_txq_id,
             round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
             round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
             ETH_WORD_SIZE_BYTES);
+
     }
 
     volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
@@ -60,6 +66,7 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
             sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
+            sender_channel_packets_ack_stream_ids[i] = to_sender_packets_acked_streams[i];
         }
     }
 
@@ -69,10 +76,12 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
+        WATCHER_RING_BUFFER_PUSH(0xc0ffee00 | src_id);
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
 
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
+    std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
 };
 
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
