@@ -58,4 +58,6 @@ private:
     bool transpose_of_faces = false;     // transpose the face order
 };
 
+std::ostream& operator<<(std::ostream& os, const Tile& tile);
+
 }  // namespace tt::tt_metal
