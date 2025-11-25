@@ -42,7 +42,7 @@ Both API versions run the same test cases but use different underlying implement
 | Conv Hardcoded              | 21-23                | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
 | Interleaved Page Read/Write | 61-69, 71-75         | Reads and writes pages between interleaved buffers and a Tensix core.                   |
 | One Packet Read/Write       | 80-83                | Reads or writes packets between two Tensix cores.                                       |
-| DRAM Sharded Read           | 84-86                | Reads from sharded DRAM into one core.                                                  |
+| DRAM Sharded Read           | 84-87                | Reads from sharded DRAM into one core.                                                  |
 | Multi Interleaved           | 110-127              | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
 | Core Bidrectional           | 140-148              | Tensix core reads from and writes to another Tensix core simultaneously.                |
 | Deinterleave                | 200-201              | Tests deinterleaving. **(Slow Dispatch)**                                               |
@@ -51,6 +51,7 @@ Both API versions run the same test cases but use different underlying implement
 | I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501              | Inline DW transactions between two Tensix cores.                                        |
 | Transaction ID              | 600-602              | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| PCIe Read Bandwidth         | 603                  | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 
 
 ## Running Tests

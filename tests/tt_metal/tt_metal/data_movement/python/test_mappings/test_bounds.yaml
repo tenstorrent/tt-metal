@@ -108,6 +108,14 @@
     riscv_0:
       bandwidth: 60
 
+"DRAM Sharded Read Transaction ID Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      bandwidth: 60
+
 "Multi Interleaved Directed Ideal":
   wormhole_b0:
     riscv_1:
@@ -303,3 +311,11 @@
   wormhole_b0:
     riscv_1:
       bandwidth: 10.5
+
+"PCIe Read Bandwidth":
+  blackhole:
+    riscv_0:
+      bandwidth: 42.5
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 20.1

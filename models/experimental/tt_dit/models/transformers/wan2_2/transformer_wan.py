@@ -227,7 +227,9 @@ class WanTransformerBlock:
         )
 
         # Residual
-        spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
+        # spatial_1BND = spatial_1BND + spatial_attn_1BND * gate_msa_1B1D
+        # NOTE: higher precision compute config in addcmul may be needed for correctness
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_attn_1BND, gate_msa_1B1D)
 
         # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND, compute_kernel_config=self.layernorm_compute_kernel_config)
@@ -248,10 +250,12 @@ class WanTransformerBlock:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
-        # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
+
         spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
-        spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+        # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
+        # NOTE: higher precision compute config in addcmul may be needed for correctness
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
 
         return spatial_1BND
 

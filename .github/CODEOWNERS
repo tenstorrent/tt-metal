@@ -39,12 +39,13 @@ tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tens
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass # fabric experimental APIs
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass # this should go away
-tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @tenstorrent/codeowner-bypass
-tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeowner-bypass
+tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/codeowner-bypass
@@ -53,7 +54,7 @@ tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/codeown
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/codeowner-bypass
-tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
@@ -257,7 +258,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 /models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
-models/common @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
+models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
@@ -271,9 +272,9 @@ models/demos/ttnn_falcon7b @cfjchu @uaydonat @tenstorrent/codeowner-bypass
 models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT @tenstorrent/codeowner-bypass
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
-models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
-models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
+models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar @tenstorrent/codeowner-bypass
@@ -289,7 +290,6 @@ models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn @tens
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
-models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/codeowner-bypass
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT @tenstorrent/codeowner-bypass
 models/experimental/ @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/codeowner-bypass
@@ -310,8 +310,6 @@ models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/blackhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
-models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
-models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/perf/ @yieldthought @esmalTT @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat @tenstorrent/codeowner-bypass
@@ -320,24 +318,14 @@ models/experimental/oft @bjanjicTT @mbezuljTT @pavlepopovic @ianastasijevicTT @d
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @bjanjicTT @ddjekicTT @njovanovicTT
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov10x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov9c @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov8x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov8s @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tracy
