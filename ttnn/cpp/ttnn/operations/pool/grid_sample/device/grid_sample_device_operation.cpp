@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 
 GridSampleOperation::program_factory_t GridSampleOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const std::string mode = operation_attributes.mode_;
+    const std::string mode = operation_attributes.mode;
     if (mode == "bilinear") {
         return program::GridSampleBilinearProgramFactory{};
     } else {
@@ -42,17 +42,17 @@ void GridSampleOperation::validate_on_program_cache_miss(
         grid_tensor.logical_shape().rank());
 
     uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
-    if (operation_attributes.use_precomputed_grid_) {
+    if (operation_attributes.use_precomputed_grid) {
         TT_FATAL(
-            grid_last_dim % (operation_attributes.mode_ == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
-                                                                     : PRECOMPUTED_GRID_ELEMENTS_PER_POINT) ==
+            grid_last_dim % (operation_attributes.mode == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                                                                    : PRECOMPUTED_GRID_ELEMENTS_PER_POINT) ==
                     0 &&
-                grid_last_dim >= (operation_attributes.mode_ == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
-                                                                          : PRECOMPUTED_GRID_ELEMENTS_PER_POINT),
+                grid_last_dim >= (operation_attributes.mode == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                                                                         : PRECOMPUTED_GRID_ELEMENTS_PER_POINT),
             "Precomputed grid tensor last dimension must be a multiple of {} (for h_nw, w_nw, weight_nw, weight_ne, "
             "weight_sw, weight_se), but got {} in shape {}",
-            (operation_attributes.mode_ == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
-                                                     : PRECOMPUTED_GRID_ELEMENTS_PER_POINT),
+            (operation_attributes.mode == "nearest" ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                                                    : PRECOMPUTED_GRID_ELEMENTS_PER_POINT),
             grid_last_dim,
             grid_tensor.logical_shape());
     } else {
@@ -74,9 +74,9 @@ void GridSampleOperation::validate_on_program_cache_miss(
         grid_tensor.logical_shape()[0]);
 
     // batch_output_channels validation - must have batched input (K > 1)
-    if (operation_attributes.batch_output_channels_) {
-        const uint32_t num_elements_per_grid_point = operation_attributes.use_precomputed_grid_
-                                                         ? operation_attributes.mode_ == "nearest"
+    if (operation_attributes.batch_output_channels) {
+        const uint32_t num_elements_per_grid_point = operation_attributes.use_precomputed_grid
+                                                         ? operation_attributes.mode == "nearest"
                                                                ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
                                                                : PRECOMPUTED_GRID_ELEMENTS_PER_POINT
                                                          : STANDARD_GRID_ELEMENTS_PER_POINT;
@@ -89,7 +89,7 @@ void GridSampleOperation::validate_on_program_cache_miss(
 
     // Data type validation
     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16");
-    if (operation_attributes.use_precomputed_grid_) {
+    if (operation_attributes.use_precomputed_grid) {
         TT_FATAL(grid_tensor.dtype() == DataType::BFLOAT16, "Precomputed grid tensor must be BFLOAT16");
     } else {
         TT_FATAL(
@@ -101,18 +101,18 @@ void GridSampleOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
     TT_FATAL(grid_tensor.layout() == Layout::ROW_MAJOR, "Grid tensor must be ROW_MAJOR layout");
 
-    TT_FATAL(operation_attributes.padding_mode_ == "zeros", "Only zeros padding mode is currently supported");
+    TT_FATAL(operation_attributes.padding_mode == "zeros", "Only zeros padding mode is currently supported");
 
     // Mode and precomputed grid compatibility validation
     TT_FATAL(
-        !(operation_attributes.mode_ == "nearest" && !operation_attributes.use_precomputed_grid_),
+        !(operation_attributes.mode == "nearest" && !operation_attributes.use_precomputed_grid),
         "use_precomputed_grid = false is not supported with mode = 'nearest'. Please use precomputed grid with nearest "
         "mode.");
 
     // Memory layout validation - support interleaved and height sharded
     auto input_memory_layout = input_tensor.memory_config().memory_layout();
     auto grid_memory_layout = grid_tensor.memory_config().memory_layout();
-    auto output_memory_layout = operation_attributes.output_mem_config_.memory_layout();
+    auto output_memory_layout = operation_attributes.output_mem_config.memory_layout();
 
     // Input tensor can be interleaved or height sharded
     TT_FATAL(
@@ -172,8 +172,8 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     // Calculate the number of batched grid points per grid row
 
-    const uint32_t num_of_elements_per_grid_point = operation_attributes.use_precomputed_grid_
-                                                        ? operation_attributes.mode_ == "nearest"
+    const uint32_t num_of_elements_per_grid_point = operation_attributes.use_precomputed_grid
+                                                        ? operation_attributes.mode == "nearest"
                                                               ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
                                                               : PRECOMPUTED_GRID_ELEMENTS_PER_POINT
                                                         : STANDARD_GRID_ELEMENTS_PER_POINT;
@@ -181,7 +181,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     // Define output shape based on batch_output_channels flag
     ttnn::Shape output_logical_shape;
-    if (operation_attributes.batch_output_channels_) {
+    if (operation_attributes.batch_output_channels) {
         // batch_output_channels=True: extend channels (legacy behavior)
         // Output shape: (N, H_out, W_out, C * grid_batching_factor)
         uint32_t C_out = C * grid_batching_factor;
@@ -200,7 +200,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
     const Layout output_layout = Layout::ROW_MAJOR;
 
     // Determine the memory config of the output
-    MemoryConfig output_memory_config = operation_attributes.output_mem_config_;
+    MemoryConfig output_memory_config = operation_attributes.output_mem_config;
 
     // Get grid padded shape - needed for both sharded and interleaved cases
     const auto& grid_padded_shape = grid_tensor.padded_shape();
@@ -208,16 +208,16 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     // For bilinear mode with interleaved input/grid, keep output interleaved to avoid core count issues
     // For nearest mode or sharded cases, use sharded output
-    if ((operation_attributes.mode_ == "bilinear" && !grid_tensor.memory_config().is_sharded() &&
-         operation_attributes.output_mem_config_.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+    if ((operation_attributes.mode == "bilinear" && !grid_tensor.memory_config().is_sharded() &&
+         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
         // Bilinear mode with interleaved tensors - use interleaved output (original behavior)
-        output_memory_config = operation_attributes.output_mem_config_;
+        output_memory_config = operation_attributes.output_mem_config;
     } else {
         // Check if user provided a shard spec - if so, respect it
-        if (operation_attributes.output_mem_config_.shard_spec().has_value() &&
+        if (operation_attributes.output_mem_config.shard_spec().has_value() &&
             !grid_tensor.memory_config().is_sharded()) {
             // User provided shard spec - use it as is
-            output_memory_config = operation_attributes.output_mem_config_;
+            output_memory_config = operation_attributes.output_mem_config;
         } else {
             // User didn't provide shard spec - generate one automatically
             // Nearest mode or sharded cases - create sharded output configuration
@@ -259,12 +259,12 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
             // Calculate output shard dimensions based on grid points per core and batching
             // For nearest interpolation, each grid point produces one output point per channel
-            const uint32_t output_shard_height = operation_attributes.batch_output_channels_
+            const uint32_t output_shard_height = operation_attributes.batch_output_channels
                                                      ? grid_points_per_shard
                                                      : grid_points_per_shard * grid_batching_factor;
 
             // Output width is the number of input channels, extended by batching factor if needed
-            const uint32_t output_shard_width = operation_attributes.batch_output_channels_
+            const uint32_t output_shard_width = operation_attributes.batch_output_channels
                                                     ? input_padded_channel_width * grid_batching_factor
                                                     : input_padded_channel_width;
 
@@ -285,7 +285,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     // Width dimension: expand by grid_batching_factor if batch_output_channels=false
     uint32_t W_out_padded;
-    if (operation_attributes.batch_output_channels_) {
+    if (operation_attributes.batch_output_channels) {
         W_out_padded = grid_padded_shape[2];  // batch_output_channels=true: use grid's padded width
     } else {
         W_out_padded = grid_padded_shape[2] * grid_batching_factor;  // batch_output_channels=false: expand width
@@ -293,7 +293,7 @@ TensorSpec GridSampleOperation::compute_output_specs(
 
     // Channel dimension: use input tensor's padded channels and apply channel extend factor
     uint32_t C_padded =
-        input_padded_shape[-1] * (operation_attributes.batch_output_channels_ ? grid_batching_factor : 1);
+        input_padded_shape[-1] * (operation_attributes.batch_output_channels ? grid_batching_factor : 1);
 
     ttnn::Shape output_padded_shape({N_padded, H_out_padded, W_out_padded, C_padded});
 
@@ -324,12 +324,12 @@ std::tuple<operation_attributes_t, tensor_args_t> GridSampleOperation::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{
-            .mode_ = mode,
-            .padding_mode_ = padding_mode,
-            .align_corners_ = align_corners,
-            .use_precomputed_grid_ = use_precomputed_grid,
-            .batch_output_channels_ = batch_output_channels,
-            .output_mem_config_ = memory_config.value_or(grid.memory_config()),
+            .mode = mode,
+            .padding_mode = padding_mode,
+            .align_corners = align_corners,
+            .use_precomputed_grid = use_precomputed_grid,
+            .batch_output_channels = batch_output_channels,
+            .output_mem_config = memory_config.value_or(grid.memory_config()),
         },
         tensor_args_t{.input_tensor = input_tensor, .grid = grid}};
 }

@@ -24,8 +24,8 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
     tensor_return_value_t& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
-    bool use_precomputed_grid = operation_attributes.use_precomputed_grid_;
-    bool batch_output_channels = operation_attributes.batch_output_channels_;
+    bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
+    bool batch_output_channels = operation_attributes.batch_output_channels;
 
     const bool is_sharded = grid_tensor.is_sharded();
     tt::tt_metal::Program program{};

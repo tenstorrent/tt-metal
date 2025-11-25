@@ -24,8 +24,8 @@ GridSampleNearestProgramFactory::cached_program_t GridSampleNearestProgramFactor
     tensor_return_value_t& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
-    const bool use_precomputed_grid = operation_attributes.use_precomputed_grid_;
-    const bool align_corners = operation_attributes.align_corners_;
+    const bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
+    const bool align_corners = operation_attributes.align_corners;
 
     const bool is_sharded = grid_tensor.is_sharded();
     tt::tt_metal::Program program{};
