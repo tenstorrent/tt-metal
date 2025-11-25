@@ -602,12 +602,68 @@ bool MeshDevice::close() {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 
+    // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation will
+    // hang. Validate this.
+    for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            auto parent_mesh = get_parent_mesh();
+            if (parent_mesh) {
+                auto parent_mesh_id = parent_mesh->get_parent_mesh_id_with_in_use_cq(cq_id);
+                if (parent_mesh_id) {
+                    TT_THROW(
+                        "MeshDevice cq ID {} is in use by parent mesh ID {} during close of mesh ID {}",
+                        cq_id,
+                        *parent_mesh_id,
+                        id());
+                }
+            }
+
+            for (const auto& submesh : submeshes_) {
+                if (auto submesh_ptr = submesh.lock()) {
+                    auto child_mesh_id = submesh_ptr->get_child_mesh_id_with_in_use_cq(cq_id);
+                    if (child_mesh_id) {
+                        TT_THROW(
+                            "MeshDevice cq ID {} is in use by child submesh ID {} during close of mesh ID {}",
+                            cq_id,
+                            *child_mesh_id,
+                            id());
+                    }
+                }
+            }
+        }
+    }
+
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
     is_internal_state_initialized = false;
     return true;
+}
+
+std::optional<int> MeshDevice::get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
+        return id();
+    }
+    if (parent_mesh_) {
+        return parent_mesh_->get_parent_mesh_id_with_in_use_cq(cq_id);
+    }
+    return std::nullopt;
+}
+
+std::optional<int> MeshDevice::get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
+        return id();
+    }
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            auto child_mesh_id = submesh_ptr->get_child_mesh_id_with_in_use_cq(cq_id);
+            if (child_mesh_id) {
+                return child_mesh_id;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 std::string MeshDevice::to_string() const {
