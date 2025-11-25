@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+# Run this with the following command:
+# tt-run --rank-binding tests/tt_metal/distributed/config/dual_8x2_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_8x2.yaml
+Tests:
+  # ======================================================================================
+  # Test 1: Inter-Mesh Directed Traffic
+  # ======================================================================================
+  - name: InterMeshCrossTraffic
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 250
+    senders:
+      - device: [0, 15]
+        patterns:
+          - destination:
+              device: [1, 7]

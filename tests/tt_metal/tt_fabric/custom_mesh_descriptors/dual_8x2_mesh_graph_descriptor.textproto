@@ -3,7 +3,7 @@
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0
-  device_topology { dims: [ 4, 4 ] }
+  device_topology { dims: [ 8, 2 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
     count: 2
@@ -16,16 +16,21 @@ mesh_descriptors {
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  # Instances: mesh ids 0..1 (all 4x4)
+  # Instances: mesh ids 0..1 (all 8x2)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
   # Strict connections between specific devices
-  # For 4x4 mesh: connect bottom row of M0 to top row of M1
-  # M0 D12 (row 3, col 0) <-> M1 D0 (row 0, col 0)
+  # For 8x2 mesh: connect rightmost column of M0 to leftmost column of M1
+  # M0 D6 (row 0, col 6) <-> M1 D0 (row 0, col 0)
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 12 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 8 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    channels { count: 1 }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 15 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 7 } }
     channels { count: 1 }
   }
 }

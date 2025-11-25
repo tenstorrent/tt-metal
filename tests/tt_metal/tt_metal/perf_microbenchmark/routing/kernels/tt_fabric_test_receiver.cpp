@@ -30,29 +30,29 @@ static_assert(
 void kernel_main() {
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;
-
+    DPRINT << "RECEIVER: starting kernel" << ENDL();
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
     uint32_t kernel_config_address = common_memory_map.kernel_config_base;
-
+    DPRINT << "RECEIVER: got kernel config address" << ENDL();
     // Use placement new to construct config in L1 memory (advances local_args_idx)
     auto* receiver_config = new (reinterpret_cast<void*>(kernel_config_address)) ReceiverKernelConfigType(
         ReceiverKernelConfigType::build_from_args(common_memory_map, rt_args_idx, local_args_idx));
-
+    DPRINT << "RECEIVER: built receiver config" << ENDL();
     // Build mux termination manager from local args (uses advanced local_args_idx)
     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
         local_args_idx, common_memory_map.mux_termination_sync_address);
-
+    DPRINT << "RECEIVER: built mux termination manager" << ENDL();
     // Clear test results area and mark as started
     clear_test_results(receiver_config->get_result_buffer_address(), receiver_config->get_result_buffer_size());
     write_test_status(receiver_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
-
+    DPRINT << "RECEIVER: cleared test results area and marked as started" << ENDL();
     // Open credit connections (no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->open_credit_connections();
-
+    DPRINT << "RECEIVER: opened credit connections" << ENDL();
     bool failed = false;
     uint64_t total_packets_received = 0;
-
+    DPRINT << "RECEIVER: initialized loop variables" << ENDL();
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
@@ -95,14 +95,14 @@ void kernel_main() {
 
     // Close credit connections (automatically flushes remaining credits, no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->close_credit_connections();
-
+    DPRINT << "RECEIVER: closed credit connections" << ENDL();
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
-
+    DPRINT << "RECEIVER: terminated muxes" << ENDL();
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
     uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
-
+    DPRINT << "RECEIVER: wrote test results" << ENDL();
     noc_async_full_barrier();
 }
