@@ -46,6 +46,11 @@ With trace, we can eliminate a large portion of these gaps. In the figure below 
 <!-- ![Metal_Trace_Tracy](images/Metal_Trace_Tracy.png){width=15 height=15} -->
 <img src="images/Metal_Trace_Tracy.png" style="width:1000px;"/>
 
+>[!NOTE]
+>For information about full model deployment see the [Deploying LLMs Guide](https://github.com/tenstorrent/tenstorrent.github.io/blob/main/core/getting-started/vLLM-servers.md).
+>
+>For the full install procedure see the [Installation Guide](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
+
 ### 1.2 APIs
 In order to use trace, we need to use the following trace apis:
 
