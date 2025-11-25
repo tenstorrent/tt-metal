@@ -227,6 +227,7 @@ template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::POWER>;
 
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;
@@ -548,7 +549,6 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
         optional_output_tensor);
 }
 
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
