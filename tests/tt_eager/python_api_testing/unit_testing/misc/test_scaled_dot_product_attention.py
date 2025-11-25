@@ -95,10 +95,10 @@ def run_test_sdpa_tt(
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=(1, 1),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
+        exp_approx_mode=False,
     )
 
     if use_high_precision_compute:
@@ -170,10 +170,10 @@ def run_sdpa_noncausal(
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=(1, 1),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
+        exp_approx_mode=False,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -235,6 +235,120 @@ def run_sdpa_noncausal(
         assert rmse < rmse_threshold
 
     assert out_pass
+
+
+q_chunks = [32, 64, 128, 256, 512]
+k_chunks = [32, 64, 128, 256, 512, 1024]
+
+# q_chunks = [128, 256]
+# k_chunks = [128, 256]
+
+# q_chunks = [128]
+# k_chunks = [128]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram_interleaved"])
+@pytest.mark.parametrize("q_chunk_size", q_chunks, ids=[f"q_{c}" for c in q_chunks])
+@pytest.mark.parametrize("k_chunk_size", k_chunks, ids=[f"k_{c}" for c in k_chunks])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        # [1, 1, 1, 8192, 128],  # Llama2-70B
+        [1, 10, 10, 2560, 128],  # Wan on 32 chips pad version 1
+        # [1, 10, 10, 2432, 128],  # Wan on 32 chips pad version 2
+    ),
+)
+def test_sdpa_run_benchmark(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, reset_seeds):
+    try:
+        run_sdpa_noncausal(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            dtype,
+            use_mask=False,
+        )
+    except:
+        print("run failed")
+
+
+from tracy.process_model_log import (
+    get_latest_ops_log_filename,
+    run_device_profiler,
+)
+
+
+def post_process_ops_log(
+    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
+):
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    import pandas as pd
+
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    results = {}
+    if float_columns:
+        assert (
+            type(float_columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(float_columns)} was provided"
+        for col in float_columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            results[col] = df_filtered[col]
+    else:
+        results = df
+    return results
+
+
+def test_create_perf_table():
+    subdir = "ttnn_sdpa_performance"
+    float_cols = ["DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+    command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark"
+
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+    )
+
+    duration_ns = [int(x) for x in r["DEVICE KERNEL DURATION [ns]"]]
+    q_chunks = [s.split("q_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
+    k_chunks = [s.split("k_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
+
+    result = sorted(zip(duration_ns, q_chunks, k_chunks), key=lambda x: x[0])
+
+    # Pretty summary table
+    header = "| q_chunk | k_chunk | measured perf (ms) |"
+    sep = "|---|---:|---:|"
+    print(header)
+    print(sep)
+    for idx, (dur, q, k) in enumerate(result):
+        measured_ms = dur / 1e6
+        measured_ms_str = f"{measured_ms:.3f}"
+        print(f"| {q} | {k} | {measured_ms_str} |")
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
