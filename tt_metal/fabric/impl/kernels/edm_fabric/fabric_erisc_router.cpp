@@ -1536,7 +1536,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table) {
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
+    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
 
     bool unwritten_packets;
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
