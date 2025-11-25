@@ -128,10 +128,6 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-perplexity:
-        required: false
-        type: boolean
-        default: false
 
 run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
@@ -145,7 +141,6 @@ jobs:
       run-nightly: ${{ steps.logic.outputs.run-nightly }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-profiler: ${{ steps.logic.outputs.run-profiler }}
-      run-perplexity: ${{ steps.logic.outputs.run-perplexity }}
     steps:
       - name: Determine test execution
         id: logic
@@ -158,7 +153,6 @@ jobs:
               echo "run-model-perf=${{ inputs.t3000-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
-              echo "run-perplexity=${{ inputs.t3000-perplexity }}" >> $GITHUB_OUTPUT
               ;;
             "models-pr")
               echo "run-unit=true" >> $GITHUB_OUTPUT
@@ -167,7 +161,6 @@ jobs:
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
-              echo "run-perplexity=false" >> $GITHUB_OUTPUT
               ;;
             "models-accuracy")
               echo "run-unit=false" >> $GITHUB_OUTPUT
@@ -176,7 +169,6 @@ jobs:
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
-              echo "run-perplexity=true" >> $GITHUB_OUTPUT
               ;;
           esac
   build-artifact:
@@ -256,13 +248,3 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: config-t3000
       test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
-  t3000-perplexity-tests:
-    if: ${{ needs.determine-tests.outputs.run-perplexity == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
