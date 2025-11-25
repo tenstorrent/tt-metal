@@ -33,6 +33,11 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     auto input_log_shape = input.logical_shape();
     auto output_log_shape = output.logical_shape();
 
+    log_debug(tt::LogOp, "reshape_view: row major program factory");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
+
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
@@ -42,7 +47,7 @@ ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed to be working 2D->2D in this function
+    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t responsibility = ((input_log_shape[-2] - 1) / num_cores_total) + 1;
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
