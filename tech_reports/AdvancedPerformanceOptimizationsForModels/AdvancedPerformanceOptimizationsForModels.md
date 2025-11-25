@@ -172,7 +172,7 @@ Configuring multiple command queues requires the following APIs:
   `@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True)`
 * `event = ttnn.record_event(device, cq_id = 0)`
 
-  This event is recorded on the device after all commands in the queue are finished. This event is visible to all command queues
+  This event is recorded on the device after all commands in the queue are finished. This event is visible to all command queues.
 * `ttnn.wait_for_event(cq_id = 0, event = event)`
 
   A command is enqueued to the specified command queue to stall until the specified event has been recorded on the device. No commands sent to the command queue after the wait for event command are executed until the event occurs.
