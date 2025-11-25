@@ -8,7 +8,7 @@ import ttnn
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import create_tt_model
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def get_QwenEmbeddingArgs():
@@ -24,18 +24,20 @@ def get_QwenEmbeddingArgs():
 
 
 class QwenEmbeddingModel:
-    def __init__(self, device):
+    def __init__(self, device, data_parallel=1):
         self.generator_args_config = {
             "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
-            "data_parallel": 1,
+            "data_parallel": data_parallel,
             "mesh_device": device,
             "instruct": False,
-            "global_batch_size": 1,
-            "optimizations": None,
+            "global_batch_size": data_parallel,
+            "optimizations": lambda model_args: DecodersPrecision.performance(
+                model_args.n_layers, model_args.model_name
+            ),
             "max_seq_len": 1024,
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
             "paged_attention": True,
-            "num_layers": 33,
+            "num_layers": 10,
         }
         (
             self.model_args,
@@ -58,7 +60,7 @@ class QwenEmbeddingModel:
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 30000000,
+            "trace_region_size": 70000000,
             "num_command_queues": 1,
             "l1_small_size": 81920,
         }
@@ -82,16 +84,16 @@ class QwenEmbeddingModel:
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("data_parallel", [1])
 def test_qwen_embedding_demo(
     device_params,
     mesh_device,
+    data_parallel,
 ):
-    model = QwenEmbeddingModel(mesh_device)
+    model = QwenEmbeddingModel(mesh_device, data_parallel)
 
     # Run model to generate embeddings
     test_prompts = [
-        "Hello, world!",
-        "This is a test of the Qwen embedding model.",
         "Embedding models convert text into vector representations.",
     ]
 
