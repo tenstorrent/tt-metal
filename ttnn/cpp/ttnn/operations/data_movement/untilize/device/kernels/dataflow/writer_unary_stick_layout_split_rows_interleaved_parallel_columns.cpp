@@ -9,8 +9,8 @@ void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
-    
-    uint32_t arg_idx = 0; 
+
+    uint32_t arg_idx = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
@@ -22,7 +22,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
-    constexpr auto num_ct_args = 2;
+    constexpr auto num_ct_args = dst_args.next_compile_time_args_offset();
 
     uint64_t base_dst_noc_addr[tile_height];
 
@@ -41,8 +41,9 @@ void kernel_main() {
 
     uint32_t stick_id = start_stick_id;
 
-    uint32_t curr_offset = offset_within_stick;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
+        // may need an ifdef here if this kernel is used elsewhere.
+        uint32_t curr_offset = offset_within_stick;
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
             for (uint32_t j = 0; j < tile_height; j++) {
                 base_dst_noc_addr[j] = get_noc_addr(j + stick_id, s, curr_offset);
@@ -54,12 +55,16 @@ void kernel_main() {
         stick_id += tile_height;
     }
 
-#ifdef FUSED_OP_SYNC    
+#ifdef FUSED_OP_SYNC
     constexpr uint32_t noc_start_x = get_compile_time_arg_val(num_ct_args);
     constexpr uint32_t noc_start_y = get_compile_time_arg_val(num_ct_args + 1);
     constexpr uint32_t noc_end_x = get_compile_time_arg_val(num_ct_args + 2);
     constexpr uint32_t noc_end_y = get_compile_time_arg_val(num_ct_args + 3);
     constexpr uint32_t num_dests = get_compile_time_arg_val(num_ct_args + 4);
+
+    if constexpr (num_dests == 0) {
+        return;
+    }
 
     auto sync_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     auto sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
@@ -69,7 +74,7 @@ void kernel_main() {
 
     noc_semaphore_wait(sync_semaphore_ptr, start_stick_id);
     noc_semaphore_set(sync_semaphore_ptr, start_stick_id+num_sticks);
-    
-    noc_semaphore_set_multicast(sync_semaphore_addr,mcast_sync_semaphore_noc_addr,num_dests);
+
+    noc_semaphore_set_multicast_loopback_src(sync_semaphore_addr, mcast_sync_semaphore_noc_addr, num_dests);
 #endif
 }
