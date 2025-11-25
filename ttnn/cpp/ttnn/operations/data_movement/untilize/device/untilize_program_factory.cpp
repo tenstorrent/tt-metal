@@ -32,25 +32,39 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
     return 1;
 }
 
-std::vector<uint32_t> get_fuse_sync_ct_args(const CoreRangeSet& sync_core_grids) {}
 
-void validate_fuse_sync_args(
+CoreRange validate_fuse_sync_args(
     const CoreRangeSet& sub_core_grids,
-    const std::optional<GlobalSemaphore>& semaphore,
     const std::optional<CoreRangeSet>& sync_core_grids) {
-    if (sync_core_grids.has_value()) {
-        TT_FATAL(semaphore.has_value(), "Expected a semaphore with sync cores");
-        TT_FATAL(
-            sync_core_grids.contains(sub_core_grids), "synchronized cores must be a superset of untilize worker cores");
+    
+    TT_FATAL(sync_core_grids.has_value(), "Expected a semaphore with sync cores");
+    TT_FATAL(
+        sync_core_grids->contains(sub_core_grids), "synchronized cores must be a superset of untilize worker cores");
 
-        auto core_range = sync_core_grids.ranges().back();
-        for(for auto cr_iter =sync_core_grids.ranges().begin()+1; cr_iter!= core_range_iter.ranges().end(); ++cr_iter){
-            // This optional is empty if the ranges are not contiguous
-            auto maybe_merged_range = core_range.merge(*cr_iter);
-            TT_FATAL(maybe_merged_range.has_value(), "Sync core ranges must all be contiguous");
-            core_range = maybe_merged_range.value();
-        }
+    auto core_range = sync_core_grids->ranges().back();
+    for(auto cr_iter =sync_core_grids->ranges().begin()+1; cr_iter!= sync_core_grids->ranges().end(); ++cr_iter){
+        // This optional is empty if the ranges are not contiguous
+        auto maybe_merged_range = core_range.merge(*cr_iter);
+        TT_FATAL(maybe_merged_range.has_value(), "Sync core ranges must all be contiguous");
+        core_range = maybe_merged_range.value();
     }
+    
+    return core_range;
+}
+
+
+std::array<uint32_t,5> get_fuse_sync_ct_args(const CoreRange& sync_core_grid, MeshDevice * device) {
+    const auto & start_coord = device->worker_core_from_logical_core(sync_core_grid.start_coord);
+    const auto & end_coord = device->worker_core_from_logical_core(sync_core_grid.end_coord);
+    const uint32_t num_dests = sync_core_grid.size() - 1;
+    
+    return {
+        start_coord.x, // noc_start_x
+        start_coord.y, // noc_start_y
+        end_coord.x, // noc_end_x
+        end_coord.y, // noc_end_y
+        num_dests,
+    };
 }
 
 operation::ProgramWithCallbacks untilize_row_wise_fuseable(
@@ -118,12 +132,21 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     const uint32_t output_page_size_bytes = padded_shape[-1] * output_tensor.element_size();
     std::vector<uint32_t> writer_ct_args = {output_page_size_bytes};
     TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
+    
+    std::map<std::string,std::string> writer_defines;
+    if(semaphore.has_value()){
+        writer_defines["FUSED_OP_SYNC"] ="1";
+        const auto sync_core_range = validate_fuse_sync_args(sub_core_grids,sync_core_grids);
+        const auto sync_ct_args = get_fuse_sync_ct_args(sync_core_range, input_tensor.device());
+        writer_ct_args.insert(writer_ct_args.end(),sync_ct_args.begin(), sync_ct_args.end());
+    }
 
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
         all_cores,
+        defines=writer_defines,
         WriterDataMovementConfig(writer_ct_args));
 
     /** compute
@@ -157,7 +180,7 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
 
     std::vector<CoreCoord> cores_with_rtargs;
 
-    constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 6;
+    constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 7;
     uint32_t column_tile_start_id = 0;
     for (uint32_t i = 0; i < cores.size(); i++) {
         const CoreCoord& core = cores[i];
@@ -182,7 +205,8 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
             ntiles_per_row,                             // ntiles_per_core
             TILE_WIDTH * output_tensor.element_size(),  // tile_width_size
             start_stick_id,                             // start stick id
-            0u  // offset_within_stick each core starts from the beginning of the row
+            0u,  // offset_within_stick each core starts from the beginning of the row
+            (semaphore.has_value()) ? semaphore->address():0
         };
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);

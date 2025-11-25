@@ -9,17 +9,18 @@ void kernel_main() {
     // Constexpr
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
-
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t tile_width_size = get_arg_val<uint32_t>(3);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(4);
-    uint32_t offset_within_stick = get_arg_val<uint32_t>(5);
+    
+    uint32_t arg_idx = 0; 
+    const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_width_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t offset_within_stick = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+
     constexpr auto dst_args = TensorAccessorArgs<1>();
-    constexpr bool fused_op_sync get_compile_time_arg_val(1) == 1;
     const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
     constexpr auto num_ct_args = 2;
 
@@ -53,18 +54,22 @@ void kernel_main() {
         stick_id += tile_height;
     }
 
-    if constexpr (fused_op_sync) {
-        constexpr uint32_t noc_start_x = get_compile_time_arg_val(num_ct_args);
-        constexpr uint32_t noc_start_y = get_compile_time_arg_val(num_ct_args + 1);
-        constexpr uint32_t noc_end_x = get_compile_time_arg_val(num_ct_args + 2);
-        constexpr uint32_t noc_end_y = get_compile_time_arg_val(num_ct_args + 3);
+#ifdef FUSED_OP_SYNC    
+    constexpr uint32_t noc_start_x = get_compile_time_arg_val(num_ct_args);
+    constexpr uint32_t noc_start_y = get_compile_time_arg_val(num_ct_args + 1);
+    constexpr uint32_t noc_end_x = get_compile_time_arg_val(num_ct_args + 2);
+    constexpr uint32_t noc_end_y = get_compile_time_arg_val(num_ct_args + 3);
+    constexpr uint32_t num_dests = get_compile_time_arg_val(num_ct_args + 4);
 
-        volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
+    auto sync_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    auto sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
 
-        uint64_t mcast_receiver_semaphore_noc_addr =
-            get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_semaphore);
+    uint64_t mcast_sync_semaphore_noc_addr =
+        get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, sync_semaphore_addr);
 
-        noc_semaphore_wait()
-    }
+    noc_semaphore_wait(sync_semaphore_ptr, start_stick_id);
+    noc_semaphore_set(sync_semaphore_ptr, start_stick_id+num_sticks);
+    
+    noc_semaphore_set_multicast(sync_semaphore_addr,mcast_sync_semaphore_noc_addr,num_dests);
+#endif
 }
