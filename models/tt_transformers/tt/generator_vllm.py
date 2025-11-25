@@ -125,6 +125,13 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
+def create_decode_input_parameters(max_batch_size, num_gpu_blocks):
+    tokens = torch.zeros(max_batch_size, 1, dtype=torch.int32)
+    start_pos = torch.zeros(max_batch_size, dtype=torch.int32)
+    page_table = torch.zeros(max_batch_size, num_gpu_blocks, dtype=torch.int32)
+    return tokens, start_pos, page_table
+
+
 class TT_MllamaProcessingInfo(MllamaProcessingInfo):
     def get_supported_mm_limits(self):
         return {"image": 1}  # TT implementation currently only supports 1 image
@@ -352,8 +359,14 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
 
 
 class LlamaForCausalLM(Generator):
@@ -411,8 +424,14 @@ class LlamaForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
 
 
 class QwenForCausalLM(Generator):
@@ -457,8 +476,14 @@ class QwenForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
 
 
 class MistralForCausalLM(Generator):
@@ -503,8 +528,14 @@ class MistralForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
 
 
 class MultiModalProcessor(BaseMultiModalProcessor):
@@ -636,8 +667,14 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
 
 
 class GptOssForCausalLM(Generator):
@@ -699,5 +736,11 @@ class GptOssForCausalLM(Generator):
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
-    def warmup_model(self, kv_cache, enable_trace):
+    def warmup_model_prefill(self, kv_cache, enable_trace):
         self.warmup_prefill_traces(kv_cache, enable_trace)
+
+    def warmup_model_decode(self, kv_cache, enable_trace, num_gpu_blocks):
+        tokens, start_pos, page_table = create_decode_input_parameters(
+            self.model_args[0].max_batch_size, num_gpu_blocks
+        )
+        super().decode_forward_text(tokens, start_pos, page_table, kv_cache, enable_trace)
