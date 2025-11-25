@@ -20,8 +20,6 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
 namespace NAMESPACE {
 
 void MAIN {
@@ -88,7 +86,7 @@ void MAIN {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_in, cb_inb, cb_scaler, cb_x, cb_ex, one_over_W, Wt, blk);
+            cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #else
         numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
             cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
@@ -102,17 +100,6 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             cb_wait_front(cb_in, blk);
-            // if (wt == 0) {
-            //     DPRINT << "large first input tile" << ENDL();
-            //     tt::compute::common::print_full_tile(cb_in, 0, true);
-            //     DPRINT << "large Ex tile" << ENDL();
-            //     tt::compute::common::print_full_tile(cb_ex, 0, true);
-            // }
-            // DPRINT << "NCHT " << NCHt << ENDL();
-            // DPRINT << "cb_in " << wt << ENDL();
-            // tt::compute::common::print_full_tile(cb_in, 0, true);
-            // DPRINT << "cb_ex " << wt << ENDL();
-            // tt::compute::common::print_full_tile(cb_ex, 0, true);
 #ifdef RMSNORM
             reconfig_data_format_srca(cb_in);
             copy_tile_init(cb_in);
@@ -120,21 +107,12 @@ void MAIN {
                 copy_tile(cb_in, j, j);
             }
 #else
+            // x-E[x]
             reconfig_data_format(cb_in, cb_ex);
             sub_bcast_cols_init_short(cb_in, cb_ex);
-            // x-E[x]
             for (uint32_t j = 0; j < blk; j++) {
                 sub_tiles_bcast_cols(cb_in, cb_ex, j, 0, j);
             }
-            // tile_regs_commit();
-            // tile_regs_wait();
-            // cb_reserve_back(cb_xmm, blk);
-            // pack_reconfig_data_format(cb_xmm);
-            // for (uint32_t j = 0; j < blk; j++) {
-            //     pack_tile(j, cb_xmm);
-            // }
-            // cb_push_back(cb_xmm, blk);
-            // tile_regs_release();
 #endif
             cb_pop_front(cb_in, blk);
 #ifdef FUSE_PRE_ADD
@@ -146,25 +124,11 @@ void MAIN {
             }
             cb_pop_front(cb_inb, blk);
 #endif
-            // if (wt == 0) {
-            //     DPRINT << "large first square tile iter: " << wt << ENDL();
-            //     dprint_tensix_dest_reg<true>(dst0);
-            // }
-            // if (wt == 1) {
-            //     DPRINT << "large second square tile iter: " << wt << ENDL();
-            //     dprint_tensix_dest_reg<true>(dst0);
-            // }
-
+            // (x-E[x])^2. Pack to CB
             square_tile_init();
             for (uint32_t j = 0; j < blk; j++) {
                 square_tile(j);
             }
-            // cb_wait_front(cb_xmm, blk);
-            // tile_regs_acquire();
-            // mul_tiles_init(cb_xmm, cb_xmm);
-            // for (uint32_t j = 0; j < blk; j++) {
-            //     mul_tiles(cb_xmm, cb_xmm, j, j, j);
-            // }
             tile_regs_commit();
             tile_regs_wait();
             cb_reserve_back(cb_xmm2, blk);
@@ -177,80 +141,20 @@ void MAIN {
 
             tile_regs_acquire();
             if (wt > 0) {
-                // reconfig_data_format_srca(cb_ex2);
                 cb_wait_front(cb_fp32, onetile);
                 reconfig_data_format_srca(cb_fp32);
-
-                // DPRINT << "Before copy " << wt << ENDL();
-                // tt::compute::common::print_full_tile(cb_ex2, 0, true);
                 copy_tile_init(cb_fp32);
-                // asm volatile("ebreak");
                 copy_tile(cb_fp32, 0, dst0);
-                // if (wt == 1) {
-                //     cb_pop_front(cb_ex2, onetile);
-                //     tile_regs_commit();
-                //     tile_regs_wait();
-                //     pack_reconfig_data_format(cb_ex2);
-                //     pack_tile(dst0, cb_ex2);
-                //     tile_regs_release();
-                //     cb_push_back(cb_ex2, onetile);
-                //     cb_wait_front(cb_ex2, onetile);
-                //     DPRINT << "large cb_ex2 on second iteration copy then pack" << ENDL();
-                //     tt::compute::common::print_full_tile(cb_ex2, 0, true);
-                // }
-                // DPRINT << "After copy: " << wt << ENDL();
-                // dprint_tensix_dest_reg<true>(dst0);
                 cb_pop_front(cb_fp32, onetile);
             }
             cb_wait_front(cb_xmm2, blk);
-            // if (wt == 0) {
-            //     UNPACK(tt::compute::common::print_full_tile(cb_xmm2, 0, true));
-            // }
-            // if (wt == 0) {
-            //     DPRINT << "large first xmm2 tile with mul_tiles" << ENDL();
-            //     tt::compute::common::print_full_tile(cb_xmm2, 0, true);
-            // }
-            // if (wt == 1) {
-            //     DPRINT << "second (x-E[x])^2 tile large" << ENDL();
-            //     tt::compute::common::print_full_tile(cb_xmm, 0, true);
-            // }
-            // DPRINT << "cb_xmm " << wt << ENDL();
-            // tt::compute::common::print_full_tile(cb_xmm, 0, true);
-            // DPRINT << "cb_xmm " << wt << ENDL();
-            // tt::compute::common::print_full_tile(cb_xmm, 0, true);
 
+            // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
             reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_fp32);
-            // accumulates squared residual
             for (uint32_t j = 0; j < blk; j++) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, j, scaler0, dst0);
-                // if (wt == 0 && j == 0) {
-                //     cb_reserve_back(cb_ex2, onetile);
-                //     tile_regs_commit();
-                //     tile_regs_wait();
-                //     pack_tile(dst0, cb_ex2);
-                //     tile_regs_release();
-                //     cb_push_back(cb_ex2, onetile);
-                //     cb_wait_front(cb_ex2, onetile);
-                //     DPRINT << "large first after first reduce iter" << ENDL();
-                //     tt::compute::common::print_full_tile(cb_ex2, 0, true);
-                // }
-                // if (wt + j == 0) {
-                //     DPRINT << "large first var reduce iter: " << wt + j << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
-                // if (wt + j == 1) {
-                //     DPRINT << "large second var reduce iter: " << wt + j << ENDL();
-                //     dprint_tensix_dest_reg<true>(dst0);
-                // }
             }
-
-            // reconfig_data_format_srca(cb_xmm);
-            // copy_tile_init(cb_xmm);
-            // for (uint32_t j = 0; j < blk; j++) {
-            //     copy_tile(cb_xmm, j, 1);
-            //     add_binary_tile(dst0, 1, dst0);
-            // }
 
             cb_pop_front(cb_xmm2, blk);
 
@@ -266,40 +170,13 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
 
-            // DPRINT << "After reduce: " << wt << ENDL();
-            // dprint_tensix_dest_reg<true>(dst0);
             cb_reserve_back(pack_cb, onetile);
             pack_reconfig_data_format(pack_cb);
             pack_tile(dst0, pack_cb);
             tile_regs_release();
             cb_push_back(pack_cb, onetile);
-            // if (wt == 0) {
-            //     cb_wait_front(cb_ex2, onetile);
-            //     DPRINT << "large after first block " << ENDL();
-            //     tt::compute::common::print_full_tile(cb_ex2, 0, true);
-            // }
-            // DPRINT << "cb_scaler " << wt << ENDL();
-            // tt::compute::common::print_full_tile(cb_scaler, 0, true);
         }
 
-        // cb_wait_front(cb_fp32, onetile);
-        // // tt::compute::common::print_full_tile(cb_fp32, 0, true);
-        // tile_regs_acquire();
-        // tile_regs_wait();
-        // copy_tile_init(cb_fp32);
-        // copy_tile(cb_fp32, 0, dst0);
-        // tile_regs_commit();
-        // cb_reserve_back(cb_ex2, onetile);
-        // pack_reconfig_data_format(cb_ex2);
-        // pack_tile(dst0, cb_ex2);
-        // tile_regs_release();
-        // cb_push_back(cb_ex2, onetile);
-        // cb_pop_front(cb_fp32, onetile);
-        // DPRINT << "large cb_ex2" << ENDL();
-        // tt::compute::common::print_full_tile(cb_ex2, 0, true);
-
-        tile_regs_acquire();
-        tile_regs_wait();
         // End of
         // Var Calculation
         // Var(X) = ∑(x-E[x])^2
@@ -311,12 +188,9 @@ void MAIN {
         //  cb_ex2pe =   -------------
         //               √(Var(X) + ε)
         cb_wait_front(cb_ex2, onetile);
-        // DPRINT << "large var reduce result after first block" << ENDL();
-        // tt::compute::common::print_full_tile(cb_ex2, 0, true);
-
         reconfig_data_format(cb_ex2, cb_eps);
-        // tt::compute::common::print_full_tile(cb_ex2, 0, true);
-        // tt::compute::common::print_full_tile(cb_eps, 0, true);
+        tile_regs_acquire();
+
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
@@ -324,25 +198,24 @@ void MAIN {
         rsqrt_tile<LEGACY_RSQRT>(dst0);
 
         tile_regs_commit();
+        tile_regs_wait();
         pack_reconfig_data_format(cb_ex2pe);
         pack_tile(dst0, cb_ex2pe);
-        cb_push_back(cb_ex2pe, onetile);
         tile_regs_release();
-
+        cb_push_back(cb_ex2pe, onetile);
         cb_pop_front(cb_ex2, onetile);
-        cb_wait_front(cb_ex2pe, onetile);
-
-        // tt::compute::common::print_full_tile(cb_ex2pe, 0, true);
 
         // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
+        cb_wait_front(cb_ex2pe, onetile);
         tile_regs_acquire();
-        tile_regs_wait();
         reconfig_data_format_srca(cb_ex2pe);
+
         unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-
         cb_pop_front(cb_ex2pe, onetile);
+
         tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
         cb_push_back(cb_ex2pe, onetile);
@@ -361,7 +234,6 @@ void MAIN {
         //  √(Var(X)+ε)
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
-            tile_regs_wait();
             cb_wait_front(cb_ex, 1);
             cb_wait_front(cb_in, blk);
 #ifdef RMSNORM
@@ -389,6 +261,12 @@ void MAIN {
             cb_pop_front(cb_inb, blk);
 #endif
             tile_regs_commit();
+            tile_regs_wait();
+            // Note: We shouldn't have to pack to
+            // intermediate CB. We should be able to
+            // do a binary dest with reuse (as we used
+            // to). However, tt-llk #868 is preventing
+            // that from working at the moment.
             cb_reserve_back(cb_xmm, blk);
             pack_reconfig_data_format(cb_xmm);
             for (uint32_t j = 0; j < blk; j++) {
@@ -397,17 +275,16 @@ void MAIN {
             cb_push_back(cb_xmm, blk);
             tile_regs_release();
 
-            tile_regs_acquire();
-            tile_regs_wait();
             cb_wait_front(cb_xmm, blk);
-            // UNPACK(tt::compute::common::print_full_tile(cb_xmm, 0, true));
-
             reconfig_data_format(cb_xmm, cb_ex2pe);
+            tile_regs_acquire();
+
             mul_tiles_init(cb_xmm, cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
                 mul_tiles(cb_xmm, cb_ex2pe, j, 0, j);
             }
             tile_regs_commit();
+            tile_regs_wait();
 
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_fusion = cb_out;
@@ -420,39 +297,7 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_fusion, blk);
             cb_pop_front(cb_xmm, blk);
-            //             reconfig_data_format_srca(cb_in, cb_ex2pe);
-            // #ifdef FUSE_PRE_ADD
-            //             cb_wait_front(cb_inb, blk);
-            //             reconfig_data_format_srca(cb_ex2pe, cb_inb);
-            //             binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-            //             for (uint32_t j = 0; j < blk; j++) {
-            //                 binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
-            //             }
-            //             cb_pop_front(cb_inb, blk);
-            //             reconfig_data_format_srca(cb_inb, cb_ex2pe);
-            // #endif
-            //             cb_wait_front(cb_ex2pe, 1);
-            //             binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
-            //             for (uint32_t j = 0; j < blk; j++) {
-            //                 binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe, 0,
-            //                 j);
-            //             }
-            //             tile_regs_commit();
-            //             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-            //                 cb_xmm = cb_out;
-            //             }
-            //             pack_reconfig_data_format(cb_xmm);
-            //             cb_reserve_back(cb_xmm, blk);
-            //             for (uint32_t j = 0; j < blk; j++) {
-            //                 pack_tile(j, cb_xmm);
-            //             }
-            //             cb_push_back(cb_xmm, blk);
-            //             // if (wt == 0) {
-            //             //     cb_wait_front(cb_xmm, blk);
-            //             //     DPRINT << "large final first tile" << ENDL();
-            //             //     tt::compute::common::print_full_tile(cb_xmm, 0, true);
-            //             // }
-            //             tile_regs_release();
+
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();
                 tile_regs_wait();
