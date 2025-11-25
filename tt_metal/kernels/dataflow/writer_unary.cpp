@@ -19,8 +19,6 @@ void kernel_main() {
     experimental::Noc noc;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
-
         cb.wait_front(ublock_size_tiles);
         noc.async_write(
             cb,

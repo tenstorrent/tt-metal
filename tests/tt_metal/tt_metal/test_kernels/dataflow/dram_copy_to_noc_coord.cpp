@@ -90,7 +90,6 @@ void kernel_main() {
     }
 
     experimental::UnicastEndpoint dst_unicast_endpoint;
-    std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
     if (use_inline_dw_write) {
         // Just write something to trigger the watcher assertion. Result data doesn't matter.
         noc.inline_dw_write(
