@@ -10,7 +10,7 @@ Workspace Layout
 - You are running inside `.auto_triage/` and all helper scripts are already staged here.
 - The full `tt-metal` repository has been mirrored into `./workspace/`. Read any source files from there.
 - Stay in this directory. Run helper scripts as `./get_logs.sh`, `./download_data_between_commits.sh`, etc.
-- Data files live in `./auto_triage/data/` (also available via the `./data/` symlink), logs in `./auto_triage/logs/` (also exposed via `./logs/`), and outputs must go into `./auto_triage/output/` (`./output/`).
+- Data files live in `./auto_triage/data/` (also available via the `./data/` symlink), logs/annotations live in `./auto_triage/logs/` (`./logs/`), and outputs must go into `./auto_triage/output/` (`./output/`). Each job’s annotations (if downloaded) reside at `./logs/job_<job_id>/annotations.json`.
 - Never reference parent directories (e.g., `../`). Doing so will trigger permission denials.
 - Always read `./data/subjob_runs.json` (symlinked to `./auto_triage/data/subjob_runs.json`) for the list of recent runs (success vs failure). `boundaries_summary.json` is metadata only; do not rely on it for determinism checks.
 
