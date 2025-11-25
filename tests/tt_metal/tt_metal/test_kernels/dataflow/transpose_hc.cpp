@@ -87,63 +87,63 @@ void kernel_main() {
                             // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes
                             // per element
                             const uint32_t src_offs = ctoffs + c16offs + TADDR(htWT + wt) + sub_src_offs +
-                                                      ((h32 & (subtile_elements - 1U)) * tile_elements)
-                        };
-                        const uint64_t src_addr = batch_addr + src_offs;
+                                                      ((h32 & (subtile_elements - 1U)) * tile_elements);
+                            const uint64_t src_addr = batch_addr + src_offs;
 
-                        if (MISALIGNED) {
-                            // if source addr and dest addr don't share alignment then we need to read to the
-                            // intermediate buffer and then copy it to the correct location
-                            const uint32_t src_alignment =
-                                static_cast<uint32_t>(src_addr & static_cast<uint64_t>(ALIGNMENT_MASK));
-                            if ((dest_tr0_l1 & ALIGNMENT_MASK) != src_alignment) {
-                                // we write to the top of the intermediate buffer as that's aligned, and we write
-                                // from the closest align source address if source is not aligned to ALIGNMENT then
-                                // we go to the nearest address that is aligned and copy from there
-                                noc_async_read(src_addr - src_alignment, intermed_l1_scratch, ALIGNMENT);
-                                uint8_t* dest_tr0_l1_ptr = reinterpret_cast<uint8_t*>(dest_tr0_l1);
-                                // need the barrier to ensure that we can copy from the intermediate buffer
-                                noc_async_read_barrier();
-                                // if source is not aligned to ALIGNMENT then we need to skip forward by the amount
-                                // needed to align to get to the correct data
-                                ::memcpy(dest_tr0_l1_ptr, intermed_l1_scratch_ptr + src_alignment, SUBTILE_LINE_BYTES);
+                            if (MISALIGNED) {
+                                // if source addr and dest addr don't share alignment then we need to read to the
+                                // intermediate buffer and then copy it to the correct location
+                                const uint32_t src_alignment =
+                                    static_cast<uint32_t>(src_addr & static_cast<uint64_t>(ALIGNMENT_MASK));
+                                if ((dest_tr0_l1 & ALIGNMENT_MASK) != src_alignment) {
+                                    // we write to the top of the intermediate buffer as that's aligned, and we write
+                                    // from the closest align source address if source is not aligned to ALIGNMENT then
+                                    // we go to the nearest address that is aligned and copy from there
+                                    noc_async_read(src_addr - src_alignment, intermed_l1_scratch, ALIGNMENT);
+                                    uint8_t* dest_tr0_l1_ptr = reinterpret_cast<uint8_t*>(dest_tr0_l1);
+                                    // need the barrier to ensure that we can copy from the intermediate buffer
+                                    noc_async_read_barrier();
+                                    // if source is not aligned to ALIGNMENT then we need to skip forward by the amount
+                                    // needed to align to get to the correct data
+                                    ::memcpy(
+                                        dest_tr0_l1_ptr, intermed_l1_scratch_ptr + src_alignment, SUBTILE_LINE_BYTES);
+                                } else {
+                                    // this starts async NOC dma from DRAM to TR0_L1 buffer
+                                    noc_async_read(src_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                                }
                             } else {
-                                // this starts async NOC dma from DRAM to TR0_L1 buffer
                                 noc_async_read(src_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
                             }
-                        } else {
-                            noc_async_read(src_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+
+                            // the output address is just linearly incremented
+                            dest_tr0_l1 += SUBTILE_LINE_BYTES;
+                            c16offs += HW2;
                         }
+                        // subtiles are ordered like this:
+                        // 0 1
+                        // 2 3
+                        // Here we offset C by 16 starting with subtile=2
+                        if (sub == 1U) {  // after we are done with subtile 1, increment for sub=2
+                            cSubtileOffs += (HW2 * subtile_elements);  // 16*HWbytes, which is subtile vertical size
+                        }
+                    }  // sub<4
 
-                        // the output address is just linearly incremented
-                        dest_tr0_l1 += SUBTILE_LINE_BYTES;
-                        c16offs += HW2;
-                    }
-                    // subtiles are ordered like this:
-                    // 0 1
-                    // 2 3
-                    // Here we offset C by 16 starting with subtile=2
-                    if (sub == 1U) {  // after we are done with subtile 1, increment for sub=2
-                        cSubtileOffs += (HW2 * subtile_elements);  // 16*HWbytes, which is subtile vertical size
-                    }
-                }  // sub<4
+                    // block on all outstanding noc DMA requests to complete
+                    noc_async_read_barrier();
 
-                // block on all outstanding noc DMA requests to complete
-                noc_async_read_barrier();
-
-                // notifies the unpacker that the buffer is populated
-                cb_push_back(operand0, onetile);
+                    // notifies the unpacker that the buffer is populated
+                    cb_push_back(operand0, onetile);
+                }
+                // since src_addr for c term is ShapeW * ShapeH * C,
+                // We increment C Offset by HW2 * tile_elements
+                ctoffs += HW2 * tile_elements;
+            }  // ct loop
+            // multiplication-free computation of ht*WT, since ht = h/32
+            // since last h of tile increment source address W size
+            if ((h & (tile_elements - 1U)) == tile_elements - 1U) {
+                htWT += WT;
             }
-            // since src_addr for c term is ShapeW * ShapeH * C,
-            // We increment C Offset by HW2 * tile_elements
-            ctoffs += HW2 * tile_elements;
-        }  // ct loop
-        // multiplication-free computation of ht*WT, since ht = h/32
-        // since last h of tile increment source address W size
-        if ((h & (tile_elements - 1U)) == tile_elements - 1U) {
-            htWT += WT;
-        }
-    }  // h < H loop
-    batch_addr += CHW2;
-}  // n<N loop
+        }  // h < H loop
+        batch_addr += CHW2;
+    }  // n<N loop
 }
