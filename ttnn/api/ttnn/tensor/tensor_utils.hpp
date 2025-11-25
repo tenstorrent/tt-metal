@@ -63,5 +63,11 @@ struct ShardDivisionSpec {
 // Returns ShardDivisionSpecs given 2D shape and shard_shape
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
 
+// Automatically computes and fills in shard_spec for a MemoryConfig if it's sharded but missing shard_spec.
+// If input tensor has a shard_spec, it will be reused. Otherwise, a new shard_spec is computed based on
+// input tensor shape, memory layout, and device grid.
+// Returns the MemoryConfig with shard_spec filled in if needed, otherwise returns the original config.
+MemoryConfig compute_auto_shard_spec(const Tensor& input_tensor, const MemoryConfig& output_memory_config);
+
 }  // namespace tt_metal
 }  // namespace tt
