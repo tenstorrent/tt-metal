@@ -74,6 +74,7 @@ FIRST_FAILING_JOB_URL=""
 
 PROCESSED=0
 FOUND_SUCCESS=false
+STOP_SEARCH=false
 
 # Track the most recent failure we see, then when we find the last success,
 # that failure is the first failure after the success
@@ -128,7 +129,7 @@ while true; do
         PROCESSED=$((PROCESSED + 1))
         echo -n "[${PROCESSED}] Checking run ${RUN_ID} (${RUN_COMPLETED_AT})... "
 
-        # Fetch jobs page by page, stopping once we find the subjob
+        # Fetch jobs page by page, grabbing every completed attempt of the subjob
         PAGE_J=1
         FOUND_JOB=false
 
@@ -144,10 +145,98 @@ while true; do
                 break
             fi
 
-            SUBJOB=$(echo "$JOB_ENTRIES" | jq -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\")] | sort_by(.completed_at // .started_at // .run_started_at // .created_at) | if length > 0 then .[-1] else empty end" 2>/dev/null || echo "")
+            MATCHING_JOBS=$(echo "$JOB_ENTRIES" | jq -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\")] | sort_by((.run_attempt // 0), (.completed_at // .started_at // .run_started_at // .created_at // \"\"))" 2>/dev/null || echo "")
+            MATCH_COUNT=$(echo "$MATCHING_JOBS" | jq 'length' 2>/dev/null || echo "0")
 
-            if [ -n "$SUBJOB" ]; then
+            if [ "$MATCH_COUNT" -gt 0 ]; then
                 FOUND_JOB=true
+                while IFS= read -r SUBJOB; do
+                    JOB_CONCLUSION=$(echo "$SUBJOB" | jq -r '.conclusion // "null"')
+                    JOB_STATUS=$(echo "$SUBJOB" | jq -r '.status')
+                    JOB_ID=$(echo "$SUBJOB" | jq -r '.id')
+                    JOB_ATTEMPT=$(echo "$SUBJOB" | jq -r '.run_attempt // 1')
+                    JOB_COMPLETED_AT=$(echo "$SUBJOB" | jq -r '.completed_at // empty')
+                    JOB_URL="${BASE_URL}/actions/runs/${RUN_ID}/job/${JOB_ID}"
+
+                    if [ "$JOB_STATUS" != "completed" ]; then
+                        continue
+                    fi
+
+                    ENTRY_COMPLETED_AT="$RUN_COMPLETED_AT"
+                    if [ -n "$JOB_COMPLETED_AT" ]; then
+                        ENTRY_COMPLETED_AT="$JOB_COMPLETED_AT"
+                    fi
+
+                    if [ "$JOB_CONCLUSION" = "success" ]; then
+                        if [ "$FOUND_SUCCESS" = false ]; then
+                            LAST_SUCCESSFUL_RUN="$RUN_URL"
+                            LAST_SUCCESSFUL_RUN_ID="$RUN_ID"
+                            LAST_SUCCESSFUL_COMMIT="$RUN_COMMIT"
+                            LAST_SUCCESSFUL_JOB_URL="$JOB_URL"
+                            FOUND_SUCCESS=true
+                            SUBJOB_RUNS_JSON=$(jq -n \
+                                --arg status "success" \
+                                --arg run_url "$RUN_URL" \
+                                --arg job_url "$JOB_URL" \
+                                --arg run_id "$RUN_ID" \
+                                --arg job_id "$JOB_ID" \
+                                --arg commit "$RUN_COMMIT" \
+                                --arg completed_at "$ENTRY_COMPLETED_AT" \
+                                --argjson job_attempt "$JOB_ATTEMPT" \
+                                --argjson arr "$SUBJOB_RUNS_JSON" \
+                                --argjson run_number "$PROCESSED" \
+                                '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
+                            )
+
+                            if [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
+                                FIRST_FAILING_RUN="$MOST_RECENT_FAILURE_RUN"
+                                FIRST_FAILING_RUN_ID="$MOST_RECENT_FAILURE_RUN_ID"
+                                FIRST_FAILING_COMMIT="$MOST_RECENT_FAILURE_COMMIT"
+                                FIRST_FAILING_JOB_URL="$MOST_RECENT_FAILURE_JOB_URL"
+                            fi
+
+                            echo -e "${GREEN}✓ SUCCESS (last successful)${NC}"
+                            echo ""
+                            echo -e "${GREEN}Found last success and first failure - stopping search${NC}"
+                            STOP_SEARCH=true
+                            break
+                        fi
+                    elif [ "$JOB_CONCLUSION" = "failure" ]; then
+                        MOST_RECENT_FAILURE_RUN="$RUN_URL"
+                        MOST_RECENT_FAILURE_RUN_ID="$RUN_ID"
+                        MOST_RECENT_FAILURE_COMMIT="$RUN_COMMIT"
+                        MOST_RECENT_FAILURE_JOB_URL="$JOB_URL"
+                        echo -e "${RED}✗ FAILURE${NC}"
+                        FAILED_RUNS_JSON=$(jq -n \
+                            --arg run_url "$RUN_URL" \
+                            --arg job_url "$JOB_URL" \
+                            --arg run_id "$RUN_ID" \
+                            --arg job_id "$JOB_ID" \
+                            --arg commit "$RUN_COMMIT" \
+                            --arg completed_at "$ENTRY_COMPLETED_AT" \
+                            --argjson job_attempt "$JOB_ATTEMPT" \
+                            --arg conclusion "$JOB_CONCLUSION" \
+                            --argjson arr "$FAILED_RUNS_JSON" \
+                            --argjson run_number "$PROCESSED" \
+                            '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, conclusion:$conclusion, run_number:$run_number}]' \
+                        )
+                        SUBJOB_RUNS_JSON=$(jq -n \
+                            --arg status "failure" \
+                            --arg run_url "$RUN_URL" \
+                            --arg job_url "$JOB_URL" \
+                            --arg run_id "$RUN_ID" \
+                            --arg job_id "$JOB_ID" \
+                            --arg commit "$RUN_COMMIT" \
+                            --arg completed_at "$ENTRY_COMPLETED_AT" \
+                            --argjson job_attempt "$JOB_ATTEMPT" \
+                            --argjson arr "$SUBJOB_RUNS_JSON" \
+                            --argjson run_number "$PROCESSED" \
+                            '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
+                        )
+                    else
+                        echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
+                    fi
+                done < <(echo "$MATCHING_JOBS" | jq -c '.[]')
                 break
             fi
 
@@ -158,103 +247,25 @@ while true; do
             PAGE_J=$((PAGE_J + 1))
         done
 
-        if [ "$FOUND_JOB" = false ] || [ -z "$SUBJOB" ]; then
+        if [ "$FOUND_JOB" = false ]; then
             echo -e "${YELLOW}Subjob not found${NC}"
             continue
         fi
 
-        JOB_CONCLUSION=$(echo "$SUBJOB" | jq -r '.conclusion // "null"')
-        JOB_STATUS=$(echo "$SUBJOB" | jq -r '.status')
-        JOB_ID=$(echo "$SUBJOB" | jq -r '.id')
-        JOB_ATTEMPT=$(echo "$SUBJOB" | jq -r '.run_attempt // 1')
-        JOB_COMPLETED_AT=$(echo "$SUBJOB" | jq -r '.completed_at // empty')
-        JOB_URL="${BASE_URL}/actions/runs/${RUN_ID}/job/${JOB_ID}"
-
-        if [ "$JOB_STATUS" != "completed" ]; then
-            echo -e "${YELLOW}Job not completed${NC}"
-            continue
-        fi
-
-        ENTRY_COMPLETED_AT="$RUN_COMPLETED_AT"
-        if [ -n "$JOB_COMPLETED_AT" ]; then
-            ENTRY_COMPLETED_AT="$JOB_COMPLETED_AT"
-        fi
-
-        if [ "$JOB_CONCLUSION" = "success" ]; then
-            if [ "$FOUND_SUCCESS" = false ]; then
-                LAST_SUCCESSFUL_RUN="$RUN_URL"
-                LAST_SUCCESSFUL_RUN_ID="$RUN_ID"
-                LAST_SUCCESSFUL_COMMIT="$RUN_COMMIT"
-                LAST_SUCCESSFUL_JOB_URL="$JOB_URL"
-                FOUND_SUCCESS=true
-                SUBJOB_RUNS_JSON=$(jq -n \
-                    --arg status "success" \
-                    --arg run_url "$RUN_URL" \
-                    --arg job_url "$JOB_URL" \
-                    --arg run_id "$RUN_ID" \
-                    --arg job_id "$JOB_ID" \
-                    --arg commit "$RUN_COMMIT" \
-                    --arg completed_at "$ENTRY_COMPLETED_AT" \
-                    --argjson job_attempt "$JOB_ATTEMPT" \
-                    --argjson arr "$SUBJOB_RUNS_JSON" \
-                    --argjson run_number "$PROCESSED" \
-                    '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
-                )
-
-                if [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
-                    FIRST_FAILING_RUN="$MOST_RECENT_FAILURE_RUN"
-                    FIRST_FAILING_RUN_ID="$MOST_RECENT_FAILURE_RUN_ID"
-                    FIRST_FAILING_COMMIT="$MOST_RECENT_FAILURE_COMMIT"
-                    FIRST_FAILING_JOB_URL="$MOST_RECENT_FAILURE_JOB_URL"
-                fi
-
-                echo -e "${GREEN}✓ SUCCESS (last successful)${NC}"
-                echo ""
-                echo -e "${GREEN}Found last success and first failure - stopping search${NC}"
-                break
-            fi
-        elif [ "$JOB_CONCLUSION" = "failure" ]; then
-            MOST_RECENT_FAILURE_RUN="$RUN_URL"
-            MOST_RECENT_FAILURE_RUN_ID="$RUN_ID"
-            MOST_RECENT_FAILURE_COMMIT="$RUN_COMMIT"
-            MOST_RECENT_FAILURE_JOB_URL="$JOB_URL"
-            echo -e "${RED}✗ FAILURE${NC}"
-            FAILED_RUNS_JSON=$(jq -n \
-                --arg run_url "$RUN_URL" \
-                --arg job_url "$JOB_URL" \
-                --arg run_id "$RUN_ID" \
-                --arg job_id "$JOB_ID" \
-                --arg commit "$RUN_COMMIT" \
-                --arg completed_at "$ENTRY_COMPLETED_AT" \
-                --argjson job_attempt "$JOB_ATTEMPT" \
-                --arg conclusion "$JOB_CONCLUSION" \
-                --argjson arr "$FAILED_RUNS_JSON" \
-                --argjson run_number "$PROCESSED" \
-                '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, conclusion:$conclusion, run_number:$run_number}]' \
-            )
-            SUBJOB_RUNS_JSON=$(jq -n \
-                --arg status "failure" \
-                --arg run_url "$RUN_URL" \
-                --arg job_url "$JOB_URL" \
-                --arg run_id "$RUN_ID" \
-                --arg job_id "$JOB_ID" \
-                --arg commit "$RUN_COMMIT" \
-                --arg completed_at "$ENTRY_COMPLETED_AT" \
-                --argjson job_attempt "$JOB_ATTEMPT" \
-                --argjson arr "$SUBJOB_RUNS_JSON" \
-                --argjson run_number "$PROCESSED" \
-                '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
-            )
-        else
-            echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
+        if [ "$STOP_SEARCH" = true ]; then
+            break
         fi
     done < <(echo "$VALID_PAGE" | jq -c '.[]')
 
-    if [ "$FOUND_SUCCESS" = true ]; then
+    if [ "$FOUND_SUCCESS" = true ] || [ "$STOP_SEARCH" = true ]; then
         break
     fi
 
     PAGE=$((PAGE + 1))
+
+    if [ "$STOP_SEARCH" = true ]; then
+        break
+    fi
 done
 
 echo ""
