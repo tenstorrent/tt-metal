@@ -39,4 +39,4 @@ jobs:
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
     secrets: inherit
-  
+
