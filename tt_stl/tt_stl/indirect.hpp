@@ -2,45 +2,64 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <initializer_list>
 #include <memory>
 #include <type_traits>
 #include <utility>
 
 /**
- * This is an implementation of C++26 compliant std::indirect without allocator support.
- * When we switch in C++26, please replace and alias this class as
+ * @file indirect.hpp
+ * @brief Implementation of C++26 compliant std::indirect without allocator support.
  *
- * ```C++
+ * This is an implementation of C++26's std::indirect that provides value semantics
+ * for dynamically allocated objects. When migrating to C++26, replace with:
+ *
+ * @code{.cpp}
  * template<typename T>
  * using ttsl::indirect = std::indirect<T>;
- * ```
+ * @endcode
  *
- * Please refer to cppreference/ eel.is for documentation.
+ * For detailed documentation, refer to:
+ * - https://en.cppreference.com/w/cpp/memory/indirect
+ * - https://eel.is/c++draft/indirect
  */
 
+/**
+ * @namespace ttsl
+ * @brief Tenstorrent Standard Library namespace containing utility types and functions.
+ */
 namespace ttsl {
 
 /**
- * Implementation of std::indirect without allocator support.
+ * @brief Implementation of std::indirect without allocator support.
  *
- * Indirect manages the lifetime of owned object (like a unique_ptr) while retaining value semantic.
+ * @tparam T The type of object to manage indirectly.
  *
- * By value semantic, it means that The behavior of special functions like copy assignment/ construction of indirect is
- * the same as it's underlying type (unlike that of unique_ptr, which is deleted).
+ * `indirect` manages the lifetime of an owned object (like `unique_ptr`) while providing value semantics.
  *
- * Indirect also handles const propogation correctly as if it's the underlying value. e.g. a dereference to a const
- * indirect returns a const reference. Unlike a pointer semantic where the pointer and the pointed-to type can exhibit
- * different const properties.
+ * ## Value Semantics
+ * Unlike `unique_ptr`, which has deleted copy operations, `indirect` provides copy construction and
+ * copy assignment that behave like the underlying type T. This means copying an `indirect<T>` creates
+ * a deep copy of the managed object.
  *
- * This class is very helpful for pimpl pattern, where the wrapper class needs to act like the internal class on
- * capabilities like copy, assignment and const correctness.
+ * ## Const Propagation
+ * `indirect` correctly propagates const-qualification to the managed object. For example, dereferencing
+ * a `const indirect<T>` returns a `const T&`. This differs from pointer semantics where the pointer
+ * and pointed-to object can have independent const-qualification.
  *
- * Note that
- * - indirect have a move-from state similar to unique_ptr, where the indirect will become valueless and essentially a
- * null pointer.
- * - The owned type can be an incomplete type (as would be required by pimpl).
- * - Dereference a R-value indirect is safe, as the managed object will be moved out.
+ * ## Use Cases
+ * This class is particularly useful for the PImpl (Pointer to Implementation) idiom, where the wrapper
+ * class needs to preserve value semantics (copy, assignment) and const-correctness of the internal class.
+ *
+ * ## Important Notes
+ * - `indirect` has a move-from state similar to `unique_ptr`. After being moved from, the `indirect`
+ *   becomes valueless (essentially a null pointer). Check with `valueless_after_move()`.
+ * - The managed type T can be an incomplete type (as required by PImpl pattern).
+ * - Dereferencing an rvalue `indirect` is safe; the managed object will be moved out.
+ *
+ * @see https://en.cppreference.com/w/cpp/memory/indirect
  */
 template <typename T>
 class indirect {
@@ -50,16 +69,16 @@ public:
     using const_pointer = /* allocator_traits<Allocator>::const_pointer */ const T*;
 
     /**
-     * Construct an owned object with the default initializer
+     * @brief Constructs an owned object using default initialization.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     constexpr explicit indirect() : p(std::make_unique<T>()) {}
 
     /**
-     * Construct an owned object that is the copy of *other
+     * Construct an owned object that is the copy of *other.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     constexpr indirect(const indirect& other) {
         if (other.p) {
@@ -69,21 +88,21 @@ public:
 
     /**
      * Transfer the ownership of other's owned object. The underlying object will not be moved and other will enter
-     * valueless state.  Similiar move constructing a unique_ptr.
+     * valueless state. Similar to move constructing a unique_ptr.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     constexpr indirect(indirect&& other) noexcept {
         std::swap(this->p, other.p);
         other.p.release();
     }
 
-    /*
+    /**
      * Construct an owned object with std::forward<U>(u).
      *
-     * This is often helpful to do with conversion operators.
+     * This is often helpful with conversion operators.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     template <class U = T>
     constexpr explicit indirect(U&& u)
@@ -92,13 +111,13 @@ public:
             !std::is_same_v<std::remove_cvref_t<U>, std::in_place_t> &&  //
             std::is_constructible_v<T, U>)
     {
-        this->p = std::make_unique<T>(std::forward<T>(u));
+        this->p = std::make_unique<T>(std::forward<U>(u));
     }
 
     /**
-     * Inplace construct an owned object using us... similar to std::make_unique
+     * In-place construct an owned object using us..., similar to std::make_unique.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     template <class... Us>
     constexpr explicit indirect(std::in_place_t, Us&&... us)
@@ -108,9 +127,9 @@ public:
     }
 
     /**
-     * Inplace construct an owned object using initializer list (and other (us...) args)
+     * In-place construct an owned object using initializer list (and other us... args).
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/indirect.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/indirect
      */
     template <class I, class... Us>
     constexpr explicit indirect(std::in_place_t, std::initializer_list<I> ilist, Us&&... us)
@@ -126,7 +145,7 @@ public:
     /**
      * Copy assigns the internally owned object with other.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
      */
     constexpr indirect& operator=(const indirect& other) {
         if (std::addressof(other) == this) {
@@ -144,10 +163,10 @@ public:
     }
 
     /**
-     * Transfers the ownership of owned object from other to this. The underlying object will not be move assigned, and
-     * other will be in a valueless state.
+     * Transfers the ownership of the owned object from other to this. The underlying object will not be move assigned,
+     * and other will be in a valueless state.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
      */
     constexpr indirect& operator=(indirect&& other) noexcept {
         if (std::addressof(other) == this) {
@@ -161,7 +180,7 @@ public:
     /**
      * Move assigns the underlying object with u.
      *
-     * See also: https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
+     * @see https://en.cppreference.com/w/cpp/memory/indirect/operator=.html
      */
     template <class U = T>
     constexpr indirect& operator=(U&& u)
@@ -171,7 +190,7 @@ public:
             std::is_assignable_v<T&, U>)
     {
         if (this->valueless_after_move()) {
-            this->p = std::make_unique<U>(std::forward<U>(u));
+            this->p = std::make_unique<T>(std::forward<U>(u));
         } else {
             **this = std::forward<U>(u);
         }
@@ -184,16 +203,16 @@ public:
     constexpr const T& operator*() const& noexcept { return *p; }
     /* Obtain a (mutable) reference to the owned object. */
     constexpr T& operator*() & noexcept { return *p; }
-    /* Obtain a const R-value reference to the owned object. */
+    /* Obtain a const rvalue reference to the owned object. */
     constexpr const T&& operator*() const&& noexcept { return std::move(*p); }
-    /* Obtain a mutable R-value reference to the owned object. */
+    /* Obtain a mutable rvalue reference to the owned object. */
     constexpr T&& operator*() && noexcept { return std::move(*p); }
-    /* Obtain a const pointer to the owned object */
+    /* Obtain a const pointer to the owned object. */
     constexpr const_pointer operator->() const noexcept { return p.get(); }
-    /* Obtain a mutable pointer to the owned object */
+    /* Obtain a mutable pointer to the owned object. */
     constexpr pointer operator->() noexcept { return p.get(); }
-    /* Checks if this class is in a moved from state, this can happen if this object has been used to move construct/
-     * move assign other indirects, think unique_ptr */
+    /* Checks if this is in a moved-from state (can happen after being used to move construct/assign other indirects).
+     */
     constexpr bool valueless_after_move() const noexcept { return !bool(p); }
 
     // [indirect.swap], swap
