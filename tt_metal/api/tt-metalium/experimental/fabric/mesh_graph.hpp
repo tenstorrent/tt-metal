@@ -25,6 +25,7 @@
 namespace tt {
 namespace tt_metal {
 enum class ClusterType : std::uint8_t;
+class PhysicalSystemDescriptor;
 }  // namespace tt_metal
 }  // namespace tt
 namespace tt::tt_fabric {
@@ -146,6 +147,10 @@ public:
         tt::tt_metal::ClusterType cluster_type,
         const std::string& root_dir,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
+
+    // Generate a mesh graph based on the physical system descriptor
+    static MeshGraph generate_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;

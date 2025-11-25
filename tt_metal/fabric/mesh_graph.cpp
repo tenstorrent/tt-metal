@@ -21,6 +21,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
@@ -810,6 +811,16 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
     auto it = intra_mesh_relaxed_policy_.find(mesh_id);
     TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
     return it->second;
+}
+
+MeshGraph MeshGraph::generate_from_physical_system_descriptor(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    // TODO: Implement mesh graph generation from physical system descriptor
+    TT_THROW("Not implemented yet");
+
+    // Come up with the biggest mesh that can be formed by the physical system descriptor based on number of chips
+
+    // Form a mesh graph of that size and return it
 }
 
 }  // namespace tt::tt_fabric

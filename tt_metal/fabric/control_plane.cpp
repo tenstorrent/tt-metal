@@ -482,6 +482,48 @@ void ControlPlane::init_control_plane(
     this->mesh_graph_->print_connectivity();
 }
 
+void ControlPlane::init_control_plane_auto_discovery(
+    std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
+        logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+
+    // NOTE: This algorithm is only supported for single host systems for now
+    // FIXME: NOTE TO SELF: This might show up in cluster validation script please run and test before merging
+    TT_FATAL(
+        *distributed_context->size() == 1,
+        "Auto discovery is only supported for single host systems, since you are running on a {} host system,"
+        "please specify a rank binding file via the tt-run argument --rank-binding argument",
+        *distributed_context->size());
+
+    // Initialize physical system descriptor
+    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+
+    // Generate Mesh graph based on physical system descriptor
+
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        // Initialize topology mapper with provided mapping, skipping discovery
+        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *this->routing_table_generator_->mesh_graph,
+            *this->physical_system_descriptor_,
+            this->local_mesh_binding_,
+            logical_mesh_chip_id_to_physical_chip_id_mapping->get());
+        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
+    } else {
+        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
+        this->load_physical_chip_mapping(
+            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+    }
+}
+
+ControlPlane::ControlPlane() { init_control_plane_auto_discovery(std::nullopt); }
+
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
 }

@@ -992,4 +992,12 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
         std::runtime_error);
 }
 
+TEST_F(ControlPlaneFixture, Test2xP300DisconnectedFabric2DSanity) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    tt::tt_metal::MetalContext::instance().get_control_plane();
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

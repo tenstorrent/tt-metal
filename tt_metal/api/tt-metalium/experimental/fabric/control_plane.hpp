@@ -75,6 +75,7 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
+    ControlPlane();
     explicit ControlPlane(const std::string& mesh_graph_desc_file);
     explicit ControlPlane(
         const std::string& mesh_graph_desc_file,
@@ -223,6 +224,10 @@ private:
 
     void init_control_plane(
         const std::string& mesh_graph_desc_file,
+        std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
+            logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
+
+    void init_control_plane_auto_discovery(
         std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
 
