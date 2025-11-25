@@ -11,6 +11,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <device_pool.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -203,6 +204,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseSwitchMeshDevice) {
 
     // Only test switch mesh (mesh_id 1)
     if (mesh_id_val != 1) {
+        initialize_fabric_on_all_devices();
         GTEST_SKIP() << "This test is for switch mesh only (mesh_id 1)";
     }
 
@@ -326,6 +328,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnSwitchFabricNodes) {
 
     // Only test switch mesh (mesh_id 1)
     if (mesh_id_val != 1) {
+        initialize_fabric_on_all_devices();
         GTEST_SKIP() << "This test is for switch mesh only (mesh_id 1)";
     }
 
