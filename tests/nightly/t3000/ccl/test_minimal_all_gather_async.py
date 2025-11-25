@@ -109,6 +109,7 @@ def run_all_gather_impl(
     num_l1_banks=64,
     all_gather_function=ttnn.experimental.all_gather_async,
     use_semaphore_free_all_gather_impl=False,
+    sub_core_grids=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -229,6 +230,7 @@ def run_all_gather_impl(
                 memory_config=mem_config_ag,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
+                sub_core_grids=sub_core_grids,
             )
         else:
             logger.info(f"Using experimental all-gather")
@@ -246,6 +248,7 @@ def run_all_gather_impl(
                 chunks_per_sync=chunks_per_sync,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                sub_core_grids=sub_core_grids,
             )
 
         return tt_all_gather_out_tensor

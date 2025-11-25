@@ -46,7 +46,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool use_optimal_ccl_for_llama,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet> sub_core_grid) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet> sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -58,7 +58,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     use_optimal_ccl_for_llama,
                     barrier_semaphore,
                     false,
-                    sub_core_grid);
+                    sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -70,7 +70,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt,
             py::arg("use_optimal_ccl_for_llama") = false,
             py::arg("barrier_semaphore") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt},
 
         // ring
         ttnn::pybind_overload_t{
@@ -89,7 +89,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                std::optional<uint32_t> chunks_per_sync,
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
-               const std::optional<CoreRangeSet> sub_core_grid) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet> sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffer,
@@ -106,7 +106,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     num_workers_per_link,
                     num_buffers_per_channel,
                     false,
-                    sub_core_grid);
+                    sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffer"),
@@ -123,7 +123,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("chunks_per_sync") = std::nullopt,
             py::arg("num_workers_per_link") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt},
 
         // line
         ttnn::pybind_overload_t{
@@ -140,7 +140,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                bool use_optimal_ccl_for_llama,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet> sub_core_grid) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet> sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -155,7 +155,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     use_optimal_ccl_for_llama,
                     barrier_semaphore,
                     false,
-                    sub_core_grid);
+                    sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -170,7 +170,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt,
             py::arg("use_optimal_ccl_for_llama") = false,
             py::arg("barrier_semaphore") = std::nullopt,
-            py::arg("sub_core_grid") = std::nullopt});
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace
