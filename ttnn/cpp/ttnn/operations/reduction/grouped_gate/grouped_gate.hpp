@@ -12,12 +12,12 @@ struct GroupedGateOperation {
     static std::array<Tensor, 2> invoke(
         const Tensor& scores,
         const Tensor& bias,
-        const uint32_t n_groups,
-        const uint32_t summed_experts_per_group,
-        const uint32_t topk_groups,
-        const uint32_t n_activated_experts,
-        const float route_scale = 1.0f,
-        const float epsilon = 1e-5f,
+        uint32_t n_groups,
+        uint32_t summed_experts_per_group,
+        uint32_t topk_groups,
+        uint32_t n_activated_experts,
+        float route_scale = 1.0f,
+        float epsilon = 1e-5f,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 

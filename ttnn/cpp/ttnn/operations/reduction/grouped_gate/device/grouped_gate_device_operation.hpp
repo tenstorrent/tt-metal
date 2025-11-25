@@ -69,12 +69,12 @@ struct GroupedGateDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& scores,
         const Tensor& bias,
-        const uint32_t n_groups,
-        const uint32_t summed_experts_per_group,
-        const uint32_t topk_groups,
-        const uint32_t n_activated_experts,
-        const float route_scale,
-        const float epsilon,
+        uint32_t n_groups,
+        uint32_t summed_experts_per_group,
+        uint32_t topk_groups,
+        uint32_t n_activated_experts,
+        float route_scale,
+        float epsilon,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
