@@ -309,3 +309,24 @@ def start_measuring_time() -> int:
 
 def stop_measuring_time(start_time) -> int:
     return time.time_ns() - start_time
+
+
+def maybe_trace(op_func, enable_trace, device):
+    if enable_trace:
+        # Compile the op
+        output = op_func()
+        ttnn.synchronize_device(device)
+
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        output = op_func()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        # Execute trace
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.release_trace(device, trace_id)
+        ttnn.synchronize_device(device)
+    else:
+        output = op_func()
+    return output
