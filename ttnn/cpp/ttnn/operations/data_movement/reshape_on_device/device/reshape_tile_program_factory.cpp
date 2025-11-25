@@ -11,8 +11,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::data_movement::detail {
 
 ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
@@ -44,7 +42,7 @@ ReshapeTileProgramFactory::cached_program_t ReshapeTileProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    uint32_t alignment = src0_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {alignment};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
