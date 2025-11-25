@@ -149,7 +149,7 @@ string get_noc_target_str(
     tt::ChipId device_id,
     HalProgrammableCoreType programmable_core_type,
     int noc,
-    dev_msgs::debug_sanitize_noc_addr_msg_t::ConstView san) {
+    dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     auto get_core_and_mem_type = [](tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
@@ -199,6 +199,16 @@ string get_noc_target_str(
     }
 
     out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san.noc_addr()));
+    return out;
+}
+
+string get_l1_target_str(
+    HalProgrammableCoreType programmable_core_type, dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
+    string out = fmt::format(
+        "{} core overflowed L1 with access to {:#x} of length {}",
+        get_riscv_name(programmable_core_type, san.which_risc()),
+        san.l1_addr(),
+        san.len());
     return out;
 }
 
@@ -631,18 +641,16 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
 }
 
 void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
-    auto san = mbox_data_.watcher().sanitize_noc()[noc];
+    auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
     string error_reason;
 
     switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeNocOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
-                san.l1_addr() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san.len() != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
-                san.which_risc() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
-                san.is_write() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+        case dev_msgs::DebugSanitizeOK:
+            if (san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 || san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 ||
+                san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 || san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
+                san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 || san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
+                san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8) {
                 error_msg = fmt::format(
                     "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
                     virtual_coord_.str(),
@@ -696,6 +704,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
+        case dev_msgs::DebugSanitizeL1AddrOverflow:
+            error_msg = get_l1_target_str(programmable_core_type_, san);
+            error_msg += " (read or write past the end of local memory).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -720,8 +732,8 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
-        if (assert_status.line_num() != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-            assert_status.which() != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+        if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
+            assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
