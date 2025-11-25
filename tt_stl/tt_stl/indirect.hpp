@@ -223,11 +223,17 @@ public:
     // [indirect.relops], relational operators
     template <class U>
     friend constexpr bool operator==(const indirect& lhs, const indirect<U>& rhs) noexcept(noexcept(*lhs == *rhs)) {
+        if (lhs.valueless_after_move() || rhs.valueless_after_move()) {
+            return lhs.valueless_after_move() && rhs.valueless_after_move();
+        }
         return *lhs == *rhs;
     }
 
     template <class U>
     friend constexpr auto operator<=>(const indirect& lhs, const indirect<U>& rhs) {
+        if (lhs.valueless_after_move() || rhs.valueless_after_move()) {
+            return !lhs.valueless_after_move() <=> !rhs.valueless_after_move();
+        }
         return *lhs <=> *rhs;
     }
 
