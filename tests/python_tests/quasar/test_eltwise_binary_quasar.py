@@ -46,7 +46,6 @@ ELTWISE_DIMENSIONS = [
             DataFormat.Float16_b,
             DataFormat.Float16,
         ],
-        same=True,
     ),
     mathop=[
         MathOperation.Elwadd,

@@ -64,7 +64,6 @@ void run_kernel()
     {
         _llk_unpack_binary_operands_(i, i);
     }
-    _llk_unpack_dest_dvalid_section_done_();
 }
 
 #endif

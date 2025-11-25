@@ -46,7 +46,7 @@ void run_kernel()
     td_val.buf_desc_id     = BUF_DESC_ID;
     td_val.reg_data_format = static_cast<uint8_t>(formats.unpack_dst);
 
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if (is_fp32_dest_acc_en)
     {
         // If Dst fmt is 32b and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);

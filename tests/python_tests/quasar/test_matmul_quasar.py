@@ -59,7 +59,6 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.Float16,
         DataFormat.Float16_b,
     ],
-    same=True,
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 IMPLIED_MATH_FORMAT = [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
@@ -93,11 +92,6 @@ def test_matmul(
     transpose,
 ):
     input_A_dimensions, input_B_dimensions, dest_acc = dimensions_dest_acc
-
-    if (format.input_format, dest_acc) == (DataFormat.Float16, DestAccumulation.Yes):
-        pytest.skip(
-            "Float16 with 32-bit dest or Float32 without 32-bit dest is not supported"
-        )
 
     torch_format = format_dict[format.output_format]
 
