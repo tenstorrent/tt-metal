@@ -108,7 +108,7 @@ while true; do
     TOTAL_RUNS_FETCHED=$((TOTAL_RUNS_FETCHED + PAGE_TOTAL))
     echo -e "${GREEN}Fetched ${TOTAL_RUNS_FETCHED} workflow runs so far (page ${PAGE})${NC}"
 
-    VALID_PAGE=$(echo "$RUNS_PAGE" | jq -r "[.[] | select(.head_branch == \"main\" and .status == \"completed\" and .conclusion != \"cancelled\")]")
+    VALID_PAGE=$(echo "$RUNS_PAGE" | jq -r "[.[] | select(.head_branch == \"main\" and ((.status == \"completed\") or (.status == \"in_progress\") or (.status == \"waiting\") or (.status == \"queued\")) and (.conclusion != \"cancelled\"))]")
     VALID_COUNT=$(echo "$VALID_PAGE" | jq 'length')
 
     if [ "$VALID_COUNT" -eq 0 ]; then
@@ -133,18 +133,18 @@ while true; do
         FOUND_JOB=false
 
         while [ "$FOUND_JOB" = false ]; do
-            PAGE_JOBS=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${PER_PAGE}&page=${PAGE_J}" --jq '[.jobs[] | {name, conclusion, status, id}]' 2>/dev/null || echo "[]")
+            PAGE_JOBS=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=${PER_PAGE}&page=${PAGE_J}" 2>/dev/null || echo "")
 
-            if [ "$PAGE_JOBS" = "[]" ] || [ -z "$PAGE_JOBS" ]; then
+            if [ -z "$PAGE_JOBS" ]; then
                 break
             fi
-
-            JOB_COUNT=$(echo "$PAGE_JOBS" | jq 'length' 2>/dev/null || echo "0")
+            JOB_ENTRIES=$(echo "$PAGE_JOBS" | jq '.jobs // []')
+            JOB_COUNT=$(echo "$JOB_ENTRIES" | jq 'length' 2>/dev/null || echo "0")
             if [ "$JOB_COUNT" -eq 0 ]; then
                 break
             fi
 
-            SUBJOB=$(echo "$PAGE_JOBS" | jq -r ".[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\")))" || echo "")
+            SUBJOB=$(echo "$JOB_ENTRIES" | jq -c "[.[] | select(.name == \"${SUBJOB_NAME}\" or .name == \"single-card-demo-tests / ${SUBJOB_NAME}\" or .name == \"${WORKFLOW_NAME} / ${SUBJOB_NAME}\" or (.name | endswith(\"${SUBJOB_NAME}\")) or (.name | contains(\"${SUBJOB_NAME}\"))) | select(.status == \"completed\")] | sort_by(.completed_at // .started_at // .run_started_at // .created_at) | if length > 0 then .[-1] else empty end" 2>/dev/null || echo "")
 
             if [ -n "$SUBJOB" ]; then
                 FOUND_JOB=true
@@ -166,11 +166,18 @@ while true; do
         JOB_CONCLUSION=$(echo "$SUBJOB" | jq -r '.conclusion // "null"')
         JOB_STATUS=$(echo "$SUBJOB" | jq -r '.status')
         JOB_ID=$(echo "$SUBJOB" | jq -r '.id')
+        JOB_ATTEMPT=$(echo "$SUBJOB" | jq -r '.run_attempt // 1')
+        JOB_COMPLETED_AT=$(echo "$SUBJOB" | jq -r '.completed_at // empty')
         JOB_URL="${BASE_URL}/actions/runs/${RUN_ID}/job/${JOB_ID}"
 
         if [ "$JOB_STATUS" != "completed" ]; then
             echo -e "${YELLOW}Job not completed${NC}"
             continue
+        fi
+
+        ENTRY_COMPLETED_AT="$RUN_COMPLETED_AT"
+        if [ -n "$JOB_COMPLETED_AT" ]; then
+            ENTRY_COMPLETED_AT="$JOB_COMPLETED_AT"
         fi
 
         if [ "$JOB_CONCLUSION" = "success" ]; then
@@ -187,10 +194,11 @@ while true; do
                     --arg run_id "$RUN_ID" \
                     --arg job_id "$JOB_ID" \
                     --arg commit "$RUN_COMMIT" \
-                    --arg completed_at "$RUN_COMPLETED_AT" \
+                    --arg completed_at "$ENTRY_COMPLETED_AT" \
+                    --argjson job_attempt "$JOB_ATTEMPT" \
                     --argjson arr "$SUBJOB_RUNS_JSON" \
                     --argjson run_number "$PROCESSED" \
-                    '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, run_number:$run_number}]' \
+                    '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
                 )
 
                 if [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
@@ -217,11 +225,12 @@ while true; do
                 --arg run_id "$RUN_ID" \
                 --arg job_id "$JOB_ID" \
                 --arg commit "$RUN_COMMIT" \
-                --arg completed_at "$RUN_COMPLETED_AT" \
+                --arg completed_at "$ENTRY_COMPLETED_AT" \
+                --argjson job_attempt "$JOB_ATTEMPT" \
                 --arg conclusion "$JOB_CONCLUSION" \
                 --argjson arr "$FAILED_RUNS_JSON" \
                 --argjson run_number "$PROCESSED" \
-                '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, conclusion:$conclusion, run_number:$run_number}]' \
+                '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, conclusion:$conclusion, run_number:$run_number}]' \
             )
             SUBJOB_RUNS_JSON=$(jq -n \
                 --arg status "failure" \
@@ -230,10 +239,11 @@ while true; do
                 --arg run_id "$RUN_ID" \
                 --arg job_id "$JOB_ID" \
                 --arg commit "$RUN_COMMIT" \
-                --arg completed_at "$RUN_COMPLETED_AT" \
+                --arg completed_at "$ENTRY_COMPLETED_AT" \
+                --argjson job_attempt "$JOB_ATTEMPT" \
                 --argjson arr "$SUBJOB_RUNS_JSON" \
                 --argjson run_number "$PROCESSED" \
-                '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, run_number:$run_number}]' \
+                '$arr + [{status:$status, run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, run_number:$run_number}]' \
             )
         else
             echo -e "${YELLOW}Conclusion: ${JOB_CONCLUSION}${NC}"
