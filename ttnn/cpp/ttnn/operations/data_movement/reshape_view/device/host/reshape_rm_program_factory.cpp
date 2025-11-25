@@ -8,7 +8,6 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"

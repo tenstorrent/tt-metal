@@ -8,9 +8,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,6 +41,30 @@ using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>
 using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
 using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
 using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
+
+/**
+ * @brief Centralized representation of chip topology information
+ *
+ * This struct contains all information about a chip's topology mapping.
+ * Fields are filled incrementally during mapping construction.
+ * Uninitialized fields remain in their default state until filled.
+ */
+struct MappedChipInfo {
+    // Core mapping information
+    FabricNodeId fabric_node_id{MeshId{0}, 0};
+    tt::tt_metal::AsicID asic_id{0};
+    ChipId physical_chip_id = 0;
+
+    // Mesh coordinate information
+    MeshCoordinate mesh_coord{0, 0};
+
+    // Host information
+    MeshHostRankId mesh_host_rank{0};
+    HostName hostname;
+
+    // Flag to track if this entry has been mapped (fabric_node_id is valid)
+    bool is_mapped = false;
+};
 class TopologyMapper {
 public:
     /**
@@ -250,6 +274,15 @@ private:
     void build_asic_physical_chip_id_mappings();
 
     /**
+     * @brief Initialize chip_topology_mapping_ map with all ASICs from physical system descriptor
+     *
+     * Creates MappedChipInfo entries for all ASICs in the system, indexed by ASIC ID.
+     * Fills in available information (asic_id, hostname, physical_chip_id for local ASICs).
+     * Other fields are left empty and filled incrementally during mapping.
+     */
+    void initialize_chip_topology_mapping_map();
+
+    /**
      * @brief Build the mapping between ASIC IDs and mesh host ranks
      *
      * This method iterates through all hosts in the physical system descriptor and creates mappings
@@ -313,7 +346,7 @@ private:
      * 1. Validates that the logical graph can fit within the physical topology
      * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
-     * 4. Creates bidirectional mappings in both fabric_node_id_to_asic_id_ and asic_id_to_fabric_node_id_
+     * 4. Updates chip_topology_mapping_ entries with mapping information (fabric_node_id, mesh_coord, etc.)
      *
      * @param mesh_id Mesh ID
      * @param adjacency_map_physical Physical adjacency maps for each mesh
@@ -346,14 +379,6 @@ private:
     const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
     bool generate_mapping_locally_ = false;
 
-    // Bidirectional mapping between FabricNodeId and AsicID
-    std::map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
-    std::map<tt::tt_metal::AsicID, FabricNodeId> asic_id_to_fabric_node_id_;
-
-    // Bidirectional mapping between AsicID and physical chip id for fast lookups
-    std::map<tt::tt_metal::AsicID, ChipId> asic_id_to_physical_chip_id_;
-    std::map<ChipId, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
-
     // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
     std::map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange> mesh_host_rank_coord_ranges_;
@@ -361,7 +386,27 @@ private:
     // Mapping from (mesh_id, host_rank) to MPI rank for lookups when fabric node isn't in local mapping
     std::map<std::pair<MeshId, MeshHostRankId>, int> mesh_host_rank_to_mpi_rank_;
 
-    // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
+    /**
+     * @brief Centralized container for chip topology information
+     *
+     * Contains all MappedChipInfo entries, populated incrementally during mapping construction.
+     */
+    std::vector<MappedChipInfo> chip_topology_mapping_;
+
+    /**
+     * @brief Lookup maps with references/pointers to chip_topology_mapping_ for fast access
+     */
+    std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_mapping_;
+    std::unordered_map<tt::tt_metal::AsicID, MappedChipInfo*> asic_id_to_mapping_;
+    std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_mapping_;
+
+    /**
+     * @brief Build lookup maps from chip_topology_mapping_ container
+     */
+    void rebuild_lookup_maps();
+
+    // Rebuild host-rank containers purely from chip_topology_mapping_ container
+    // Uses asic_id_to_mesh_rank parameter for compatibility with algorithm improvements
     void rebuild_host_rank_structs_from_mapping(
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 

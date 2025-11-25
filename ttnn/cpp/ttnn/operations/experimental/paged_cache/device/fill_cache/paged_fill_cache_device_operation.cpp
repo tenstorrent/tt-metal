@@ -4,7 +4,6 @@
 
 #include "paged_fill_cache_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -13,7 +12,12 @@ namespace ttnn::operations::experimental::paged_cache::fill {
 
 PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::PagedFillCacheProgramFactory{};
+    // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
+    if (args.mesh_coords.has_value()) {
+        return program::PagedFillCacheMeshWorkloadFactory{};
+    } else {
+        return program::PagedFillCacheProgramFactory{};
+    }
 }
 
 void PagedFillCacheDeviceOperation::validate_on_program_cache_hit(
@@ -72,33 +76,12 @@ tensor_return_value_t PagedFillCacheDeviceOperation::create_output_tensors(
 
 tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& cache_tensor = tensor_args.cache_tensor;
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& page_table_tensor = tensor_args.page_table;
-
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<PagedFillCacheDeviceOperation>(
-        args,
-        program_factory.index(),
-        cache_tensor.dtype(),
-        input_tensor.dtype(),
-        page_table_tensor.dtype(),
-        cache_tensor.memory_config(),
-        input_tensor.memory_config(),
-        page_table_tensor.memory_config(),
-        cache_tensor.padded_shape(),
-        input_tensor.padded_shape(),
-        page_table_tensor.padded_shape(),
-        tensor_args.batch_idx_tensor_opt.has_value());
 
-    // Include batch_idx_tensor properties when present (affects CB data format and compile-time args)
-    if (tensor_args.batch_idx_tensor_opt.has_value()) {
-        const auto& batch_idx_tensor = tensor_args.batch_idx_tensor_opt.value();
-        hash = tt::stl::hash::hash_objects(
-            hash, batch_idx_tensor.dtype(), batch_idx_tensor.memory_config(), batch_idx_tensor.padded_shape());
-    }
-
-    return hash;
+    // Exclude batch_idx_fallback from hash since it's a runtime-only parameter (used only in runtime args)
+    // Include mesh_coords since it affects program factory selection
+    return operation::hash_operation<PagedFillCacheDeviceOperation>(
+        args.mesh_coords, tensor_args, program_factory.index());
 }
 
 std::tuple<PagedFillCacheDeviceOperation::operation_attributes_t, PagedFillCacheDeviceOperation::tensor_args_t>

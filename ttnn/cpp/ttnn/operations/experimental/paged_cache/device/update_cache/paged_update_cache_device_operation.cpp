@@ -13,7 +13,12 @@ namespace ttnn::operations::experimental::paged_cache::update {
 
 PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return program::PagedUpdateCacheProgramFactory{};
+    // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
+    if (operation_attributes.mesh_coords.has_value()) {
+        return program::PagedUpdateCacheMeshWorkloadFactory{};
+    } else {
+        return program::PagedUpdateCacheProgramFactory{};
+    }
 }
 
 void PagedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
@@ -193,7 +198,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 PagedUpdateCacheDeviceOperation::spec_return_value_t PagedUpdateCacheDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Do nothing because it's an in-place operation
-    return {};
+    return tensor_args.cache_tensor.tensor_spec();
 }
 
 PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOperation::create_output_tensors(
@@ -203,49 +208,19 @@ PagedUpdateCacheDeviceOperation::tensor_return_value_t PagedUpdateCacheDeviceOpe
 }
 
 tt::stl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& cache_tensor = tensor_args.cache_tensor;
-    const auto& input_tensor = tensor_args.input_tensor;
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto program_factory = select_program_factory(args, tensor_args);
 
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    tt::stl::hash::hash_t hash = 0;
-    hash = tt::stl::hash::hash_objects(
-        hash,
-        // Exclude update_idxs (runtime-only, only used in override_runtime_arguments)
-        // Exclude batch_offset (runtime-only, always 0 per validation)
-        operation_attributes.compute_kernel_config,  // Affects fp32_dest_acc_en in ComputeConfig
-        operation_attributes.share_cache,            // Affects cache_batch_num_tiles in compile-time args
-        operation_attributes.mesh_coords,            // Affects mesh workload filtering
-        program_factory.index(),                     // Include program factory variant index
-        cache_tensor.dtype(),
-        cache_tensor.layout(),
-        cache_tensor.memory_config(),
-        cache_tensor.padded_shape(),
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
-        input_tensor.padded_shape());
-
-    if (tensor_args.update_idxs_tensor.has_value()) {
-        hash = tt::stl::hash::hash_objects(
-            hash,
-            tensor_args.update_idxs_tensor.value().dtype(),
-            tensor_args.update_idxs_tensor.value().layout(),
-            tensor_args.update_idxs_tensor.value().memory_config(),
-            tensor_args.update_idxs_tensor.value().padded_shape());
-    }
-
-    if (tensor_args.page_table.has_value()) {
-        hash = tt::stl::hash::hash_objects(
-            hash,
-            tensor_args.page_table.value().dtype(),
-            tensor_args.page_table.value().layout(),
-            tensor_args.page_table.value().memory_config(),
-            tensor_args.page_table.value().padded_shape());
-    }
-
-    return hash;
+    // Exclude runtime-only parameters from hash:
+    // - update_idxs: values are runtime-only (used only in runtime args), size is validated to match input tensor shape
+    // (already in tensor_args)
+    // - batch_offset: validated to be 0, doesn't affect program structure
+    // Include parameters that affect program structure:
+    // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
+    // - share_cache: affects program structure (semaphore setup)
+    // - mesh_coords: affects program factory selection
+    return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
+        args.compute_kernel_config, args.share_cache, args.mesh_coords, tensor_args, program_factory.index());
 }
 
 std::tuple<PagedUpdateCacheDeviceOperation::operation_attributes_t, PagedUpdateCacheDeviceOperation::tensor_args_t>

@@ -5,7 +5,6 @@
 #include "manual_seed_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::reduction::manual_seed::program {
