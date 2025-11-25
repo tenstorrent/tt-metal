@@ -167,6 +167,12 @@ public:
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
 private:
+    // Private constructor for static factory functions
+    MeshGraph() = default;
+
+    static MeshGraph generate_mesh_graph_of_shape(
+        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
+
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,

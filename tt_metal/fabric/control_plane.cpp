@@ -505,6 +505,8 @@ void ControlPlane::init_control_plane_auto_discovery(
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     // Generate Mesh graph based on physical system descriptor
+    auto mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(
+        tt::tt_fabric::MeshGraph::generate_from_physical_system_descriptor(*this->physical_system_descriptor_));
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         // Initialize topology mapper with provided mapping, skipping discovery
