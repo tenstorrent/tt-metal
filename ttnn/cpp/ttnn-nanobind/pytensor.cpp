@@ -27,21 +27,22 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"
+#include "ttnn-nanobind/ttnn_dtype_traits.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -94,107 +95,9 @@ Shape ndarray_shape_to_ttnn(const nb::ndarray<Ts...>& arr) {
     return Shape{std::move(shp)};
 }
 
-/*
-enum class dtype_code : uint8_t {
-    Int = 0, UInt = 1, Float = 2, Bfloat = 4, Complex = 5, Bool = 6
-};
-
-struct device {
-    int32_t device_type = 0;
-    int32_t device_id = 0;
-};
-
-struct dtype {
-    uint8_t code = 0;
-    uint8_t bits = 0;
-    uint16_t lanes = 0;
-
-    constexpr bool operator==(const dtype &o) const {
-        return code == o.code && bits == o.bits && lanes == o.lanes;
-    }
-
-    constexpr bool operator!=(const dtype &o) const { return !operator==(o); }
-};
-*/
-
-template <typename... Ts>
-ttnn::DataType ndarray_dtype_to_ttnn(const nb::ndarray<Ts...>& arr) {
-    using nb::dlpack::dtype_code;
-
-    const nb::dlpack::dtype dt = arr.dtype();
-    ttnn::DataType ttnn_dt = ttnn::DataType::INVALID;
-    std::string_view dtype_str;
-
-    switch (static_cast<dtype_code>(dt.code)) {
-        case dtype_code::Int:
-            switch (dt.bits) {
-                case 64: ttnn_dt = ttnn::DataType::UINT32; break;  // downcast to uint32 as per parse_py_tensor
-                case 32: ttnn_dt = ttnn::DataType::INT32; break;
-                default: ttnn_dt = ttnn::DataType::INVALID; dtype_str = "Int";
-            }
-            break;
-        case dtype_code::UInt:
-            switch (dt.bits) {
-                case 32: ttnn_dt = ttnn::DataType::UINT32; break;
-                case 16: ttnn_dt = ttnn::DataType::UINT16; break;
-                case 8: ttnn_dt = ttnn::DataType::UINT8; break;
-                default:
-                    ttnn_dt = ttnn::DataType::INVALID;
-                    dtype_str = "UInt";
-                    break;
-            }
-            break;
-        case dtype_code::Float:
-            switch (dt.bits) {
-                case 32: ttnn_dt = ttnn::DataType::FLOAT32; break;
-                case 16:
-                    // ttnn_dt = ttnn::DataType::FLOAT16; // doesn't exist in the code (yet?)
-                    // break;
-                default:
-                    ttnn_dt = ttnn::DataType::INVALID;
-                    dtype_str = "Float";
-                    break;
-            }
-            break;
-        case dtype_code::Bfloat:
-            switch (dt.bits) {
-                case 16: ttnn_dt = ttnn::DataType::BFLOAT16; break;
-                case 8: ttnn_dt = ttnn::DataType::BFLOAT8_B; break;
-                case 4: ttnn_dt = ttnn::DataType::BFLOAT4_B; break;
-                default:
-                    ttnn_dt = ttnn::DataType::INVALID;
-                    dtype_str = "BFloat";
-                    break;
-            }
-            break;
-        case dtype_code::Complex:
-            ttnn_dt = ttnn::DataType::INVALID;
-            dtype_str = "Complex";
-            break;
-        case dtype_code::Bool:
-            ttnn_dt = ttnn::DataType::INVALID;
-            dtype_str = "Bool";
-            break;
-        default: ttnn_dt = ttnn::DataType::INVALID; dtype_str = "InvalidDtypeCode";
-    }
-
-    if (ttnn_dt == ttnn::DataType::INVALID) {
-        TT_THROW(
-            "Unsupported {} bit datatype: {}. Code: {}. Lanes: {}. Framework: {}",
-            dt.bits,
-            dtype_str,
-            dt.code,
-            dt.lanes,
-            std::string(nb::detail::ndarray_config_t<int, Ts...>::Framework::name.text));
-    }
-
-    return ttnn_dt;
-
-}  // ttnn::DataType ndarray_dtype_to_ttnn(const nb::ndarray<Ts...>& arr)
-
-template <typename T, typename... Ts>
+template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
-    nb::ndarray<Ts...> py_ndarray,
+    nb::ndarray<nb::array_api, nb::c_contig> py_ndarray,
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
@@ -208,7 +111,7 @@ Tensor create_typed_tt_tensor_from_py_data(
             tensor_layout.get_memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray), py_data_shape.volume());
+    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
 
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
@@ -242,9 +145,8 @@ Tensor create_typed_tt_tensor_from_py_data(
     }
 }
 
-template <typename... Ts>
 Tensor create_tt_tensor_from_py_data(
-    nb::ndarray<Ts...> py_data,
+    nb::ndarray<nb::array_api, nb::c_contig> py_data,
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
@@ -279,242 +181,29 @@ Tensor create_tt_tensor_from_py_data(
 
 // Preprocess the python tensor, optionally performing dtype conversion.
 // TODO_NANOBIND: See if we can get rid of this in favor of ndarray
-template <typename... Ts>
 struct PreprocessedPyTensor {
+    nb::ndarray<nb::array_api, nb::c_contig> contiguous_py_tensor;
     DataType data_type = DataType::INVALID;
-    // nb::object contiguous_py_tensor;
-    nb::ndarray<Ts...> contiguous_py_tensor;
-    std::size_t num_elements = 0;
-    std::size_t py_data_ptr = 0;
 };
 
-template <typename... Ts>
-PreprocessedPyTensor parse_pytorch_tensor(
-    nb::ndarray<nb::pytorch, Ts...> pytorch_tensor, std::optional<DataType> optional_data_type) {
-    //
+PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
+    DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
 
-    nb::object torch_module = nb::module_::import_("torch");
-    const auto torch_dtype = pytorch_tensor.attr("dtype");
+    nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
+    config.dtype = get_dtype_from_ttnn_datatype(data_type);
+    config.order = nb::c_contig::value;  // force row-major contiguous
 
-    nb::ndarray<nb::pytorch, nb::c_contig> contiguous_pytorch_tensor = [](nb::ndarray<nb::pytorch> arg) {
-        return nb::ndarray<nb::pytorch, nb::c_contig>(arg);
-    };
+    nb::detail::ndarray_handle* converted_tensor = nanobind::detail::ndarray_import(
+        py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),  // new handle manages ownership
+        &config,
+        true /*convert*/,
+        nullptr);
 
-    DataType data_type = DataType::INVALID;
-
-    // Override the data type if there is a user-provided one
-    // Otherwise, figure it out from torch dtype
-    if (optional_data_type.has_value()) {
-        data_type = optional_data_type.value();
-    } else if (torch_dtype.equal(torch.attr("float32"))) {
-        data_type = DataType::FLOAT32;
-    } else if (torch_dtype.equal(torch.attr("float16")) || torch_dtype.equal(torch.attr("bfloat16"))) {
-        data_type = DataType::BFLOAT16;
-    } else if (torch_dtype.equal(torch.attr("int64"))) {
-        data_type = DataType::UINT32;
-    } else if (torch_dtype.equal(torch.attr("int32"))) {
-        data_type = DataType::INT32;
-    } else if (torch_dtype.equal(torch.attr("int16"))) {
-        data_type = DataType::UINT16;
-    } else if (torch_dtype.equal(torch.attr("uint8"))) {
-        data_type = DataType::UINT8;
-    } else {
-        TT_THROW("Unsupported DataType: {}", std::string(nb::repr(torch_dtype).c_str()));
-    }
-
-    // pytorch.Tensor.to is a true typecast NOT a bit_cast
-    auto maybe_convert_pytorch_tensor =
-        [&contiguous_pytorch_tensor, &torch_dtype, &torch](const char* target_py_dtype) {
-            if (not torch_dtype.equal(torch.attr(target_py_dtype))) {
-                contiguous_pytorch_tensor = contiguous_pytorch_tensor.attr("to")(torch.attr(target_py_dtype));
-            }
-        };
-    switch (data_type) {
-        case DataType::UINT8: {
-            maybe_convert_pytorch_tensor("uint8");
-            break;
-        }
-        case DataType::UINT16: {
-            maybe_convert_pytorch_tensor("int16");
-            break;
-        }
-        case DataType::INT32:
-        case DataType::UINT32: {
-            maybe_convert_pytorch_tensor("int32");
-            break;
-        }
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-        case DataType::FLOAT32: {
-            maybe_convert_pytorch_tensor("float32");
-            break;
-        }
-        case DataType::BFLOAT16: {
-            maybe_convert_pytorch_tensor("bfloat16");
-            break;
-        }
-        default: {
-            TT_THROW("Unsupported DataType: {}", data_type);
-            break;
-        }
-    }
-
-    return PreprocessedPyTensor{
-        .data_type = data_type,
-        .contiguous_pytorch_tensor = contiguous_pytorch_tensor,
-        .num_elements = nb::cast<std::size_t>(contiguous_pytorch_tensor.attr("numel")()),
-        .py_data_ptr = nb::cast<std::size_t>(contiguous_pytorch_tensor.attr("data_ptr")()),
-    };
+    return {.contiguous_py_tensor = converted_tensor, .data_type = data_type};
 }
 
-// TODO_NANOBIND: rather than a py_tensor handle, importing each library, and manually checking,
-// use a nb::ndarray. Does this function still need to exist?
-PreprocessedPyTensor parse_py_tensor(const nb::handle& py_tensor, std::optional<DataType> optional_data_type)
-{
-    const auto py_dtype = py_tensor.attr("dtype");
-
-    if (nb::object torch = nb::module_::import_("torch");
-        nb::isinstance(py_tensor, torch.attr("Tensor")))
-    {
-        nb::object contiguous_py_tensor = py_tensor.attr("contiguous")();
-        DataType data_type = DataType::INVALID;
-
-        // Override the data type if there is a user-provided one
-        // Otherwise, figure it out from torch dtype
-        if (optional_data_type.has_value()) {
-            data_type = optional_data_type.value();
-        } else if (py_dtype.equal(torch.attr("float32"))) {
-            data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(torch.attr("float16")) || py_dtype.equal(torch.attr("bfloat16"))) {
-            data_type = DataType::BFLOAT16;
-        } else if (py_dtype.equal(torch.attr("int64"))) {
-            data_type = DataType::UINT32;
-        } else if (py_dtype.equal(torch.attr("int32"))) {
-            data_type = DataType::INT32;
-        } else if (py_dtype.equal(torch.attr("int16"))) {
-            data_type = DataType::UINT16;
-        } else if (py_dtype.equal(torch.attr("uint8"))) {
-            data_type = DataType::UINT8;
-        } else {
-            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype).c_str()));
-        }
-
-        // pytorch.Tensor.to is a true typecast NOT a bit_cast
-        auto maybe_convert_pytorch_tensor = [&contiguous_py_tensor, &py_dtype, &torch](const char* target_py_dtype) {
-            if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("to")(torch.attr(target_py_dtype));
-            }
-        };
-        switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_pytorch_tensor("uint8");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_pytorch_tensor("int16");
-                break;
-            }
-            case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_pytorch_tensor("int32");
-                break;
-            }
-            case DataType::BFLOAT4_B:
-            case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_pytorch_tensor("float32");
-                break;
-            }
-            case DataType::BFLOAT16: {
-                maybe_convert_pytorch_tensor("bfloat16");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
-        }
-
-        return PreprocessedPyTensor{
-            .data_type = data_type,
-            .contiguous_py_tensor = contiguous_py_tensor,
-            .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
-            .py_data_ptr = nb::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
-        };
-    }
-    else if (nb::object np = nb::module_::import_("numpy");
-             nb::isinstance(py_tensor, np.attr("ndarray")))
-    {
-        nb::object contiguous_py_tensor = np.attr("ascontiguousarray")(py_tensor);
-        DataType data_type = DataType::INVALID;
-
-        // Override the data type if there is a user-provided one
-        // Otherwise, figure it out from numpy dtype
-        if (optional_data_type.has_value()) {
-            data_type = optional_data_type.value();
-        } else if (py_dtype.equal(np.attr("float32"))) {
-            data_type = DataType::FLOAT32;
-        } else if (py_dtype.equal(np.attr("int64"))) {
-            // TODO: add DataType::INT64?
-            data_type = DataType::UINT32;
-            // TODO: add np.float16 support?
-        } else if (py_dtype.equal(np.attr("int32"))) {
-            data_type = DataType::INT32;
-        } else if (py_dtype.equal(np.attr("int16"))) {
-            // TODO: add DataType::INT16?
-            data_type = DataType::UINT16;
-        } else if (py_dtype.equal(np.attr("ubyte"))) {
-            data_type = DataType::UINT8;
-        } else {
-            TT_THROW("Unsupported DataType: {}", std::string(nb::repr(py_dtype).c_str()));
-        }
-
-        auto maybe_convert_numpy_tensor = [&contiguous_py_tensor, &py_dtype, &np](const char* target_py_dtype) {
-            if (not py_dtype.equal(np.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("astype")(np.attr(target_py_dtype));
-            }
-        };
-        switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_numpy_tensor("ubyte");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_numpy_tensor("int16");
-                break;
-            }
-            case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_numpy_tensor("int32");
-                break;
-            }
-            case DataType::BFLOAT4_B:
-            case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_numpy_tensor("float32");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
-        }
-
-        return PreprocessedPyTensor{
-            .data_type = data_type,
-            .contiguous_py_tensor = contiguous_py_tensor,
-            .num_elements = nb::cast<std::size_t>(contiguous_py_tensor.attr("size")),
-            .py_data_ptr = nb::cast<std::size_t>(nb::cast<nb::tuple>(
-                nb::cast<nb::dict>(contiguous_py_tensor.attr("__array_interface__"))[nb::str("data")])[0]),
-        };
-    } else {
-        TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
-    }
-}
-
-template <typename... Ts>
 Tensor convert_python_tensor_to_tt_tensor(
-    nb::ndarray<Ts...> py_tensor,
+    nb::ndarray<nb::array_api> py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
@@ -535,16 +224,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    // auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
-    // const auto shape = ttnn::Shape(nb::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
-
-    auto preprocessed_py_tensor = PreprocessedPyTensor{
-        .data_type = ndarray_dtype_to_ttnn(py_tensor),
-        .contiguous_py_tensor = py_tensor,
-        .num_elements = py_tensor.size(),
-        .py_data_ptr = std::bit_cast<size_t>(py_tensor.data()),
-    };
-
+    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const ttnn::Shape shape = ndarray_shape_to_ttnn(py_tensor);
 
     // TT_FATAL(
@@ -568,17 +248,16 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
-    // TODO_NANOBIND: AFFECTS BEHAVIOR
-    // TODO_NANOBIND: validate this comment
     // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
     // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only
     // increments / decrements the reference count on the memory pin; the last decrement to the pin should be triggered
     // from the nanobind caller thread, which will correctly decrement the `nb::object` reference count while hodling
     // GIL.
-    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<>>(preprocessed_py_tensor.contiguous_py_tensor));
+    tt::tt_metal::MemoryPin pydata_pin(
+        std::make_shared<nb::ndarray<nb::array_api, nb::c_contig>>(preprocessed_py_tensor.contiguous_py_tensor));
 
     auto output = create_tt_tensor_from_py_data(
-        preprocessed_py_tensor.py_data_ptr,
+        preprocessed_py_tensor.contiguous_py_tensor,
         shape,
         TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
         device,
@@ -1105,134 +784,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "__init__",
             [](Tensor* t,
-               nb::ndarray<nb::numpy> numpy_tensor,
-               std::optional<DataType> data_type,
-               std::optional<MeshDevice*> device,
-               std::optional<Layout> layout,
-               const std::optional<MemoryConfig>& mem_config,
-               const std::optional<Tile>& tile,
-               std::optional<ttnn::QueueId> cq_id,
-               std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
-                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    numpy_tensor,
-                    data_type,
-                    layout,
-                    tile,
-                    mem_config.value_or(MemoryConfig{}),
-                    device.value_or(nullptr),
-                    cq_id,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper));
-            },
-            nb::arg("tensor").noconvert(),
-            nb::arg("data_type") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("layout").noconvert() = nb::none(),
-            nb::arg("mem_config").noconvert() = nb::none(),
-            nb::arg("tile").noconvert() = nb::none(),
-            nb::arg("cq_id") = nb::none(),
-            nb::arg("pad_value") = nb::none(),
-            nb::arg("mesh_mapper") = nullptr,
-            nb::rv_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Numpy Tensor                   |
-                +--------------+--------------------------------+
-                | data_type    | TT Tensor data type (optional) |
-                +--------------+--------------------------------+
-                | device       | TT device ptr (optional)       |
-                +--------------+--------------------------------+
-                | layout       | TT layout (optional)           |
-                +--------------+--------------------------------+
-                | mem_config   | TT memory_config (optional)    |
-                +--------------+--------------------------------+
-                | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | cq_id        | TT Command Queue ID (optional) |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor from numpy tensor:
-
-                .. code-block:: python
-
-                    device = ttnn.open_device(device_id=0)
-                    py_tensor = np.zeros((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
-            )doc")
-        .def(
-            "__init__",
-            [](Tensor* t,
-               nb::ndarray<nb::pytorch> pytorch_tensor,
-               std::optional<DataType> data_type,
-               std::optional<MeshDevice*> device,
-               std::optional<Layout> layout,
-               const std::optional<MemoryConfig>& mem_config,
-               const std::optional<Tile>& tile,
-               std::optional<ttnn::QueueId> cq_id,
-               std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
-                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    pytorch_tensor,
-                    data_type,
-                    layout,
-                    tile,
-                    mem_config.value_or(MemoryConfig{}),
-                    device.value_or(nullptr),
-                    cq_id,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper));
-            },
-            nb::arg("tensor").noconvert(),
-            nb::arg("data_type") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("layout").noconvert() = nb::none(),
-            nb::arg("mem_config").noconvert() = nb::none(),
-            nb::arg("tile").noconvert() = nb::none(),
-            nb::arg("cq_id") = nb::none(),
-            nb::arg("pad_value") = nb::none(),
-            nb::arg("mesh_mapper") = nullptr,
-            nb::rv_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Pytorch Tensor                 |
-                +--------------+--------------------------------+
-                | data_type    | TT Tensor data type (optional) |
-                +--------------+--------------------------------+
-                | device       | TT device ptr (optional)       |
-                +--------------+--------------------------------+
-                | layout       | TT layout (optional)           |
-                +--------------+--------------------------------+
-                | mem_config   | TT memory_config (optional)    |
-                +--------------+--------------------------------+
-                | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | cq_id        | TT Command Queue ID (optional) |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor from numpy tensor:
-
-                .. code-block:: python
-
-                    device = ttnn.open_device(device_id=0)
-                    py_tensor = np.zeros((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
-            )doc")
-        .def(
-            "__init__",
-            [](Tensor* t,
                nb::ndarray<nb::array_api> dlpack_tensor,
                std::optional<DataType> data_type,
                std::optional<MeshDevice*> device,
@@ -1268,70 +819,6 @@ void pytensor_module(nb::module_& mod) {
                 | Argument     | Description                    |
                 +==============+================================+
                 | tensor       | dlpack compliant Tensor        |
-                +--------------+--------------------------------+
-                | data_type    | TT Tensor data type (optional) |
-                +--------------+--------------------------------+
-                | device       | TT device ptr (optional)       |
-                +--------------+--------------------------------+
-                | layout       | TT layout (optional)           |
-                +--------------+--------------------------------+
-                | mem_config   | TT memory_config (optional)    |
-                +--------------+--------------------------------+
-                | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | cq_id        | TT Command Queue ID (optional) |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor from numpy tensor:
-
-                .. code-block:: python
-
-                    device = ttnn.open_device(device_id=0)
-                    py_tensor = np.zeros((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
-            )doc")
-        .def(
-            "__init__",
-            [](Tensor* t,
-               nb::ndarray<> python_tensor,
-               std::optional<DataType> data_type,
-               std::optional<MeshDevice*> device,
-               std::optional<Layout> layout,
-               const std::optional<MemoryConfig>& mem_config,
-               const std::optional<Tile>& tile,
-               std::optional<ttnn::QueueId> cq_id,
-               std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
-                new (t) Tensor(CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    python_tensor,
-                    data_type,
-                    layout,
-                    tile,
-                    mem_config.value_or(MemoryConfig{}),
-                    device.value_or(nullptr),
-                    cq_id,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper));
-            },
-            nb::arg("tensor"),
-            nb::arg("data_type") = nb::none(),
-            nb::arg("device") = nb::none(),
-            nb::arg("layout").noconvert() = nb::none(),
-            nb::arg("mem_config").noconvert() = nb::none(),
-            nb::arg("tile").noconvert() = nb::none(),
-            nb::arg("cq_id") = nb::none(),
-            nb::arg("pad_value") = nb::none(),
-            nb::arg("mesh_mapper") = nullptr,
-            nb::rv_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | fallback ndarray-bind Tensor   |
                 +--------------+--------------------------------+
                 | data_type    | TT Tensor data type (optional) |
                 +--------------+--------------------------------+
