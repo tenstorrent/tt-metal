@@ -46,6 +46,13 @@ inline constexpr uint64_t seed_mix_constant_2 = 0xfedcba9876543210ULL;
 inline constexpr int float_mantissa_shift = 9;
 inline constexpr uint32_t float_exponent_bias = 0x3f800000;
 
+// Uniform distribution constants (matching std::uniform_real_distribution)
+inline constexpr uint32_t uint32_max = std::numeric_limits<uint32_t>::max();
+inline constexpr float two_to_32 = static_cast<float>(uint32_max) + 1.0f;  // 2^32 = UINT32_MAX + 1
+inline constexpr float uint32_max_plus_one = two_to_32;                    // UINT32_MAX + 1.0 = 2^32
+inline constexpr float neg_two_to_32 = -two_to_32;                         // -2^32
+inline constexpr float inv_two_to_32 = 1.0f / two_to_32;                   // 1 / (2^32)
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -133,25 +140,35 @@ public:
     }
 
     // Generate 4 floats in [0, 1) range using SIMD
-    // Uses linear uniformity method: convert random integers to floats and divide by max
-    // This produces truly uniform distribution in linear sense (required for Box-Muller)
     [[nodiscard]]
     __m128 generate_float_x4() noexcept {
         __m128i rand_int = generate_128bit();
 
-        // Extract lower 23 bits from each 32-bit integer (2^23 = 8,388,608 possible values)
-        // This provides sufficient precision for uniform distribution
-        __m128i mantissa_mask = _mm_set1_epi32(0x007FFFFF);  // 23 bits
-        __m128i masked = _mm_and_si128(rand_int, mantissa_mask);
+        // std::uniform_real_distribution uses: u / (UINT32_MAX + 1.0)
+        // where u is a random uint32_t value
+        // We have random bits in rand_int, need to convert to unsigned range
 
-        // Convert integers to floats
-        __m128 rand_float = _mm_cvtepi32_ps(masked);
+        // Convert signed int32 to float (treats as signed)
+        __m128 signed_float = _mm_cvtepi32_ps(rand_int);
 
-        // Divide by 2^23 to get uniform distribution in [0, 1)
-        // Maximum value is (2^23 - 1) / 2^23, slightly less than 1
-        // This is correct for Box-Muller after transformation to (0, 1]
-        const __m128 inv_max = _mm_set1_ps(1.1920928955078125e-07f);  // 1.0f / 8388608.0f
-        return _mm_mul_ps(rand_float, inv_max);
+        // For negative values, add 2^32 to map to unsigned range
+        // This correctly maps signed int32 range [-2^31, 2^31) to unsigned uint32 range [0, 2^32)
+        // Example: -1 (signed) -> 4294967295 (unsigned) = -1 + 2^32
+        __m128i is_negative = _mm_srai_epi32(rand_int, 31);  // -1 for negative, 0 for positive
+        // Convert mask to float: -1 -> -1.0f, 0 -> 0.0f
+        __m128 mask_float = _mm_cvtepi32_ps(is_negative);
+        // Multiply by -2^32: -1.0f * -2^32 = 2^32, 0.0f * -2^32 = 0
+        const __m128 neg_two_to_32_vec = _mm_set1_ps(neg_two_to_32);
+        __m128 offset = _mm_mul_ps(mask_float, neg_two_to_32_vec);
+        // offset is 2^32 for negative values, 0 for positive
+
+        __m128 unsigned_float = _mm_add_ps(signed_float, offset);
+
+        // Divide by (UINT32_MAX + 1.0) = 2^32 to get uniform distribution in [0, 1)
+        // This matches std::uniform_real_distribution exactly: u / (UINT32_MAX + 1.0)
+        const __m128 inv_two_to_32_vec = _mm_set1_ps(inv_two_to_32);
+
+        return _mm_mul_ps(unsigned_float, inv_two_to_32_vec);
     }
 
     // Generate 4 bfloat16 values in [0, 1) range
@@ -3135,7 +3152,8 @@ void generate_normal_simd(AesRng& rng, std::span<T> output, float mean, float st
 
             uint32_t sign_bit = (u >> 13) & 1;  // 14th bit for sign
             uint32_t u2 = rng();
-            float u_val = static_cast<float>(u2) / static_cast<float>(std::numeric_limits<uint32_t>::max());
+            // Match std::uniform_real_distribution: u / (UINT32_MAX + 1.0)
+            float u_val = static_cast<float>(u2) / uint32_max_plus_one;
 
             double x_i = ziggurat_x[rect_i];
             double x_i1 = (rect_i == static_cast<int>(ZIGGURAT_RECTS)) ? 0.0 : ziggurat_x[rect_i + 1];
@@ -3191,7 +3209,8 @@ void generate_normal_simd(AesRng& rng, std::span<T> output, float mean, float st
 
             uint32_t sign_bit = (u >> 13) & 1;  // 14th bit for sign
             uint32_t u2 = rng();
-            float u_val = static_cast<float>(u2) / static_cast<float>(std::numeric_limits<uint32_t>::max());
+            // Match std::uniform_real_distribution: u / (UINT32_MAX + 1.0)
+            float u_val = static_cast<float>(u2) / uint32_max_plus_one;
 
             double x_i = ziggurat_x[rect_i];
             double x_i1 = (rect_i == static_cast<int>(ZIGGURAT_RECTS)) ? 0.0 : ziggurat_x[rect_i + 1];

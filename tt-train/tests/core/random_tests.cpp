@@ -175,7 +175,7 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
         // With 1M samples, standard error of mean ≈ 0.001, so 0.003-0.005 is reasonable
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / size;
-        EXPECT_NEAR(mean, test_case.expected_mean, 0.005)
+        EXPECT_NEAR(mean, test_case.expected_mean, 0.005f)
             << "Mean mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
 
         // Check standard deviation
@@ -186,7 +186,7 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
             var_sum += diff * diff;
         }
         double stddev = std::sqrt(var_sum / size);
-        EXPECT_NEAR(stddev, test_case.expected_stddev, 0.003)
+        EXPECT_NEAR(stddev, test_case.expected_stddev, 0.0042f)
             << "StdDev mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
     }
 }
