@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::data_movement {
+
+struct ReshapeOperationAttributes {
+    const ttnn::Shape logical_output_shape;
+    const ttnn::Shape padded_output_shape;
+    const tt::tt_metal::MemoryConfig output_mem_config;
+};
+
+struct ReshapeTensorArgs {
+    const Tensor& input_tensor;
+};
+
+using tensor_return_value_t = Tensor;
+
+}  // namespace ttnn::operations::data_movement
