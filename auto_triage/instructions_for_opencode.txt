@@ -96,7 +96,7 @@ Actions:
 3. Prepare outputs under `./output/`:
    - `chosen_commit.json` (must include: `commit` SHA, `commit_url`, `authors` (array of `{login,name,is_org_member}`), `approvers` (array of `{login,name,is_org_member}`), and a short `summary`).
    - `alternatives.json`
-   - `explanation.md` covering:
+   - `explanation.md` (title should be `Auto Triage Explanation: <failing job name>`). Cover:
      - Why the failure is deterministic.
      - The commit window, Copilot summaries referenced, and supporting diffs.
      - Exact code changes (file path + before/after hunk) from the suspected commit that plausibly trigger the observed error, with a clear explanation tying the change to the failure signature. At minimum: cite the old code (pre-commit), the new code (post-commit), and describe how the behavior change produces the observed test failure.
