@@ -21,6 +21,7 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
@@ -95,7 +96,12 @@ void RunTest(
         CreateKernel(program_, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", crs, config);
 
         for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
-            UpdateGoldenOutput(golden_output, mesh_device, "ER0");
+            if (tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                    HalProgrammableCoreType::ACTIVE_ETH) > 1) {
+                UpdateGoldenOutput(golden_output, mesh_device, "ER0");
+            } else {
+                UpdateGoldenOutput(golden_output, mesh_device, "ER");
+            }
         }
     }
 
