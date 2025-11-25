@@ -127,6 +127,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        is_fsdp: bool = True,
         quantization_config: Optional[dict] = None,
     ):
         super().__init__()
@@ -160,6 +161,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             num_links=num_links,
             topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
+
+        self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.use_cache = use_cache
@@ -212,7 +215,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
+            is_fsdp=self.is_fsdp,
             quantization_config=self.quantization_config,
         )
 
@@ -255,8 +258,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
             quantization_config=self.quantization_config,
+            is_fsdp=self.is_fsdp,
         )
 
         if self.use_cache:
