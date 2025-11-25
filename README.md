@@ -91,7 +91,6 @@ For information on initial model procedures, please see [Model Bring-Up and Test
 - [Programming Mesh of Devices](./tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md) (updated Sept 9th, 2024)
 - [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
 - [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
-- [YOLOv4 Implementation in TT-NN on WH](./tech_reports/YoloV4-TTNN/yolov4.md)  (updated November 8th, 2024)
 - [CNN Bring up & Optimization in TT-NN](./tech_reports/CNNs/cnn_optimizations.md) (updated Jan 22nd, 2025)
 
 ## Benchmarks
@@ -203,7 +202,8 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 | Release | Release Date |
 |---------|--------------|
-| 0.64.4 | ETA Nov 21, 2025 |
+| 0.64.5 | ETA Dec 1, 2025 |
+| [0.64.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.4) | Nov 24, 2025 |
 | [0.64.3](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.3) | Nov 14, 2025 |
 | [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 |
 | [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |

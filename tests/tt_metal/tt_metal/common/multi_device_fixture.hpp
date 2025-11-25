@@ -7,8 +7,7 @@
 #include <gtest/gtest.h>
 #include <boost/algorithm/string.hpp>
 
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -213,15 +212,14 @@ protected:
 class GenericMeshDeviceFabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMeshDeviceFabric2DFixture() :
-        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {}
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 class MeshDevice2x4Fabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric2DFixture() :
-        MeshDeviceFixtureBase(Config{
-            .mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {
-    }
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 }  // namespace tt::tt_metal

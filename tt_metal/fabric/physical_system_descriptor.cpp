@@ -9,7 +9,7 @@
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
@@ -47,10 +47,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::Cluster& cluster,
-    ChipId chip_id,
-    const std::string& mobo_name,
-    bool using_mock_cluster_desc) {
+    tt::umd::Cluster& cluster, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
@@ -213,6 +210,10 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
+    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
+    // This is especially important when using rankfiles with hostnames that may require DNS resolution,
+    // as MPI connections may not be fully established when discovery starts.
+    distributed_context_->barrier();
     this->resolve_hostname_uniqueness();
     this->run_local_discovery(run_live_discovery);
     if (run_global_discovery) {
@@ -234,7 +235,10 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
-        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        TT_FATAL(
+            cluster_ != nullptr,
+            "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live "
+            "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
@@ -256,7 +260,10 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
-        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        TT_FATAL(
+            cluster_ != nullptr,
+            "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live "
+            "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] =
             get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
@@ -822,7 +829,10 @@ AsicID PhysicalSystemDescriptor::get_asic_id(
 }
 
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
-    TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet metrics");
+    TT_FATAL(
+        cluster_ != nullptr,
+        "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet "
+        "metrics");
     tt::umd::Cluster& cluster = *cluster_;
 
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
@@ -853,8 +863,7 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
 
                 cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster.read_from_device(
-                    &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
+                cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
                 cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
                     &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));

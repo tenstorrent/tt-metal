@@ -113,18 +113,6 @@ jobs:
       version: 22.04
       skip-tt-train: false
 
-  build-docs:
-    if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true'
-        }}
-    needs: [find-changes, build]
-    uses: ./.github/workflows/docs-latest-public.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
@@ -277,7 +265,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
@@ -334,14 +321,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests, triage-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

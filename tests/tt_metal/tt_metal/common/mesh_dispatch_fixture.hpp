@@ -14,10 +14,10 @@
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
