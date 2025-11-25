@@ -486,8 +486,8 @@ LinkMetricsResult process_link_statuses(
 }
 
 struct PortInfo {
-    tt::scaleout_tools::PortType port_type;
-    tt::scaleout_tools::PortId port_id;
+    tt::scaleout_tools::PortType port_type = tt::scaleout_tools::PortType::TRACE;
+    tt::scaleout_tools::PortId port_id{0};
 };
 
 std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortInfo>> generate_port_info(
