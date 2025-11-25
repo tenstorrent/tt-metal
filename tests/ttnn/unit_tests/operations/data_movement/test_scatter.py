@@ -201,6 +201,8 @@ def test_scatter_normal_with_callback(
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 
+##### !!!! WARNING !!!! #####
+##### DO NOT FEED CORE RANGE SETS CONTAINING ONLY **ONE** CORE INSIDE - split_work_to_cores DOES NOT HANDLE THAT GRACEFULLY!!!
 @pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, sub_core_grids, expected_num_cache_entries",
     [
@@ -277,8 +279,8 @@ def test_scatter_normal_with_callback(
             ttnn.Layout.ROW_MAJOR,
             ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
                 ]
             ),
             1,
@@ -297,8 +299,6 @@ def test_scatter_reduction_row_major_int32_with_callback_and_sub_cores(
     device,
 ):
     torch.manual_seed(0)
-    # torch_dtype = select_torch_dtype(input_dtype)
-    torch_index_dtype = torch.int64
 
     torch_dtype = torch.float32
 

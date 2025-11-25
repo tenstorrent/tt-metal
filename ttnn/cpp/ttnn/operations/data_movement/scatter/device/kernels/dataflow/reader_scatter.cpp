@@ -216,37 +216,6 @@ FORCE_INLINE void scatter_along_chunk(
         const uint32_t& output_index = index_value - input_offset;
         output_l1_write_ptr[output_index] = perform_reduction<number_type>(
             output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
-        // switch (scatter_reduction_type) {
-        //     case ScatterReductionType::INVALID: {
-        //         output_l1_write_ptr[output_index] = source_value;
-        //         break;
-        //     }
-
-        //     case ScatterReductionType::ADD: {
-        //         output_l1_write_ptr[output_index] += source_value;
-        //         break;
-        //     }
-
-        //     case ScatterReductionType::MULTIPLY: {
-        //         output_l1_write_ptr[output_index] *= source_value;
-        //         break;
-        //     }
-
-        //     case ScatterReductionType::AMIN: {
-        //         output_l1_write_ptr[output_index] = std::min(output_l1_write_ptr[output_index], source_value);
-        //         break;
-        //     }
-
-        //     case ScatterReductionType::AMAX: {
-        //         output_l1_write_ptr[output_index] = std::max(output_l1_write_ptr[output_index], source_value);
-        //         break;
-        //     }
-
-        //     default: {
-        //         output_l1_write_ptr[output_index] = source_value;
-        //         break;
-        //     }
-        // }
     }
 }
 
