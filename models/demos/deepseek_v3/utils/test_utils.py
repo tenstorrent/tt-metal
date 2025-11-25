@@ -26,10 +26,18 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    logger.debug(f"Attempting to load model state_dict from {model_path}")
+
     if module_path:
         module_path += "."  # So that the later matches include the separating dot
 
-    weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
+    weight_path_index_filename = model_path / "model.safetensors.index.json"
+    if not weight_path_index_filename.exists():
+        raise RuntimeError(
+            f"Unable to load model state_dict due to missing index file (expected {weight_path_index_filename}) to exist"
+        )
+
+    weight_paths = json.load(open(weight_path_index_filename, "r"))["weight_map"]
     per_safetensor_weights = {}
 
     for weight_name in weight_paths.keys():
@@ -479,7 +487,7 @@ def get_test_weight_config(
     force_recalculate: bool,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    per_test_weight_cache_path = cache_path
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )
