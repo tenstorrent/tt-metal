@@ -1,0 +1,30 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::embedding_backward {
+
+namespace embedding_backward {
+
+struct operation_attributes_t {
+    const tt::tt_metal::MemoryConfig output_mem_config;
+    const tt::tt_metal::DataType output_dtype;
+    const uint32_t num_embeddings;
+};
+
+struct tensor_args_t {
+    const Tensor& index_tensor;
+    const Tensor& grad_tensor;
+    std::optional<Tensor> preallocated_output;
+};
+
+using spec_return_value_t = ttnn::TensorSpec;
+using tensor_return_value_t = Tensor;
+
+}  // namespace embedding_backward
+
+}  // namespace ttnn::operations::embedding_backward
