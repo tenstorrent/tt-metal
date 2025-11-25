@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include <umd/device/types/xy_pair.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
@@ -15,12 +17,12 @@ namespace tt::scaleout_tools {
 constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
 
 struct LinkDescriptors {
-    std::string host;
-    uint32_t tray_id;
-    uint32_t asic_location;
-    uint32_t channel;
-    ChipId chip_id;
-    tt_xy_pair coord;
+    std::string host{};
+    uint32_t tray_id{};
+    uint32_t asic_location{};
+    uint32_t channel{};
+    ChipId chip_id{};
+    tt_xy_pair coord{};
 };
 
 [[nodiscard]] tt_xy_pair get_eth_core_coord(const tt::Cluster& cluster, ChipId chip_id, uint8_t channel) {
