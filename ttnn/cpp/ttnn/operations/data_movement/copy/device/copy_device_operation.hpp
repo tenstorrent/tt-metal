@@ -43,7 +43,8 @@ struct CopyDeviceOperation {
         const Tensor& input,
         const tt::tt_metal::MemoryConfig& output_mem_config,
         const tt::tt_metal::DataType& output_dtype,
-        const std::optional<Tensor>& preallocated_output);
+        const std::optional<Tensor>& preallocated_output,
+        bool backwards = false);
 };
 
 }  // namespace ttnn::operations::data_movement::copy

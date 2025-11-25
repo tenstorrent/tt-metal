@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         input_tensor.storage());
 }
 
-static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -101,19 +101,14 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
         (output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
                                                                          : output_tensor.device()->l1_size_per_core());
 
-    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
+    move::MoveOpParallelizationStrategy move_op_parallelization_strategy =
+        move::MoveOpParallelizationStrategy::MULTI_CORE;
     if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and
         compute_with_storage_grid_size.y > 1) {
-        move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
+        move_op_parallelization_strategy = move::MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
-    auto output = operation::run(
-                      MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy},
-                      {input_tensor, output_tensor},
-                      {},
-                      {})
-                      .at(0);
-    return output;
+    return ttnn::prim::move(input_tensor, output_tensor, output_mem_config, move_op_parallelization_strategy);
 }
 
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
@@ -153,18 +148,17 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
             input_address);
         return {output_tensor};
     }
-    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
-    return operation::run(
-               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
-               {input_tensor, output_tensor})
-        .at(0);
+    move::MoveOpParallelizationStrategy move_op_parallelization_strategy =
+        move::MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
+    return ttnn::prim::move(
+        input_tensor, output_tensor, output_tensor.memory_config(), move_op_parallelization_strategy);
 }
 
 ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
         return move_sharded(input_tensor, output_mem_config);
     }
-    return move(input_tensor, output_mem_config);
+    return move_impl(input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement
