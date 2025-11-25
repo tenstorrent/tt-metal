@@ -393,8 +393,11 @@ jobs:
 
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
+          echo "Using model: $HF_MODEL"
           MODEL_NAME="${HF_MODEL/\//--}"
+          echo "Derived model name for cache: $MODEL_NAME"
           export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
+          echo "Using TT_CACHE_PATH: $TT_CACHE_PATH"
 
           # Temporarily allow HF hub access for tokenizer initialization
           # The model files are cached, but vLLM needs to resolve the tokenizer
