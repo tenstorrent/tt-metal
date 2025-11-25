@@ -17,8 +17,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // Local constants for profiler example
-constexpr uint32_t OP_COUNT = 1000;
-constexpr uint32_t MARKER_COUNT = 4;
+constexpr uint32_t DRAM_MARKER_COUNT = 6000;
+constexpr uint32_t FULL_L1_MARKER_COUNT = 256;
 
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
@@ -72,9 +72,7 @@ void RunFillUpAllBuffers(
 
     workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
-        for (int i = 0;
-             i < OP_COUNT * MARKER_COUNT / loop_count;
-             i++) {
+        for (int i = 0; i < DRAM_MARKER_COUNT / FULL_L1_MARKER_COUNT; i++) {
             // Enqueue the same mesh workload multiple times to generate profiler traffic
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }

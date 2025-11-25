@@ -174,8 +174,8 @@ def test_multi_op():
 
 
 def test_multi_op_buffer_overflow():
-    COMPUTE_OP_COUNT = 267
-    DATA_MOVEMENT_OP_COUNT = 1333
+    COMPUTE_OP_COUNT = 200
+    DATA_MOVEMENT_OP_COUNT = 1000
     RUN_COUNT = 1
     REF_COMPUTE_COUNT_DICT = {
         "wormhole_b0": [
@@ -272,7 +272,7 @@ def test_custom_cycle_count():
 
 
 def test_full_buffer():
-    OP_COUNT = 26
+    OP_COUNT = 23
     RISC_COUNT = 5
     ZONE_COUNT = 125
     REF_COUNT_DICT = {
@@ -450,8 +450,8 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
         "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
-        "dispatch_total_cq_cmd_op_time": [236],
-        "dispatch_go_send_wait_time": [236],
+        "dispatch_total_cq_cmd_op_time": [219],
+        "dispatch_go_send_wait_time": [219],
     }
 
     verify_stats(
@@ -500,8 +500,8 @@ def test_dispatch_cores():
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2777, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
-        "Ethernet CQ Prefetch": [572, 1058, 2108, 4030, 7795],
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2083, 2464, 2648, 2827, 3178, 3661, 5011, 5362],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 5846],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
