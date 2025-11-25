@@ -17,20 +17,29 @@ ops:
     skus:
       wh_llmbox:
         time_budget: 90
-  unit:
-    skus:
-      wh_llmbox:
-        time_budget: 50
 fabric:
   integration:
     skus:
       wh_llmbox:
         time_budget: 165
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 50
+ttnn:
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 50
 scaleout:
   integration:
     skus:
       wh_llmbox:
         time_budget: 30
+  unit:
+    skus:
+      wh_llmbox:
+        time_budget: 20
 models:
   integration:
     skus:

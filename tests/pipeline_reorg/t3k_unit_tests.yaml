@@ -13,21 +13,21 @@
   cmd: run_t3000_ttmetal_tests
   sku: wormhole_b0
   owner_id: ULMEPM2MA # Sean Nijjar
-  team: ops
+  team: fabric
   timeout: 40
 
 - name: t3k_ttnn_tests
   cmd: run_t3000_ttnn_tests
   sku: wormhole_b0
   owner_id: UBHPP2NDP # Joseph Chu
-  team: ops
+  team: ttnn
   timeout: 45
 
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
   sku: wormhole_b0
   owner_id: U03NG0A5ND7 # Aditya Saigal
-  team: ops
+  team: scaleout
   timeout: 15
 
 - name: t3k_falcon7b_tests
