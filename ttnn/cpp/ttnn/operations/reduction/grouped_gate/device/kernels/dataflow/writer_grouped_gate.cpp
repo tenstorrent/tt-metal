@@ -26,12 +26,14 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
     DPRINT << "++++++" << ENDL();
 }
 
-FORCE_INLINE void generate_index_tile(const uint32_t index_write_addr, uint32_t start_expert_index) {
+FORCE_INLINE void generate_index_tile(
+    const uint32_t topk_index_creation_cb_index, const uint32_t index_write_addr, uint32_t start_expert_index) {
     constexpr uint32_t face_line = 16;
     constexpr uint32_t face_line_bytes = 32;
     constexpr uint32_t face_size_bytes = 512;
 
     // Create the top two faces by writing 1 face line, then using noc to write the rest of the face
+    cb_reserve_back(topk_index_creation_cb_index, 1);
     for (uint32_t width_face = 0; width_face < 2; width_face++) {
         uint32_t current_index = start_expert_index + width_face * face_line;
         uint32_t index_write_face_offset = index_write_addr + width_face * face_size_bytes;
@@ -59,17 +61,17 @@ FORCE_INLINE void generate_index_tile(const uint32_t index_write_addr, uint32_t 
     // Create the bottom two faces by doing a noc copy of the top two faces
     noc_async_read(index_noc_addr_base, index_write_addr + 2 * face_size_bytes, 2 * face_size_bytes);
     noc_async_read_barrier();
+    cb_push_back(topk_index_creation_cb_index, 1);
 }
 
 FORCE_INLINE void generate_index_tiles(
     const uint32_t topk_index_creation_cb_index, uint32_t width_tiles, uint32_t page_size) {
-    cb_reserve_back(topk_index_creation_cb_index, width_tiles);
     uint32_t write_addr = get_write_ptr(topk_index_creation_cb_index);
     constexpr uint32_t face_size = 16;
     for (uint32_t i = 0; i < width_tiles; i++) {
-        generate_index_tile(get_write_ptr(topk_index_creation_cb_index) + i * page_size, 32 * i);
+        generate_index_tile(
+            topk_index_creation_cb_index, get_write_ptr(topk_index_creation_cb_index) + i * page_size, 32 * i);
     }
-    cb_push_back(topk_index_creation_cb_index, width_tiles);
 }
 
 void kernel_main() {

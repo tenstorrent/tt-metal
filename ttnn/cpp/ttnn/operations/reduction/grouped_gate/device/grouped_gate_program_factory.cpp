@@ -142,6 +142,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"topk_input_cb_index", topk_input_cb_index},
         {"topk_index_cb_index", topk_index_cb_index},
         {"topk_index_creation_cb_index", topk_index_creation_cb_index},
+        {"group_size", experts / operation_attributes.n_groups},
+        {"log_group_size", std::log2(experts / operation_attributes.n_groups)},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
