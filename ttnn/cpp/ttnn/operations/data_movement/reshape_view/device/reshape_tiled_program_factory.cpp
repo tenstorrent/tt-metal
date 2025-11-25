@@ -95,7 +95,7 @@ struct TileIterator {
         tile_idx_w(0),
         tile_end_h(in_end_h - 1),
         tile_end_w(in_end_w - 1),
-        first(true){};
+        first(true) {};
 
     bool next() {
         if (first) {
