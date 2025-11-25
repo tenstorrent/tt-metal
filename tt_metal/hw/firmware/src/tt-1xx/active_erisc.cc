@@ -30,7 +30,9 @@
 #include "debug/waypoint.h"
 
 uint8_t noc_index;
-uint8_t current_kernel_group_noc_mode;
+// Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
+// noc_mode is the same for all erisc kernels in the program
+uint8_t kg_noc_mode;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -90,7 +92,7 @@ inline void wait_subordinate_eriscs() {
         invalidate_l1_cache();
         // If the subordinate is using dynamic NOC mode, it may use NOC0 but we don't need to sync the counters
         // as they are in a shared L1 region with base firmware
-        internal_::risc_context_switch(current_kernel_group_noc_mode == DM_DYNAMIC_NOC);
+        internal_::risc_context_switch(kg_noc_mode == DM_DYNAMIC_NOC);
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 #endif
@@ -218,7 +220,7 @@ int __attribute__((noinline)) main(void) {
 
     set_deassert_addresses();
 
-    current_kernel_group_noc_mode = DM_DEDICATED_NOC;
+    kg_noc_mode = DM_DEDICATED_NOC;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
@@ -290,23 +292,23 @@ int __attribute__((noinline)) main(void) {
             // cmd_buf allocation is determined based on the physical ERISC index in tt_metal/hw/inc/dataflow_cmd_bufs.h
             // ERISC0 is BRISC, ERISC1 is NCRISC.
             //
-            current_kernel_group_noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+            kg_noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            if (current_kernel_group_noc_mode == DM_DEDICATED_NOC) {
-                if (prev_noc_mode != current_kernel_group_noc_mode) {
+            if (kg_noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != kg_noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
                 noc_local_state_init(noc_index);
             } else {
-                if (prev_noc_mode != current_kernel_group_noc_mode) {
+                if (prev_noc_mode != kg_noc_mode) {
                     dynamic_noc_init();
                 }
                 dynamic_noc_local_state_init();
             }
-            prev_noc_mode = current_kernel_group_noc_mode;
+            prev_noc_mode = kg_noc_mode;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
