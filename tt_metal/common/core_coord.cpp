@@ -731,3 +731,8 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
 }
 
 }  // namespace ttsl::json
+
+std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set) {
+    tt::stl::reflection::operator<<(os, core_range_set);
+    return os;
+}
