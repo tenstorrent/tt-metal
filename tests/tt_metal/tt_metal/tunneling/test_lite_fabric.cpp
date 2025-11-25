@@ -27,6 +27,7 @@
 
 #include "tt_metal/lite_fabric/host_util.hpp"
 #include "tt_metal/lite_fabric/build.hpp"
+#include <llrt/tt_cluster.hpp>
 
 // UMD opens lite fabric on P300. Only run this test on P150 so we don't overwrite binaries
 #define CHECK_TEST_REQS()                                                                            \
