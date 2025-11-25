@@ -19,14 +19,14 @@
   cmd: source tests/scripts/t3000/run_t3000_frequent_tests.sh && run_t3000_ethernet_tests
   sku: wh_llmbox
   owner_id: ULMEPM2MA # Sean Nijjar
-  team: ops
+  team: fabric
   timeout: 10
 
 - name: t3k_trace_stress_tests
   cmd: source tests/scripts/t3000/run_t3000_frequent_tests.sh && run_t3000_trace_stress_tests
   sku: wh_llmbox
   owner_id: U03NG0A5ND7 # Aditya Saigal
-  team: ops
+  team: scaleout
   timeout: 30
 
 - name: t3k_falcon40b_tests

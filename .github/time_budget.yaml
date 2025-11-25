@@ -20,7 +20,7 @@ ops:
   integration:
     skus:
       wh_llmbox:
-        time_budget: 70
+        time_budget: 30
 fabric:
   e2e:
     skus:
@@ -30,6 +30,10 @@ fabric:
     skus:
       wh_llmbox:
         time_budget: 40
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 10
 ttnn:
   unit:
     skus:
@@ -44,6 +48,10 @@ scaleout:
     skus:
       wh_llmbox:
         time_budget: 15
+  integration:
+    skus:
+      wh_llmbox:
+        time_budget: 30
 models:
   e2e:
     skus:
