@@ -2,16 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
-import itertools
-import random
-import torch
-import math
-
 import ttnn
 import pytest
-
-from models.common.utility_functions import torch_random
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
 
