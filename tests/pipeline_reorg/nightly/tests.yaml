@@ -30,6 +30,13 @@
   team: fabric
   timeout: 30
 
+- name: t3k_addrgen_write_tests
+  cmd: build/test/tt_metal/tt_fabric/addrgen_write/test_addrgen_write
+  sku: wh_llmbox
+  owner_id: U08LD7UCKDF # Tomer Levin
+  team: scaleout
+  timeout: 10
+
 - name: t3k_dispatch_unit_tests
   cmd: build/test/tt_metal/unit_tests_dispatch --gtest_filter="Large*.NIGHTLY_DRAMReadback/*"
   sku: wh_llmbox
@@ -43,3 +50,10 @@
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   team: fabric
   timeout: 120
+
+- name: models_common_unit_tests
+  cmd: pytest -n auto models/common/tests
+  sku: wh_llmbox
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+  timeout: 10

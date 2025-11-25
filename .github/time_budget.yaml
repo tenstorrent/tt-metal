@@ -27,3 +27,8 @@ scaleout:
     skus:
       wh_llmbox:
         time_budget: 30
+models:
+  nightly:
+    skus:
+      wh_llmbox:
+        time_budget: 10
