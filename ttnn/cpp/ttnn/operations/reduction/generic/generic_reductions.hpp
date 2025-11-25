@@ -9,6 +9,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 namespace operations::reduction {
@@ -31,7 +32,8 @@ struct Reduce {
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         float scalar = 1.0f,
-        bool correction = true);
+        bool correction = true,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
