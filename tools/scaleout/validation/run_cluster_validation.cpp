@@ -18,6 +18,7 @@
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 

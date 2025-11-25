@@ -4,15 +4,13 @@
 
 #include "ttnn/common/queue_id.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include "reduce_scatter.hpp"
 #include "device/reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 

@@ -11,7 +11,7 @@ target_sources(
         convert_to_chw/device/convert_to_chw_device_operation.cpp
         convert_to_chw/device/convert_to_chw_program_factory.cpp
         convert_to_hwc/convert_to_hwc.cpp
-        convert_to_hwc/device/convert_to_hwc_op.cpp
+        convert_to_hwc/device/convert_to_hwc_device_operation.cpp
         convert_to_hwc/device/convert_to_hwc_program_factory.cpp
 )
 

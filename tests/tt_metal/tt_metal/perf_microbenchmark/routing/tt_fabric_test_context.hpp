@@ -72,7 +72,6 @@ using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 
 using Topology = tt::tt_fabric::Topology;
 using FabricConfig = tt::tt_fabric::FabricConfig;
-using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
 using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
@@ -587,7 +586,11 @@ public:
 
         // Copy CSV files to CI artifacts directory
         for (const std::filesystem::path& csv_filepath :
-             {csv_file_path_, csv_summary_file_path_, csv_summary_upload_file_path_, diff_csv_file_path_, comparison_statistics_csv_file_path_}) {
+             {csv_file_path_,
+              csv_summary_file_path_,
+              csv_summary_upload_file_path_,
+              diff_csv_file_path_,
+              comparison_statistics_csv_file_path_}) {
             try {
                 std::filesystem::copy_file(
                     csv_filepath,
@@ -1365,18 +1368,17 @@ private:
         for (const auto& result : bandwidth_results_summary_) {
             // Write upload columns if present
             if (include_upload_columns) {
-                csv_stream << result.file_name.value() << ","
-                          << result.machine_type.value() << ","
-                          << result.test_ts.value() << ",";
+                csv_stream << result.file_name.value() << "," << result.machine_type.value() << ","
+                           << result.test_ts.value() << ",";
             }
 
             // Convert vector of num_devices to a string representation
             std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
 
             // Write standard columns
-            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << ","
-                       << result.topology << ",\"" << num_devices_str << "\"," << result.num_links << ","
-                       << result.packet_size << "," << result.num_iterations;
+            csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
+                       << ",\"" << num_devices_str << "\"," << result.num_links << "," << result.packet_size << ","
+                       << result.num_iterations;
             for (double stat : result.statistics_vector) {
                 csv_stream << "," << std::fixed << std::setprecision(6) << stat;
             }

@@ -13,7 +13,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextMod
 
 from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.experimental.stable_diffusion_35_large.tt.utils import assert_quality
+from models.experimental.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(

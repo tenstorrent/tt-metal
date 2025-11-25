@@ -24,7 +24,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_descriptor.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
@@ -33,6 +33,8 @@
 #include "hw/inc/debug/ring_buffer.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
+#include <impl/debug/watcher_server.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;
 using std::string;

@@ -5,7 +5,6 @@
 #include "optional"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -13,7 +12,7 @@
 #include <algorithm>
 
 #include "slice_op.hpp"
-using namespace tt::constants;
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {

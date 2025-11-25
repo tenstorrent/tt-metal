@@ -4,8 +4,6 @@
 
 #include "typecast_device_op.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::copy {

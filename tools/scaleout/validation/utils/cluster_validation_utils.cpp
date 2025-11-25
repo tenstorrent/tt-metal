@@ -25,6 +25,7 @@
 #include <google/protobuf/text_format.h>
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 

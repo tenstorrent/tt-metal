@@ -410,6 +410,7 @@ Tensor FoldOperation::invoke(
     const bool has_c_padding = (pad_c_front | pad_c_back) != 0;
 
     const Tensor& input_tensor = input_tensor_;
+    TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
 
     // Legacy transpose-based fold (TODO: remove when #29514 is solved)
     if (use_transpose_as_fold) {

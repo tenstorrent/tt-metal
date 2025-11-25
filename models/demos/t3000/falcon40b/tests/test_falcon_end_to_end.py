@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
@@ -241,7 +241,6 @@ def run_test_FalconCausalLM_end_to_end(
     # Second run for perf ----------------------------------------------------------------
     logger.info(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     if llm_mode == "prefill":
         model_inputs = torch.split(model_input, 1)
@@ -503,8 +502,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     tt_cache_path = Path(get_hf_tt_cache_path(model_version))
-
-    disable_persistent_kernel_cache()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,

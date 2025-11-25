@@ -12,7 +12,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn-pybind/decorators.hpp"
 
 #include "conv1d.hpp"

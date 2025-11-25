@@ -109,6 +109,7 @@ def test_crossattnup(
         ttnn_residual_tensors = ttnn_residual_tensors + (ttnn_residual,)
 
     ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_encoder_tensor = ttnn.from_torch(
         torch_encoder_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
     )

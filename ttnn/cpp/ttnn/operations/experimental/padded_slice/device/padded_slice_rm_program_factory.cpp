@@ -18,14 +18,12 @@
 #include <cstdint>
 #include <ranges>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::padded_slice::program {

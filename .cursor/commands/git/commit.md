@@ -15,6 +15,7 @@ Create a git commit with an appropriate commit message following conventional co
    - Reference issues in footer if applicable
 
 3. **Address any issues surfaced by a precommit hook**
+   - If clang format caused some files to change - re-add and commit again
 
 
 **Commit types**
