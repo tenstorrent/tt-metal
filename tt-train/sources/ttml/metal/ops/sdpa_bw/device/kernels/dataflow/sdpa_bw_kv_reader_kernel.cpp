@@ -105,8 +105,8 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    DPRINT << "SDPA BW: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", qWt=" << qWt
-           << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads =" << q_heads << ", scaler=" << scaler
+    DPRINT << "SDPA BW KV: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row
+           << ", qWt=" << qWt << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads =" << q_heads << ", scaler=" << scaler
            << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf << ENDL();
 
     // process rows of K and V assigned to this core
@@ -135,7 +135,8 @@ void kernel_main() {
         // jump to relevent batch and head, then jump to the row in attn_mask associated with current row of K and V
         uint32_t mask_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * Ht + (global_row_idx % Ht);
 
-        uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht;
+        // add change here: multiply by num_of_interm_tiles because we need to read 2 tiles per head row
+        uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
 
         // TODO: add calculation for dO, O indexes because in forward pass they are stored with shape (B, 1, S,
         // qNH*qEmbd)

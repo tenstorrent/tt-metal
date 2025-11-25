@@ -80,11 +80,11 @@ const uint32_t num_of_interm_tiles = 2U;  // number of tiles in intermediates bu
 
 void MAIN {
     init_sfpu(cb_query, cb_key);
-    binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    binary_op_init_common(cb_grad_output, cb_query, cb_key);
 
-    cb_wait_front(cb_reduction_scaler);
-    cb_wait_front(cb_mat_mul_reduction);
+    cb_wait_front(cb_reduction_scaler, onetile);
+    cb_wait_front(cb_mat_mul_reduction, onetile);
+    mm_init(cb_query, cb_key, cb_attention_weights);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_query, tiles_per_row);
@@ -92,11 +92,20 @@ void MAIN {
         cb_wait_front(cb_grad_output, tiles_per_row);
 
         uint32_t alias_cb_prev_grad_query = cb_prev_grad_query;
-        ;
         uint32_t alias_cb_cur_grad_query = cb_cur_grad_query;
+
+        // mask intermediates inplace: keep column 0 of `intermediates`, zero everything else.
+        mask_intermediates(cb_intermediates, cb_mat_mul_reduction, cb_masked_interm, num_of_interm_tiles);
+        DPRINT << "Intermediates masked" << ENDL();
+
+        // Step 2: calculate u_scalar row
+        // Calculate u_scalar row once before K/V loop
+        compute_u_scalar_row(cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row);
+        DPRINT << "u_scalar_row computed" << ENDL();
 
         const uint32_t matmul_accum_reg = 0;
         for (uint32_t h = 0; h < Ht; ++h) {
+            DPRINT << "Q_KERNEL: Processing row=" << row << ", h=" << h << " / " << Ht << ENDL();
             cb_wait_front(cb_key, tiles_per_row);
             cb_wait_front(cb_value, tiles_per_row);
 
@@ -106,6 +115,7 @@ void MAIN {
             mm_init(cb_query, cb_key, cb_attention_weights, /* transpose */ 1);
             // TODO(vmelnykov): switch to use mm_init_short instead of mm_init
             // mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            tile_regs_acquire();
             for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
                 matmul_tiles(
                     cb_query,
@@ -128,26 +138,26 @@ void MAIN {
             pack_tile(matmul_accum_reg, cb_attention_weights);
             tile_regs_release();
             cb_push_back(cb_attention_weights, onetile);
+            DPRINT << "Mask applied on attention weights" << ENDL();
 
-            // mask intermediates inplace: keep column 0 of `intermediates`, zero everything else.
-            mask_intermediates(cb_intermediates, cb_mat_mul_reduction, cb_masked_interm, num_of_interm_tiles);
+            // // mask intermediates inplace: keep column 0 of `intermediates`, zero everything else.
+            // mask_intermediates(cb_intermediates, cb_mat_mul_reduction, cb_masked_interm, num_of_interm_tiles);
+            // DPRINT << "Intermediates masked" << ENDL();
 
             // apply statistics inplace: softmax(QK^T / sqrt(Et))
-            apply_statistics_inplace(cb_attention_weights, cb_masked_interm, cb_mat_mul_reduction, num_of_interm_tiles);
-
-            // Step 2: calculate u_scalar row
-            // Probably for grad Q I can calculate u_scalar_row once before K/V loop
-            compute_u_scalar_row(cb_grad_output, cb_attn_output, cb_u_scalar_row, cb_mat_mul_reduction, tiles_per_row);
+            apply_statistics_inplace(cb_attention_weights, cb_masked_interm, num_of_interm_tiles);
+            DPRINT << "Attention weights softmaxed" << ENDL();
 
             // Step 3: compute grad w.r.t attention weights
             // dP = dO @ V^T (where dO is upsteam grad_output)
             compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights);
+            DPRINT << "Grad attention weights computed" << ENDL();
 
             // Step 4: softmax backward block
             // dZ = (dP - u_scalar_row) * P (where P is attention weights, * - element-wise multiplication)
             compute_grad_scores(
                 cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
-
+            DPRINT << "Grad scores computed" << ENDL();
             // Step 5: compute grad w.r.t. query
             // dQ = scaler * (dZ @ K)
             update_grad_query(
@@ -158,21 +168,25 @@ void MAIN {
                 alias_cb_cur_grad_query,
                 tiles_per_row,
                 /* do_accumulate */ (h > 0));
-            
+            cb_wait_front(alias_cb_cur_grad_query, tiles_per_row);
+            DPRINT << "Grad query updated" << ENDL();
             // Swap current and previous grad_query buffers
             std::swap(alias_cb_prev_grad_query, alias_cb_cur_grad_query);
 
             // Pop CBs for next K/V block
             cb_pop_front(cb_key, tiles_per_row);
             cb_pop_front(cb_value, tiles_per_row);
+
             cb_pop_front(cb_attention_weights, onetile);
             cb_pop_front(cb_grad_attn_weights, onetile);
-            cb_pop_front(cb_u_scalar_row, onetile);
         }
 
         // Push final grad_query to output CB
         pack_result(alias_cb_prev_grad_query, cb_grad_query, tiles_per_row);
+        DPRINT << "Final grad_query packed" << ENDL();
 
+        cb_pop_front(cb_u_scalar_row, onetile);
+        cb_pop_front(cb_masked_interm, num_of_interm_tiles);
         cb_pop_front(cb_query, tiles_per_row);
         cb_pop_front(cb_attn_output, tiles_per_row);
         cb_pop_front(cb_grad_output, tiles_per_row);

@@ -145,8 +145,7 @@ void MAIN {
                 mask_intermediates(cb_intermediates, cb_mat_mul_reduction, cb_masked_interm, num_of_interm_tiles);
 
                 // apply statistics inplace: softmax(QK^T / sqrt(Et))
-                apply_statistics_inplace(
-                    cb_attention_weights, cb_masked_interm, cb_mat_mul_reduction, num_of_interm_tiles);
+                apply_statistics_inplace(cb_attention_weights, cb_masked_interm, num_of_interm_tiles);
 
                 // Step 2: Accumulate grad_V = Attention^T @ grad_output
                 update_grad_value(
@@ -187,6 +186,8 @@ void MAIN {
                 cb_pop_front(cb_grad_attn_weights, onetile);
                 cb_pop_front(cb_grad_scores, onetile);
                 cb_pop_front(cb_attention_weights, onetile);
+                // pop intermediates here because they are not used anymore
+                cb_pop_front(cb_masked_interm, num_of_interm_tiles);
 
                 cb_pop_front(cb_query, tiles_per_row);
                 cb_pop_front(cb_grad_output, tiles_per_row);
@@ -211,4 +212,3 @@ void MAIN {
 }
 
 }  // namespace NAMESPACE
-

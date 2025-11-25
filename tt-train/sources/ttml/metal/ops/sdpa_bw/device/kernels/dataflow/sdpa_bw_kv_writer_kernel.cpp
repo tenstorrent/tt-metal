@@ -81,12 +81,10 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_grad_key, kWt);
 
-        // for (uint32_t h = 0; h < Ht; ++h) {
-        //     cb_wait_front(cb_grad_key, onetile);
-        //     uint32_t l1_grad_k_read_addr = get_read_ptr(cb_grad_key);
-        //     noc_async_write_tile(h, grad_key_addr_generator, l1_grad_k_read_addr);
-        //     noc_async_write_barrier();
-        //     cb_pop_front(cb_grad_key, onetile);
-        // }
+        // cb_wait_front(cb_grad_query, onetile);
+        // uint32_t grad_query_l1_read_addr = get_read_ptr(cb_grad_query);
+        // noc_async_write_tile(r * qWt, grad_query_addr_generator, grad_query_l1_read_addr);
+        // noc_async_write_barrier();
+        // cb_pop_front(cb_grad_query, onetile);
     }
 }

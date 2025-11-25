@@ -144,6 +144,8 @@ void assign_per_core_runtime_args(
                 num_rows_per_core,             // rows to process in this kernel
                 num_rows_written               // starting row for this core
             });
+
+        num_rows_written += num_rows_per_core;
     }
 }
 
@@ -208,6 +210,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
 
     // Scale factor for attention computation
+    // TODO(vmelnykov): double check if this is correct
     float per_head_dim = static_cast<float>(qEmbd) / static_cast<float>(qNH);
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);

@@ -95,16 +95,29 @@ void kernel_main() {
     const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
+    const uint32_t num_of_interm_tiles = 2U;
+
+    const float scaler = uint32_to_float(scaler_bits);
+    const float minus_one = uint32_to_float(minus_one_bits);
+    const float custom_inf = uint32_to_float(custom_inf_bits);
+
+    DPRINT << "SDPA BW Q: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", qWt=" << qWt
+           << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads =" << q_heads << ", scaler=" << scaler
+           << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf << ENDL();
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         uint32_t global_row_idx = start_row + i;
         uint32_t q_start_idx = global_row_idx * qWt;
+        DPRINT << "Q_READER: Processing row " << i << ", global_row_idx=" << global_row_idx
+               << ", q_start_idx=" << q_start_idx << ENDL();
         // Read query row
         read_row(q_start_idx, qWt, cb_query, query_addr_generator, tile_bytes);
         // Read attn_output row
         read_row(q_start_idx, qWt, cb_attn_output, attn_output_addr_generator, tile_bytes);
         // Read grad_output row
         read_row(q_start_idx, qWt, cb_grad_output, grad_output_addr_generator, tile_bytes);
+
+        uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
 
         // which batch we are processing right now
         uint32_t batch_idx = global_row_idx / (Ht * q_heads);
@@ -117,18 +130,41 @@ void kernel_main() {
         // calculate the starting index of attn_mask to read
         uint32_t mask_offset = (batch_idx * q_heads + q_head_idx) * Ht * Ht + (global_row_idx % Ht) * Ht;
 
+        DPRINT << "Q_READER: batch_idx=" << batch_idx << ", q_head_idx=" << q_head_idx
+               << ", kv_group_idx=" << kv_group_idx << ENDL();
+        DPRINT << "Q_READER: kv_offset=" << kv_offset << ", mask_offset=" << mask_offset << ENDL();
+
+        // read intermediates for current row of Q
+        uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
+        DPRINT << "Q_READER: intermediates_idx=" << intermediates_idx << ENDL();
+        read_row(intermediates_idx, num_of_interm_tiles, cb_intermediates, intermediates_addr_generator, tile_bytes);
+
+        // cb_wait_front(cb_intermediates, num_of_interm_tiles);
+        // print_tile(cb_intermediates, 0);
+        // print_tile(cb_intermediates, 1);
+
         for (uint32_t h = 0; h < Ht; ++h) {
             uint32_t kv_start_idx =
                 kv_offset + h * qWt;  // jump to the next row of K and V, qWt == kWt == vWt(same embedding size)
+
+            if (i == 0 && h == 0) {
+                DPRINT << "Q_READER: First K/V row - kv_start_idx=" << kv_start_idx << ENDL();
+            }
+
             // Read one row of K and V
             read_row(kv_start_idx, qWt, cb_key, key_addr_generator, tile_bytes);
             read_row(kv_start_idx, qWt, cb_value, value_addr_generator, tile_bytes);
 
             // read one tile of attn_mask for current row of K and V
             // row of K define the column in (QK^T) matrix, so it define the column of attn_mask to read
+            uint32_t mask_tile_idx = mask_offset + h;
+            if (i == 0 && h == 0) {
+                DPRINT << "Q_READER: mask_tile_idx=" << mask_tile_idx << ENDL();
+            }
+
             cb_reserve_back(cb_attn_mask, onetile);
             uint32_t attn_mask_l1_write_addr = get_write_ptr(cb_attn_mask);
-            noc_async_read_tile(mask_offset + h, mask_addr_generator, attn_mask_l1_write_addr);
+            noc_async_read_tile(mask_tile_idx, mask_addr_generator, attn_mask_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_attn_mask, onetile);
         }

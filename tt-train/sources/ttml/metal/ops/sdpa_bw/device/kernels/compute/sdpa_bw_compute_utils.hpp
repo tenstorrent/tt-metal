@@ -18,6 +18,9 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+// test
+#include "compute_kernel_api/eltwise_unary/fill.h"
+
 constexpr uint32_t onetile = 1U;
 
 #ifdef FP32_DEST_ACC_EN
@@ -82,13 +85,13 @@ void mask_intermediates(
     cb_wait_front(cb_intermediates, num_of_interm_tiles);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < num_of_interm_tiles; ++tile_idx) {
-        UNPACK({ DPRINT << "Copying intermediates tile " << tile_idx << " to " << 2 * tile_idx << ENDL(); });
+        // UNPACK({ DPRINT << "Copying intermediates tile " << tile_idx << " to " << 2 * tile_idx << ENDL(); });
         copy_tile_init(cb_intermediates);
         copy_tile(cb_intermediates, /* tile_idx */ tile_idx, /* register idx */ 2 * tile_idx);
 
-        UNPACK({
-            DPRINT << "Copying matmul reduction for tile " << 2 * tile_idx << " to " << 2 * tile_idx + 1 << ENDL();
-        });
+        // UNPACK({
+        //     DPRINT << "Copying matmul reduction for tile " << 2 * tile_idx << " to " << 2 * tile_idx + 1 << ENDL();
+        // });
         copy_tile_init(cb_mat_mul_reduction);
         copy_tile(cb_mat_mul_reduction, /* tile_idx */ 0, /* register idx */ 2 * tile_idx + 1);
 
@@ -109,16 +112,14 @@ void mask_intermediates(
     cb_pop_front(cb_intermediates, num_of_interm_tiles);
 }
 
-void apply_statistics_inplace(
-    uint32_t cb_attention_weights,
-    uint32_t cb_masked_interm,
-    uint32_t cb_mat_mul_reduction,
-    uint32_t num_of_interm_tiles) {
+void apply_statistics_inplace(uint32_t cb_attention_weights, uint32_t cb_masked_interm, uint32_t num_of_interm_tiles) {
     cb_wait_front(cb_attention_weights, onetile);
     cb_wait_front(cb_masked_interm, num_of_interm_tiles);
 
     const uint32_t working_reg = 0;
     const uint32_t intermediates_reg = 1U;
+
+    init_bcast<ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_masked_interm, cb_attention_weights);
 
     reconfig_data_format(cb_attention_weights, cb_masked_interm);
     tile_regs_acquire();
@@ -147,98 +148,9 @@ void apply_statistics_inplace(
     cb_push_back(cb_attention_weights, onetile);
 
     // [DPRINT]: For debug, should be removed later
-    cb_pop_front(cb_masked_interm, num_of_interm_tiles);
+    // need to pop intermediates outside this function because for grad Q kernel I need one interm per q row
+    // cb_pop_front(cb_masked_interm, num_of_interm_tiles);
 }
-
-// Compute gradient w.r.t. V: grad_V = Attention^T @ grad_output
-// void update_grad_value(
-//     uint32_t cb_attention_weights,
-//     uint32_t cb_transpose_wh,
-//     uint32_t cb_grad_output,
-//     uint32_t cb_mm_result_holder,
-//     uint32_t cb_grad_value,
-//     uint32_t tiles_per_row,
-//     uint32_t block_size,
-//     bool do_accumulate = false) {
-//     cb_wait_front(cb_attention_weights, onetile);
-//     // cb_wait_front(cb_grad_output, tiles_per_row); // wait it once when loop starts
-
-//     // transpose attention weights
-//     cb_reserve_back(cb_transpose_wh, onetile);
-//     pack_reconfig_data_format(cb_transpose_wh);
-//     tile_regs_acquire();
-//     transpose_wh_init(cb_attention_weights, cb_transpose_wh);
-//     transpose_wh_tile(cb_attention_weights, /* tile idx */ 0, /* reg idx */ 0);
-//     tile_regs_commit();
-
-//     tile_regs_wait();
-//     pack_tile(0, cb_transpose_wh);
-//     tile_regs_release();
-//     cb_push_back(cb_transpose_wh, onetile);
-
-//     // grad_V = Attention^T @ grad_output
-//     cb_wait_front(cb_transpose_wh, onetile);
-//     reconfig_data_format(cb_transpose_wh, cb_grad_output);
-//     // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
-//     mm_init(cb_transpose_wh, cb_grad_output, cb_grad_value, 0);
-
-//     if (do_accumulate) {
-//         cb_wait_front(cb_grad_value, tiles_per_row);
-//     }
-
-//     cb_reserve_back(cb_mm_result_holder, tiles_per_row);
-//     pack_reconfig_data_format(cb_mm_result_holder);
-//     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
-//         tile_regs_acquire();
-//         mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
-//         matmul_tiles(
-//             cb_transpose_wh,
-//             cb_grad_output,
-//             /* tile_idx */ 0,
-//             /* tile_idx */ tile_idx,
-//             /* dst_reg_idx*/ 0,
-//             /* transpose */ 0);
-
-//         if (do_accumulate) {
-//             copy_tile_init(cb_grad_value);
-//             copy_tile(cb_grad_value, /* tile_idx */ tile_idx, /* register idx */ 1U);
-
-//             add_binary_tile_init();
-//             add_binary_tile(0, 1U, 0);  // accumulate in register 0
-//         }
-
-//         tile_regs_commit();
-
-//         tile_regs_wait();
-//         pack_tile(0, cb_mm_result_holder);
-//         tile_regs_release();
-//     }
-//     cb_push_back(cb_mm_result_holder, tiles_per_row);
-
-//     if (do_accumulate) {
-//         cb_pop_front(cb_grad_value, tiles_per_row);
-//     }
-
-//     // dummy implementation
-//     cb_wait_front(cb_mm_result_holder, tiles_per_row);
-//     cb_reserve_back(cb_grad_value, tiles_per_row);
-//     pack_reconfig_data_format(cb_grad_value);
-//     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
-//         tile_regs_acquire();
-//         copy_tile_init(cb_mm_result_holder);
-//         copy_tile(cb_mm_result_holder, /* tile_idx */ tile_idx, /* register idx */ 0);
-//         tile_regs_commit();
-
-//         tile_regs_wait();
-//         pack_tile(0, cb_grad_value);
-//         tile_regs_release();
-//     }
-//     cb_push_back(cb_grad_value, tiles_per_row);
-
-//     // pop data from temporary cbs
-//     cb_pop_front(cb_transpose_wh, onetile);
-//     cb_pop_front(cb_mm_result_holder, tiles_per_row);
-// }
 
 inline void transpose_attn_weights(uint32_t cb_attention_weights, uint32_t cb_transpose_wh) {
     cb_wait_front(cb_attention_weights, onetile);
@@ -360,6 +272,7 @@ void compute_grad_attn_weights(
     uint32_t cb_grad_output, uint32_t cb_value, uint32_t tiles_per_row, uint32_t cb_grad_attn_weights) {
     reconfig_data_format(cb_grad_output, cb_value);
     mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
+    // mm_init(cb_grad_output, cb_value, cb_grad_attn_weights, /* transpose */ 1);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         matmul_tiles(
@@ -381,7 +294,7 @@ void compute_grad_attn_weights(
     cb_push_back(cb_grad_attn_weights, onetile);
 }
 
-// Compute gradient w.r.t. scores(before softmax) dL/d(Q@K^T)
+// Compute gradient w.r.t. scores(before softmax) dL/dZ = dL/d(Q@K^T) = (dP - u_scalar_row) * P
 void compute_grad_scores(
     uint32_t cb_grad_attn_weights,
     uint32_t cb_attention_weights,
@@ -487,6 +400,7 @@ void update_grad_query(
     uint32_t cb_cur_grad_query,
     uint32_t tiles_per_row,
     bool do_accumulate = false) {
+    cb_wait_front(cb_grad_scores, onetile);
     cb_reserve_back(cb_cur_grad_query, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_query);
     reconfig_data_format(cb_grad_scores, cb_key);

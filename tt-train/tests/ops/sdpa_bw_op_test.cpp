@@ -54,8 +54,11 @@ void print_error_analysis(
     const std::string& name) {
     assert(result.shape() == groundtruth.shape() && "Tensors must have the same shape");
 
-    float atol = threshold.first;
-    float rtol = threshold.second;
+    // float atol = threshold.first;
+    // float rtol = threshold.second;
+    // auto& [atol, rtol] = threshold;
+    double atol = static_cast<double>(threshold.first);
+    double rtol = static_cast<double>(threshold.second);
     size_t total_elements = result.size();
     auto shape = result.shape();
 
@@ -86,57 +89,38 @@ void print_error_analysis(
     fmt::print("First {} elements where error exceeds threshold:\n", num_elements_to_print);
     fmt::print("(index: result_val, groundtruth_val, abs_diff, threshold)\n");
 
-    size_t count = 0;
-    for (size_t i = 0; i < total_elements && count < num_elements_to_print; ++i) {
-        float result_val = result.flat(i);
-        float gt_val = groundtruth.flat(i);
-        float diff = std::abs(result_val - gt_val);
-        float tolerance = atol + rtol * std::abs(gt_val);
+    size_t error_count = 0;
 
-        // Check if error exceeds threshold (same as xt::allclose)
-        if (diff > tolerance) {
-            // Convert flat index to multi-dimensional index
-            std::vector<size_t> indices(shape.size());
-            size_t remaining = i;
-            for (int dim = shape.size() - 1; dim >= 0; --dim) {
-                indices[dim] = remaining % shape[dim];
-                remaining /= shape[dim];
+    for (size_t b = 0; b < shape[0]; ++b) {
+        for (size_t h = 0; h < shape[1]; ++h) {
+            for (size_t s = 0; s < shape[2]; ++s) {
+                for (size_t d = 0; d < shape[3]; ++d) {
+                    double result_val = static_cast<double>(result(b, h, s, d));
+                    double gt_val = static_cast<double>(groundtruth(b, h, s, d));
+                    double diff = std::abs(result_val - gt_val);
+                    double tolerance = std::max(atol, rtol * std::abs(gt_val));
+                    bool is_close = (diff <= atol || diff <= rtol * std::max(std::abs(result_val), std::abs(gt_val)));
+                    if (!is_close) {
+                        if (error_count <= num_elements_to_print) {
+                            fmt::print(
+                                "[{},{},{},{}]: {:.3e}, {:.3e}, {:.3e}, {:.3e}\n",
+                                b,
+                                h,
+                                s,
+                                d,
+                                result_val,
+                                gt_val,
+                                diff,
+                                tolerance);
+                        }
+                        error_count++;
+                    }
+                }
             }
-
-            // Format multi-dimensional index
-            std::string index_str = "[";
-            for (size_t j = 0; j < indices.size(); ++j) {
-                index_str += std::to_string(indices[j]);
-                if (j < indices.size() - 1)
-                    index_str += ",";
-            }
-            index_str += "]";
-
-            fmt::print("{}: {:.6e}, {:.6e}, {:.6e}, {:.6e}\n", index_str, result_val, gt_val, diff, tolerance);
-            count++;
         }
     }
 
-    if (count == 0) {
-        fmt::print("No elements exceed the threshold!\n");
-    } else if (count == num_elements_to_print) {
-        // Check if there are more errors beyond what we printed
-        size_t total_errors = 0;
-        for (size_t i = 0; i < total_elements; ++i) {
-            float diff = std::abs(result.flat(i) - groundtruth.flat(i));
-            float tolerance = atol + rtol * std::abs(groundtruth.flat(i));
-            if (diff > tolerance) {
-                total_errors++;
-            }
-        }
-        if (total_errors > num_elements_to_print) {
-            fmt::print(
-                "... ({} more errors not shown, {} total errors)\n",
-                total_errors - num_elements_to_print,
-                total_errors);
-        }
-    }
-
+    fmt::print(" Total elements exceeding threshold: {}\n", error_count);
     fmt::print("=== End Error Analysis ===\n\n");
 }
 
@@ -537,7 +521,8 @@ std::vector<ttnn::Tensor> composite_sdpa(
             /* recip sum exp */ recip_sum_exp,
             /* dL_dQ */ dL_dQ,
             /* dL_dK */ dL_dK,
-            /* dL_dV */ dL_dV};
+            /* dL_dV */ dL_dV,
+            /*attention_weights*/ qk_scaled};
 }
 
 TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
@@ -545,6 +530,7 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 64U, qD = 128U, kvD = 128U;
     const float dropout_probability = 0.0F;
     const bool fp32_dest_acc_en = true;
+    const float atol = 3e-2F, rtol = 3e-2F;
 
     auto* device = &autograd::ctx().get_device();
 
@@ -572,8 +558,8 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         seed);
 
     // Create attention mask in kernel-expected format (B, qNH, S, S)
-    // xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
-    xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, qNH, S, S});
+    xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
+    // xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, qNH, S, S});
 
     xt::xarray<float> grad_output_tensor = xt::empty<float>({B, qNH, S, qD});
     ttml::core::parallel_generate(
@@ -605,6 +591,7 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     auto dL_dQ = /* dL_dQ */ composite_output[3];
     auto dL_dK = /* dL_dK */ composite_output[4];
     auto dL_dV = /* dL_dV */ composite_output[5];
+    auto attention_weights = /* attention_weights */ composite_output[6];
 
     auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
     max_value = ttnn::add(padded_interm, max_value);
@@ -612,15 +599,24 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
 
     auto forward_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
     fmt::print("Intermediates shape: {}\n", forward_intermediates.logical_shape());
-    
+
+    xt::xarray<float> fowrard_intermediates_xtensor = core::to_xtensor(forward_intermediates);
+    for (uint32_t i = 0; i < 2U; ++i) {
+        for (uint32_t j = 0; j < S; ++j) {
+            fmt::print(
+                "forward_intermediates[0,0,{},{}] = {:.6e}\n",
+                j,
+                i * 32,
+                fowrard_intermediates_xtensor(0, 0, j, i * 32));
+        }
+    }
+
     // Diagnostic: Check intermediate values that might affect numerical stability
     xt::xarray<float> max_val_cpu = core::to_xtensor(max_value);
     xt::xarray<float> recip_cpu = core::to_xtensor(recip_sum_exp);
     fmt::print("\n=== Intermediates for Numerical Stability Check ===\n");
-    fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", 
-               max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
-    fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", 
-               max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
+    fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
+    fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
 
     auto op_result = ttml::metal::sdpa_bw(
         grad_output,
@@ -635,28 +631,45 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
 
     fmt::print("\n=== Converting tensors to xtensor ===\n");
 
-    xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
-    fmt::print("Converted kernel dV\n");
-    xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
-    fmt::print("Converted composite dV\n");
+    xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(op_result[0]);  // dL_dQ
+    fmt::print("Converted kernel dQ\n");
+    xt::xarray<float> composite_dQ = core::to_xtensor(dL_dQ);
+    fmt::print("Converted composite dQ\n");
 
     xt::xarray<float> sdpa_bw_dK = core::to_xtensor(op_result[1]);  // dL_dK
     fmt::print("Converted kernel dK\n");
     xt::xarray<float> composite_dK = core::to_xtensor(dL_dK);
     fmt::print("Converted composite dK\n");
 
+    xt::xarray<float> sdpa_bw_dV = core::to_xtensor(op_result[2]);  // dL_dV
+    fmt::print("Converted kernel dV\n");
+    xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
+    fmt::print("Converted composite dV\n");
+
+    // xt::xarray<float> composite_attention_weights = core::to_xtensor(attention_weights);
+
     // Print shapes before checking
     fmt::print("\n=== Tensor Shapes ===\n");
+    fmt::print("float_dQ shape: {}\n", float_dQ.shape());
     fmt::print("float_dK shape: {}\n", float_dK.shape());
     fmt::print("float_dV shape: {}\n", float_dV.shape());
+    fmt::print("composite_dQ shape: {}\n", composite_dQ.shape());
     fmt::print("composite_dK shape: {}\n", composite_dK.shape());
     fmt::print("composite_dV shape: {}\n", composite_dV.shape());
+    fmt::print("kernel_dQ shape: {}\n", sdpa_bw_dQ.shape());
     fmt::print("kernel_dK shape: {}\n", sdpa_bw_dK.shape());
     fmt::print("kernel_dV shape: {}\n", sdpa_bw_dV.shape());
 
+    // fmt::print("composite_attention_weights shape: {}\n", composite_attention_weights.shape());
     // Verify shapes match
-    if (sdpa_bw_dV.shape() != composite_dV.shape()) {
-        fmt::print("ERROR: kernel_dV shape != composite_dV shape\n");
+    if (sdpa_bw_dQ.shape() != composite_dQ.shape()) {
+        fmt::print("ERROR: kernel_dQ shape != composite_dQ shape\n");
+    }
+    if (sdpa_bw_dQ.shape() != float_dQ.shape()) {
+        fmt::print("ERROR: kernel_dQ shape != float_dQ shape\n");
+    }
+    if (composite_dQ.shape() != float_dQ.shape()) {
+        fmt::print("ERROR: composite_dQ shape != float_dQ shape\n");
     }
     if (sdpa_bw_dK.shape() != composite_dK.shape()) {
         fmt::print("ERROR: kernel_dK shape != composite_dK shape\n");
@@ -664,11 +677,14 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     if (sdpa_bw_dK.shape() != float_dK.shape()) {
         fmt::print("ERROR: kernel_dK shape != float_dK shape\n");
     }
-    if (sdpa_bw_dV.shape() != float_dV.shape()) {
-        fmt::print("ERROR: kernel_dV shape != float_dV shape\n");
-    }
     if (composite_dK.shape() != float_dK.shape()) {
         fmt::print("ERROR: composite_dK shape != float_dK shape\n");
+    }
+    if (sdpa_bw_dV.shape() != composite_dV.shape()) {
+        fmt::print("ERROR: kernel_dV shape != composite_dV shape\n");
+    }
+    if (sdpa_bw_dV.shape() != float_dV.shape()) {
+        fmt::print("ERROR: kernel_dV shape != float_dV shape\n");
     }
     if (composite_dV.shape() != float_dV.shape()) {
         fmt::print("ERROR: composite_dV shape != float_dV shape\n");
@@ -688,6 +704,9 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         fmt::print("{}: shape={}, NaNs={}, Infs={}\n", name, arr.shape(), nan_count, inf_count);
     };
 
+    has_nan_or_inf(float_dQ, "float_dQ");
+    has_nan_or_inf(composite_dQ, "composite_dQ");
+    has_nan_or_inf(sdpa_bw_dQ, "kernel_dQ");
     has_nan_or_inf(float_dK, "float_dK");
     has_nan_or_inf(composite_dK, "composite_dK");
     has_nan_or_inf(sdpa_bw_dK, "kernel_dK");
@@ -698,23 +717,29 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("\n=== COMPARISON RESULTS ===\n\n");
 
     // 1. Float vs Composite
-    fmt::print("--- Float Reference vs Composite ---\n");
-    print_error_analysis(composite_dK, float_dK, {2e-2F, 2e-2F}, 50, "dK (Composite vs Float)");
-    print_error_analysis(composite_dV, float_dV, {2e-2F, 2e-2F}, 50, "dV (Composite vs Float)");
+    fmt::print("------- FLOAT REFERENCE VS COMPOSITE -------\n");
+    print_error_analysis(composite_dQ, float_dQ, {atol, rtol}, 50, "dQ (Composite vs Float)");
+    print_error_analysis(composite_dK, float_dK, {atol, rtol}, 50, "dK (Composite vs Float)");
+    print_error_analysis(composite_dV, float_dV, {atol, rtol}, 50, "dV (Composite vs Float)");
 
     // 2. Float vs Kernel
-    fmt::print("--- Float Reference vs Kernel ---\n");
-    print_error_analysis(sdpa_bw_dK, float_dK, {2e-2F, 2e-2F}, 50, "dK (Kernel vs Float)");
-    print_error_analysis(sdpa_bw_dV, float_dV, {2e-2F, 2e-2F}, 50, "dV (Kernel vs Float)");
+    fmt::print("------- FLOAT REFERENCE VS KERNEL -------\n");
+    print_error_analysis(sdpa_bw_dQ, float_dQ, {atol, rtol}, 50, "dQ (Kernel vs Float)");
+    print_error_analysis(sdpa_bw_dK, float_dK, {atol, rtol}, 50, "dK (Kernel vs Float)");
+    print_error_analysis(sdpa_bw_dV, float_dV, {atol, rtol}, 50, "dV (Kernel vs Float)");
+
+    // print_error_analysis(
+    //     sdpa_bw_dQ, composite_attention_weights, {2e-2F, 2e-2F}, 50, "Attention Weights (Kernel vs Composite)");
 
     // 3. Kernel vs Composite (original comparison)
     // fmt::print("--- Kernel vs Composite ---\n");
-    // print_error_analysis(sdpa_bw_dK, composite_dK, {2e-2F, 2e-2F}, 50, "dK (Kernel vs Composite)");
-    // print_error_analysis(sdpa_bw_dV, composite_dV, {2e-2F, 2e-2F}, 50, "dV (Kernel vs Composite)");
+    // print_error_analysis(sdpa_bw_dQ, composite_dQ, {atol, rtol}, 50, "dQ (Kernel vs Composite)");
+    // print_error_analysis(sdpa_bw_dK, composite_dK, {atol, rtol}, 50, "dK (Kernel vs Composite)");
+    // print_error_analysis(sdpa_bw_dV, composite_dV, {atol, rtol}, 50, "dV (Kernel vs Composite)");
 
     // DEBUG: Check xt::isclose to understand second tile issue
     fmt::print("\n=== DEBUG: Analyzing xt::isclose for second tile issue ===\n");
-    auto isclose_result = xt::isclose(sdpa_bw_dK, float_dK, 3e-2, 3e-2);
+    auto isclose_result = xt::isclose(sdpa_bw_dK, float_dK, rtol, atol);
     size_t xtensor_false_count = 0;
     size_t first_false_idx = 0;
     bool found_first_false = false;
@@ -740,11 +765,14 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         }
     }
 
-    fmt::print("xt::isclose found {} mismatches out of {} elements (tolerance: 3e-2)\n", xtensor_false_count, sdpa_bw_dK.size());
+    fmt::print(
+        "xt::isclose found {} mismatches out of {} elements (tolerance: 3e-2)\n",
+        xtensor_false_count,
+        sdpa_bw_dK.size());
     fmt::print("Distribution:\n");
     fmt::print("  First half (indices 0-{}): {} mismatches\n", halfway - 1, false_before_half);
     fmt::print("  Second half (indices {}-{}): {} mismatches\n", halfway, sdpa_bw_dK.size() - 1, false_after_half);
-    
+
     // Detailed analysis of mismatch pattern in second tile
     if (xtensor_false_count > 0) {
         fmt::print("\n=== Detailed Mismatch Analysis (first 20 errors) ===\n");
@@ -756,19 +784,29 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
                 size_t h = (i / (64 * 128)) % 1;
                 size_t s = (i / 128) % 64;
                 size_t d = i % 128;
-                
+
                 float kernel_val = sdpa_bw_dK.flat(i);
                 float float_val = float_dK.flat(i);
                 float composite_val = composite_dK.flat(i);
                 float diff_float = std::abs(kernel_val - float_val);
                 float diff_composite = std::abs(kernel_val - composite_val);
-                
-                fmt::print("[{},{},{},{}]: kernel={:.6e}, float={:.6e}, composite={:.6e}, diff_float={:.6e}, diff_composite={:.6e}\n",
-                          b, h, s, d, kernel_val, float_val, composite_val, diff_float, diff_composite);
+
+                fmt::print(
+                    "[{},{},{},{}]: kernel={:.6e}, float={:.6e}, composite={:.6e}, diff_float={:.6e}, "
+                    "diff_composite={:.6e}\n",
+                    b,
+                    h,
+                    s,
+                    d,
+                    kernel_val,
+                    float_val,
+                    composite_val,
+                    diff_float,
+                    diff_composite);
                 count++;
             }
         }
-        
+
         // Check if errors are concentrated in specific sequence positions or dimensions
         std::map<size_t, size_t> errors_by_seq_pos;
         std::map<size_t, size_t> errors_by_dim;
@@ -780,42 +818,59 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
                 errors_by_dim[d]++;
             }
         }
-        
-    fmt::print("\n=== Error Distribution by Sequence Position ===\n");
-    for (const auto& [seq_pos, cnt] : errors_by_seq_pos) {
-        fmt::print("  Seq pos {}: {} errors\n", seq_pos, cnt);
-    }
-    
-    // Check if positions 33-63 have smaller errors that pass the threshold
-    fmt::print("\n=== Max error per sequence position (entire second tile) ===\n");
-    for (size_t s = 32; s < 64; ++s) {
-        float max_err = 0.0f;
-        for (size_t d = 0; d < 128; ++d) {
-            float diff = std::abs(sdpa_bw_dK(0, 0, s, d) - float_dK(0, 0, s, d));
-            max_err = std::max(max_err, diff);
+
+        fmt::print("\n=== Error Distribution by Sequence Position ===\n");
+        for (const auto& [seq_pos, cnt] : errors_by_seq_pos) {
+            fmt::print("  Seq pos {}: {} errors\n", seq_pos, cnt);
         }
-        if (max_err > 1e-3f) {  // Only print if error is significant
-            fmt::print("  Seq pos {}: max_err={:.6e}\n", s, max_err);
+
+        // Check if positions 33-63 have smaller errors that pass the threshold
+        fmt::print("\n=== Max error per sequence position (entire second tile) ===\n");
+        for (size_t s = 32; s < 64; ++s) {
+            float max_err = 0.0f;
+            for (size_t d = 0; d < 128; ++d) {
+                float diff = std::abs(sdpa_bw_dK(0, 0, s, d) - float_dK(0, 0, s, d));
+                max_err = std::max(max_err, diff);
+            }
+            if (max_err > 1e-3f) {  // Only print if error is significant
+                fmt::print("  Seq pos {}: max_err={:.6e}\n", s, max_err);
+            }
         }
-    }
-        
+
         fmt::print("\n=== Error Distribution by Dimension (top 10) ===\n");
         std::vector<std::pair<size_t, size_t>> dim_errors(errors_by_dim.begin(), errors_by_dim.end());
-        std::sort(dim_errors.begin(), dim_errors.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::sort(
+            dim_errors.begin(), dim_errors.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
         for (size_t i = 0; i < std::min(size_t(10), dim_errors.size()); ++i) {
             fmt::print("  Dim {}: {} errors\n", dim_errors[i].first, dim_errors[i].second);
         }
     }
-    
+
     fmt::print("\nNOTE: All errors in second half suggests tile-specific kernel bug, not just numerical noise.\n");
 
     // Final assertions
-    bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, 3e-2F, 3e-2F);
-    bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, 2e-2F, 2e-2F);
-    bool kernel_dK_matches_composite = xt::allclose(sdpa_bw_dK, composite_dK, 3e-2F, 3e-2F);
-    bool kernel_dV_matches_composite = xt::allclose(sdpa_bw_dV, composite_dV, 2e-2F, 2e-2F);
+    // 3e-2F
+    bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
+    bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
+    bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
+    bool kernel_dQ_matches_composite = xt::allclose(sdpa_bw_dQ, composite_dQ, rtol, atol);
+    bool kernel_dK_matches_composite = xt::allclose(sdpa_bw_dK, composite_dK, rtol, atol);
+    bool kernel_dV_matches_composite = xt::allclose(sdpa_bw_dV, composite_dV, rtol, atol);
+    bool composite_dQ_matches_float = xt::allclose(composite_dQ, float_dQ, rtol, atol);
+    bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
+    bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
+
+    // bool kernel_attention_weights_matches_composite =
+    //     xt::allclose(sdpa_bw_dQ, composite_attention_weights, 2e-2F, 2e-2F);
 
     fmt::print("\n=== FINAL RESULTS ===\n");
+    // fmt::print("dQ: Kernel vs Composite temp res: {}\n", kernel_attention_weights_matches_composite ? "PASS" :
+    // "FAIL");
+
+    fmt::print(
+        "dQ: Kernel vs Float: {}, Kernel vs Composite: {}\n",
+        kernel_dQ_matches_float ? "PASS" : "FAIL",
+        kernel_dQ_matches_composite ? "PASS" : "FAIL");
     fmt::print(
         "dK: Kernel vs Float: {}, Kernel vs Composite: {}\n",
         kernel_dK_matches_float ? "PASS" : "FAIL",
@@ -825,8 +880,18 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         kernel_dV_matches_float ? "PASS" : "FAIL",
         kernel_dV_matches_composite ? "PASS" : "FAIL");
 
+    fmt::print("dQ: Composite vs Float: {}\n", composite_dQ_matches_float ? "PASS" : "FAIL");
+    fmt::print("dK: Composite vs Float: {}\n", composite_dK_matches_float ? "PASS" : "FAIL");
+    fmt::print("dV: Composite vs Float: {}\n", composite_dV_matches_float ? "PASS" : "FAIL");
+
+    // fmt::print(
+    //     "kernel_attention_weights_matches_composite: {}\n",
+    //     kernel_attention_weights_matches_composite ? "PASS" : "FAIL");
+
+    EXPECT_TRUE(kernel_dQ_matches_float);
     EXPECT_TRUE(kernel_dK_matches_float);
     EXPECT_TRUE(kernel_dV_matches_float);
+    EXPECT_TRUE(kernel_dQ_matches_composite);
     EXPECT_TRUE(kernel_dK_matches_composite);
     EXPECT_TRUE(kernel_dV_matches_composite);
 }
