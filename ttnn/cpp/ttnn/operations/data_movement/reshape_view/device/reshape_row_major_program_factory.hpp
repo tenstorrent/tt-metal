@@ -11,11 +11,11 @@ namespace ttnn::operations::data_movement::reshape {
 
 struct ReshapeRMProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle reader_kernel_id2;
-        bool can_use_dual_kernel;
-        uint32_t num_cores_x;
-        uint32_t num_cores_y;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle reader_kernel_id2{};
+        bool can_use_dual_kernel{};
+        uint32_t num_cores_x{};
+        uint32_t num_cores_y{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
