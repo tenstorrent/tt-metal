@@ -17,12 +17,12 @@ namespace tt::scaleout_tools {
 constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
 
 struct LinkDescriptors {
-    std::string host{};
+    std::string host;
     uint32_t tray_id{};
     uint32_t asic_location{};
     uint32_t channel{};
     ChipId chip_id{};
-    tt_xy_pair coord{};
+    tt_xy_pair coord;
 };
 
 [[nodiscard]] tt_xy_pair get_eth_core_coord(const tt::Cluster& cluster, ChipId chip_id, uint8_t channel) {
