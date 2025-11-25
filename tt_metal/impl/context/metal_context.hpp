@@ -4,30 +4,23 @@
 
 #pragma once
 
-#include <string>
-#include <tt_stl/indestructible.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/distributed_context.hpp>
-#include "llrt/core_descriptor.hpp"
-#include <tt-metalium/hal_types.hpp>
-#include <llrt/tt_cluster.hpp>
-#include <llrt/hal.hpp>
-#include <llrt/rtoptions.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
-#include <impl/allocator/allocator_types.hpp>
-
-#include <array>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <unordered_set>
 #include <vector>
+#include <llrt/rtoptions.hpp>
+#include <impl/allocator/allocator_types.hpp>
+#include "tt-metalium/experimental/fabric/routing_table_generator.hpp"
+#include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
+
+namespace tt {
+class Cluster;
+}  // namespace tt
+
+namespace tt::tt_metal::distributed::multihost {
+class DistributedContext;
+}
 
 namespace tt::tt_metal {
 struct ProfilerStateManager;
@@ -37,6 +30,14 @@ class Data;
 }
 
 class DataCollector;
+class DeviceManager;
+class Hal;
+class dispatch_core_manager;
+class DispatchQueryManager;
+class DPrintServer;
+class WatcherServer;
+class DispatchMemMap;
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
