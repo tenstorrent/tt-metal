@@ -146,8 +146,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "relu_min_tile_init();",
                 fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
-        case UnaryOpType::POWER:
-            return {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, (uint32_t)param0)};
+        case UnaryOpType::POWER: {
+            // power_tile expects exponent as IEEE 754 float bits
+            // For float: bit_cast preserves IEEE 754 bit pattern
+            // For int/uint32_t: convert to float first, then bit_cast to get float bits
+            float exp_float = static_cast<float>(params[0]);
+            uint32_t exponent = std::bit_cast<uint32_t>(exp_float);
+            bool legacy_compat = (exp_float == 0.0f || exp_float == 1.0f || exp_float == 2.0f || exp_float == 3.0f);
+            if (legacy_compat) {
+                return {"power_tile_init<true>();", fmt::format("power_tile<true>({}, {:#x}u);", idst, exponent)};
+            }
+            return {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, exponent)};
+        }
         case UnaryOpType::LEAKY_RELU:
             return {
                 "leaky_relu_tile_init();",
