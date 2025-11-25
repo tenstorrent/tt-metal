@@ -20,21 +20,21 @@
 
 namespace {
 
-constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
-constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+constexpr auto kFabricConfig = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D;
+constexpr auto kReliabilityMode = tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+std::unique_ptr<tt::tt_metal::experimental::fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_metal::experimental::fabric::ControlPlane>(graph_desc.string());
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     return control_plane;
 }
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
+std::unique_ptr<tt::tt_metal::experimental::fabric::ControlPlane> make_control_plane(
     const std::filesystem::path& graph_desc,
-    const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+    const std::map<tt::tt_metal::experimental::fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    auto control_plane = std::make_unique<tt::tt_metal::experimental::fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
@@ -42,10 +42,10 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     return control_plane;
 }
 
-constexpr auto kFabricConfig1D = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+constexpr auto kFabricConfig1D = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D_RING;
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+std::unique_ptr<tt::tt_metal::experimental::fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_metal::experimental::fabric::ControlPlane>(graph_desc.string());
     control_plane->initialize_fabric_context(kFabricConfig1D);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig1D, kReliabilityMode);
 
@@ -54,7 +54,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
 
 }  // namespace
 
-namespace tt::tt_fabric::fabric_router_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
@@ -289,7 +289,7 @@ TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
     const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
-    tt_fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
+    tt_metal::experimental::fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
 
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}));
 
@@ -326,7 +326,7 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
     const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
-    tt_fabric::MeshGraph mesh_graph(t3k_2x2_mesh_graph_desc_path.string());
+    tt_metal::experimental::fabric::MeshGraph mesh_graph(t3k_2x2_mesh_graph_desc_path.string());
 
     // This configuration has two meshes (id 0 and id 1)
     EXPECT_THAT(mesh_graph.get_mesh_ids(), ElementsAre(MeshId{0}, MeshId{1}));
@@ -383,7 +383,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
-    tt_fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
+    tt_metal::experimental::fabric::MeshGraph mesh_graph(t3k_dual_host_mesh_graph_desc_path.string());
 
     // Test valid chips for mesh 0
     // Based on the dual host configuration:
@@ -410,7 +410,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
-    tt_fabric::MeshGraph mesh_graph_single_host(t3k_mesh_graph_desc_path.string());
+    tt_metal::experimental::fabric::MeshGraph mesh_graph_single_host(t3k_mesh_graph_desc_path.string());
 
     // In single host configuration, all chips should belong to host rank 0
     for (ChipId chip_id = 0; chip_id < 8; chip_id++) {
@@ -421,7 +421,7 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
-    tt_fabric::MeshGraph mesh_graph_2x2(t3k_2x2_mesh_graph_desc_path.string());
+    tt_metal::experimental::fabric::MeshGraph mesh_graph_2x2(t3k_2x2_mesh_graph_desc_path.string());
 
     // Each mesh has only one host rank (0)
     for (ChipId chip_id = 0; chip_id < 4; chip_id++) {
@@ -441,7 +441,7 @@ TEST(MeshGraphValidation, TestExplicitShapeValidationNegative) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_invalid_shape_mesh_graph_descriptor.textproto";
 
     // This should throw an exception due to incompatible shape
-    EXPECT_THROW(tt_fabric::MeshGraph(invalid_shape_mesh_graph_desc_path.string()), std::exception);
+    EXPECT_THROW(tt_metal::experimental::fabric::MeshGraph(invalid_shape_mesh_graph_desc_path.string()), std::exception);
 }
 
 namespace single_galaxy_constants {
@@ -933,7 +933,7 @@ TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
 
     // Test 2: With FabricConfig=FABRIC_2D - should restrict to mesh (ignore wrap-around links)
     {
-        MeshGraph mesh_graph_override(torus_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+        MeshGraph mesh_graph_override(torus_mgd_path.string(), tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D);
         const auto& connectivity = mesh_graph_override.get_intra_mesh_connectivity();
 
         // In mesh mode, NW corner should only have E and S connections (ignore wrap-around)
@@ -953,8 +953,8 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
 
     // Attempting to override mesh to torus should throw - cannot create connections that don't exist
     EXPECT_THROW(
-        { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
+        { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_router_tests

@@ -24,7 +24,7 @@
 #include <atomic>
 #include <cstdlib>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace {
 // Encodes MPI rank, MeshId and MeshHostRankId into a single 64-bit value for transport.
@@ -498,10 +498,10 @@ std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> TopologyMapper:
 std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical() const {
     std::map<MeshId, LogicalAdjacencyMap> adjacency_map;
 
-    auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
+    auto get_local_adjacents = [&](tt::tt_metal::experimental::fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
         auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
 
-        std::vector<tt::tt_fabric::FabricNodeId> adjacents;
+        std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> adjacents;
         bool relaxed = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id);
         for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
             // Skip self-connections
@@ -510,7 +510,7 @@ std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logica
             }
             size_t repeat_count = relaxed ? 1 : edge.connected_chip_ids.size();
             for (size_t i = 0; i < repeat_count; ++i) {
-                adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+                adjacents.push_back(tt::tt_metal::experimental::fabric::FabricNodeId(mesh_id, neighbor_chip_id));
             }
         }
         return adjacents;
@@ -520,7 +520,7 @@ std::map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logica
     for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
         LogicalAdjacencyMap logical_adjacency_map;
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
-            auto fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, chip_id);
+            auto fabric_node_id = tt::tt_metal::experimental::fabric::FabricNodeId(mesh_id, chip_id);
             logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
         }
         adjacency_map[mesh_id] = logical_adjacency_map;
@@ -2126,4 +2126,4 @@ void TopologyMapper::print_physical_adjacency_map(const std::map<MeshId, Physica
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

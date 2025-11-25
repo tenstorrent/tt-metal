@@ -70,7 +70,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                const MeshDevice& mesh_device,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               tt::tt_fabric::Topology topology,
+               tt::tt_metal::experimental::fabric::Topology topology,
                bool use_noc1_only) {
                 return self(
                     input_tensor,
@@ -95,7 +95,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = tt::tt_fabric::Topology::Linear,
+            py::arg("topology") = tt::tt_metal::experimental::fabric::Topology::Linear,
             py::arg("use_noc1_only") = false});
 }
 

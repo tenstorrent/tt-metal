@@ -56,7 +56,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -128,12 +128,12 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         };
 
         if (dst_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
         }
         writer_runtime_args.emplace_back(!dst_is_forward);
         if (!dst_is_forward) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
         }
 

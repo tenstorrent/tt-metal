@@ -7,10 +7,10 @@
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "protobuf/port_descriptor_table.pb.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 std::vector<uint8_t> serialize_to_bytes(const PortDescriptorTable& port_id_table) {
-    tt::fabric::proto::PortDescriptorTable proto_table;
+    tt::tt_metal::experimental::fabric::proto::PortDescriptorTable proto_table;
 
     // Iterate through the outer map (source_mesh_id -> inner_map)
     for (const auto& [source_mesh_id, inner_map] : port_id_table) {
@@ -53,7 +53,7 @@ PortDescriptorTable deserialize_port_descriptors_from_bytes(const std::vector<ui
     PortDescriptorTable result;
 
     // Parse the protobuf
-    tt::fabric::proto::PortDescriptorTable proto_table;
+    tt::tt_metal::experimental::fabric::proto::PortDescriptorTable proto_table;
     if (!proto_table.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PortDescriptorTable from protobuf binary format");
     }
@@ -88,4 +88,4 @@ PortDescriptorTable deserialize_port_descriptors_from_bytes(const std::vector<ui
     return result;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -52,11 +52,11 @@ using tt::tt_metal::distributed::MeshShape;
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}, .num_cqs = 2}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
         MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
     }
 };
 

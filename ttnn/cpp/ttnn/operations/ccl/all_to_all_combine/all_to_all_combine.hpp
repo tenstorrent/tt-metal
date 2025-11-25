@@ -19,7 +19,7 @@ struct ExecuteAllToAllCombine {
         const ttnn::Tensor& expert_metadata_tensor,
         bool locally_reduced = 1,
         std::optional<uint32_t> num_links = std::nullopt,
-        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
+        std::optional<tt::tt_metal::experimental::fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<uint32_t>& axis = std::nullopt,
         const std::optional<uint32_t>& output_shard_dim = std::nullopt,

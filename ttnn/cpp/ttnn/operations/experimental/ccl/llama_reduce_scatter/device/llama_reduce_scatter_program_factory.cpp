@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
+std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_metal::experimental::fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
@@ -31,13 +31,13 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, t
         }
     }
 
-    if (topology == tt::tt_fabric::Topology::Linear) {
+    if (topology == tt::tt_metal::experimental::fabric::Topology::Linear) {
         // Sort based on absolute difference from ring_index in descending order
         std::sort(device_order.begin(), device_order.end(), [ring_index](uint32_t a, uint32_t b) {
             return std::abs(static_cast<int>(a) - static_cast<int>(ring_index)) >
                    std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
         });
-    } else if (topology == tt::tt_fabric::Topology::Ring) {
+    } else if (topology == tt::tt_metal::experimental::fabric::Topology::Ring) {
         // Sort based on ring distance
         // 0 -> 1 -> 2 -> ... -> ring_size - 1 -> 0
         std::sort(device_order.begin(), device_order.end(), [ring_index, ring_size](uint32_t a, uint32_t b) {
@@ -305,7 +305,7 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
         ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
     }
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -336,7 +336,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     using namespace ttnn::ccl;
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -426,7 +426,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
@@ -490,7 +490,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -695,7 +695,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
         num_packet_worker_cores,
-        topology == tt::tt_fabric::Topology::Ring ? 1u : 0u};
+        topology == tt::tt_metal::experimental::fabric::Topology::Ring ? 1u : 0u};
 
     auto writer_defines = reader_defines;
     bool skip_write_back = output_cores == packet_worker_cores and num_pages_per_packet == output_tiles_per_core_width;
@@ -788,10 +788,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
                 const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                    tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
                 const auto forward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-                tt::tt_fabric::append_fabric_connection_rt_args(
+                    tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
                     forward_device_fabric_node_id,
                     link_idx,
@@ -803,10 +803,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
                 const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                    tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
                 const auto backward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-                tt::tt_fabric::append_fabric_connection_rt_args(
+                    tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                     target_device_fabric_node_id,
                     backward_device_fabric_node_id,
                     link_idx,

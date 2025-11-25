@@ -17,7 +17,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-namespace tt::tt_fabric::mesh_socket_tests {
+namespace tt::tt_metal::experimental::fabric::mesh_socket_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
@@ -43,7 +43,7 @@ struct PhysicalMeshConfig {
 };
 
 struct FabricConfig {
-    tt::tt_fabric::Topology topology;
+    tt::tt_metal::experimental::fabric::Topology topology;
 };
 
 struct MemoryConfig {
@@ -179,4 +179,4 @@ private:
     static void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());
 };
 
-}  // namespace tt::tt_fabric::mesh_socket_tests
+}  // namespace tt::tt_metal::experimental::fabric::mesh_socket_tests

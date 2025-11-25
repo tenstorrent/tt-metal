@@ -21,7 +21,7 @@
 
 #include "fabric_fixture.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace fabric_router_tests {
 
@@ -573,4 +573,4 @@ TEST_F(LogicalToPhysicalConversionFixture, TestConvert2DUsesProvidedNECorner) {
 
 }  // namespace fabric_router_tests
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

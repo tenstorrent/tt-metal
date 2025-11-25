@@ -29,10 +29,10 @@ namespace tt_metal {
 class FabricRoutingLookup {
 public:
     // both of these are keyed by physical chip id!
-    using EthCoreToChannelMap = std::map<std::tuple<ChipId, CoreCoord>, tt::tt_fabric::chan_id_t>;
+    using EthCoreToChannelMap = std::map<std::tuple<ChipId, CoreCoord>, tt::tt_metal::experimental::fabric::chan_id_t>;
 
     FabricRoutingLookup() {
-        using namespace tt::tt_fabric;
+        using namespace tt::tt_metal::experimental::fabric;
 
         Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
@@ -53,7 +53,7 @@ public:
     }
 
     // lookup Eth Channel ID given a physical chip id and physical EDM router core coordinate
-    std::optional<tt::tt_fabric::chan_id_t> getRouterEthCoreToChannelLookup(
+    std::optional<tt::tt_metal::experimental::fabric::chan_id_t> getRouterEthCoreToChannelLookup(
         ChipId phys_chip_id, CoreCoord& eth_router_phys_core_coord) const {
         auto it = eth_core_to_channel_lookup_.find(std::make_tuple(phys_chip_id, eth_router_phys_core_coord));
         if (it != eth_core_to_channel_lookup_.end()) {
@@ -94,7 +94,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     topology_json["mesh_shapes"] = nlohmann::ordered_json::array();
-    for (const auto& [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+    for (const auto& [mesh_id, mesh_shape] : tt::tt_metal::experimental::fabric::get_physical_mesh_shapes()) {
         topology_json["mesh_shapes"].push_back({
             {"mesh_id", mesh_id.get()},
             {"shape", std::vector(mesh_shape.cbegin(), mesh_shape.cend())},
@@ -104,18 +104,18 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     topology_json["cluster_type"] = enchantum::to_string(cluster.get_cluster_type());
 
     topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_metal::experimental::fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
         for (auto physical_chip_id : cluster.get_cluster_desc()->get_all_chips()) {
-            auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            auto fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(physical_chip_id);
             auto device_routing_planes = nlohmann::ordered_json::array();
             topology_json["device_id_to_fabric_node_id"][std::to_string(physical_chip_id)] = {
                 fabric_node_id.mesh_id.get(), fabric_node_id.chip_id};
 
-            for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
+            for (const auto& direction : tt::tt_metal::experimental::fabric::FabricContext::routing_directions) {
                 auto eth_routing_planes_in_dir =
-                    tt::tt_fabric::get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
+                    tt::tt_metal::experimental::fabric::get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
 
                 while (device_routing_planes.size() < eth_routing_planes_in_dir.size()) {
                     device_routing_planes.push_back(
@@ -147,9 +147,9 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     topology_json_ofs << topology_json.dump(2);
 }
 
-// determines the implied unicast/multicast start distance and range in tt_fabric::LowLatencyRoutingFields
+// determines the implied unicast/multicast start distance and range in tt_metal::experimental::fabric::LowLatencyRoutingFields
 inline std::tuple<int, int> get_low_latency_routing_start_distance_and_range(uint32_t llrf_value) {
-    using LLRF = tt::tt_fabric::LowLatencyRoutingFields;
+    using LLRF = tt::tt_metal::experimental::fabric::LowLatencyRoutingFields;
 
     uint32_t value = llrf_value;
     int start_distance = 1;
@@ -167,10 +167,10 @@ inline std::tuple<int, int> get_low_latency_routing_start_distance_and_range(uin
     return {start_distance, range};
 }
 
-// determines the implied unicast/multicast start distance and range in tt_fabric::RoutingFields
+// determines the implied unicast/multicast start distance and range in tt_metal::experimental::fabric::RoutingFields
 inline std::tuple<int, int> get_routing_start_distance_and_range(uint8_t routing_fields_value) {
-    int start_distance = tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK & routing_fields_value;
-    int range = routing_fields_value >> tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    int start_distance = tt::tt_metal::experimental::fabric::RoutingFields::HOP_DISTANCE_MASK & routing_fields_value;
+    int range = routing_fields_value >> tt::tt_metal::experimental::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
     return {start_distance, range};
 }
 

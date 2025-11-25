@@ -23,8 +23,8 @@
 namespace tt::tt_metal::distributed {
 
 using ::testing::ElementsAre;
-using ::tt::tt_fabric::MeshHostRankId;
-using ::tt::tt_fabric::MeshId;
+using ::tt::tt_metal::experimental::fabric::MeshHostRankId;
+using ::tt::tt_metal::experimental::fabric::MeshId;
 
 // Parameterized test fixture for mesh device validation
 class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase,
@@ -61,7 +61,7 @@ TEST(BigMeshDualRankTest, LocalRankBinding) {
     auto& global_context = MetalContext::instance().global_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
-    tt_fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
+    tt_metal::experimental::fabric::MeshHostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
     if (global_context.rank() == multihost::Rank(0)) {
         EXPECT_EQ(local_rank_binding, MeshHostRankId(0));
     } else {
@@ -108,7 +108,7 @@ TEST_F(BigMeshDualRankTest2x4, SystemMeshValidation) {
 
     auto mapped_devices = system_mesh.get_mapped_devices(MeshShape(2, 4));
     const MeshContainer<MaybeRemote<int>> physical_device_ids(MeshShape(2, 4), std::move(mapped_devices.device_ids));
-    const MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids(
+    const MeshContainer<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids(
         MeshShape(2, 4), std::move(mapped_devices.fabric_node_ids));
 
     // Generic local/remote validation

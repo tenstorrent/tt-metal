@@ -830,7 +830,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     const auto reserved_packet_header_CB_index =
         datamovement_kernel_config.processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
     static constexpr auto num_packet_headers_storable = 8;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -1136,16 +1136,16 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_device.has_value() and forward_device.value());
     auto worker_core = corerange_to_cores(worker_core_range).at(0);
     if (forward_device.has_value() and forward_device.value()) {
-        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-        const auto forward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto forward_device_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(device_fabric_node_id, forward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     rt_args.push_back(backward_device.has_value() and backward_device.value());
     if (backward_device.has_value() and backward_device.value()) {
-        const auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-        const auto backward_device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-        tt::tt_fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
+        const auto device_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto backward_device_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(device_fabric_node_id, backward_device_fabric_node_id, link, program, {worker_core}, rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {

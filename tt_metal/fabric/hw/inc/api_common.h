@@ -8,7 +8,7 @@
 #include <type_traits>
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
-namespace tt::tt_fabric::common::experimental {
+namespace tt::tt_metal::experimental::fabric::common::experimental {
 
 // clang-format off
 /**
@@ -128,7 +128,7 @@ template <typename T>
 struct is_mux_sender : std::false_type {};
 
 template <uint8_t N>
-struct is_mux_sender<tt::tt_fabric::WorkerToFabricMuxSender<N>> : std::true_type {};
+struct is_mux_sender<tt::tt_metal::experimental::fabric::WorkerToFabricMuxSender<N>> : std::true_type {};
 
 template <typename T>
 constexpr bool is_mux_sender_v = is_mux_sender<T>::value;
@@ -138,7 +138,7 @@ template <typename T>
 struct is_edm_sender : std::false_type {};
 
 template <>
-struct is_edm_sender<tt::tt_fabric::WorkerToFabricEdmSender> : std::true_type {};
+struct is_edm_sender<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender> : std::true_type {};
 
 template <typename T>
 constexpr bool is_edm_sender_v = is_edm_sender<T>::value;
@@ -287,11 +287,11 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
  */
 // clang-format on
 FORCE_INLINE void open_connections(
-    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
     size_t& rt_arg_idx) {
-    connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
-        tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
+    connection_manager = tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager::template build_from_args<
+        tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION>(rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off
@@ -305,8 +305,8 @@ FORCE_INLINE void open_connections(
  * | connection_manager                    | Connection manager to be closed         | RoutingPlaneConnectionManager&                 | True     |
  */
 // clang-format on
-FORCE_INLINE void close_connections(tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager) {
+FORCE_INLINE void close_connections(tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager& connection_manager) {
     connection_manager.close();
 }
 
-}  // namespace tt::tt_fabric::common::experimental
+}  // namespace tt::tt_metal::experimental::fabric::common::experimental

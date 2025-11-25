@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * FabricRouterBuilder
@@ -57,13 +57,13 @@ public:
         umd::CoreCoord eth_logical_core,
         FabricNodeId fabric_node_id,
         FabricNodeId remote_fabric_node_id,
-        const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
-        tt::tt_fabric::eth_chan_directions eth_direction,
+        const tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig& edm_config,
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverType fabric_edm_type,
+        tt::tt_metal::experimental::fabric::eth_chan_directions eth_direction,
         bool fabric_tensix_extension_enabled,
         bool dispatch_link,
-        tt::tt_fabric::chan_id_t eth_chan,
-        tt::tt_fabric::Topology topology);
+        tt::tt_metal::experimental::fabric::chan_id_t eth_chan,
+        tt::tt_metal::experimental::fabric::Topology topology);
 
     /**
      * Connect the downstream router over noc or Ethernet. Iterates through all VCs and channels
@@ -115,4 +115,4 @@ private:
     FabricRouterChannelMapping channel_mapping_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -119,7 +119,7 @@ using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
 TEST_F(MeshDeviceView2x4Test, MeshId) {
     const auto& view = mesh_device_->get_view();
     EXPECT_EQ(view.shape(), MeshShape(2, 4));
-    EXPECT_EQ(view.mesh_id(), tt::tt_fabric::MeshId(0));
+    EXPECT_EQ(view.mesh_id(), tt::tt_metal::experimental::fabric::MeshId(0));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewBasicProperties) {
@@ -207,7 +207,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIds) {
     EXPECT_THAT(all_fabric_ids, SizeIs(8));
 
     // Verify all fabric node IDs are unique
-    std::set<tt::tt_fabric::FabricNodeId> fabric_ids_set;
+    std::set<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_ids_set;
     for (const auto& fabric_id : all_fabric_ids) {
         fabric_ids_set.insert(fabric_id);
     }
@@ -360,7 +360,7 @@ TEST_F(MeshDeviceView2x4Test, ViewMeshId) {
 
 TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
     std::vector<IDevice*> devices;
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));

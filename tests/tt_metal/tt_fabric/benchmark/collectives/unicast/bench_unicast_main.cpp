@@ -20,17 +20,17 @@ struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
         ::tt::tt_metal::MeshDeviceFixtureBase(Config{
             .num_cqs = 1,
             .trace_region_size = 1u << 20,  // enable mesh trace capture (e.g., 1 MiB)
-            .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}) {}
+            .fabric_config = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D}) {}
     void TestBody() override {}
     void setup() { this->SetUp(); }
     void teardown() { this->TearDown(); }
 };
 
 // Shorthands
-using tt::tt_fabric::bench::PerfParams;
-using tt::tt_fabric::bench::PerfStats;
-using tt::tt_fabric::bench::run_repeated;
-using tt::tt_fabric::bench::warmup_once;
+using tt::tt_metal::experimental::fabric::bench::PerfParams;
+using tt::tt_metal::experimental::fabric::bench::PerfStats;
+using tt::tt_metal::experimental::fabric::bench::run_repeated;
+using tt::tt_metal::experimental::fabric::bench::warmup_once;
 
 namespace {
 

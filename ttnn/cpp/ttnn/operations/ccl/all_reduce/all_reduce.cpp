@@ -18,7 +18,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_metal::experimental::fabric::Topology> topology) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-reduce on cluster_axis=1, then
     // all-reduce on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -38,7 +38,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
 
     // Determine topology
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     // Call the experimental all_reduce_async with Sum operation
     return ::ttnn::experimental::all_reduce_async(

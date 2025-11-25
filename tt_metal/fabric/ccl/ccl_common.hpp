@@ -11,14 +11,14 @@
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

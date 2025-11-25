@@ -4,7 +4,7 @@
 
 #include "tt_fabric_test_config.hpp"
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 CmdlineParser::CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {
     if (test_args::has_command_option(input_args_, "--filter")) {
@@ -364,15 +364,15 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
         if (filter_type.value() == "name" || filter_type.value() == "Name") {
             return test_config.name == filter_value;
         } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
-            auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+            auto topo = tt::tt_metal::experimental::fabric::Topology::Linear;  // Default value
             if (filter_value == "Ring") {
-                topo = tt::tt_fabric::Topology::Ring;
+                topo = tt::tt_metal::experimental::fabric::Topology::Ring;
             } else if (filter_value == "Linear") {
-                topo = tt::tt_fabric::Topology::Linear;
+                topo = tt::tt_metal::experimental::fabric::Topology::Linear;
             } else if (filter_value == "Mesh") {
-                topo = tt::tt_fabric::Topology::Mesh;
+                topo = tt::tt_metal::experimental::fabric::Topology::Mesh;
             } else if (filter_value == "Torus") {
-                topo = tt::tt_fabric::Topology::Torus;
+                topo = tt::tt_metal::experimental::fabric::Topology::Torus;
             } else {
                 log_info(
                     tt::LogTest,
@@ -439,7 +439,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 }
             }
             // soft filter
-            std::optional<tt::tt_fabric::NocSendType> ntype;
+            std::optional<tt::tt_metal::experimental::fabric::NocSendType> ntype;
             ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
             bool checker = false;
             for (const auto& sender : test_config.senders) {
@@ -485,7 +485,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                     }
                 }
             }
-            std::optional<tt::tt_fabric::ChipSendType> ftype;
+            std::optional<tt::tt_metal::experimental::fabric::ChipSendType> ftype;
             ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
             bool checker = false;
             for (const auto& sender : test_config.senders) {
@@ -793,4 +793,4 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
     return config;
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

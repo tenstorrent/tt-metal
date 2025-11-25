@@ -25,7 +25,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_metal::experimental::fabric::Topology> topology) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-gather on cluster_axis=1, then
     // all-gather on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -47,7 +47,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
 
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));

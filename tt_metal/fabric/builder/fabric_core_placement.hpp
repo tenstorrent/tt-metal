@@ -8,7 +8,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include <cstddef>
 
-namespace tt::tt_fabric::core_placement {
+namespace tt::tt_metal::experimental::fabric::core_placement {
 
 struct CorePlacementContext {
     Topology topology{};
@@ -22,4 +22,4 @@ void apply_core_placement_optimizations(
     FabricEriscDatamoverBuilder& edm_bwd,
     size_t link_index);
 
-}  // namespace tt::tt_fabric::core_placement
+}  // namespace tt::tt_metal::experimental::fabric::core_placement

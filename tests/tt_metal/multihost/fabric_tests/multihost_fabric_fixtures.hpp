@@ -12,7 +12,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 template <typename Fixture>
@@ -103,7 +103,7 @@ public:
         }
 
         validate_and_setup_control_plane_config(this);
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        this->DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {
@@ -267,7 +267,7 @@ public:
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
 
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        this->DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {
@@ -313,4 +313,4 @@ public:
 };
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

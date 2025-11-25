@@ -30,7 +30,7 @@ FORCE_INLINE void recordFabricNocEvent(
     fabric_noc_event.dst_y = decoded_y;
     fabric_noc_event.mcast_end_dst_x = -1;
     fabric_noc_event.mcast_end_dst_y = -1;
-    fabric_noc_event.dst_noc_type = tt::tt_fabric::edm_to_local_chip_noc == 1
+    fabric_noc_event.dst_noc_type = tt::tt_metal::experimental::fabric::edm_to_local_chip_noc == 1
                                         ? KernelProfilerNocEventMetadata::NocType::NOC_1
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
@@ -56,7 +56,7 @@ FORCE_INLINE void recordFabricNocEventMulticast(
     fabric_noc_event.dst_y = noc_y_start;
     fabric_noc_event.mcast_end_dst_x = noc_x_start + mcast_rect_size_x - 1;
     fabric_noc_event.mcast_end_dst_y = noc_y_start + mcast_rect_size_y - 1;
-    fabric_noc_event.dst_noc_type = tt::tt_fabric::edm_to_local_chip_noc == 1
+    fabric_noc_event.dst_noc_type = tt::tt_metal::experimental::fabric::edm_to_local_chip_noc == 1
                                         ? KernelProfilerNocEventMetadata::NocType::NOC_1
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
@@ -83,7 +83,7 @@ FORCE_INLINE void recordFabricScatterEvent(
         fabric_scatter_event.noc_xfer_type = noc_event_type;
         fabric_scatter_event.dst_x = decoded_x;
         fabric_scatter_event.dst_y = decoded_y;
-        fabric_scatter_event.dst_noc_type = tt::tt_fabric::edm_to_local_chip_noc == 1
+        fabric_scatter_event.dst_noc_type = tt::tt_metal::experimental::fabric::edm_to_local_chip_noc == 1
                                                 ? KernelProfilerNocEventMetadata::NocType::NOC_1
                                                 : KernelProfilerNocEventMetadata::NocType::NOC_0;
         if (i < num_chunks - 1) {
@@ -113,28 +113,28 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
 // how slow is this? alternative is sotring entire route buffer which isn't ideal either...
 template <uint32_t STATIC_ID = 12345>
 FORCE_INLINE void recordRoutingFields2D(
-    const volatile tt::tt_fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
+    const volatile tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields routing_fields, const volatile uint8_t* route_buffer) {
     KernelProfilerNocEventMetadata ev_md;
     auto& routing_fields_2d = ev_md.data.fabric_routing_fields_2d;
     routing_fields_2d.noc_xfer_type = KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_2D;
 
     // dimension order routing: first we have N/S forwarding with possible branching/local writes for mcast
     uint8_t total_hops = 0;
-    while (route_buffer[total_hops] & tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) {
+    while (route_buffer[total_hops] & tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) {
         total_hops++;
     }
 
     routing_fields_2d.ns_hops = total_hops;
 
     // compute e/w hops and check for e/w line mcast
-    while (route_buffer[total_hops] != tt::tt_fabric::LowLatencyMeshRoutingFields::NOOP) {
+    while (route_buffer[total_hops] != tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::NOOP) {
         total_hops++;
     }
 
     // Look at last entry in buffer to check if west branch exists
     // If west branch exists, compute west hops and east hops as remaining
     // Otherwise, we only have east hops (which is trivially to 0 if we have no e/w hops at all)
-    if (route_buffer[total_hops - 1] == tt::tt_fabric::LowLatencyMeshRoutingFields::FORWARD_EAST) {
+    if (route_buffer[total_hops - 1] == tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::FORWARD_EAST) {
         routing_fields_2d.w_hops = total_hops - routing_fields.branch_west_offset;
         routing_fields_2d.e_hops = routing_fields.branch_west_offset - routing_fields_2d.ns_hops;
     } else {
@@ -144,12 +144,12 @@ FORCE_INLINE void recordRoutingFields2D(
     // look at first entries of trunk/branches in buffer to check for N/S line mcast, E/W line mcast, or 2d mcast
     // the last check is for the 1N1E1W edge case (which is a 2d mcast)
     if (routing_fields_2d.ns_hops > 0 &&
-            (route_buffer[0] & tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) ==
-                tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS ||
+            (route_buffer[0] & tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS) ==
+                tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS ||
         routing_fields_2d.e_hops > 0 && route_buffer[routing_fields.branch_east_offset] ==
-                                            tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
+                                            tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
         routing_fields_2d.w_hops > 0 && route_buffer[routing_fields.branch_west_offset] ==
-                                            tt::tt_fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
+                                            tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW ||
         routing_fields_2d.e_hops > 0 && routing_fields_2d.w_hops > 0) {
         routing_fields_2d.is_mcast = true;
     }
@@ -161,18 +161,18 @@ FORCE_INLINE void recordRoutingFields2D(
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
     // determine routing fields type at compile time
     KernelProfilerNocEventMetadata::FabricPacketType routing_fields_type;
-    if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
+    if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH;
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY;
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
         routing_fields_type = KernelProfilerNocEventMetadata::FabricPacketType::REGULAR;
     }
 
     // first profiler packet stores XY address data as well as packet type tag (used to decode routing fields)
     auto noc_send_type = fabric_header_ptr->get_noc_send_type();
     switch (noc_send_type) {
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_WRITE: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_write;
             recordFabricNocEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_WRITE,
@@ -180,7 +180,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 unicast_write_cmd.noc_address);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_seminc;
             recordFabricNocEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_ATOMIC_INC,
@@ -188,7 +188,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 unicast_write_cmd.noc_address);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_seminc_fused;
             recordFabricNocEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_FUSED_UNICAST_ATOMIC_INC,
@@ -196,7 +196,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 unicast_write_cmd.noc_address);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_inline_write;
             recordFabricNocEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_INLINE_WRITE,
@@ -204,7 +204,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 unicast_write_cmd.noc_address);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_scatter_write;
             recordFabricScatterEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_SCATTER_WRITE,
@@ -214,7 +214,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 NOC_SCATTER_WRITE_MAX_CHUNKS);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_MULTICAST_WRITE: {
             const volatile auto& mcast_write_cmd = fabric_header_ptr->get_command_fields().mcast_write;
             recordFabricNocEventMulticast(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_MULTICAST_WRITE,
@@ -225,7 +225,7 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 mcast_write_cmd.mcast_rect_size_y);
             break;
         }
-        case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC: {
             const volatile auto& mcast_write_cmd = fabric_header_ptr->get_command_fields().mcast_seminc;
             recordFabricNocEventMulticast(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_MULTICAST_ATOMIC_INC,
@@ -243,13 +243,13 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
     }
 
     // following profiler event just stores the routing fields
-    if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
+    if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields, ROUTING_FIELDS_TYPE>) {
 #if defined(FABRIC_2D)
         recordRoutingFields2D(fabric_header_ptr->routing_fields, fabric_header_ptr->route_buffer);
 #endif
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::LowLatencyRoutingFields, ROUTING_FIELDS_TYPE>) {
         recordRoutingFields1D(fabric_header_ptr->routing_fields.value);
-    } else if constexpr (std::is_base_of_v<tt::tt_fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
+    } else if constexpr (std::is_base_of_v<tt::tt_metal::experimental::fabric::RoutingFields, ROUTING_FIELDS_TYPE>) {
         recordRoutingFields1D(fabric_header_ptr->routing_fields.value);
     }
 }

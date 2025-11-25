@@ -8,7 +8,7 @@
 #include "tt_metal/fabric/builder/fabric_router_recipe.hpp"  // for FabricChannelPoolType
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
     const FabricStaticSizedChannelsAllocator& static_allocator) :
@@ -54,4 +54,4 @@ size_t FabricRemoteChannelsAllocator::get_remote_receiver_channel_num_buffers(si
     return this->remote_receiver_channels_num_buffers_[channel_id];
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

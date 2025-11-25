@@ -8,7 +8,7 @@
 #include "debug/assert.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 static constexpr uint8_t edm_to_local_chip_noc = 1;
 
@@ -73,4 +73,4 @@ FORCE_INLINE void send_chunk(
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

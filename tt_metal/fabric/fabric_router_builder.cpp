@@ -10,7 +10,7 @@
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 FabricRouterBuilder::FabricRouterBuilder(
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
@@ -28,21 +28,21 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     umd::CoreCoord eth_logical_core,
     FabricNodeId fabric_node_id,
     FabricNodeId remote_fabric_node_id,
-    const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
-    tt::tt_fabric::eth_chan_directions eth_direction,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig& edm_config,
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverType fabric_edm_type,
+    tt::tt_metal::experimental::fabric::eth_chan_directions eth_direction,
     bool fabric_tensix_extension_enabled,
     bool dispatch_link,
-    tt::tt_fabric::chan_id_t eth_chan,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_metal::experimental::fabric::chan_id_t eth_chan,
+    tt::tt_metal::experimental::fabric::Topology topology) {
 
     bool has_tensix_extension = false;
     if (fabric_tensix_extension_enabled && !dispatch_link) {
         has_tensix_extension = true;
     }
 
-    auto edm_builder = std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(
-        tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+    auto edm_builder = std::make_unique<tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder>(
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::build(
             device,
             fabric_program,
             eth_logical_core,
@@ -63,11 +63,11 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     }
 
     // Create tensix builder if needed
-    std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
+    std::optional<tt::tt_metal::experimental::fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
     if (fabric_tensix_extension_enabled) {
         // Only create tensix builder if this channel is not used by dispatch
         if (!dispatch_link) {
-            auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+            auto tensix_builder = tt::tt_metal::experimental::fabric::FabricTensixDatamoverBuilder::build(
                 device, fabric_program, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
             tensix_builder_opt = tensix_builder;
         }
@@ -76,10 +76,10 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     // Create channel mapping
     // Only enable tensix extension in mapping if we actually created a tensix builder
     bool has_tensix_builder = tensix_builder_opt.has_value();
-    auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
+    auto channel_mapping = tt::tt_metal::experimental::fabric::FabricRouterChannelMapping(
         topology, eth_direction, has_tensix_builder);
 
-    return std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
+    return std::make_unique<tt::tt_metal::experimental::fabric::FabricRouterBuilder>(
         std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
 }
 
@@ -255,4 +255,4 @@ FabricNodeId FabricRouterBuilder::get_peer_fabric_node_id() const {
     return erisc_builder_->peer_fabric_node_id;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

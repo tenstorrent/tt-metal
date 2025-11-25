@@ -12,7 +12,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_fabric::tests::scale_out {
+namespace tt::tt_metal::experimental::fabric::tests::scale_out {
 
 TEST(Sanity, CorrectPCIeToBusIdMapping) {
     constexpr static size_t NUM_PCI_DEVICES = 4;
@@ -117,4 +117,4 @@ TEST(Cluster, TestFactorySystemDescriptor4xBHQuietbox) {
         "fsd/factory_system_descriptor_4x_bh_quietbox.textproto",
         "tests/scale_out/4x_bh_quietbox/global_system_descriptors/4x_bh_quietbox_physical_desc.yaml");
 }
-}  // namespace tt::tt_fabric::tests::scale_out
+}  // namespace tt::tt_metal::experimental::fabric::tests::scale_out

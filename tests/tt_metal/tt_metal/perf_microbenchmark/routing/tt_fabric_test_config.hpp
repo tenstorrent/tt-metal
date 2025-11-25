@@ -31,7 +31,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 // Helper template for static_assert in visitor - must be defined before use
@@ -840,7 +840,7 @@ private:
             }
         }
 
-        if (test.fabric_setup.topology == tt::tt_fabric::Topology::Linear) {
+        if (test.fabric_setup.topology == tt::tt_metal::experimental::fabric::Topology::Linear) {
             for (const auto& sender : test.senders) {
                 for (const auto& pattern : sender.patterns) {
                     if (pattern.destination->device.has_value()) {
@@ -1491,7 +1491,7 @@ private:
         return detail::fabric_reliability_mode_mapper.to_string(mode, "FabricReliabilityMode");
     }
 
-    static std::string to_string(tt::tt_fabric::Topology topology) {
+    static std::string to_string(tt::tt_metal::experimental::fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
     }
 
@@ -1675,4 +1675,4 @@ private:
 };
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

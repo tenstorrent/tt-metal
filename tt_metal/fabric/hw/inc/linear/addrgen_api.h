@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // NOTE: These helper functions are located in linear/addrgen_api.h rather than a common location
 // to avoid CI issues related to increased interleaved addr gen usage. Relocating these helper
@@ -165,7 +165,7 @@ FORCE_INLINE void to_noc_unicast_scatter_write(
 
 }  // namespace linear
 
-// Alias to allow mesh code to access addrgen_detail at tt::tt_fabric level
+// Alias to allow mesh code to access addrgen_detail at tt::tt_metal::experimental::fabric level
 namespace addrgen_detail = linear::addrgen_detail;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -39,7 +39,7 @@ namespace tt {
 namespace llrt {
 class RunTimeOptions;
 }
-namespace tt_fabric {
+namespace tt_metal::experimental::fabric {
 class ControlPlane;
 class FabricNodeId;
 }
@@ -295,10 +295,10 @@ public:
 
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
-        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+        tt_metal::experimental::fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
     void initialize_fabric_config(
-        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+        tt_metal::experimental::fabric::FabricConfig fabric_config, tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode);
 
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
@@ -316,7 +316,7 @@ public:
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores
-    std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(ChipId chip_id) const;
+    std::set<tt_metal::experimental::fabric::chan_id_t> get_fabric_ethernet_channels(ChipId chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
     std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const;

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <hostdevcommon/fabric_common.h>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 struct SenderWorkerAdapterSpec;
 
@@ -31,4 +31,4 @@ protected:
     eth_chan_directions direction_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

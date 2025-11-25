@@ -9,7 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tools/profiler/fabric_event_profiler.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 using FabricEndpointStatus = EDMStatus;
 
@@ -63,12 +63,12 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
-    local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
+    local_fabric_ep_status_ptr[0] = tt::tt_metal::experimental::fabric::FabricEndpointStatus::TERMINATED;
     do {
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
+    } while (local_fabric_ep_status_ptr[0] != tt::tt_metal::experimental::fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
@@ -101,8 +101,8 @@ FORCE_INLINE void fabric_endpoint_terminate(
     uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_termination_signal_address);
     noc_inline_dw_write(
         noc_addr,
-        graceful_termination ? tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE
-                             : tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        graceful_termination ? tt::tt_metal::experimental::fabric::TerminationSignal::GRACEFULLY_TERMINATE
+                             : tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     noc_async_write_barrier();
 }
 
@@ -130,4 +130,4 @@ FORCE_INLINE void fabric_atomic_inc(
     connection_handle.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

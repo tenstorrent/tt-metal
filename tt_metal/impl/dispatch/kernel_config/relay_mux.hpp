@@ -57,7 +57,7 @@ class RelayMux : public FDKernel {
 private:
     relay_mux_static_config static_config_;
     // This is separate from independent/dependent config as it's managed by fabric
-    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config_;
+    std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig> mux_kernel_config_;
     std::vector<uint32_t> mux_ct_args_;
     std::vector<uint32_t> mux_rt_args_;
     bool d2h_ = false;
@@ -86,32 +86,32 @@ public:
             .logical_core = logical_core_,
             .core_type = GetCoreType(),
             .address = this->mux_kernel_config_->get_termination_signal_address(),
-            .val = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE,
+            .val = tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE,
         };
     }
 
     const relay_mux_static_config& GetStaticConfig() const { return static_config_; }
 
     // Returns the Mux Kernel config. Populated after generating static configs.
-    const std::shared_ptr<tt::tt_fabric::FabricMuxConfig>& GetMuxKernelConfig() const { return mux_kernel_config_; }
+    const std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig>& GetMuxKernelConfig() const { return mux_kernel_config_; }
 
     // Returns the channel index for a given worker.
     // Note, workers that need the full size channel are specified in the upstream kernels.
     // and workers that only need the header only channel are specified in the downstream kernels.
     // Throws if not found
-    int GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const;
+    int GetWorkerChannelIndex(int worker_id, tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type) const;
 
     // Get the link index used by dispatch for coordination with fabric tensix
     static uint32_t get_dispatch_link_index(
-        tt::tt_fabric::FabricNodeId src_fabric_node_id,
-        tt::tt_fabric::FabricNodeId dst_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId src_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId dst_fabric_node_id,
         IDevice* device);
 };
 
 // Helper function to assemble the dispatch_fabric_mux_client_config args
 void assemble_fabric_mux_client_config_args(
     int node_id,
-    tt::tt_fabric::FabricMuxChannelType ch_type,
+    tt::tt_metal::experimental::fabric::FabricMuxChannelType ch_type,
     const RelayMux* fabric_mux,
     relay_mux_client_config& config);
 

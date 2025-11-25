@@ -91,11 +91,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
 
     // L1 Scratch CB Creation
     DataType dtype = input_tensor.dtype();
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t MAX_PACKET_SIZE_BYTES =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
     const size_t packet_size_bytes =
-        tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
+        tilized ? tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
@@ -262,7 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
         }
 
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+        std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
         if (forward_coord.has_value()) {
             const auto forward_coord_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());

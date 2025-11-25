@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace tt::tt_fabric::connection {
+namespace tt::tt_metal::experimental::fabric::connection {
 
 template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
 FORCE_INLINE void open_start(
@@ -21,13 +21,13 @@ FORCE_INLINE void open_start(
     uint8_t edm_noc_y) {
     const auto dest_noc_addr_coord_only = get_noc_addr(edm_noc_x, edm_noc_y, 0);
 
-    tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
-        reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(router_worker_location_info_addr);
+    tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
+        reinterpret_cast<tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(router_worker_location_info_addr);
 
     const uint64_t dest_edm_location_info_addr =
         dest_noc_addr_coord_only | reinterpret_cast<size_t>(
                                        router_worker_location_info_addr +
-                                       offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
+                                       offsetof(tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
     // write the address of our local copy of read counter (that EDM is supposed to update)
 
     noc_inline_dw_write<InlineWriteDst::L1, posted>(
@@ -85,4 +85,4 @@ void close_start(
 }
 }  // namespace worker
 
-}  // namespace tt::tt_fabric::connection
+}  // namespace tt::tt_metal::experimental::fabric::connection

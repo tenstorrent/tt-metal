@@ -124,9 +124,9 @@ void kernel_main() {
         volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
         pkt_hdr_forward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+            tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
         pkt_hdr_backward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+            tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.open_finish();
         // 1. mcast via fabric to remote tensor addresses
         uint32_t tiles_read = 0;

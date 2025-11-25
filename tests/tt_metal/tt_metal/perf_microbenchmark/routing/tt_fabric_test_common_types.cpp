@@ -4,7 +4,7 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common_types.hpp"
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 // Helper functions for fetching pattern parameters
 TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config) {
@@ -47,4 +47,4 @@ uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern) {
     return fetch_pattern_int(pattern, [](const auto& pattern) { return pattern.size; });
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

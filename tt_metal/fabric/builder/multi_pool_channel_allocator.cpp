@@ -7,7 +7,7 @@
 #include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "builder/fabric_remote_channels_allocator.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 static bool implements_static_channel_allocator(FabricChannelAllocator* allocator) {
     return dynamic_cast<FabricStaticSizedChannelsAllocator*>(allocator) != nullptr || dynamic_cast<FabricRemoteChannelsAllocator*>(allocator) != nullptr;
@@ -121,4 +121,4 @@ FabricChannelPoolType MultiPoolChannelAllocator::get_pool_type(size_t pool_index
     return pool_types_[pool_index];
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

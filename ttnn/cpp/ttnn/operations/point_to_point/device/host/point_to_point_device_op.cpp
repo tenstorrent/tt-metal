@@ -19,7 +19,7 @@ namespace detail {
 
 AlignedPacketDims compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;

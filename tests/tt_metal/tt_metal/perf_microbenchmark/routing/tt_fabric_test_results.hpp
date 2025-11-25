@@ -17,11 +17,11 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 
-using Topology = tt::tt_fabric::Topology;
-using NocSendType = tt::tt_fabric::NocSendType;
-using RoutingDirection = tt::tt_fabric::RoutingDirection;
+using Topology = tt::tt_metal::experimental::fabric::Topology;
+using NocSendType = tt::tt_metal::experimental::fabric::NocSendType;
+using RoutingDirection = tt::tt_metal::experimental::fabric::RoutingDirection;
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 // Bandwidth measurement result structures
 struct BandwidthResult {
@@ -131,4 +131,4 @@ private:
     double overall_geomean_speedup_ = 1.0;
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

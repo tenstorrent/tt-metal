@@ -18,7 +18,7 @@
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_metal::experimental::fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -159,10 +159,10 @@ void kernel_main() {
     const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
 #endif
 
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
-    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    tt::tt_metal::experimental::fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
+    tt::tt_metal::experimental::fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     if (mux_connection_valid) {
-        mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+        mux_connection = tt::tt_metal::experimental::fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
             fabric_mux_x,
             fabric_mux_y,
             fabric_mux_channel_id,
@@ -183,7 +183,7 @@ void kernel_main() {
 
     if (mux_connection_valid) {
         // need to wait for fabric mux to be ready to accept connections
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
     }
 
@@ -196,7 +196,7 @@ void kernel_main() {
     }
 
     if (mux_connection_valid) {
-        tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
+        tt::tt_metal::experimental::fabric::fabric_client_connect(*mux_connection_handle);
     }
 
     // pre-populate packet headers
@@ -214,7 +214,7 @@ void kernel_main() {
                 pkt_hdr_sem_inc,
                 static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
                 static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                     0,  // ignore
                     static_cast<uint32_t>(1)});
 
@@ -229,7 +229,7 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
@@ -237,7 +237,7 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
@@ -246,7 +246,7 @@ void kernel_main() {
                 fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+                    tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
             } else {
                 ASSERT(false);
             }
@@ -297,7 +297,7 @@ void kernel_main() {
             UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             pkt_hdr_sem_inc,
             static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                 0,  // ignore
                 static_cast<uint32_t>(1)});
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
@@ -324,7 +324,7 @@ void kernel_main() {
                 row_offset += output_tensor_Wt;
                 pages_read_in_row = 0;
             }
-            auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+            auto noc_address0 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(
                 output_addrgen, tile_one_id, 0);
             // Will have more cases once scatter-write supports more than 2 distinct addresses
             switch (tiles_to_put_in_current_packet) {
@@ -336,7 +336,7 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                    auto noc_address1 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(
                         output_addrgen, tile_two_id, 0);
                     if (direction == 1) {
                         if constexpr (num_targets_backward_direction) {
@@ -402,7 +402,7 @@ void kernel_main() {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
             }
             noc_async_writes_flushed();
@@ -414,7 +414,7 @@ void kernel_main() {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
         }
 
@@ -519,7 +519,7 @@ void kernel_main() {
                     row_offset += output_tensor_Wt;
                     pages_read_in_row = 0;
                 }
-                auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                auto noc_address0 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(
                     output_addrgen, tile_one_id, 0);
                 // Will have more cases once scatter-write supports more than 2 distinct addresses
                 switch (tiles_to_put_in_current_packet) {
@@ -531,7 +531,7 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                        auto noc_address1 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(
                             output_addrgen, tile_two_id, 0);
                         fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                             mux_connection_handle,
@@ -562,7 +562,7 @@ void kernel_main() {
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
                 }
                 noc_async_writes_flushed();
             }
@@ -572,7 +572,7 @@ void kernel_main() {
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
             }
 
             num_channels_processed_in_current_batch++;
@@ -598,12 +598,12 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
-        tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
+        tt::tt_metal::experimental::fabric::fabric_client_disconnect(*mux_connection_handle);
 
         if (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            tt::tt_metal::experimental::fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);

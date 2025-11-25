@@ -27,7 +27,7 @@ class MeshDevice;
 class MeshShape;
 }  // namespace tt::tt_metal::distributed
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
@@ -99,7 +99,7 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
-tt::tt_fabric::Topology get_fabric_topology();
+tt::tt_metal::experimental::fabric::Topology get_fabric_topology();
 
 /**
  * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
@@ -167,7 +167,7 @@ public:
 
     // Returns the base compile time args without stream IDs (for custom stream ID override)
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
+        const tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     std::vector<uint32_t> get_fabric_mux_run_time_args(
@@ -260,10 +260,10 @@ private:
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 
-bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+bool is_1d_fabric_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
 
-bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+bool is_2d_fabric_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
 
 size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

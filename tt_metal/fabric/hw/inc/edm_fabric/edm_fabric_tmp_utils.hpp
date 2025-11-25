@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <tuple>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // a generic tuple‐for_each helper that provides compile-time indices
 template <typename Tuple, typename F, size_t... Is>
@@ -41,4 +41,4 @@ constexpr void tuple_for_each(Tuple&& t, F&& f) {
         std::make_index_sequence<std::tuple_size_v<std::remove_reference_t<Tuple>>>{});
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

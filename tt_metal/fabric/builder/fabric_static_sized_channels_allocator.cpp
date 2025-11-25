@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 size_t FabricStaticSizedChannelsAllocator::get_sender_channel_base_address(size_t channel_id) const {
     TT_FATAL(channel_id < sender_channels_base_address.size(), "Sender channel ID {} out of bounds", channel_id);
@@ -37,7 +37,7 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
 }
 
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels,
@@ -66,7 +66,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-    bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool has_tensix_extension = options.fabric_tensix_config != tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(
         topology,
@@ -325,9 +325,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     }
 
     switch (options.fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::MUX: {
+        case tt::tt_metal::experimental::fabric::FabricTensixConfig::MUX: {
             uint32_t num_sender_channels = this->num_sender_channels_with_tensix_config;
-            if (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) {
+            if (topology == tt::tt_metal::experimental::fabric::Topology::Ring || topology == tt::tt_metal::experimental::fabric::Topology::Torus) {
                 // extra sender channel for vc1
                 num_sender_channels = this->num_sender_channels_with_tensix_config_deadlock_avoidance;
             }
@@ -558,4 +558,4 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
     }
 }
 
-};  // namespace tt::tt_fabric
+};  // namespace tt::tt_metal::experimental::fabric

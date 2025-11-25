@@ -41,7 +41,7 @@
 
 struct FabricLiteTestConfig {
     bool standalone{false};
-    tt::tt_fabric::FabricConfig fabric_config{tt::tt_fabric::FabricConfig::DISABLED};
+    tt::tt_metal::experimental::fabric::FabricConfig fabric_config{tt::tt_metal::experimental::fabric::FabricConfig::DISABLED};
 };
 
 // Lite Fabric Test Fixture
@@ -72,8 +72,8 @@ protected:
         }
 
         // Configure fabric if needed
-        if (GetParam().fabric_config != tt::tt_fabric::FabricConfig::DISABLED) {
-            tt::tt_fabric::SetFabricConfig(GetParam().fabric_config);
+        if (GetParam().fabric_config != tt::tt_metal::experimental::fabric::FabricConfig::DISABLED) {
+            tt::tt_metal::experimental::fabric::SetFabricConfig(GetParam().fabric_config);
             fabric_configured_ = true;
         }
 
@@ -97,7 +97,7 @@ protected:
 
         // Reset fabric configuration
         if (fabric_configured_) {
-            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+            tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
             fabric_configured_ = false;
         }
     }
@@ -112,14 +112,14 @@ INSTANTIATE_TEST_SUITE_P(
         // Standard tests with mesh device but no fabric
         FabricLiteTestConfig{.standalone = false},
         // Test with 1D fabric active (full fabric)
-        FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D},
+        FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D},
         // Test with 2D fabric active (full fabric)
-        FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}),
+        FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D}),
     [](const testing::TestParamInfo<FabricLiteTestConfig>& info) {
         std::string name;
         if (info.param.standalone) {
             name = "Standalone";
-        } else if (info.param.fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+        } else if (info.param.fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::DISABLED) {
             name = "MeshDevice";
         } else {
             name = "MeshDevice_";

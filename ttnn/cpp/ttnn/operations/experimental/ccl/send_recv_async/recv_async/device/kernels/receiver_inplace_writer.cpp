@@ -34,8 +34,8 @@ void kernel_main() {
     uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets
     uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages
 
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores

@@ -32,7 +32,7 @@ void write_data(
     uint32_t dest_id,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes,
     uint32_t offset,
@@ -60,7 +60,7 @@ void write_data(
         if (local) {
             noc_async_write(l1_read_addr, addrgen.get_noc_addr(dest_id, offset), payload_size_bytes);
         } else {
-            tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, dest_id, addrgen, offset);
+            tt::tt_metal::experimental::fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, dest_id, addrgen, offset);
             perform_payload_send(fabric_connection, l1_read_addr, payload_size_bytes, pkt_hdr);
         }
     }
@@ -75,7 +75,7 @@ void write_data(
     uint32_t dest_id1,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes0,
     uint32_t payload_size_bytes1,
@@ -91,7 +91,7 @@ void write_data(
                 l1_read_addr + output_page_size, addrgen.get_noc_addr(dest_id1, offset1), payload_size_bytes1);
             noc_async_write_barrier();
         } else {
-            tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes0, pkt_hdr, dest_id0, addrgen, offset0);
+            tt::tt_metal::experimental::fabric::linear::to_noc_unicast_write(payload_size_bytes0, pkt_hdr, dest_id0, addrgen, offset0);
             perform_payload_send(fabric_connection, l1_read_addr, payload_size_bytes0, pkt_hdr);
             size_t l1_read_addr_plus_payload = l1_read_addr + output_page_size;
             noc_async_writes_flushed();
@@ -121,8 +121,8 @@ void write_data(
             }
             auto payload_size = payload_size_bytes0 + payload_size_bytes1;
 
-            auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, dest_id0, offset0);
-            auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, dest_id1, offset1);
+            auto noc_address0 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(addrgen, dest_id0, offset0);
+            auto noc_address1 = tt::tt_metal::experimental::fabric::linear::addrgen_detail::get_noc_address(addrgen, dest_id1, offset1);
 
             pkt_hdr->to_noc_unicast_scatter_write(
                 NocUnicastScatterCommandHeader(
@@ -186,20 +186,20 @@ void kernel_main() {
 #define RING 2
 #if TOPOLOGY == LINEAR
     if (fabric_connection.has_forward_connection()) {
-        pkt_hdr_forward->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        pkt_hdr_forward->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             init_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr_forward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_devices - current_device_id - 1)});
+            tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_devices - current_device_id - 1)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_addr_forward, sizeof(PACKET_HEADER_TYPE));
     }
 
     if (fabric_connection.has_backward_connection()) {
-        pkt_hdr_backward->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        pkt_hdr_backward->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             init_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
         pkt_hdr_backward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(current_device_id)});
+            tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(current_device_id)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_addr_backward, sizeof(PACKET_HEADER_TYPE));
@@ -210,7 +210,7 @@ void kernel_main() {
 
     for (uint32_t device_id = 0; device_id < num_devices; ++device_id) {
         volatile PACKET_HEADER_TYPE* pkt_hdr;
-        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection = (device_id > current_device_id)
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& cur_connection = (device_id > current_device_id)
                                                                      ? fabric_connection.get_forward_connection()
                                                                      : fabric_connection.get_backward_connection();
         if (device_id > current_device_id) {
@@ -222,11 +222,11 @@ void kernel_main() {
         }
 #elif TOPOLOGY == RING
     if (fabric_connection.has_forward_connection()) {
-        pkt_hdr_forward->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        pkt_hdr_forward->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             init_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr_forward->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_devices - 1)});
+            tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_devices - 1)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_addr_forward, sizeof(PACKET_HEADER_TYPE));
     }
@@ -239,7 +239,7 @@ void kernel_main() {
         int val = (d % 2 == 0) ? distance : -distance;
         uint32_t device_id = (current_device_id + val + num_devices) % num_devices;
         volatile PACKET_HEADER_TYPE* pkt_hdr;
-        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& cur_connection =
             (val >= 0) ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
         if (val >= 0) {
             pkt_hdr = pkt_hdr_forward;

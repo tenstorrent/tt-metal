@@ -31,8 +31,8 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         }
 
         const auto mesh_id = mesh_ids.front();
-        const auto local_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::LOCAL);
-        const auto local_coord_range = control_plane.get_coord_range(mesh_id, tt::tt_fabric::MeshScope::LOCAL);
+        const auto local_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, tt::tt_metal::experimental::fabric::MeshScope::LOCAL);
+        const auto local_coord_range = control_plane.get_coord_range(mesh_id, tt::tt_metal::experimental::fabric::MeshScope::LOCAL);
 
         // Validate that the physical chip ids are unique.
         std::unordered_set<ChipId> unique_chip_ids;
@@ -42,10 +42,10 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
 
         for (const auto& coord : local_coord_range) {
             const auto logical_chip_id =
-                coord.to_linear_index(control_plane.get_physical_mesh_shape(mesh_id, tt::tt_fabric::MeshScope::GLOBAL));
+                coord.to_linear_index(control_plane.get_physical_mesh_shape(mesh_id, tt::tt_metal::experimental::fabric::MeshScope::GLOBAL));
             // Query the control plane to get the physical chip id from logical chip id
             const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
-                tt::tt_fabric::FabricNodeId(mesh_id, logical_chip_id));
+                tt::tt_metal::experimental::fabric::FabricNodeId(mesh_id, logical_chip_id));
             TT_FATAL(
                 unique_chip_ids.insert(physical_chip_id).second,
                 "Found duplicate physical chip id: {}, mesh id: {}",

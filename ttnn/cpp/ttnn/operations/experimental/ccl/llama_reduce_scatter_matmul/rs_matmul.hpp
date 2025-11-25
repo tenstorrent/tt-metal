@@ -25,7 +25,7 @@ struct ExecuteLlamaReduceScatterMatmul {
         const tt::tt_metal::SubDeviceId& subdevice_id,
         const std::optional<const ttnn::Tensor>& second_weight_tensor = std::nullopt,
         const std::optional<const ttnn::Tensor>& rs_tensor = std::nullopt,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+        tt::tt_metal::experimental::fabric::Topology topology = tt::tt_metal::experimental::fabric::Topology::Linear,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,  // rs 8 default std::nullopt
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,  // mm4 used but default std::nullopt
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config =

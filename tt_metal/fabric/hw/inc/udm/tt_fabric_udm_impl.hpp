@@ -15,7 +15,7 @@
 #include "dev_mem_map.h"
 #include <type_traits>
 
-namespace tt::tt_fabric::udm {
+namespace tt::tt_metal::experimental::fabric::udm {
 
 /**
  * @brief Enum for UDM control fields
@@ -113,12 +113,12 @@ FORCE_INLINE void fabric_write_set_unicast_route(
     volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint8_t trid, uint8_t posted) {
     udm_write_fields udm = {my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], proc_type, trid, posted};
 
-    if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+    if constexpr (std::is_same_v<T, tt::tt_metal::experimental::fabric::UDMHybridMeshPacketHeader>) {
         fabric_write_set_unicast_route_impl(packet_header, udm, dst_dev_id, dst_mesh_id);
     } else {
         // Compile error for unsupported types
         static_assert(
-            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>,
+            std::is_same_v<T, tt::tt_metal::experimental::fabric::UDMHybridMeshPacketHeader>,
             "Unsupported packet header type for fabric_write_set_unicast_route - only UDMHybridMeshPacketHeader is "
             "supported");
     }
@@ -185,12 +185,12 @@ FORCE_INLINE void fabric_read_set_unicast_route(
     udm_read_fields udm = {
         my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], src_l1_addr, size_bytes, proc_type, trid};
 
-    if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+    if constexpr (std::is_same_v<T, tt::tt_metal::experimental::fabric::UDMHybridMeshPacketHeader>) {
         fabric_read_set_unicast_route_impl(packet_header, udm, dst_dev_id, dst_mesh_id);
     } else {
         // Compile error for unsupported types
         static_assert(
-            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>,
+            std::is_same_v<T, tt::tt_metal::experimental::fabric::UDMHybridMeshPacketHeader>,
             "Unsupported packet header type for fabric_read_set_unicast_route - only UDMHybridMeshPacketHeader is "
             "supported");
     }
@@ -242,8 +242,8 @@ FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_pt
  *
  * @return Reference to the fabric connection and initialized flag
  */
-FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
-    static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
+FORCE_INLINE std::pair<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
+    static tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender* connection = nullptr;
     static bool initialized = false;
 
     if (!initialized) {
@@ -252,8 +252,8 @@ FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_ope
         // TODO: instead of using rt args, use the reserved L1 region for get the correct ETH channel, and semaphore
         // addresses.
         size_t rt_args_idx = 0;
-        static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        static tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender conn;
+        conn = tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
         conn.open();
         connection = &conn;
         initialized = true;
@@ -293,4 +293,4 @@ FORCE_INLINE volatile tt_l1_ptr PACKET_HEADER_TYPE* get_or_allocate_header() {
     return singleton_header;
 }
 
-}  // namespace tt::tt_fabric::udm
+}  // namespace tt::tt_metal::experimental::fabric::udm

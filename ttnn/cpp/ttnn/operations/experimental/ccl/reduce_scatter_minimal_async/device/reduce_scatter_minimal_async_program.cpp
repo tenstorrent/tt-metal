@@ -489,8 +489,8 @@ std::vector<uint32_t> get_line_reduce_compile_args(
 using namespace ccl;
 
 void append_fabric_mux_connection_ct_args(
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type,
+    const tt::tt_metal::experimental::fabric::FabricMuxConfig& mux_kernel_config,
     uint32_t num_workers_per_direction,
     std::vector<uint32_t>& writer_ct_args) {
     constexpr auto num_ct_args = 5;
@@ -509,8 +509,8 @@ void append_fabric_mux_connection_ct_args(
 void append_fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const CoreCoord& mux_virtual_core,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type,
+    const tt::tt_metal::experimental::fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& worker_logical_core,
     const uint32_t worker_per_direction_id,
     const bool is_termination_master,
@@ -806,7 +806,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t max_target_noc_addresses_per_packet = 2;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
@@ -866,8 +866,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     const auto num_full_size_channels = num_workers_per_direction;
     constexpr auto num_header_only_channels = 0;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    const auto buffer_size_bytes_full_size_channel = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto mux_kernel_config = tt::tt_metal::experimental::fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -954,7 +954,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             normalized_dim);
 
     append_fabric_mux_connection_ct_args(
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         num_workers_per_direction,
         sender_writer_compile_args);
@@ -1110,7 +1110,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 append_fabric_mux_connection_rt_args(
                     true,
                     mux_virtual_core,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
                     core,
                     worker,
@@ -1421,7 +1421,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t max_scatter_write_pages = 2;
@@ -1533,10 +1533,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
     const auto num_full_size_channels = num_workers_per_direction;
     const auto num_header_only_channels = 0;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     // Fabric mux kernel
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    auto mux_kernel_config = tt::tt_metal::experimental::fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -1634,7 +1634,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             sync_with_other_direction);
 
     append_fabric_mux_connection_ct_args(
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         num_workers_per_direction,
         sender_writer_compile_args);
@@ -1828,7 +1828,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 append_fabric_mux_connection_rt_args(
                     mux_connection_valid(dir),
                     mux_virtual_core,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
                     core,
                     worker,

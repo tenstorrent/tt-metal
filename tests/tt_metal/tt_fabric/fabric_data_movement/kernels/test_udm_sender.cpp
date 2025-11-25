@@ -23,7 +23,7 @@ constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(13);
 
 void kernel_main() {
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
+    tt::tt_metal::experimental::fabric::udm::fabric_local_state_init();
 
     // Runtime args are set up by append_fabric_connection_rt_args and used internally by fabric_fast_write
     // We don't need to read them explicitly here
@@ -46,7 +46,7 @@ void kernel_main() {
 
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
-                tt::tt_fabric::udm::fabric_fast_write_any_len(
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_write_any_len(
                     dst_dev_id,
                     dst_mesh_id,
                     source_l1_buffer_address,
@@ -55,12 +55,12 @@ void kernel_main() {
             } break;
             case NOC_UNICAST_INLINE_WRITE: {
                 uint32_t inline_value = time_seed;
-                tt::tt_fabric::udm::fabric_fast_write_dw_inline(
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_write_dw_inline(
                     dst_dev_id, dst_mesh_id, inline_value, get_noc_addr(noc_x_start, noc_y_start, target_address));
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
                 uint32_t incr_value = time_seed;
-                tt::tt_fabric::udm::fabric_fast_atomic_inc(
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_atomic_inc(
                     dst_dev_id, dst_mesh_id, incr_value, get_noc_addr(noc_x_start, noc_y_start, target_address));
             } break;
             default: {
@@ -83,10 +83,10 @@ void kernel_main() {
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE:
             case NOC_UNICAST_INLINE_WRITE: {
-                tt::tt_fabric::udm::fabric_write_barrier();
+                tt::tt_metal::experimental::fabric::udm::fabric_write_barrier();
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
-                tt::tt_fabric::udm::fabric_atomic_barrier();
+                tt::tt_metal::experimental::fabric::udm::fabric_atomic_barrier();
             } break;
             default: {
                 ASSERT(false);
@@ -97,7 +97,7 @@ void kernel_main() {
     }
 
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
+    tt::tt_metal::experimental::fabric::udm::close_fabric_connection();
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 

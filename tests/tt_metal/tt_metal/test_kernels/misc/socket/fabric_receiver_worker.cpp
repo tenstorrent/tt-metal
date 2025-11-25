@@ -16,8 +16,8 @@ void kernel_main() {
     constexpr uint32_t output_addr = get_compile_time_arg_val(5);
 
     size_t rt_args_idx = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     fabric_connection.open_start();
     auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 

@@ -9,7 +9,7 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
-using StreamId = tt::tt_fabric::NamedType<uint32_t, struct StreamIdType>;
+using StreamId = tt::tt_metal::experimental::fabric::NamedType<uint32_t, struct StreamIdType>;
 
 //------------------------- Stream Scratch Register --------------------------
 //--------------------------------  24 bits ----------------------------------

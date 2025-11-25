@@ -33,9 +33,9 @@ const std::string default_sync_kernel_src =
 const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
-using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
+using FabricMuxConfig = tt::tt_metal::experimental::fabric::FabricMuxConfig;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 struct ConnectionKey {
@@ -393,4 +393,4 @@ private:
 };
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

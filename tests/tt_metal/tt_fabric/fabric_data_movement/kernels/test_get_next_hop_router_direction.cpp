@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
-using namespace tt::tt_fabric;
+using namespace tt::tt_metal::experimental::fabric;
 
 void kernel_main() {
     uint32_t src_mesh_id = get_arg_val<uint32_t>(0);

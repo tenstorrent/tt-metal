@@ -15,12 +15,12 @@
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 
-using FabricNodeId = tt::tt_fabric::FabricNodeId;
+using FabricNodeId = tt::tt_metal::experimental::fabric::FabricNodeId;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
-using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
-using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
-using RoutingDirection = tt::tt_fabric::RoutingDirection;
+using TestDevice = tt::tt_metal::experimental::fabric::fabric_tests::TestDevice;
+using TestFixture = tt::tt_metal::experimental::fabric::fabric_tests::TestFixture;
+using RoutingDirection = tt::tt_metal::experimental::fabric::RoutingDirection;
 
 /**
  * @brief Result structure containing buffer data and location metadata for a single ethernet core
@@ -29,7 +29,7 @@ struct EthCoreBufferResult {
     MeshCoordinate coord;                  // Device mesh coordinate
     FabricNodeId fabric_node_id;           // Fabric node ID
     CoreCoord eth_core;                    // Ethernet core coordinate
-    tt::tt_fabric::chan_id_t eth_channel;  // Ethernet channel ID
+    tt::tt_metal::experimental::fabric::chan_id_t eth_channel;  // Ethernet channel ID
     RoutingDirection direction;            // Direction this core serves
     uint32_t link_index;                   // Link index within direction
     std::vector<uint32_t> buffer_data;     // The actual buffer contents

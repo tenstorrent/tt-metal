@@ -21,7 +21,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const ttnn::Tensor& expert_metadata_tensor,
     const bool locally_reduced,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<tt::tt_metal::experimental::fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& axis,
     const std::optional<uint32_t>& output_shard_dim,
@@ -32,7 +32,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t shard_dim = output_shard_dim.value_or(1);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
     // create zeros tensor

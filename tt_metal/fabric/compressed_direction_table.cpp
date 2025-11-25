@@ -4,7 +4,7 @@
 
 #include "compressed_direction_table.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 template <std::uint32_t ArraySize>
 void direction_table_t<ArraySize>::set_direction(std::uint16_t index, std::uint8_t direction) {
@@ -54,4 +54,4 @@ void direction_table_t<ArraySize>::set_original_direction(std::uint16_t index, s
 template struct direction_table_t<MAX_MESH_SIZE>;
 template struct direction_table_t<MAX_NUM_MESHES>;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

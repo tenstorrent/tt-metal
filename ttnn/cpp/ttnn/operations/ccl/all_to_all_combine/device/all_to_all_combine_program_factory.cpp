@@ -59,7 +59,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     using namespace ttnn::ccl;
 
     Program program{};

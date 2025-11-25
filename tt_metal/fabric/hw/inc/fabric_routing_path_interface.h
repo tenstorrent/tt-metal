@@ -7,7 +7,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Device-side compressed decoder function for 2D routing
 template <>
@@ -136,4 +136,4 @@ inline bool decode_route_to_buffer_by_dev(uint16_t dst_chip_id, volatile uint8_t
     return decode_route_to_buffer_by_hops(hops, out_route_buffer);
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

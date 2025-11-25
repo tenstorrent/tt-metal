@@ -33,20 +33,20 @@ std::vector<std::shared_ptr<distributed::MeshDevice>> get_line_devices(distribut
 class MeshDevice1x4Fixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice1x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 4}}) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
         MeshDeviceFixtureBase::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
     }
 };
 
 class MultiCQFabricMeshDevice2x4Fixture : public MultiCQMeshDevice2x4Fixture {
 protected:
-    MultiCQFabricMeshDevice2x4Fixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    MultiCQFabricMeshDevice2x4Fixture() { tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D); }
     void TearDown() override {
         MultiCQMeshDevice2x4Fixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
     }
 };
 

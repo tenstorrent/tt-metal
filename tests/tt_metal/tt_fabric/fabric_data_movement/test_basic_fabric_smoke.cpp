@@ -32,7 +32,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 struct WorkerMemMap {
@@ -211,4 +211,4 @@ TEST_F(Fabric2DFixture, TestUnicastConnAPI2DSmoke) { RunTestUnicastSmoke(this); 
 TEST_F(Fabric1DFixture, TestUnicastConnAPI1DSmoke) { RunTestUnicastSmoke(this); }
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

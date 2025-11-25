@@ -17,7 +17,7 @@ constexpr bool payloads_are_mcast = get_compile_time_arg_val(1) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     size_t arg_idx = 0;
 
     // A safe location to dump payload data
@@ -99,7 +99,7 @@ void kernel_main() {
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), dest_dummy_payload_buffer_address, 0);
     if constexpr (enable_fused_payload_with_sync) {
         payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                 dest_payload_noc_addr, dest_semaphore_noc_addr, 1, false},
             payload_size_bytes);
     } else {
@@ -180,12 +180,12 @@ void kernel_main() {
     }
 
     auto send_teardown_message = [packet_header = payload_packet_header](
-                                     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+                                     tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
                                      uint64_t teardown_noc_addr,
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
         fabric_set_unicast_route<false>(packet_header, num_hops_on_fabric);
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{teardown_noc_addr, 1});
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{teardown_noc_addr, 1});
 
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

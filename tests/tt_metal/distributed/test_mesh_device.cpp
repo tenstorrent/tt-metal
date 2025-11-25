@@ -63,7 +63,7 @@ TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<IDevice*> devices;
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
@@ -194,7 +194,7 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     EXPECT_EQ(mesh_device_->shape().dims(), 2);
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
+        tt_metal::experimental::fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
         EXPECT_EQ(
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),
             fabric_node_id);

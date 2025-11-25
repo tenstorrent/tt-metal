@@ -23,7 +23,7 @@ constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(13);
 
 void kernel_main() {
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
+    tt::tt_metal::experimental::fabric::udm::fabric_local_state_init();
 
     uint32_t time_seed = time_seed_init;
 
@@ -47,7 +47,7 @@ void kernel_main() {
         switch (noc_send_type) {
             case NOC_UNICAST_READ: {
                 // Issue a read request to the remote device
-                tt::tt_fabric::udm::fabric_fast_read_any_len(
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_read_any_len(
                     dst_dev_id,
                     dst_mesh_id,
                     get_noc_addr(noc_x_start, noc_y_start, remote_read_addr),
@@ -68,7 +68,7 @@ void kernel_main() {
                     req_notification_size_bytes);
 
                 // wait for the read to complete
-                tt::tt_fabric::udm::fabric_read_barrier();
+                tt::tt_metal::experimental::fabric::udm::fabric_read_barrier();
 
                 // Check the received data
                 match = check_packet_data(
@@ -98,7 +98,7 @@ void kernel_main() {
     }
 
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
+    tt::tt_metal::experimental::fabric::udm::close_fabric_connection();
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 

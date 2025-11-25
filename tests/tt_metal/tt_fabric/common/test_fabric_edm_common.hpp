@@ -109,28 +109,28 @@ public:
     Fabric1DFixture() : device_open(false) { this->SetupDevices(); }
 
     Fabric1DFixture(
-        tt::tt_fabric::FabricConfig fabric_config,
-        tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_metal::experimental::fabric::FabricConfig fabric_config,
+        tt::tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
 
     ~Fabric1DFixture() {
         TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
     }
 };
 
 class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
+    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D) {}
 };
 
 class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
+    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 
 template <typename ProgramContainer>

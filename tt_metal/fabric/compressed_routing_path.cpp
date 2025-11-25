@@ -8,7 +8,7 @@
 #include "tt_metal/api/tt-metalium/control_plane.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // 1D routing specialization
 template <>
@@ -50,7 +50,7 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             continue;
         }
 
-        tt::tt_fabric::FabricNodeId dst_fabric_node_id(mesh_id, dst_chip_id);
+        tt::tt_metal::experimental::fabric::FabricNodeId dst_fabric_node_id(mesh_id, dst_chip_id);
         std::vector<uint16_t> best_chip_sequence;
         for (chan_id_t start_chan : candidate_src_chan_ids) {
             auto candidate_route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, start_chan);
@@ -60,9 +60,9 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             // Build chip sequence ("intra"-mesh only)
             std::vector<uint16_t> seq;
             seq.reserve(candidate_route.size());
-            tt::tt_fabric::FabricNodeId last_added = src_fabric_node_id;
+            tt::tt_metal::experimental::fabric::FabricNodeId last_added = src_fabric_node_id;
             for (const auto& step : candidate_route) {
-                const tt::tt_fabric::FabricNodeId& node = step.first;
+                const tt::tt_metal::experimental::fabric::FabricNodeId& node = step.first;
                 if (node.mesh_id != mesh_id) {
                     break;  // ignore inter-mesh tail
                 }
@@ -93,7 +93,7 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         auto is_ns = [](RoutingDirection d) { return d == RoutingDirection::N || d == RoutingDirection::S; };
         auto is_ew = [](RoutingDirection d) { return d == RoutingDirection::E || d == RoutingDirection::W; };
 
-        auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
+        auto make_node = [mesh_id](uint16_t chip) { return tt::tt_metal::experimental::fabric::FabricNodeId(mesh_id, chip); };
         auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
             return control_plane.get_forwarding_direction(make_node(from_chip), make_node(to_chip));
         };
@@ -140,4 +140,4 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

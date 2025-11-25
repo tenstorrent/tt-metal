@@ -13,7 +13,7 @@ namespace ttnn::operations::ccl::common {
 std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const ttnn::distributed::MeshDeviceView& mesh_view,
     const ttnn::distributed::MeshCoordinate& mesh_coordinate,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     std::optional<uint32_t> axis);
 
 // Utilities to code-gen variadic length containers for kernels

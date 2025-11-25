@@ -184,7 +184,7 @@ struct FabricLiteMemoryMap {
     unsigned char padding4[12]{};
 
     lite_fabric::FabricLiteConfig config;
-    tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
+    tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo sender_location_info;
 
     // Must be last because it has members that are only stored on the host
     HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>

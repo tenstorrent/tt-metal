@@ -61,7 +61,7 @@ void RelayMux::GenerateStaticConfigs() {
 
     // Buffer size for the Mux must matching downstream fabric router size
     // Round down to nearest power of 2
-    uint32_t mux_buffer_size = std::bit_floor(tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    uint32_t mux_buffer_size = std::bit_floor(tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes());
     uint32_t header_size = fabric_context.get_fabric_packet_header_size_bytes();
     static_config_.buffer_size_bytes = header_size + mux_buffer_size;
     uint32_t num_slots = 16;
@@ -72,7 +72,7 @@ void RelayMux::GenerateStaticConfigs() {
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
-    mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
+    mux_kernel_config_ = std::make_shared<tt::tt_metal::experimental::fabric::FabricMuxConfig>(
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
         num_slots,
@@ -95,8 +95,8 @@ void RelayMux::GenerateStaticConfigs() {
         // Get the device which is downstream on the specified tunnel
         destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
     }
-    const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
-    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
+    const auto src_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
+    const auto dst_fabric_node_id = tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
 
     auto link_index = get_dispatch_link_index(src_fabric_node_id, dst_fabric_node_id, device_);
     log_debug(
@@ -132,8 +132,8 @@ void RelayMux::CreateKernel() {
 
 void RelayMux::ConfigureCore() {}
 
-int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChannelType channel_type) const {
-    const auto& kernels = channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
+int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type) const {
+    const auto& kernels = channel_type == tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL ? upstream_kernels_
                                                                                                  : downstream_kernels_;
     for (int i = 0; i < kernels.size(); ++i) {
         if (kernels[i]->GetNodeId() == worker_id) {
@@ -147,7 +147,7 @@ int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChann
 
 void assemble_fabric_mux_client_config_args(
     int node_id,
-    tt::tt_fabric::FabricMuxChannelType ch_type,
+    tt::tt_metal::experimental::fabric::FabricMuxChannelType ch_type,
     const RelayMux* fabric_mux,
     relay_mux_client_config& config) {
     const auto ch_index = fabric_mux->GetWorkerChannelIndex(node_id, ch_type);
@@ -201,7 +201,7 @@ int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id) {
 }
 
 uint32_t RelayMux::get_dispatch_link_index(
-    tt::tt_fabric::FabricNodeId src_fabric_node_id, tt::tt_fabric::FabricNodeId dst_fabric_node_id, IDevice* device) {
+    tt::tt_metal::experimental::fabric::FabricNodeId src_fabric_node_id, tt::tt_metal::experimental::fabric::FabricNodeId dst_fabric_node_id, IDevice* device) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable()) {
@@ -223,7 +223,7 @@ uint32_t RelayMux::get_dispatch_link_index(
             }
         }
     } else {
-        const auto& available_links = tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+        const auto& available_links = tt_metal::experimental::fabric::get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
         TT_FATAL(!available_links.empty(), "No links available from {} to {}", src_fabric_node_id, dst_fabric_node_id);
         return available_links.back();
     }

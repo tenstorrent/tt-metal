@@ -102,7 +102,7 @@ struct Matmul_RS {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+        tt::tt_metal::experimental::fabric::Topology topology = tt::tt_metal::experimental::fabric::Topology::Linear,
         bool use_noc1_only = false,
         const std::optional<const ttnn::Tensor>& second_weight_tensor = std::nullopt);
 };

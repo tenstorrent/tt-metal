@@ -175,7 +175,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     }
 
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        tt::tt_metal::experimental::fabric::GetFabricConfig() == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
 
         // All reduce = all gather + local reduce
@@ -248,7 +248,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -271,7 +271,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
-        tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        tt::tt_metal::experimental::fabric::GetFabricConfig() == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D) {
         log_debug(tt::LogOp, "Using composite all gather + local reduce");
         // All reduce = all gather + local reduce
         composite_dim = 0;

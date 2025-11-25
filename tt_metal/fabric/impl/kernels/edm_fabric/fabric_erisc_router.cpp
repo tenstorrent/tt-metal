@@ -40,7 +40,7 @@
 #include <cstdint>
 #include <type_traits>
 
-using namespace tt::tt_fabric;
+using namespace tt::tt_metal::experimental::fabric;
 
 /*
 
@@ -294,8 +294,8 @@ struct RouterElasticChannelWriterAdapter {};
 template <uint8_t SENDER_NUM_BUFFERS>
 using RouterToRouterSender = std::conditional_t<
     PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
-    tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
-    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
+    tt::tt_metal::experimental::fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
+    tt::tt_metal::experimental::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
@@ -304,7 +304,7 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
+    tt::tt_metal::experimental::fabric::connection_interface::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
     sender_channel_3_free_slots_stream_id,
@@ -538,11 +538,11 @@ FORCE_INLINE bool can_forward_packet_completely(
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
     // mcast terminal value masked in to the routing field. This simplifies the check here to a single compare.
     bool deliver_locally_only;
-    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
-        deliver_locally_only = cached_routing_fields.value == tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
-    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
-        deliver_locally_only = (cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK) ==
-                               tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY;
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_metal::experimental::fabric::RoutingFields>) {
+        deliver_locally_only = cached_routing_fields.value == tt::tt_metal::experimental::fabric::RoutingFields::LAST_MCAST_VAL;
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_metal::experimental::fabric::LowLatencyRoutingFields>) {
+        deliver_locally_only = (cached_routing_fields.value & tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::FIELD_MASK) ==
+                               tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::WRITE_ONLY;
     }
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
@@ -766,13 +766,13 @@ FORCE_INLINE void receiver_forward_packet(
         false;
 #endif
     invalidate_l1_cache();  // Make sure we have the latest packet header in L1
-    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_metal::experimental::fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
-            (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
-            tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+            (cached_routing_fields.value & tt::tt_metal::experimental::fabric::RoutingFields::HOP_DISTANCE_MASK) ==
+            tt::tt_metal::experimental::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-        bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
+        bool not_last_destination_device = cached_routing_fields.value != tt::tt_metal::experimental::fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm<
@@ -784,21 +784,21 @@ FORCE_INLINE void receiver_forward_packet(
         if (start_distance_is_terminal_value) {
             execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
         }
-    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
-        uint32_t routing = cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK;
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_metal::experimental::fabric::LowLatencyRoutingFields>) {
+        uint32_t routing = cached_routing_fields.value & tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
-            case tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY:
+            case tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::WRITE_ONLY:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-            case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
+            case tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::FORWARD_ONLY:
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
                     ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
-            case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
+            case tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -1500,7 +1500,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
-    const tt::tt_fabric::routing_l1_info_t& routing_table) {
+    const tt::tt_metal::experimental::fabric::routing_l1_info_t& routing_table) {
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
@@ -1661,7 +1661,7 @@ FORCE_INLINE void run_receiver_channel_step(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
-    const tt::tt_fabric::routing_l1_info_t& routing_table) {
+    const tt::tt_metal::experimental::fabric::routing_l1_info_t& routing_table) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         invalidate_l1_cache();
         run_receiver_channel_step_impl<
@@ -1719,16 +1719,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_noc_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_noc_interface_vc1,
     RemoteEthReceiverChannels& remote_receiver_channels,
-    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
+    volatile tt::tt_metal::experimental::fabric::TerminationSignal* termination_signal_ptr,
     TransactionIdTrackerCH0& receiver_channel_0_trid_tracker,
     TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
-    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
+    *termination_signal_ptr = tt::tt_metal::experimental::fabric::TerminationSignal::KEEP_RUNNING;
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
+    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_metal::experimental::fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    tt::tt_metal::experimental::fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
@@ -1949,10 +1949,10 @@ void
     {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[0]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[0]);
-        new (&local_sender_channel_worker_interfaces.template get<0>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0]>(
+        new (&local_sender_channel_worker_interfaces.template get<0>()) tt::tt_metal::experimental::fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0]>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1963,10 +1963,10 @@ void
     {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[1]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[1]);
-        new (&local_sender_channel_worker_interfaces.template get<1>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
+        new (&local_sender_channel_worker_interfaces.template get<1>()) tt::tt_metal::experimental::fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1978,10 +1978,10 @@ void
     {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[2]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[2]);
-        new (&local_sender_channel_worker_interfaces.template get<2>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[2]>(
+        new (&local_sender_channel_worker_interfaces.template get<2>()) tt::tt_metal::experimental::fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[2]>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -1992,10 +1992,10 @@ void
     {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[3]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[3]);
-        new (&local_sender_channel_worker_interfaces.template get<3>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[3]>(
+        new (&local_sender_channel_worker_interfaces.template get<3>()) tt::tt_metal::experimental::fabric::
+            StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[3]>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
@@ -2009,11 +2009,11 @@ void
             static_assert(NUM_SENDER_CHANNELS > VC1_SENDER_CHANNEL);
             auto connection_live_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
                 local_sender_connection_live_semaphore_addresses[VC1_SENDER_CHANNEL]);
-            auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
                 local_sender_connection_info_addresses[VC1_SENDER_CHANNEL]);
             new (&local_sender_channel_worker_interfaces.template get<VC1_SENDER_CHANNEL>())
-                tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
-                    tt::tt_fabric::worker_handshake_noc,
+                tt::tt_metal::experimental::fabric::StaticSizedSenderChannelWorkerInterface<
+                    tt::tt_metal::experimental::fabric::worker_handshake_noc,
                     SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]>(
                     connection_worker_info_ptr,
                     0,  // Not used for credits.
@@ -2056,8 +2056,8 @@ void wait_for_other_local_erisc() {
 }
 
 FORCE_INLINE void teardown(
-    volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
+    volatile tt_l1_ptr tt::tt_metal::experimental::fabric::TerminationSignal* termination_signal_ptr,
+    volatile tt_l1_ptr tt::tt_metal::experimental::fabric::EDMStatus* edm_status_ptr,
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
         NUM_TRANSACTION_IDS,
@@ -2112,7 +2112,7 @@ FORCE_INLINE void teardown(
         wait_for_other_local_erisc();
     }
     if constexpr (IS_TEARDOWN_MASTER()) {
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
+        *edm_status_ptr = tt::tt_metal::experimental::fabric::EDMStatus::TERMINATED;
     }
 }
 
@@ -2191,9 +2191,9 @@ void kernel_main() {
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
+        reinterpret_cast<volatile tt::tt_metal::experimental::fabric::TerminationSignal*>(termination_signal_addr);
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
-    volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
+    volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::experimental::fabric::EDMStatus*>(edm_status_ptr_addr);
 
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
@@ -2223,29 +2223,29 @@ void kernel_main() {
             reinterpret_cast<volatile uint32_t*>(receiver_1_completed_packet_header_cb_address),
             receiver_1_completed_packet_header_cb_size_headers)};
 
-    volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_0_channel_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_1_channel_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_0_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_1_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_2_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_3_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_4_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters* receiver_0_channel_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters* receiver_1_channel_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters* sender_channel_0_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters* sender_channel_1_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters* sender_channel_2_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters* sender_channel_3_counters_ptr = nullptr;
+    volatile tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters* sender_channel_4_counters_ptr = nullptr;
 
     if constexpr (enable_fabric_counters) {
-        new (const_cast<tt::tt_fabric::EdmFabricReceiverChannelCounters*>(receiver_0_channel_counters_ptr))
-            tt::tt_fabric::EdmFabricReceiverChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricReceiverChannelCounters*>(receiver_1_channel_counters_ptr))
-            tt::tt_fabric::EdmFabricReceiverChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_0_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_1_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_2_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_3_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_4_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters*>(receiver_0_channel_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters*>(receiver_1_channel_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricReceiverChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters*>(sender_channel_0_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters*>(sender_channel_1_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters*>(sender_channel_2_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters*>(sender_channel_3_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters();
+        new (const_cast<tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters*>(sender_channel_4_counters_ptr))
+            tt::tt_metal::experimental::fabric::EdmFabricSenderChannelCounters();
     }
 
     size_t arg_idx = 0;
@@ -2362,7 +2362,7 @@ void kernel_main() {
         }
     }
 
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
+    *edm_status_ptr = tt::tt_metal::experimental::fabric::EDMStatus::STARTED;
 
     //////////////////////////////
     //////////////////////////////
@@ -2382,21 +2382,21 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_4});
 
     // create the remote receiver channel buffers using multi-pool system
-    auto remote_receiver_channels = tt::tt_fabric::MultiPoolEthChannelBuffers<
+    auto remote_receiver_channels = tt::tt_metal::experimental::fabric::MultiPoolEthChannelBuffers<
         PACKET_HEADER_TYPE,
         eth_remote_channel_pools_args,
         REMOTE_RECEIVER_TO_POOL_TYPE,
         REMOTE_RECEIVER_TO_POOL_IDX>::make();
 
     auto local_receiver_channels =
-        tt::tt_fabric::MultiPoolEthChannelBuffers<
+        tt::tt_metal::experimental::fabric::MultiPoolEthChannelBuffers<
             PACKET_HEADER_TYPE,
             channel_pools_args,
             RECEIVER_TO_POOL_TYPE,
             RECEIVER_TO_POOL_IDX
         >::make();
 
-    auto local_sender_channels = tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
+    auto local_sender_channels = tt::tt_metal::experimental::fabric::MultiPoolSenderEthChannelBuffers<
         PACKET_HEADER_TYPE,
         channel_pools_args,
         SENDER_TO_POOL_TYPE,
@@ -2420,13 +2420,13 @@ void kernel_main() {
                 local_sender_channel_4_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[i]);
         connection_worker_info_ptr->edm_read_counter = 0;
     }
     // create the sender channel worker interfaces with input array of number of buffers
     auto local_sender_channel_worker_interfaces =
-        tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_metal::experimental::fabric::EdmChannelWorkerInterfaces<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
@@ -2506,8 +2506,8 @@ void kernel_main() {
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
                         .template setup_edm_noc_cmd_buf<
-                            tt::tt_fabric::edm_to_downstream_noc,
-                            tt::tt_fabric::forward_and_local_write_noc_vc>();
+                            tt::tt_metal::experimental::fabric::edm_to_downstream_noc,
+                            tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc>();
                 }
             }
             compact_index++;
@@ -2556,8 +2556,8 @@ void kernel_main() {
             // to a noc dependency. See the comment for the initialization that happens later in multi-erisc mode.
             if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                 downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
+                    tt::tt_metal::experimental::fabric::edm_to_downstream_noc,
+                    tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc>();
             }
         }
     }
@@ -2643,7 +2643,7 @@ void kernel_main() {
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
-        *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
+        *edm_status_ptr = tt::tt_metal::experimental::fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
@@ -2658,13 +2658,13 @@ void kernel_main() {
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
             }
 
-            *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+            *edm_status_ptr = tt::tt_metal::experimental::fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal
             // 2. All risc cores in master eth core receive signal from host and exits from this wait
             //    Other subordinate risc cores wait for this signal
             // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
-            wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            wait_for_notification((uint32_t)edm_status_ptr, tt::tt_metal::experimental::fabric::EDMStatus::READY_FOR_TRAFFIC);
 
             if constexpr (is_local_handshake_master) {
                 // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
@@ -2673,7 +2673,7 @@ void kernel_main() {
                     edm_channels_mask,
                     local_handshake_master_eth_chan,
                     (uint32_t)edm_status_ptr,
-                    tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+                    tt::tt_metal::experimental::fabric::EDMStatus::READY_FOR_TRAFFIC);
             }
         }
     }
@@ -2699,7 +2699,7 @@ void kernel_main() {
                         .template open<
                             false,
                             use_posted_writes_for_connection_open,
-                            tt::tt_fabric::worker_handshake_noc>();
+                            tt::tt_metal::experimental::fabric::worker_handshake_noc>();
                 }
             }
             edm_index++;
@@ -2708,7 +2708,7 @@ void kernel_main() {
         if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
-                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_metal::experimental::fabric::worker_handshake_noc>();
             }
         }
     } else {
@@ -2716,14 +2716,14 @@ void kernel_main() {
         if constexpr (is_receiver_channel_serviced[0]) {
             if (has_downstream_edm_vc0_buffer_connection) {
                 downstream_edm_noc_interfaces_vc0[0]
-                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_metal::experimental::fabric::worker_handshake_noc>();
                 ASSERT(
                     get_ptr_val(downstream_edm_noc_interfaces_vc0[0].get_worker_credits_stream_id()) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
             }
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
-                    .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
+                    .template open<false, use_posted_writes_for_connection_open, tt::tt_metal::experimental::fabric::worker_handshake_noc>();
                 ASSERT(
                     get_ptr_val(downstream_edm_noc_interface_vc1.get_worker_credits_stream_id()) ==
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
@@ -2747,8 +2747,8 @@ void kernel_main() {
                 if (has_downstream_edm & 0x1) {
                     downstream_edm_noc_interfaces_vc0[edm_index]
                         .template setup_edm_noc_cmd_buf<
-                            tt::tt_fabric::edm_to_downstream_noc,
-                            tt::tt_fabric::forward_and_local_write_noc_vc>();
+                            tt::tt_metal::experimental::fabric::edm_to_downstream_noc,
+                            tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc>();
                 }
                 edm_index++;
                 has_downstream_edm >>= 1;
@@ -2756,8 +2756,8 @@ void kernel_main() {
             if constexpr (enable_deadlock_avoidance) {
                 if (has_downstream_edm_vc1_buffer_connection) {
                     downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
-                        tt::tt_fabric::edm_to_downstream_noc,
-                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+                        tt::tt_metal::experimental::fabric::edm_to_downstream_noc,
+                        tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc>();
                 }
             }
         }

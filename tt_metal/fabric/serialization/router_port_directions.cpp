@@ -7,11 +7,11 @@
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "protobuf/router_port_directions.pb.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 std::vector<uint8_t> serialize_router_port_directions_to_bytes(
     const RouterPortDirectionsData& router_port_directions_data) {
-    tt::tt_fabric::protobuf::RouterPortDirectionsMap proto_msg;
+    tt::tt_metal::experimental::fabric::protobuf::RouterPortDirectionsMap proto_msg;
 
     // Set local mesh id
     auto* mesh_id = proto_msg.mutable_local_mesh_id();
@@ -54,7 +54,7 @@ std::vector<uint8_t> serialize_router_port_directions_to_bytes(
 RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std::vector<uint8_t>& data) {
     RouterPortDirectionsData result;
 
-    tt::tt_fabric::protobuf::RouterPortDirectionsMap proto_msg;
+    tt::tt_metal::experimental::fabric::protobuf::RouterPortDirectionsMap proto_msg;
     if (!proto_msg.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse protobuf data");
     }
@@ -97,4 +97,4 @@ RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std
     return result;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

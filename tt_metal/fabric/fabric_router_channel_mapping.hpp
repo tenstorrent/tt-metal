@@ -9,7 +9,7 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 enum class BuilderType : uint8_t {
     ERISC = 0,
@@ -96,4 +96,4 @@ private:
     bool is_ring_or_torus() const;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

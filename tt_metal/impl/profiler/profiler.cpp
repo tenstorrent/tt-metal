@@ -793,7 +793,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                             eth_router_phys_coord.y);
                         continue;
                     }
-                    tt::tt_fabric::chan_id_t eth_chan = *eth_chan_opt;
+                    tt::tt_metal::experimental::fabric::chan_id_t eth_chan = *eth_chan_opt;
                     fabric_event_json["fabric_send"]["eth_chan"] = eth_chan;
                 } else {
                     // router eth core location is derived from the local noc write event
@@ -817,7 +817,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                             eth_router_phys_coord.y);
                         continue;
                     }
-                    tt::tt_fabric::chan_id_t eth_chan = *eth_chan_opt;
+                    tt::tt_metal::experimental::fabric::chan_id_t eth_chan = *eth_chan_opt;
                     fabric_event_json["fabric_send"]["eth_chan"] = eth_chan;
                 }
 

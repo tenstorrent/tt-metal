@@ -96,7 +96,7 @@ void kernel_main() {
     if (use_barrier_sem) {
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             barrier_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
         // Write the mcast packet (forward)
@@ -153,7 +153,7 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {

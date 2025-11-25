@@ -18,18 +18,18 @@ constexpr size_t NUM_PACKET_SIZES = get_compile_time_arg_val(1);
 constexpr size_t NUM_MESSAGES = get_compile_time_arg_val(2);
 
 static FORCE_INLINE void setup_packet_header(
-    volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_fabric::ChipSendType chip_send_type) {
+    volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_metal::experimental::fabric::ChipSendType chip_send_type) {
     if (num_hops > 0) {
-        if (chip_send_type == tt::tt_fabric::CHIP_UNICAST) {
+        if (chip_send_type == tt::tt_metal::experimental::fabric::CHIP_UNICAST) {
             fabric_set_unicast_route<false>(pkt_hdr, num_hops);
         } else {
-            pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
+            pkt_hdr->to_chip_multicast(tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
         }
     }
 }
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     size_t arg_idx = 0;
 
     const size_t fabric_write_dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -60,7 +60,7 @@ void kernel_main() {
     size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);;
 
     auto fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
     cb_reserve_back(source_l1_cb_index, 1);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
@@ -74,7 +74,7 @@ void kernel_main() {
 
     // We let workers send different traffic patterns across iterations
     uint32_t num_fwd_hops = 1;
-    tt::tt_fabric::ChipSendType chip_send_type = CHIP_UNICAST;
+    tt::tt_metal::experimental::fabric::ChipSendType chip_send_type = CHIP_UNICAST;
 
     setup_packet_header(pkt_hdr_fwd, num_fwd_hops, chip_send_type);
     auto noc0_dest_addr_fwd = get_noc_addr(
@@ -122,9 +122,9 @@ void kernel_main() {
         noc_semaphore_inc(next_worker_token_addr, 1);
 
         if ((i & (wrap_val - 1)) == 0) {
-            stall_duration_index = tt::tt_fabric::wrap_increment<NUM_STALL_DURATIONS>(stall_duration_index);
-            packet_size_index = tt::tt_fabric::wrap_increment<NUM_PACKET_SIZES>(packet_size_index);
-            num_messages_index = tt::tt_fabric::wrap_increment<NUM_MESSAGES>(num_messages_index);
+            stall_duration_index = tt::tt_metal::experimental::fabric::wrap_increment<NUM_STALL_DURATIONS>(stall_duration_index);
+            packet_size_index = tt::tt_metal::experimental::fabric::wrap_increment<NUM_PACKET_SIZES>(packet_size_index);
+            num_messages_index = tt::tt_metal::experimental::fabric::wrap_increment<NUM_MESSAGES>(num_messages_index);
         }
     }
 

@@ -23,11 +23,11 @@
 #include "protobuf/mesh_graph_descriptor.pb.h"
 
 // Implementation of hash function for port_id_t
-std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
+std::size_t std::hash<tt::tt_metal::experimental::fabric::port_id_t>::operator()(const tt::tt_metal::experimental::fabric::port_id_t& p) const {
     return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
@@ -44,11 +44,11 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
 }
 
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
-using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
+using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_metal::experimental::fabric::FabricType, ClusterToDescriptorMap>;
 
 const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
     tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
-        {tt::tt_fabric::FabricType::MESH,
+        {tt::tt_metal::experimental::fabric::FabricType::MESH,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::N300, "n300_mesh_graph_descriptor.textproto"},
@@ -68,17 +68,17 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::P300_X2, "p300_x2_mesh_graph_descriptor.textproto"},
          }},
-        {tt::tt_fabric::FabricType::TORUS_X,
+        {tt::tt_metal::experimental::fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}
          }},
-        {tt::tt_fabric::FabricType::TORUS_Y,
+        {tt::tt_metal::experimental::fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}
          }},
-        {tt::tt_fabric::FabricType::TORUS_XY,
+        {tt::tt_metal::experimental::fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}
@@ -776,7 +776,7 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
     const tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
-    const tt::tt_fabric::FabricType fabric_type) {
+    const tt::tt_metal::experimental::fabric::FabricType fabric_type) {
     auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
     auto fabric_it = fabric_to_cluster_map.find(fabric_type);
     if (fabric_it != fabric_to_cluster_map.end()) {
@@ -812,4 +812,4 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
     return it->second;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

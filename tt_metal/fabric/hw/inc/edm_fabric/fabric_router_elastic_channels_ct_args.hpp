@@ -12,7 +12,7 @@
 #include <array>
 #include <utility>
 
-namespace tt::tt_fabric::elastic_channels {
+namespace tt::tt_metal::experimental::fabric::elastic_channels {
 
 template <size_t SLOT_SIZE_BYTES, size_t N_SLOTS_PER_CHUNK, size_t N_CHUNKS>
 constexpr bool validate_elastic_channel_chunk_addresses(const std::array<size_t, N_CHUNKS>& chunk_base_addresses) {
@@ -58,4 +58,4 @@ struct RouterElasticChannelsCtArgs {
     using assert_t = typename printer_t::type;
 };
 
-};  // namespace tt::tt_fabric::elastic_channels
+};  // namespace tt::tt_metal::experimental::fabric::elastic_channels

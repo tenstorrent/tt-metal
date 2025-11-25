@@ -5,10 +5,10 @@
 #include "dataflow_api.h"
 
 #include <cstdint>
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 // temporary to avoid a decent chunk of conflicting code reorg that would be better done as an isolated change
 constexpr uint8_t worker_handshake_noc = 0;
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 #include "tests/tt_metal/tt_fabric/feature_bringup/kernels/fabric_elastic_channels.hpp"
 #include "core_config.h"
@@ -57,7 +57,7 @@ void kernel_main() {
     worker_timing_stats->total_idle_cycles = 0;
     worker_timing_stats->idle_count = 0;
 
-    tt::tt_fabric::WorkerFabricWriterAdapter fabric_writer_adapter(next_chunk_ptr, CHUNK_N_PKTS, payload_size_bytes);
+    tt::tt_metal::experimental::fabric::WorkerFabricWriterAdapter fabric_writer_adapter(next_chunk_ptr, CHUNK_N_PKTS, payload_size_bytes);
 
     const uint64_t dest_sem_noc_addr =
         get_noc_addr(dest_eth_noc_x, dest_eth_noc_y, get_stream_reg_write_addr(to_eth_flow_control_stream_id));

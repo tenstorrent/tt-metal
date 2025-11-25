@@ -66,7 +66,7 @@ struct WorkerTimingStats {
 class N300TestDevice {
 public:
     N300TestDevice() : num_devices_(tt::tt_metal::GetNumAvailableDevices()), device_open(false) {
-        tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+        tt_metal::experimental::fabric::SetFabricConfig(tt_metal::experimental::fabric::FabricConfig::DISABLED);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and

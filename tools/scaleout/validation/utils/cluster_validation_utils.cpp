@@ -628,7 +628,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 
 std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortType>> generate_port_types(
     const PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_fabric::chan_id_t, tt::scaleout_tools::PortType>>
+    std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<tt::tt_metal::experimental::fabric::chan_id_t, tt::scaleout_tools::PortType>>
         port_types;
     const auto& asic_connectivity_graph = physical_system_descriptor.get_system_graph().asic_connectivity_graph;
 

@@ -25,7 +25,7 @@ constexpr uint32_t mcast_mode = get_compile_time_arg_val(4);
 constexpr bool is_2d_fabric = get_compile_time_arg_val(5);
 
 inline void setup_connection_and_headers(
-    tt::tt_fabric::WorkerToFabricEdmSender& connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint64_t noc_dest_addr,
     uint32_t packet_payload_size_bytes) {
@@ -40,7 +40,7 @@ inline void send_packet(
     uint32_t source_l1_buffer_address,
     uint32_t packet_payload_size_bytes,
     uint32_t seed,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection) {
 #ifndef BENCHMARK_MODE
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
     // fill packet data for sanity testing
@@ -77,10 +77,10 @@ void set_mcast_header(
     fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
 }
 
-inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
+inline void teardown_connection(tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     size_t rt_args_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -94,14 +94,14 @@ void kernel_main() {
     uint32_t north_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
-    tt::tt_fabric::WorkerToFabricEdmSender north_trunk_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender north_trunk_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     uint32_t south_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
-    tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender south_trunk_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     uint32_t left_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t right_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -110,11 +110,11 @@ void kernel_main() {
     uint16_t left_hops = direct_hops >> 16;
     uint16_t right_hops = direct_hops & 0xFFFF;
 
-    tt::tt_fabric::WorkerToFabricEdmSender left_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender left_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    tt::tt_fabric::WorkerToFabricEdmSender right_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender right_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();

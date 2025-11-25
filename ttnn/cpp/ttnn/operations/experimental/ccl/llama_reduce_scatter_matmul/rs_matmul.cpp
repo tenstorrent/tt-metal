@@ -19,7 +19,7 @@ std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
     const tt::tt_metal::SubDeviceId& subdevice_id,
     const std::optional<const ttnn::Tensor>& second_weight_tensor,
     const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
     const std::optional<const ttnn::DeviceComputeKernelConfig>

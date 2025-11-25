@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class EdmLineFabricOpInterface {
 public:
@@ -29,7 +29,7 @@ public:
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
         bool is_galaxy = false,
-        const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{});
+        const tt::tt_metal::experimental::fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_metal::experimental::fabric::FabricRouterBufferConfig{});
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -65,10 +65,10 @@ public:
     // who will be sending the termination signals (and which link(s) they are connected to)
     // and so a termination signal may be sent to our link first before the other eth core links
     // on the chip so multi-link isn't officially supported yet
-    std::vector<tt::tt_fabric::edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
+    std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t> generate_ordered_termination_info_farthest_to_nearest() const;
 
     // Generates a list of termination infos for the local chip's EDMs
-    std::vector<tt::tt_fabric::edm_termination_info_t> generate_local_chip_fabric_termination_infos(
+    std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t> generate_local_chip_fabric_termination_infos(
         tt::tt_metal::IDevice* device) const;
 
     // Accessors
@@ -89,14 +89,14 @@ public:
     size_t get_edm_buffer_size_bytes() const { return buffer_size_bytes; }
 
     void teardown_from_host(
-        tt::tt_fabric::TerminationSignal termination_signal =
-            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
+        tt::tt_metal::experimental::fabric::TerminationSignal termination_signal =
+            tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
 
     // Device ID -> EDM Builders
-    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
-    std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
+    std::unordered_map<size_t, std::vector<tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
 
 private:
     // Device ID -> link index
@@ -110,4 +110,4 @@ private:
     size_t buffer_size_bytes;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

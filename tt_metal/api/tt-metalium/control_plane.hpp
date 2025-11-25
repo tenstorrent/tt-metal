@@ -31,7 +31,7 @@ class Cluster;
 
 }  // namespace tt::umd
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class TopologyMapper;
 
@@ -90,7 +90,7 @@ public:
 
     // Converts chip level routing tables to per ethernet channel
     void configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+        tt::tt_metal::experimental::fabric::FabricConfig fabric_config, tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
@@ -183,7 +183,7 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
+    void initialize_fabric_context(tt_metal::experimental::fabric::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
 
@@ -215,7 +215,7 @@ public:
 
     // Check if the physical system supports the specified fabric configuration
     // Returns true if valid, false otherwise.
-    bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
+    bool is_fabric_config_valid(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const;
 
 private:
     // Check if the provided mesh is local to this host
@@ -274,8 +274,8 @@ private:
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
-        tt_fabric::FabricConfig fabric_config,
-        tt_fabric::FabricReliabilityMode reliability_mode);
+        tt_metal::experimental::fabric::FabricConfig fabric_config,
+        tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode);
     void trim_ethernet_channels_not_mapped_to_live_routing_planes();
 
     void validate_mesh_connections(MeshId mesh_id) const;
@@ -296,9 +296,9 @@ private:
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
-        tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
-        tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
-        tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+        tt::tt_metal::experimental::fabric::fabric_connection_info_t& worker_connection_info,
+        tt::tt_metal::experimental::fabric::fabric_connection_info_t& dispatcher_connection_info,
+        tt::tt_metal::experimental::fabric::fabric_connection_info_t& tensix_connection_info,
         ChipId physical_chip_id,
         chan_id_t eth_channel_id) const;
 
@@ -381,7 +381,7 @@ private:
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
-    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
+    std::unique_ptr<tt::tt_metal::experimental::fabric::TopologyMapper> topology_mapper_;
 
     // Performance caches for frequently accessed data
     // Cache for faster asic_id to fabric_node_id lookup
@@ -389,8 +389,8 @@ private:
     mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
 
     // This method performs validation through assertions and exceptions.
-    void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
-    std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
+    void validate_torus_setup(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const;
+    std::string get_galaxy_cabling_descriptor_path(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

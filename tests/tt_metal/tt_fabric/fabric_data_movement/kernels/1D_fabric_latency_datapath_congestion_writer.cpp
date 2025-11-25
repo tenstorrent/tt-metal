@@ -15,7 +15,7 @@
 constexpr bool use_mcast_mode = get_compile_time_arg_val(0) != 0;
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);

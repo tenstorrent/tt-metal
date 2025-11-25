@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package tt.tt_fabric.proto;
+package tt.tt_metal.experimental.fabric.proto;
 
 // Mesh Graph Descriptor (MGD) 2.0 schema
 // This file is richly annotated with guidance for writing MGD 2.0 textprotos.

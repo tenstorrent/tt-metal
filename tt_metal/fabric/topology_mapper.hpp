@@ -19,7 +19,7 @@ class PhysicalSystemDescriptor;
 
 using HostName = std::string;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 struct LocalMeshBinding;
 
@@ -39,7 +39,7 @@ using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>
  */
 
 using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
-using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
+using LogicalAdjacencyMap = std::map<tt::tt_metal::experimental::fabric::FabricNodeId, std::vector<tt::tt_metal::experimental::fabric::FabricNodeId>>;
 using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 class TopologyMapper {
 public:
@@ -370,4 +370,4 @@ private:
     void print_physical_adjacency_map(const std::map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

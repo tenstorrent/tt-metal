@@ -327,18 +327,18 @@ void DevicePool::initialize(
 
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-        if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
-            tt::tt_fabric::SetFabricConfig(
-                tt::tt_fabric::FabricConfig::FABRIC_1D,
-                tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        if (fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::DISABLED) {
+            tt::tt_metal::experimental::fabric::SetFabricConfig(
+                tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D,
+                tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                 1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
+            fabric_config = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D;
         } else {
             // Use the same mode
-            tt::tt_fabric::SetFabricConfig(
-                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            tt::tt_metal::experimental::fabric::SetFabricConfig(
+                fabric_config, tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
         }
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs);
     }
@@ -408,8 +408,8 @@ void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    if (tt_metal::experimental::fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
         tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
 
@@ -610,8 +610,8 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     // Only can launch Fabric if all devices are active
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    if (tt_metal::experimental::fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             // Fabric currently requires all devices to be active
             TT_FATAL(
@@ -635,8 +635,8 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    if (!tt::tt_metal::experimental::fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
 
@@ -900,7 +900,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+    if (tt::tt_metal::experimental::fabric::is_tt_fabric_config(fabric_config)) {
         const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
@@ -909,7 +909,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
         // Terminate fabric tensix configs (mux cores) if enabled
         // TODO: issue #26855, move the termination process to device
         bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+                                     tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED;
         if (tensix_config_enabled) {
             const auto& tensix_config = fabric_context.get_tensix_config();
 
@@ -962,7 +962,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
         pass &= dev->close();
     }
 
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
 
     if (getDeviceProfilerState()) {
         // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is

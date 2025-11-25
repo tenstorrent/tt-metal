@@ -4,10 +4,10 @@
 
 #ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_metal::experimental::fabric::linear::experimental;
 #elif defined(API_TYPE_Mesh)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
-using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_metal::experimental::fabric::mesh::experimental;
 #else
 #error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
@@ -52,7 +52,7 @@ void kernel_main() {
 #endif
 
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
-    tt::tt_fabric::RoutingPlaneConnectionManager connections;
+    tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager connections;
     open_connections(connections, num_send_dir, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);
@@ -79,7 +79,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     } else {
                         fabric_multicast_noc_unicast_write(
@@ -87,7 +87,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
@@ -95,7 +95,7 @@ void kernel_main() {
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
-                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
+                        tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         fabric_multicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
                             connections, route_id, ih);
@@ -103,7 +103,7 @@ void kernel_main() {
                         fabric_multicast_noc_unicast_inline_write(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
@@ -112,7 +112,7 @@ void kernel_main() {
                 case NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                        tt::tt_fabric::NocUnicastScatterCommandHeader sh{};
+                        tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader sh{};
                         sh.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         sh.noc_address[1] = get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
                         fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
@@ -124,7 +124,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                                 first_chunk_size},
@@ -144,7 +144,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)},
                             packet_payload_size_bytes);
                     } else {
@@ -153,14 +153,14 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)},
                             hop_info.ucast.num_hops);
                     }
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
-                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
+                        tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         fabric_unicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
                             connections, route_id, ih);
@@ -168,7 +168,7 @@ void kernel_main() {
                         fabric_unicast_noc_unicast_inline_write(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
                             hop_info.ucast.num_hops);
                     }
@@ -176,7 +176,7 @@ void kernel_main() {
                 case NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                        tt::tt_fabric::NocUnicastScatterCommandHeader sh{};
+                        tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader sh{};
                         sh.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         sh.noc_address[1] = get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
                         fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
@@ -188,7 +188,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                                 first_chunk_size},
@@ -209,7 +209,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)},
                             packet_payload_size_bytes);
                     } else {
@@ -219,7 +219,7 @@ void kernel_main() {
                             ranges,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     }
                 } break;
@@ -228,14 +228,14 @@ void kernel_main() {
                         fabric_multicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
                     } else {
                         fabric_multicast_noc_unicast_inline_write(
                             connections,
                             route_id,
                             ranges,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
                     }
                 } break;
@@ -245,7 +245,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(
                                      noc_x_start, noc_y_start, target_address + packet_payload_size_bytes / 2)}});
@@ -256,7 +256,7 @@ void kernel_main() {
                             ranges,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(
                                      noc_x_start, noc_y_start, target_address + packet_payload_size_bytes / 2)},
@@ -275,7 +275,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)},
                             packet_payload_size_bytes);
                     } else {
@@ -284,13 +284,13 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     }
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     if constexpr (with_state) {
-                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader ih{};
+                        tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader ih{};
                         ih.noc_address = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         fabric_unicast_noc_unicast_inline_write_with_state<UnicastInlineWriteUpdateMask::DstAddr>(
                             connections, route_id, ih);
@@ -298,14 +298,14 @@ void kernel_main() {
                         fabric_unicast_noc_unicast_inline_write(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastInlineWriteCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF});
                     }
                 } break;
                 case NOC_UNICAST_SCATTER_WRITE: {
                     if constexpr (with_state) {
                         uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                        tt::tt_fabric::NocUnicastScatterCommandHeader sh{};
+                        tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader sh{};
                         sh.noc_address[0] = get_noc_addr(noc_x_start, noc_y_start, target_address);
                         sh.noc_address[1] = get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size);
                         fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
@@ -317,7 +317,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                                 first_chunk_size});

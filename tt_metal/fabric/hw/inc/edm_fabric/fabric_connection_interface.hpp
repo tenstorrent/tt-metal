@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace tt::tt_fabric::connection_interface {
+namespace tt::tt_metal::experimental::fabric::connection_interface {
 
 inline constexpr uint8_t edm_fabric_write_noc_index = 0;
 
@@ -20,4 +20,4 @@ static constexpr uint32_t close_connection_request_value = 2;
 // fabric router of new packets availale.
 static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
 
-};  // namespace tt::tt_fabric::connection_interface
+};  // namespace tt::tt_metal::experimental::fabric::connection_interface

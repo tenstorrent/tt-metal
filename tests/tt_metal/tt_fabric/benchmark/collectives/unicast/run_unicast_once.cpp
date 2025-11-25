@@ -21,7 +21,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 
-namespace tt::tt_fabric::bench {
+namespace tt::tt_metal::experimental::fabric::bench {
 
 // ---------- helpers (validation / utilities) ----------
 
@@ -38,13 +38,13 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
 
 // Resolve forwarding link and fail early if none found.
 inline bool pick_forwarding_link_or_fail(
-    const tt::tt_fabric::FabricNodeId& /*src*/,
-    const tt::tt_fabric::FabricNodeId& /*dst*/,
+    const tt::tt_metal::experimental::fabric::FabricNodeId& /*src*/,
+    const tt::tt_metal::experimental::fabric::FabricNodeId& /*dst*/,
     uint32_t& out_link_idx,
     const PerfParams& p) {
-    auto links = tt::tt_fabric::get_forwarding_link_indices(
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
+    auto links = tt::tt_metal::experimental::fabric::get_forwarding_link_indices(
+        tt::tt_metal::experimental::fabric::FabricNodeId{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.src_chip},
+        tt::tt_metal::experimental::fabric::FabricNodeId{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.dst_chip});
 
     if (links.empty()) {
         ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
@@ -99,8 +99,8 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
 
-    tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
-    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
+    tt::tt_metal::experimental::fabric::FabricNodeId src{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.src_chip};
+    tt::tt_metal::experimental::fabric::FabricNodeId dst{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.dst_chip};
 
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
@@ -272,7 +272,7 @@ Notes:
     // Pack the fabric-connection runtime args for the writer kernel.
     // This establishes the send path (routing/link identifiers) for fabric traffic.
     // The device kernel must unpack these in the same order via build_from_args(...).
-    tt::tt_fabric::append_fabric_connection_rt_args(
+    tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
@@ -321,4 +321,4 @@ Notes:
     };
 }
 
-}  // namespace tt::tt_fabric::bench
+}  // namespace tt::tt_metal::experimental::fabric::bench

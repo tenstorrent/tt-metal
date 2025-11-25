@@ -32,7 +32,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
 
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     return tt::tt_metal::operation::run(
                ttnn::SliceReshardAsync(

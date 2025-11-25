@@ -19,7 +19,7 @@ constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0
 constexpr bool sem_inc_only = get_compile_time_arg_val(1) != 0;
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     size_t arg_idx = 0;
 
     // A safe location to dump payload data
@@ -59,7 +59,7 @@ void kernel_main() {
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), dest_dummy_payload_buffer_address, 0);
     if constexpr (enable_fused_payload_with_sync) {
         payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                 dest_payload_noc_addr, dest_semaphore_noc_addr, 1, false},
             payload_size_bytes);
     } else {

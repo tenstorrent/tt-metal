@@ -106,7 +106,7 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     const std::optional<const std::string>& activation,                                  // default std::nullopt
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // default std::nullopt
     const std::optional<Tensor>& optional_output_tensor,                                 // default std::nullopt
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     bool use_noc1_only,
     const std::optional<const ttnn::Tensor>& second_weight_tensor) {
     TT_FATAL(

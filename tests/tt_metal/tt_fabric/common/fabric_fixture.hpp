@@ -18,7 +18,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
@@ -35,12 +35,12 @@ class ControlPlaneFixture : public ::testing::Test {
            // reserve max available planes
            uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
-               tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
+               tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D, num_routing_planes);
        }
 
        void TearDown() override {
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
-               tt::tt_fabric::FabricConfig::DISABLED);
+               tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
        }
 };
 
@@ -65,10 +65,10 @@ public:
     }
 
     static void DoSetUpTestSuite(
-        tt_fabric::FabricConfig fabric_config,
+        tt_metal::experimental::fabric::FabricConfig fabric_config,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
-        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED) {
+        tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config = tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
+        tt_metal::experimental::fabric::FabricUDMMode fabric_udm_mode = tt_metal::experimental::fabric::FabricUDMMode::DISABLED) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -79,8 +79,8 @@ public:
         // Fabric Reliability Mode
         // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
         // If runtime option RELIABILITY_MODE is set, use the value from the runtime option
-        tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        tt::tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         // Query runtime options for an env-parsed override
         auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
         if (reliability_mode_override.has_value()) {
@@ -96,7 +96,7 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_fabric::SetFabricConfig(
+        tt::tt_metal::experimental::fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -113,7 +113,7 @@ public:
         }
         devices_map_.clear();
         devices_.clear();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
     }
 
     static void SetUpTestSuite() { TT_THROW("SetUpTestSuite not implemented in BaseFabricFixture"); }
@@ -152,7 +152,7 @@ public:
 
 class Fabric1DFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
@@ -168,7 +168,7 @@ protected:
             return;
         }
         BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+            tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_metal::experimental::fabric::FabricTensixConfig::MUX);
     }
     static void TearDownTestSuite() {
         if (!should_skip_) {
@@ -185,13 +185,13 @@ protected:
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
@@ -199,10 +199,10 @@ class Fabric2DUDMModeFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
-            tt_fabric::FabricUDMMode::ENABLED);
+            tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
+            tt_metal::experimental::fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
@@ -211,17 +211,17 @@ class NightlyFabric2DUDMModeFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
-            tt_fabric::FabricUDMMode::ENABLED);
+            tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
+            tt_metal::experimental::fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
 class NightlyFabric2DFixture : public BaseFabricFixture {
 protected:
-    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D); }
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
@@ -235,7 +235,7 @@ public:
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D);
     }
 
 private:
@@ -336,4 +336,4 @@ void RunEDMConnectionStressTest(
 void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

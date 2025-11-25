@@ -208,10 +208,10 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
                     const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                        tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
                     const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
@@ -220,10 +220,10 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
                 writer_rt_args.push_back(backward_device.has_value());
                 if (backward_device.has_value()) {
                     const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                        tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
                     const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
             }

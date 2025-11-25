@@ -98,7 +98,7 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
-    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
         output_semaphore_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     volatile PACKET_HEADER_TYPE* cur_pkt_header;
@@ -116,7 +116,7 @@ void kernel_main() {
         uint32_t& cur_hops = cur_is_forward ? forward_hops : backward_hops;
         uint32_t dst_ring_id =
             cur_is_forward ? (my_ring_id + cur_hops) % ring_size : (my_ring_id - cur_hops + ring_size) % ring_size;
-        tt::tt_fabric::WorkerToFabricEdmSender& cur_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& cur_connection =
             cur_is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
         cur_pkt_header = cur_is_forward ? pkt_hdr_forward : pkt_hdr_backward;
         fabric_set_unicast_route<false>(cur_pkt_header, cur_hops);
@@ -159,7 +159,7 @@ void kernel_main() {
                         prev_chunk_id = current_chunk_id;
                     } else {
                         // Unicast payload write
-                        tt::tt_fabric::linear::to_noc_unicast_write(
+                        tt::tt_metal::experimental::fabric::linear::to_noc_unicast_write(
                             payload_size_bytes, cur_pkt_header, first_id, intermediate_tensor_addrgen);
                         perform_payload_send(cur_connection, l1_read_addr, payload_size_bytes, cur_pkt_header);
                     }

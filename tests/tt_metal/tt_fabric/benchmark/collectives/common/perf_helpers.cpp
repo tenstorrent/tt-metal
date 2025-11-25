@@ -10,7 +10,7 @@
 
 #include <tt-metalium/device_pool.hpp>
 
-namespace tt::tt_fabric::bench {
+namespace tt::tt_metal::experimental::fabric::bench {
 
 double mean_of(const std::vector<double>& v) {
     if (v.empty()) {
@@ -105,4 +105,4 @@ tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
     return nullptr;
 }
 
-}  // namespace tt::tt_fabric::bench
+}  // namespace tt::tt_metal::experimental::fabric::bench

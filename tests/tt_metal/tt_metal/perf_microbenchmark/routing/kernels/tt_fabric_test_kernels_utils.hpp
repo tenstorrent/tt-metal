@@ -15,7 +15,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 // Maximum number of fabric connections supported per kernel (1 per direction: N, S, E, W)
@@ -506,7 +506,7 @@ struct FabricConnectionArray {
     // TODO: get the num buffers more systematically
     static constexpr uint8_t NUM_BUFFERS = 8;
 
-    using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
+    using MuxConnectionType = tt::tt_metal::experimental::fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
     static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(WorkerToFabricEdmSender), sizeof(MuxConnectionType));
 
     // Type-erased storage for connections (sized for maximum)
@@ -584,7 +584,7 @@ struct FabricConnectionArray {
             if (is_mux[i]) {
                 // Wait for mux to be ready before connecting
                 const auto& info = mux_cached_info[i];
-                tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
                     info.mux_x, info.mux_y, info.mux_status_address, info.local_mux_status_address);
                 get_mux_connection(i).open();
             } else {
@@ -1356,7 +1356,7 @@ struct MuxTerminationManager<true, NUM_MUXES> {
 
             // Terminate all muxes in sequence
             for (uint8_t i = 0; i < num_muxes_to_terminate_; i++) {
-                tt::tt_fabric::fabric_endpoint_terminate(mux_x_[i], mux_y_[i], mux_signal_addrs_[i]);
+                tt::tt_metal::experimental::fabric::fabric_endpoint_terminate(mux_x_[i], mux_y_[i], mux_signal_addrs_[i]);
             }
         } else {
             // Signal the master
@@ -2214,4 +2214,4 @@ private:
 };
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

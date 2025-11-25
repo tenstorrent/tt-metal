@@ -479,11 +479,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             std::transform(
                 mode_str.begin(), mode_str.end(), mode_str.begin(), [](unsigned char c) { return std::tolower(c); });
             if (mode_str == "strict" || mode_str == "0") {
-                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+                this->reliability_mode = tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
             } else if (mode_str == "relaxed" || mode_str == "1") {
-                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+                this->reliability_mode = tt::tt_metal::experimental::fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
             } else if (mode_str == "dynamic" || mode_str == "2") {
-                this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
+                this->reliability_mode = tt::tt_metal::experimental::fabric::FabricReliabilityMode::DYNAMIC_RECONFIGURATION_SETUP_MODE;
             }
             break;
         }

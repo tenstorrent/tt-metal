@@ -11,7 +11,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 namespace multihost_utils {
@@ -37,4 +37,4 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
 }  // namespace multihost_utils
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

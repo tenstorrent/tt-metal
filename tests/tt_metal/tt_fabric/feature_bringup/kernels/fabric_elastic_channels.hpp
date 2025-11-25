@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <limits>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 constexpr bool is_next_power_of_2(size_t n) { return n > 0 && (n & (n - 1)) == 0; }
 constexpr size_t get_next_power_of_2(size_t n) {
@@ -379,7 +379,7 @@ struct WorkerFabricWriterAdapter {
     SenderChannelView sender_channel_view;
     // We have a uint8_t (byte) iterator with a step size of buffer slot. The uint8_t is the type because then we can
     // safely due byte address increments
-    tt::tt_fabric::OnePassIterator<uint8_t> current_chunk;
+    tt::tt_metal::experimental::fabric::OnePassIterator<uint8_t> current_chunk;
 
     WorkerFabricWriterAdapter(
         volatile uint32_t* next_chunk_ptr, uint32_t num_buffer_slots_per_chunk, uint32_t max_payload_size_bytes) :
@@ -405,4 +405,4 @@ struct WorkerFabricWriterAdapter {
     }
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

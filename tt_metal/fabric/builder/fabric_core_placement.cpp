@@ -8,13 +8,13 @@
 #include <vector>
 #include <functional>
 
-namespace tt::tt_fabric::core_placement {
+namespace tt::tt_metal::experimental::fabric::core_placement {
 
 namespace {
 void run_default_galaxy_optimizer(
     const CorePlacementContext& ctx,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2) {
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder1,
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder2) {
     if (!ctx.is_galaxy) {
         return;
     }
@@ -96,4 +96,4 @@ void apply_core_placement_optimizations(
     }
 }
 
-} // namespace tt::tt_fabric::core_placement
+} // namespace tt::tt_metal::experimental::fabric::core_placement

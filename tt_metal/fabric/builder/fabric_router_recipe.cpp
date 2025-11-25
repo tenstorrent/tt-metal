@@ -5,7 +5,7 @@
 #include "fabric_router_recipe.hpp"
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 FabricRouterRecipe::FabricRouterRecipe(
     std::vector<ChannelPoolDefinition> pool_definitions,
@@ -95,4 +95,4 @@ void FabricRouterRecipe::validate() const {
     // That validation will be done when allocators are constructed.
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

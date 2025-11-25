@@ -28,7 +28,7 @@ struct AllGatherDeviceOperation {
         uint32_t dim;
         const std::optional<uint32_t> cluster_axis;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-        const tt::tt_fabric::Topology topology;
+        const tt::tt_metal::experimental::fabric::Topology topology;
         const uint32_t num_links;
     };
 
@@ -91,7 +91,7 @@ struct AllGatherDeviceOperation {
         const ttnn::MemoryConfig& memory_config,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology);
+        tt::tt_metal::experimental::fabric::Topology topology);
 };
 
 }  // namespace ttnn::operations::ccl

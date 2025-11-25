@@ -4,10 +4,10 @@
 
 #include <cstdint>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 // temporary to avoid a decent chunk of conflicting code reorg that would be better done as an isolated change
 constexpr uint8_t worker_handshake_noc = 0;
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 #include <array>
 #include <tuple>
@@ -48,11 +48,11 @@ constexpr int32_t pkts_received_stream_id = 2 * N_SRC_CHANS;  // read by receive
 static_assert(pkts_received_stream_id < 32, "pkts_received_stream_id must be less than 10");
 static_assert(PACKET_SIZE_BYTES % sizeof(uint32_t) == 0, "PACKET_SIZE_BYTES must be a multiple of sizeof(uint32_t)");
 
-using tt::tt_fabric::BufferIndex;
+using tt::tt_metal::experimental::fabric::BufferIndex;
 
 // Points to a chunk and steps through the addresses
 using chunk_forward_iterator_t =
-    tt::tt_fabric::OnePassIteratorStaticSizes<uint32_t, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>;
+    tt::tt_metal::experimental::fabric::OnePassIteratorStaticSizes<uint32_t, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>;
 
 // Timing tracking structure
 struct TimingStats {
@@ -131,7 +131,7 @@ void process_send_side(
     uint32_t& messages_acked,
     uint32_t messages_to_send,
     std::array<size_t, RX_N_PKTS>& receiver_buffer_addresses,
-    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
+    tt::tt_metal::experimental::fabric::ChannelBufferPointer<RX_N_PKTS>& sender_view_rx_buf_wr_ptr,
     uint32_t message_size) {
     // Process Ack
 
@@ -191,7 +191,7 @@ void process_send_side(
         // Currently we only support one-deep open chunks
         size_t new_chunk_base_address = new_chunk->get_buffer_address(BufferIndex{0});
         size_t new_chunk_field_for_sender =
-            tt::tt_fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
+            tt::tt_metal::experimental::fabric::FabricChunkMessageAvailableMessage::pack(new_chunk_base_address);
         // notify the worker about new chunk availability
         auto start_misc = eth_read_wall_clock();
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
@@ -219,13 +219,13 @@ void main_loop(
     std::array<noc_addr_t, N_SRC_CHANS>& src_ch_new_chunk_addrs,
     std::array<noc_addr_t, N_SRC_CHANS>& dest_noc_write_addrs,
     std::array<noc_addr_t, 10>& fabric_fwd_addrs,
-    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>& send_pool) {
+    tt::tt_metal::experimental::fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>& send_pool) {
 #if defined(ARCH_WORMHOLE)
     // acq: 6.00
     // rel: 9.5
     std::array<
-        tt::tt_fabric::WormholeEfficientCircularBuffer<
-            typename tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*,
+        tt::tt_metal::experimental::fabric::WormholeEfficientCircularBuffer<
+            typename tt::tt_metal::experimental::fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*,
             N_CHUNKS>,
         N_SRC_CHANS>
         open_chunks_cbs;
@@ -233,8 +233,8 @@ void main_loop(
     // acq: 17
     // rel: 4
     std::array<
-        tt::tt_fabric::
-            CircularBuffer<typename tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
+        tt::tt_metal::experimental::fabric::
+            CircularBuffer<typename tt::tt_metal::experimental::fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS>::chunk_t*, N_CHUNKS>,
         N_SRC_CHANS>
         open_chunks_cbs;
 #endif
@@ -247,9 +247,9 @@ void main_loop(
     uint32_t idle_count = 0;
     const uint32_t idle_max = 100000;
     std::array<chunk_forward_iterator_t, N_SRC_CHANS> sender_channel_wrptrs;
-    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_rd_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RX_N_PKTS> receiver_wr_ptr;
+    tt::tt_metal::experimental::fabric::ChannelBufferPointer<RX_N_PKTS> sender_view_rx_buf_wr_ptr;
+    tt::tt_metal::experimental::fabric::ChannelBufferPointer<RX_N_PKTS> receiver_rd_ptr;
+    tt::tt_metal::experimental::fabric::ChannelBufferPointer<RX_N_PKTS> receiver_wr_ptr;
     std::array<bool, N_SRC_CHANS> completed_sender_channels;
     std::array<size_t, N_SRC_CHANS> sender_channels_acks_received;
     std::array<BufferIndex, N_SRC_CHANS> current_chunk_ack_indices;
@@ -520,7 +520,7 @@ void kernel_main() {
         recv_buffer_addresses[i] = recv_buffer_base + i * PACKET_SIZE_BYTES;
     }
 
-    tt::tt_fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
+    tt::tt_metal::experimental::fabric::ChannelBuffersPool<N_CHUNKS, CHUNK_N_PKTS> send_pool;
     send_pool.init(send_chunk_base_addresses, PACKET_SIZE_BYTES, sizeof(eth_channel_sync_t));
 
     // Set up channels for bidirectional communication if enabled

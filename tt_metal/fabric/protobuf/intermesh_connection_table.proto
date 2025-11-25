@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package tt.fabric.proto;
+package tt.tt_metal.experimental.fabric.proto;
 
 // Represents a connection endpoint with ID, direction, and channel
 message ConnectionEndpoint {

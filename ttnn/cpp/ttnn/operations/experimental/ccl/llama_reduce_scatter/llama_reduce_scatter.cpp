@@ -21,7 +21,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const MeshDevice& mesh_device,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     bool use_noc1_only) {
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

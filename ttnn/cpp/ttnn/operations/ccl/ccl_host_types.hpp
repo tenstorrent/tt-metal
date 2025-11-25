@@ -10,7 +10,7 @@ namespace ttnn {
 namespace ccl {
 
 // TODO: Remove
-using tt::tt_fabric::Topology;
+using tt::tt_metal::experimental::fabric::Topology;
 
 };  // namespace ccl
 };  // namespace ttnn

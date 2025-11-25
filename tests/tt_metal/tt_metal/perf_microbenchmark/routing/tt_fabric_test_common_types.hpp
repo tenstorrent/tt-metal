@@ -20,7 +20,7 @@
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 // Device identifier that can be resolved later (used during parsing)
 using DeviceIdentifier = std::variant<
@@ -112,9 +112,9 @@ enum class HighLevelTrafficPattern {
 };
 
 struct TestFabricSetup {
-    tt::tt_fabric::Topology topology{0};
-    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
-    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
+    tt::tt_metal::experimental::fabric::Topology topology{0};
+    std::optional<tt_metal::experimental::fabric::FabricTensixConfig> fabric_tensix_config;
+    std::optional<tt_metal::experimental::fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
@@ -282,4 +282,4 @@ uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
 
 uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

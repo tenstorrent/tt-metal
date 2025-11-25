@@ -4,7 +4,7 @@
 
 #include "tt_fabric_test_kernels_utils.hpp"
 
-using namespace tt::tt_fabric::fabric_tests;
+using namespace tt::tt_metal::experimental::fabric::fabric_tests;
 
 constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
 constexpr uint8_t NUM_SYNC_FABRIC_CONNECTIONS = get_compile_time_arg_val(1);

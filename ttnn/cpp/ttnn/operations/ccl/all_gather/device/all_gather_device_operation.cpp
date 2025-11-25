@@ -166,7 +166,7 @@ AllGatherDeviceOperation::invoke(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_metal::experimental::fabric::Topology topology) {
     return {
         operation_attributes_t{
             .memory_config = memory_config,

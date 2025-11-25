@@ -13,7 +13,7 @@
 #include <ostream>
 #include <sstream>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Multi-pool channel allocator coordinator/manager.
@@ -154,4 +154,4 @@ inline std::ostream& operator<<(std::ostream& os, const MultiPoolChannelAllocato
     return os;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

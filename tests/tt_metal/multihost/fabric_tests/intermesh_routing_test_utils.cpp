@@ -19,7 +19,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 namespace multihost_utils {
@@ -156,7 +156,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, 0, sender_program, {sender_logical_core}, sender_runtime_args);
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -363,7 +363,7 @@ void run_mcast_sender_step(
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
 
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         mcast_sender_node, mcast_start_node, 0, mcast_send_program, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(mcast_send_program, mcast_send_kernel, sender_logical_core, sender_runtime_args);
@@ -552,4 +552,4 @@ std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping
 }  // namespace multihost_utils
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

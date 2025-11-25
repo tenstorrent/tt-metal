@@ -67,8 +67,8 @@ public:
             }
             mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
             // Create mapping from mesh coordinates to mesh devices
-            for (tt::tt_fabric::MeshCoordinate coord : tt::tt_fabric::MeshCoordinateRange(mesh_device_->shape())) {
-                coord_to_mesh_device_[coord] = mesh_device_->create_submesh(tt::tt_fabric::MeshShape{1, 1}, coord);
+            for (tt::tt_metal::experimental::fabric::MeshCoordinate coord : tt::tt_metal::experimental::fabric::MeshCoordinateRange(mesh_device_->shape())) {
+                coord_to_mesh_device_[coord] = mesh_device_->create_submesh(tt::tt_metal::experimental::fabric::MeshShape{1, 1}, coord);
             }
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");

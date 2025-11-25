@@ -12,30 +12,30 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /* Termination signal handling*/
-FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_metal::experimental::fabric::TerminationSignal* termination_signal_ptr) {
+    return *termination_signal_ptr == tt::tt_metal::experimental::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
 }
 
-FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_metal::experimental::fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
     invalidate_l1_cache();
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
-    return (*termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) ||
+    return (*termination_signal_ptr == tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE) ||
            launch_msg->kernel_config.exit_erisc_kernel;
 }
 
 FORCE_INLINE bool connect_is_requested(uint32_t cached) {
-    return cached == tt::tt_fabric::connection_interface::open_connection_value ||
-           cached == tt::tt_fabric::connection_interface::close_connection_request_value;
+    return cached == tt::tt_metal::experimental::fabric::connection_interface::open_connection_value ||
+           cached == tt::tt_metal::experimental::fabric::connection_interface::close_connection_request_value;
 }
 
 template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_worker_connection(
-    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+    tt::tt_metal::experimental::fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
@@ -43,7 +43,7 @@ FORCE_INLINE void establish_worker_connection(
 
 template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+    tt::tt_metal::experimental::fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
         local_sender_channel_worker_interface,
     bool& channel_connection_established,
     uint32_t stream_id) {
@@ -116,4 +116,4 @@ inline void notify_subordinate_routers(
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

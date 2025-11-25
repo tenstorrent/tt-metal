@@ -23,7 +23,7 @@ namespace {
 
 using ::testing::FloatEq;
 using ::testing::Pointwise;
-using ::tt::tt_fabric::MeshHostRankId;
+using ::tt::tt_metal::experimental::fabric::MeshHostRankId;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;

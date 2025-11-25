@@ -21,7 +21,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<tt::tt_metal::experimental::fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<uint32_t>& output_concat_dim) {
@@ -31,7 +31,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
 
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     log_debug(tt::LogOp, "num_links: {}", num_links_);
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
 

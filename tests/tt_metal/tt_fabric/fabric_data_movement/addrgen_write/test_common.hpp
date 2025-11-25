@@ -9,7 +9,7 @@
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-namespace tt::tt_fabric::test {
+namespace tt::tt_metal::experimental::fabric::test {
 
 // Import ChipId from distributed namespace
 using ChipId = tt::tt_metal::distributed::ChipId;
@@ -63,4 +63,4 @@ struct AddrgenTestParams {
     uint32_t mesh_cols = kDefaultMeshCols;
 };
 
-}  // namespace tt::tt_fabric::test
+}  // namespace tt::tt_metal::experimental::fabric::test

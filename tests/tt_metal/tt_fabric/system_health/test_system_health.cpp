@@ -17,7 +17,7 @@
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace system_health_tests {
 
 enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
@@ -48,7 +48,7 @@ ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t ch
             if (cluster.is_external_cable(chip_id, eth_core)) {
                 return ConnectorType::QSFP;
             }
-            auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
+            auto ubb_id = tt::tt_metal::experimental::fabric::get_ubb_id(*driver, chip_id);
             if ((ubb_id.asic_id == 5 || ubb_id.asic_id == 6) && (12 <= chan && chan <= 15)) {
                 return ConnectorType::LK1;
             } else if ((ubb_id.asic_id == 7 || ubb_id.asic_id == 8) && (12 <= chan && chan <= 15)) {
@@ -151,7 +151,7 @@ std::string get_ubb_id_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
     TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
-    auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
+    auto ubb_id = tt::tt_metal::experimental::fabric::get_ubb_id(*driver, chip_id);
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
@@ -540,4 +540,4 @@ TEST(Cluster, TestMeshFullConnectivity) {
 }
 
 }  // namespace system_health_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

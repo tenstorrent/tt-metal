@@ -19,7 +19,7 @@
 // Forward declarations
 class TestContext;
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 struct TestDevice;
 
@@ -32,7 +32,7 @@ struct ProgressMonitorConfig {
 
 // Progress data for a single device
 struct DeviceProgress {
-    tt::tt_fabric::FabricNodeId device_id{tt::tt_fabric::MeshId{0}, 0};  // Default: mesh 0, chip 0
+    tt::tt_metal::experimental::fabric::FabricNodeId device_id{tt::tt_metal::experimental::fabric::MeshId{0}, 0};  // Default: mesh 0, chip 0
     uint64_t current_packets = 0;                                        // Total packets sent so far
     uint64_t total_packets = 0;                                          // Total packets to send
     uint32_t num_senders = 0;                                            // Number of sender cores
@@ -63,17 +63,17 @@ public:
 
 private:
     // Poll all devices and collect progress
-    std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> poll_devices();
+    std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress> poll_devices();
 
     // Poll a single device's senders
     DeviceProgress poll_device_senders(const MeshCoordinate& coord, const TestDevice& test_device);
 
     // Check for hung devices and display warnings
-    void check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
+    void check_for_hung_devices(const std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress>& progress);
 
     // Display progress (single line summary)
     void display_progress(
-        const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
+        const std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress>& progress,
         std::chrono::duration<double> elapsed_since_last_poll);
 
     // Formatting helpers
@@ -82,7 +82,7 @@ private:
     std::string format_duration(double seconds) const;
 
     // Hung detection
-    bool is_device_hung(tt::tt_fabric::FabricNodeId device_id, uint64_t current_packets);
+    bool is_device_hung(tt::tt_metal::experimental::fabric::FabricNodeId device_id, uint64_t current_packets);
 
     // ETA calculation
     std::optional<double> estimate_eta(uint64_t current_total, uint64_t target_total, double throughput) const;
@@ -99,8 +99,8 @@ private:
     uint64_t last_total_packets_ = 0;
 
     // Hung detection state
-    std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceState> device_states_;
+    std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceState> device_states_;
     std::chrono::seconds hung_threshold_;
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

@@ -24,7 +24,7 @@ const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric
     {Topology::Mesh, FabricConfig::FABRIC_2D},
 };
 
-const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
+const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_metal::experimental::fabric::fabric_tests::pair_hash>
     TestFixture::torus_topology_to_fabric_config_map = {
         {{Topology::Torus, "X"}, FabricConfig::FABRIC_2D_TORUS_X},
         {{Topology::Torus, "Y"}, FabricConfig::FABRIC_2D_TORUS_Y},
@@ -44,8 +44,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::vector<ParsedTestConfig> raw_test_configs;
-    tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
-    std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
+    tt::tt_metal::experimental::fabric::fabric_tests::AllocatorPolicies allocation_policies;
+    std::optional<tt::tt_metal::experimental::fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
     bool use_dynamic_policies = true;  // Default to dynamic
 
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {

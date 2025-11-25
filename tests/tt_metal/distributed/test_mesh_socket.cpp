@@ -597,7 +597,7 @@ void test_single_connection_multi_device_socket(
 
     auto recv_virtual_coord = md1->worker_core_from_logical_core(recv_logical_coord);
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -668,7 +668,7 @@ void test_single_connection_multi_device_socket(
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     std::vector<uint32_t> sender_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_coord, sender_rtas);
@@ -742,7 +742,7 @@ void test_single_connection_multi_device_socket(
     }
 
     std::vector<uint32_t> recv_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
     tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 
@@ -777,7 +777,7 @@ void test_single_connection_multi_device_socket_with_workers(
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes();
 
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
@@ -847,7 +847,7 @@ void test_single_connection_multi_device_socket_with_workers(
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     std::vector<uint32_t> sender_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_coord, sender_rtas);
@@ -894,7 +894,7 @@ void test_single_connection_multi_device_socket_with_workers(
                 static_cast<uint32_t>(1)}});
 
     std::vector<uint32_t> recv_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_logical_coord}, recv_rtas);
     tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_logical_coord, recv_rtas);
 
@@ -955,7 +955,7 @@ std::shared_ptr<Program> create_sender_program(
         control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id);
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes();
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(
         *sender_program,
@@ -972,7 +972,7 @@ std::shared_ptr<Program> create_sender_program(
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
     std::vector<uint32_t> sender_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id,
         recv_fabric_node_id,
         sender_link_idx,
@@ -1109,14 +1109,14 @@ std::shared_ptr<Program> create_split_reduce_program(
     std::vector<uint32_t> recv_rtas_0;
     std::vector<uint32_t> recv_rtas_1;
 
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         recv_fabric_node_id,
         sender0_fabric_node_id,
         sender0_link_idx,
         *recv_program,
         {recv_logical_coord_0},
         recv_rtas_0);
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         recv_fabric_node_id,
         sender1_fabric_node_id,
         sender1_link_idx,
@@ -1195,14 +1195,14 @@ std::shared_ptr<Program> create_reduce_program(
 
     std::vector<uint32_t> recv_rtas;
 
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         reducer_fabric_node_id,
         sender0_fabric_node_id,
         sender0_link_idx,
         *reduce_program,
         reduce_logical_coord,
         recv_rtas);
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         reducer_fabric_node_id,
         sender1_fabric_node_id,
         sender1_link_idx,
@@ -1213,7 +1213,7 @@ std::shared_ptr<Program> create_reduce_program(
     tt_metal::SetRuntimeArgs(*reduce_program, recv_kernel, reduce_logical_coord, recv_rtas);
 
     std::vector<uint32_t> send_rtas;
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         reducer_fabric_node_id, recv_fabric_node_id, recv_link_idx, *reduce_program, reduce_logical_coord, send_rtas);
     tt_metal::SetRuntimeArgs(*reduce_program, send_kernel, reduce_logical_coord, send_rtas);
 
@@ -1260,7 +1260,7 @@ std::shared_ptr<Program> create_recv_program(
 
     std::vector<uint32_t> recv_rtas;
 
-    tt_fabric::append_fabric_connection_rt_args(
+    tt_metal::experimental::fabric::append_fabric_connection_rt_args(
         recv_fabric_node_id, sender_fabric_node_id, recv_link_idx, *recv_program, {recv_logical_coord}, recv_rtas);
 
     tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_logical_coord, recv_rtas);
@@ -1601,8 +1601,8 @@ void test_multi_connection_multi_device_data_copy(
 
 std::pair<MeshCoordinate, MeshCoordinate> get_random_mesh_coordinates(const MeshShape& mesh_shape) {
     std::srand(std::time(nullptr));  // Seed the RNG
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_2d_fabric_config(fabric_config)) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    if (tt_metal::experimental::fabric::is_2d_fabric_config(fabric_config)) {
         auto coord0 = MeshCoordinate(rand() % mesh_shape[0], rand() % mesh_shape[1]);
         auto coord1 = coord0;
         while (coord1 == coord0) {
@@ -1659,7 +1659,7 @@ template <typename FixtureT>
 void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
     std::vector<MeshCoordinate> coordinates;
     std::vector<uint32_t> link_indices;
-    if (tt_fabric::is_2d_fabric_config(tt::tt_metal::MetalContext::instance().get_fabric_config())) {
+    if (tt_metal::experimental::fabric::is_2d_fabric_config(tt::tt_metal::MetalContext::instance().get_fabric_config())) {
         auto mesh_device = fixture->get_mesh_device();
         auto mesh_shape = mesh_device->shape();
         coordinates.resize(mesh_shape.mesh_size(), MeshCoordinate(0, 0));
@@ -1681,7 +1681,7 @@ void run_multi_sender_single_recv(FixtureT* fixture, bool split_reducer) {
             auto reducer_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(reducer_physical_chip_id);
 
-            std::unordered_set<tt_fabric::chan_id_t> used_channels;
+            std::unordered_set<tt_metal::experimental::fabric::chan_id_t> used_channels;
             for (auto dst_chip_id : {sender_0_physical_chip_id, sender_1_physical_chip_id, receiver_physical_chip_id}) {
                 auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
                 auto forwarding_direction =

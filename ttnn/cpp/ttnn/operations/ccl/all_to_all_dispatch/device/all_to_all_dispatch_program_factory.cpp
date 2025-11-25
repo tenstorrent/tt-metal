@@ -60,7 +60,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     constexpr uint32_t buffering_factor = 2;
     constexpr uint32_t num_packet_headers = 2;
 
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
 
     std::array<uint32_t, 6> cb_sizes = {
         buffering_factor * aligned_input_page_size,
@@ -311,7 +311,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt::tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -449,7 +449,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 link_id,
                 reader_runtime_args[6],
                 reader_runtime_args[7]);
-            tt::tt_fabric::append_fabric_connection_rt_args(
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,

@@ -24,9 +24,9 @@ bool is_fabric_2d();
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
-tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, const std::optional<tt::tt_fabric::Topology>& topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+tt::tt_metal::experimental::fabric::Topology get_usable_topology(const Tensor& tensor, const std::optional<tt::tt_metal::experimental::fabric::Topology>& topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
 
-tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
+tt::tt_metal::experimental::fabric::Topology convert_2d_to_1d_topology(tt::tt_metal::experimental::fabric::Topology topology);
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor,

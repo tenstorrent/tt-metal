@@ -4,7 +4,7 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_results.hpp"
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 void PostComparisonAnalyzer::organize_speedups_by_topology() {
     // Go through each comparison result and add its speedup to the corresponding topology->packet_size and
@@ -140,4 +140,4 @@ void PostComparisonAnalyzer::generate_comparison_statistics_csv(const std::files
     log_info(tt::LogTest, "Comparison statistics CSV results appended to: {}", csv_file_path.string());
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

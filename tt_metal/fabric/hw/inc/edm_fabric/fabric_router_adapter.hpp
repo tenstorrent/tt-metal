@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <array>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /*
  * The FabricToFabricSender acts as an adapter between two routers in the fabric. It hides details
@@ -317,7 +317,7 @@ private:
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::tt_fabric::is_valid(
+        ASSERT(tt::tt_metal::experimental::fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
 
         send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
@@ -342,4 +342,4 @@ private:
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
 using EdmToEdmSender = RouterStaticSizedChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -38,7 +38,7 @@ namespace {
 
 // checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
 bool is_TG_gateway_connection(
-    const tt::tt_fabric::FabricNodeId& src_fabric_node_id, const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) {
+    const tt::tt_metal::experimental::fabric::FabricNodeId& src_fabric_node_id, const tt::tt_metal::experimental::fabric::FabricNodeId& dst_fabric_node_id) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         return false;
     }
@@ -57,7 +57,7 @@ bool is_TG_gateway_connection(
 
 }  // namespace
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -194,12 +194,12 @@ void append_fabric_connection_rt_args(
         const auto& edm_config = fabric_context.get_fabric_router_config();
         auto channel_allocator = edm_config.channel_allocator.get();
         const auto static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+            dynamic_cast<tt::tt_metal::experimental::fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         // Sender channel 0 is always for local worker in the new design
         const auto sender_channel = 0;
-        tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
+        tt::tt_metal::experimental::fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
             .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
@@ -246,7 +246,7 @@ void append_routing_plane_connection_manager_rt_args(
     // direction
     std::unordered_set<eth_chan_directions> used_directions;
     for (const auto& dst_node : dst_nodes) {
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        auto dir_opt = tt::tt_metal::experimental::fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         if (dir_opt.has_value()) {
             TT_FATAL(
                 used_directions.find(dir_opt.value()) == used_directions.end(),
@@ -259,7 +259,7 @@ void append_routing_plane_connection_manager_rt_args(
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        auto dir_opt = tt::tt_metal::experimental::fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
         TT_FATAL(
             dir_opt.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
@@ -323,7 +323,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
         src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
-tt::tt_fabric::Topology get_fabric_topology() {
+tt::tt_metal::experimental::fabric::Topology get_fabric_topology() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
 }
@@ -350,16 +350,16 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
     return control_plane.routing_direction_to_eth_direction(routing_direction.value());
 }
 
-bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+bool is_1d_fabric_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D ||
+           fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D_RING;
 }
 
-bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+bool is_2d_fabric_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D ||
+           fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+           fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+           fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
 // TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196
@@ -404,4 +404,4 @@ size_t get_number_of_available_routing_planes(
 
 }  // namespace experimental
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

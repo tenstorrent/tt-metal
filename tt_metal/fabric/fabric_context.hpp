@@ -14,23 +14,23 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class FabricContext {
 public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-    explicit FabricContext(tt::tt_fabric::FabricConfig fabric_config);
+    explicit FabricContext(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
     ~FabricContext() = default;
 
     bool is_wrap_around_mesh(MeshId mesh_id) const;
 
-    static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
+    static tt::tt_metal::experimental::fabric::Topology get_topology_from_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
 
-    static bool is_2D_topology(tt::tt_fabric::Topology topology);
+    static bool is_2D_topology(tt::tt_metal::experimental::fabric::Topology topology);
 
-    tt::tt_fabric::Topology get_fabric_topology() const;
+    tt::tt_metal::experimental::fabric::Topology get_fabric_topology() const;
     bool is_2D_routing_enabled() const;
 
     bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
@@ -39,14 +39,14 @@ public:
     size_t get_fabric_max_payload_size_bytes() const;
     size_t get_fabric_channel_buffer_size_bytes() const;
 
-    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Default,
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis::Short,
+        tt::tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config = tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
     // Get fabric tensix config for mux configuration
-    tt::tt_fabric::FabricTensixDatamoverConfig& get_tensix_config() const;
+    tt::tt_metal::experimental::fabric::FabricTensixDatamoverConfig& get_tensix_config() const;
 
     // Initialize fabric tensix config (call after routing tables are configured)
     void initialize_tensix_config();
@@ -61,24 +61,24 @@ public:
 
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
 
-    std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
+    std::optional<std::pair<uint32_t, tt::tt_metal::experimental::fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
 
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
-    tt::tt_fabric::Topology get_topology() const;
+    tt::tt_metal::experimental::fabric::Topology get_topology() const;
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
-    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType edm_type,
-        tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
-        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
+    std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig> get_edm_config_options(
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverType edm_type,
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis edm_axis,
+        tt::tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config = tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     bool initialized_ = false;
-    tt::tt_fabric::FabricConfig fabric_config_{};
-    tt::tt_fabric::Topology topology_{};
+    tt::tt_metal::experimental::fabric::FabricConfig fabric_config_{};
+    tt::tt_metal::experimental::fabric::Topology topology_{};
 
     bool is_2D_routing_enabled_ = false;
 
@@ -87,18 +87,18 @@ private:
     size_t packet_header_size_bytes_ = 0;
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
-    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
+    std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
     // these edm types will have different optimizations based on the number of devices along the axis.
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_router_config_ = {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
+    std::array<std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig>, 2> dateline_router_config_ = {};
+    std::array<std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
+    std::array<std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
         {};
 
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, eth_chan_directions::COUNT>
+    std::array<std::unique_ptr<tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig>, eth_chan_directions::COUNT>
         router_with_mux_config_ = {};  // for E W N S.
 
     // Tensix config for fabric mux configuration (same for all devices)
-    std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig> tensix_config_;
+    std::unique_ptr<tt::tt_metal::experimental::fabric::FabricTensixDatamoverConfig> tensix_config_;
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;
@@ -109,4 +109,4 @@ private:
     std::vector<uint32_t> num_initialized_routers_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

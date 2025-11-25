@@ -60,9 +60,9 @@ constexpr line_multicast_route_info_t get_line_multicast_route_info_from_args() 
 template <typename packet_header_t>
 FORCE_INLINE void fabric_set_line_unicast_route(
     volatile tt_l1_ptr packet_header_t* fabric_header_addr, const line_unicast_route_info_t& route_info) {
-    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
+    if constexpr (std::is_same_v<packet_header_t, tt::tt_metal::experimental::fabric::HybridMeshPacketHeader>) {
         fabric_set_unicast_route(fabric_header_addr, route_info.dst_chip_id, route_info.dst_mesh_id);
-    } else if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::LowLatencyPacketHeader>) {
+    } else if constexpr (std::is_same_v<packet_header_t, tt::tt_metal::experimental::fabric::LowLatencyPacketHeader>) {
         fabric_set_unicast_route<false>(fabric_header_addr, route_info.distance_in_hops);
     } else {
         static_assert(
@@ -77,7 +77,7 @@ FORCE_INLINE void fabric_set_line_unicast_route(
 template <typename packet_header_t>
 FORCE_INLINE void fabric_set_line_multicast_route(
     volatile tt_l1_ptr packet_header_t* fabric_header_addr, const line_multicast_route_info_t& route_info) {
-    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
+    if constexpr (std::is_same_v<packet_header_t, tt::tt_metal::experimental::fabric::HybridMeshPacketHeader>) {
         fabric_set_mcast_route(
             fabric_header_addr,
             route_info.dst_chip_id,
@@ -87,8 +87,8 @@ FORCE_INLINE void fabric_set_line_multicast_route(
             route_info.n_num_hops,
             route_info.s_num_hops
         );
-    } else if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::LowLatencyPacketHeader>) {
-        fabric_header_addr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
+    } else if constexpr (std::is_same_v<packet_header_t, tt::tt_metal::experimental::fabric::LowLatencyPacketHeader>) {
+        fabric_header_addr->to_chip_multicast(tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{
             static_cast<uint8_t>(route_info.start_distance_in_hops), static_cast<uint8_t>(route_info.range_hops)});
     } else {
         static_assert(

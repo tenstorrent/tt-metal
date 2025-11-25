@@ -82,7 +82,7 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    tt::tt_fabric::WorkerToFabricEdmSender* fabric_direction_connection =
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender* fabric_direction_connection =
         fabric_connection.is_logically_connected() ? (direction == 1 ? &fabric_connection.get_backward_connection()
                                                                      : &fabric_connection.get_forward_connection())
                                                    : nullptr;
@@ -189,7 +189,7 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     // Write the unicast packet

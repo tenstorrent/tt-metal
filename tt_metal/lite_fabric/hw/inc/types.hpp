@@ -15,27 +15,27 @@
 namespace lite_fabric {
 
 template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
-using ChannelPointersTupleImpl = tt::tt_fabric::ChannelPointersTupleImpl<ChannelType, BufferSizes, Seq>;
+using ChannelPointersTupleImpl = tt::tt_metal::experimental::fabric::ChannelPointersTupleImpl<ChannelType, BufferSizes, Seq>;
 
 template <template <uint8_t> class ChannelType, auto& BufferSizes>
-using ChannelPointersTuple = tt::tt_fabric::ChannelPointersTuple<ChannelType, BufferSizes>;
+using ChannelPointersTuple = tt::tt_metal::experimental::fabric::ChannelPointersTuple<ChannelType, BufferSizes>;
 
 template <uint8_t RECEIVER_NUM_BUFFERS>
-using OutboundReceiverChannelPointers = tt::tt_fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>;
+using OutboundReceiverChannelPointers = tt::tt_metal::experimental::fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>;
 using OutboundReceiverChannelPointersTuple =
     lite_fabric::ChannelPointersTuple<OutboundReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>;
 using OutboundReceiverChannelPointersTupleImpl =
     decltype(lite_fabric::ChannelPointersTuple<OutboundReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make());
 
 template <uint8_t RECEIVER_NUM_BUFFERS>
-using ReceiverChannelPointers = tt::tt_fabric::ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>;
+using ReceiverChannelPointers = tt::tt_metal::experimental::fabric::ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>;
 using ReceiverChannelPointersTuple =
     lite_fabric::ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>;
 using ReceiverChannelPointersTupleImpl =
     decltype(lite_fabric::ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make());
 
-using SenderEthChannelBuffer = tt::tt_fabric::SenderEthChannel<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[0]>;
-using ReceiverEthChannelBuffer = tt::tt_fabric::EthChannelBuffer<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>;
+using SenderEthChannelBuffer = tt::tt_metal::experimental::fabric::SenderEthChannel<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[0]>;
+using ReceiverEthChannelBuffer = tt::tt_metal::experimental::fabric::EthChannelBuffer<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>;
 
 using HostInterface = HostToFabricLiteInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>;
 
@@ -47,11 +47,11 @@ using WriteTridTracker = WriteTransactionIdTracker<
     lite_fabric::edm_to_downstream_noc>;
 
 using RemoteReceiverChannelsType =
-    decltype(tt::tt_fabric::StaticSizedEthChannelBuffers<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+    decltype(tt::tt_metal::experimental::fabric::StaticSizedEthChannelBuffers<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{}));
 
 using LocalSenderChannelsType =
-    decltype(tt::tt_fabric::StaticSizedSenderEthChannelBuffers<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+    decltype(tt::tt_metal::experimental::fabric::StaticSizedSenderEthChannelBuffers<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{}));
 
 }  // namespace lite_fabric

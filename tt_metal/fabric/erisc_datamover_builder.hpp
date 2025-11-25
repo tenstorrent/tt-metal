@@ -27,7 +27,7 @@
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 struct FabricRiscConfig;
 class FabricRouterBuilder;
@@ -259,9 +259,9 @@ struct FabricEriscDatamoverConfig {
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
-        (((tt::tt_fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+        (((tt::tt_metal::experimental::fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
     static constexpr std::size_t sender_channel_counters_size_bytes =
-        (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+        (((tt::tt_metal::experimental::fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
 
     std::array<std::size_t, builder_config::num_receiver_channels> receiver_channels_counters_address = {};
     std::array<std::size_t, builder_config::num_sender_channels> sender_channels_counters_address = {};
@@ -269,10 +269,10 @@ struct FabricEriscDatamoverConfig {
     // Packet header history buffer(s)
     static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
     static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
     static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
     std::array<std::size_t, builder_config::num_receiver_channels> receivers_completed_packet_header_cb_address = {};
     std::array<std::size_t, builder_config::num_sender_channels> senders_completed_packet_header_cb_address = {};
 
@@ -294,7 +294,7 @@ struct FabricEriscDatamoverConfig {
     // persistent mode field
     std::array<std::size_t, builder_config::num_sender_channels> sender_channels_buffer_index_semaphore_address = {};
 
-    static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
+    static_assert(sizeof(tt::tt_metal::experimental::fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
     // persistent mode field
@@ -413,7 +413,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::vector<uint32_t>& args_out);
 
 void append_worker_to_fabric_edm_sender_rt_args(
-    tt::tt_fabric::chan_id_t eth_channel,
+    tt::tt_metal::experimental::fabric::chan_id_t eth_channel,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
@@ -516,8 +516,8 @@ public:
 
     void teardown_from_host(
         tt::tt_metal::IDevice* d,
-        tt::tt_fabric::TerminationSignal termination_signal =
-            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
+        tt::tt_metal::experimental::fabric::TerminationSignal termination_signal =
+            tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
@@ -535,8 +535,8 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::shared_ptr<tt::tt_metal::experimental::fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
+    std::array<std::shared_ptr<tt::tt_metal::experimental::fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -586,4 +586,4 @@ private:
         FabricDatamoverBuilderBase *downstream_builder, FabricDatamoverBuilderBase *vc1_edm_builder);
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

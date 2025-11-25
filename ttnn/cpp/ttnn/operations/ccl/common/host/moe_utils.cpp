@@ -13,11 +13,11 @@ namespace ttnn::operations::ccl::common {
 
 namespace detail {
 
-bool has_wrap_around(tt::tt_fabric::Topology topology) {
-    return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+bool has_wrap_around(tt::tt_metal::experimental::fabric::Topology topology) {
+    return topology == tt::tt_metal::experimental::fabric::Topology::Ring || topology == tt::tt_metal::experimental::fabric::Topology::Torus;
 }
 
-tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt_fabric::Topology topology) {
+tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt_metal::experimental::fabric::Topology topology) {
     return has_wrap_around(topology) ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                                      : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
 }
@@ -36,7 +36,7 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
 std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
-    const tt::tt_fabric::Topology topology,
+    const tt::tt_metal::experimental::fabric::Topology topology,
     const std::optional<uint32_t> axis) {
     // For readability use symbolic indices instead of raw numbers when accessing the
     // `directions` array `{East, West, North, South}`.
@@ -107,11 +107,11 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     auto mesh_range_set = tt::tt_metal::distributed::MeshCoordinateRangeSet(mesh_range);
     const auto& mesh_view = mesh_device.get_view();
     auto mesh_shape = mesh_view.shape();
-    auto topology = tt::tt_fabric::get_fabric_topology();
+    auto topology = tt::tt_metal::experimental::fabric::get_fabric_topology();
 
-    constexpr std::array<std::array<tt::tt_fabric::RoutingDirection, 2>, 2> directions = {
-        {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
-         {tt::tt_fabric::RoutingDirection::W, tt::tt_fabric::RoutingDirection::E}}};
+    constexpr std::array<std::array<tt::tt_metal::experimental::fabric::RoutingDirection, 2>, 2> directions = {
+        {{tt::tt_metal::experimental::fabric::RoutingDirection::N, tt::tt_metal::experimental::fabric::RoutingDirection::S},
+         {tt::tt_metal::experimental::fabric::RoutingDirection::W, tt::tt_metal::experimental::fabric::RoutingDirection::E}}};
 
     ttnn::SmallVector<size_t> cluster_axes;
     if (cluster_axis.has_value()) {
@@ -120,17 +120,17 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         cluster_axes = {0, 1};
     }
 
-    auto positive_direction = [&](tt::tt_fabric::RoutingDirection direction) {
-        return direction == tt::tt_fabric::RoutingDirection::E || direction == tt::tt_fabric::RoutingDirection::S;
+    auto positive_direction = [&](tt::tt_metal::experimental::fabric::RoutingDirection direction) {
+        return direction == tt::tt_metal::experimental::fabric::RoutingDirection::E || direction == tt::tt_metal::experimental::fabric::RoutingDirection::S;
     };
-    [[maybe_unused]] auto negative_direction = [&](tt::tt_fabric::RoutingDirection direction) {
-        return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
+    [[maybe_unused]] auto negative_direction = [&](tt::tt_metal::experimental::fabric::RoutingDirection direction) {
+        return direction == tt::tt_metal::experimental::fabric::RoutingDirection::W || direction == tt::tt_metal::experimental::fabric::RoutingDirection::N;
     };
 
     auto applicable_to_coord = [&](const MeshCoordinate& coord,
                                    size_t cluster_axis,
                                    size_t axis_size,
-                                   tt::tt_fabric::RoutingDirection direction) -> bool {
+                                   tt::tt_metal::experimental::fabric::RoutingDirection direction) -> bool {
         auto boundary_mode = detail::get_boundary_mode(topology);
         int offset = positive_direction(direction) ? 1 : -1;
         auto neighbor = coord.get_neighbor(mesh_shape, offset, cluster_axis, boundary_mode);
@@ -154,7 +154,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
             for (const auto direction : directions[axis]) {
                 if (applicable_to_coord(coord, axis, mesh_shape[axis], direction)) {
                     auto planes_in_direction =
-                        tt::tt_fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
+                        tt::tt_metal::experimental::fabric::get_num_available_routing_planes_in_direction(fabric_node_id, direction);
                     // if the device is not mmio capable then one link on some axis will be unavailable
                     // ideally we only subtract if we're targetting that cluster axis, but we don't have access to that
                     // information here to be safe, we subtract 1 regardless of the axis when the axis is not available

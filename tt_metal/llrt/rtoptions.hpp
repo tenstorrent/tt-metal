@@ -229,7 +229,7 @@ class RunTimeOptions {
     bool use_mesh_graph_descriptor_2_0 = false;
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
-    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+    std::optional<tt::tt_metal::experimental::fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
@@ -538,7 +538,7 @@ public:
     }
 
     // Reliability mode override accessor
-    std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
+    std::optional<tt::tt_metal::experimental::fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }

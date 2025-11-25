@@ -7,9 +7,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
-using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
-using tt::tt_fabric::NocUnicastCommandHeader;
-using tt::tt_fabric::WorkerToFabricEdmSender;
+using tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader;
+using tt::tt_metal::experimental::fabric::NocUnicastCommandHeader;
+using tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
 namespace detail {
@@ -60,7 +60,7 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
-    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
+    constexpr tt::tt_metal::experimental::fabric::Topology topology = tt::tt_metal::experimental::fabric::Topology(get_compile_time_arg_val(16));
     constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
     constexpr auto output_args = TensorAccessorArgs<18>();
 

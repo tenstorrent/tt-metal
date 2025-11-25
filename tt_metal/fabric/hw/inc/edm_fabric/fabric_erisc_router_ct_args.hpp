@@ -477,7 +477,7 @@ using buffer_slot = BufferSlot<channel_buffer_size, sizeof(PACKET_HEADER_TYPE)>;
 
 constexpr uint32_t ELASTIC_CHANNELS_CT_ARG_START_IDX = HOST_SIGNAL_ARGS_START_IDX + 4;
 using FWDED_SENDER_ELASTIC_CHANNELS_INFO =
-    tt::tt_fabric::elastic_channels::RouterElasticChannelsCtArgs<ELASTIC_CHANNELS_CT_ARG_START_IDX, buffer_slot::size_bytes>;
+    tt::tt_metal::experimental::fabric::elastic_channels::RouterElasticChannelsCtArgs<ELASTIC_CHANNELS_CT_ARG_START_IDX, buffer_slot::size_bytes>;
 
 
 constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
@@ -529,7 +529,7 @@ constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 constexpr bool is_persistent_fabric = true;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,
     "edm_to_local_chip_noc must equal to receiver_channel_local_write_noc_ids");
@@ -626,4 +626,4 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
     eth_remote_channel_pools_args::receiver_channel_to_pool_index,
     NUM_RECEIVER_CHANNELS>();
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

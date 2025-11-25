@@ -132,7 +132,7 @@ AlignedPacketDims compute_aligned_packet_dims(
 struct Fabric1DRoute {
     const uint32_t num_hops;
     const bool is_forward;
-    const tt::tt_fabric::FabricNodeId neighbor_id;
+    const tt::tt_metal::experimental::fabric::FabricNodeId neighbor_id;
 };
 
 Fabric1DRoute fabric_1d_routing(

@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
@@ -59,15 +59,15 @@ enum class FabricReliabilityMode : uint32_t {
     DYNAMIC_RECONFIGURATION_SETUP_MODE = 2,
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;

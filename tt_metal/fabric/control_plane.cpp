@@ -56,7 +56,7 @@
 #include "tt_metal/fabric/topology_mapper.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace {
 
@@ -137,9 +137,9 @@ UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity,
-    tt_fabric::FabricConfig fabric_config,
-    tt_fabric::FabricReliabilityMode reliability_mode) {
-    if (fabric_config == tt_fabric::FabricConfig::CUSTOM || fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config,
+    tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode) {
+    if (fabric_config == tt_metal::experimental::fabric::FabricConfig::CUSTOM || fabric_config == tt_metal::experimental::fabric::FabricConfig::DISABLED) {
         return;
     }
 
@@ -166,10 +166,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     auto apply_min =
         [&](FabricNodeId fabric_node_id,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
+            const std::unordered_map<tt::tt_metal::experimental::fabric::RoutingDirection, std::vector<tt::tt_metal::experimental::fabric::chan_id_t>>&
                 port_direction_eth_chans,
-            tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
+            tt::tt_metal::experimental::fabric::RoutingDirection direction,
+            const std::unordered_map<tt::tt_metal::experimental::fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
             size_t& val) {
             if (skip_direction(fabric_node_id, direction)) {
                 return;
@@ -181,7 +181,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     // For each mesh in the system
     auto user_meshes = this->get_user_physical_mesh_ids();
-    if (reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+    if (reliability_mode == tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
         for (const auto& [fabric_node_id, directions_and_eth_chans] :
              this->router_port_directions_to_physical_eth_chan_map_) {
             for (const auto& [direction, eth_chans] : directions_and_eth_chans) {
@@ -461,14 +461,14 @@ void ControlPlane::init_control_plane(
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         // Initialize topology mapper with provided mapping, skipping discovery
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+        this->topology_mapper_ = std::make_unique<tt::tt_metal::experimental::fabric::TopologyMapper>(
             *this->routing_table_generator_->mesh_graph,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+        this->topology_mapper_ = std::make_unique<tt::tt_metal::experimental::fabric::TopologyMapper>(
             *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
@@ -799,7 +799,7 @@ void ControlPlane::order_ethernet_channels() {
 void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
     auto user_mesh_ids = this->get_user_physical_mesh_ids();
     std::unordered_set<MeshId> user_mesh_ids_set(user_mesh_ids.begin(), user_mesh_ids.end());
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::CUSTOM) {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_metal::experimental::fabric::FabricConfig::CUSTOM) {
         for (auto& [fabric_node_id, directional_eth_chans] : this->router_port_directions_to_physical_eth_chan_map_) {
             if (user_mesh_ids_set.count(fabric_node_id.mesh_id) == 0) {
                 continue;
@@ -859,7 +859,7 @@ size_t ControlPlane::get_num_live_routing_planes(
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
-    tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode) {
+    tt::tt_metal::experimental::fabric::FabricConfig fabric_config, tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode) {
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -917,7 +917,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                                              connected_chips_and_eth_cores.end();
                     TT_FATAL(
                         connections_exist ||
-                            reliability_mode != tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+                            reliability_mode != tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
                         "Expected connections to exist for M{}D{} to D{}",
                         mesh_id,
                         fabric_chip_id,
@@ -927,7 +927,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     }
 
                     const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
-                    if (reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+                    if (reliability_mode == tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
                         TT_FATAL(
                             connected_eth_cores.size() >= edge.connected_chip_ids.size(),
                             "Expected {} eth links from physical chip {} to physical chip {}",
@@ -1212,7 +1212,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         auto src_chip_id = src_fabric_node_id.chip_id;
         auto dst_mesh_id = dst_fabric_node_id.mesh_id;
         auto dst_chip_id = dst_fabric_node_id.chip_id;
-        if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
+        if (i >= tt::tt_metal::experimental::fabric::MAX_MESH_SIZE * tt::tt_metal::experimental::fabric::MAX_NUM_MESHES) {
             log_warning(
                 tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
             return {};
@@ -1362,7 +1362,7 @@ void write_to_worker_or_fabric_tensix_cores(
 
     // Check if tensix config is enabled
     bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+                                 tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED;
 
     // Get pre-computed translated fabric mux cores from tensix config
     std::unordered_set<CoreCoord> fabric_mux_cores_translated;
@@ -1549,11 +1549,11 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     // Build intra-mesh routing entries (chip-to-chip routing)
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     TT_FATAL(
-        router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
+        router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_metal::experimental::fabric::MAX_MESH_SIZE,
         "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
-    for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_MESH_SIZE; i++) {
+    for (std::uint32_t i = 0; i < tt::tt_metal::experimental::fabric::MAX_MESH_SIZE; i++) {
         routing_info.intra_mesh_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
@@ -1576,11 +1576,11 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     // Build inter-mesh routing entries (mesh-to-mesh routing)
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     TT_FATAL(
-        router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
+        router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_metal::experimental::fabric::MAX_NUM_MESHES,
         "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
 
     // Initialize all entries to INVALID_ROUTING_TABLE_ENTRY first
-    for (std::uint32_t i = 0; i < tt::tt_fabric::MAX_NUM_MESHES; i++) {
+    for (std::uint32_t i = 0; i < tt::tt_metal::experimental::fabric::MAX_NUM_MESHES; i++) {
         routing_info.inter_mesh_direction_table.set_original_direction(
             i, static_cast<std::uint8_t>(eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY));
     }
@@ -1643,9 +1643,9 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
     FabricNodeId src_fabric_node_id{mesh_id, chip_id};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
-    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_worker_connections = {};
-    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_dispatcher_connections = {};
-    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_tensix_connections = {};
+    tt::tt_metal::experimental::fabric::tensix_fabric_connections_l1_info_t fabric_worker_connections = {};
+    tt::tt_metal::experimental::fabric::tensix_fabric_connections_l1_info_t fabric_dispatcher_connections = {};
+    tt::tt_metal::experimental::fabric::tensix_fabric_connections_l1_info_t fabric_tensix_connections = {};
 
     // Get all physically connected ethernet channels directly from the cluster
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -1656,7 +1656,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
          this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
         for (auto eth_channel_id : eth_chans) {
             eth_chan_directions router_direction = this->routing_direction_to_eth_direction(direction);
-            if (num_eth_endpoint >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
+            if (num_eth_endpoint >= tt::tt_metal::experimental::fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
                 log_warning(
                     tt::LogFabric,
                     "ControlPlane: Maximum number of fabric endpoints exceeded for M%dD%d, skipping further "
@@ -1700,7 +1700,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
         &fabric_worker_connections,      // worker_data - goes to mux cores
         &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
         &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
-        sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+        sizeof(tt::tt_metal::experimental::fabric::tensix_fabric_connections_l1_info_t),
         tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
         physical_chip_id);
 }
@@ -1838,7 +1838,7 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
+void ControlPlane::initialize_fabric_context(tt_metal::experimental::fabric::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
@@ -2021,14 +2021,14 @@ ControlPlane::get_global_logical_bindings() const {
 
 // Helper function to fill connection info with common fields for fabric router configs
 void fill_connection_info_fields(
-    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    tt::tt_metal::experimental::fabric::fabric_connection_info_t& connection_info,
     const CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
     auto channel_allocator = config.channel_allocator.get();
     const auto static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        dynamic_cast<tt::tt_metal::experimental::fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
@@ -2045,9 +2045,9 @@ void fill_connection_info_fields(
 
 // Helper function to fill tensix connection info with tensix-specific configuration
 void fill_tensix_connection_info_fields(
-    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    tt::tt_metal::experimental::fabric::fabric_connection_info_t& connection_info,
     const CoreCoord& mux_core_virtual,
-    const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
+    const tt::tt_metal::experimental::fabric::FabricTensixDatamoverConfig& tensix_config,
     ChipId physical_chip_id,
     chan_id_t eth_channel_id,
     uint32_t sender_channel,
@@ -2068,9 +2068,9 @@ void fill_tensix_connection_info_fields(
 }
 
 void ControlPlane::populate_fabric_connection_info(
-    tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
-    tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
-    tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
+    tt::tt_metal::experimental::fabric::fabric_connection_info_t& worker_connection_info,
+    tt::tt_metal::experimental::fabric::fabric_connection_info_t& dispatcher_connection_info,
+    tt::tt_metal::experimental::fabric::fabric_connection_info_t& tensix_connection_info,
     ChipId physical_chip_id,
     chan_id_t eth_channel_id) const {
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
@@ -2082,8 +2082,8 @@ void ControlPlane::populate_fabric_connection_info(
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
     const auto& edm_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Default,
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config,
         static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
@@ -2092,7 +2092,7 @@ void ControlPlane::populate_fabric_connection_info(
         worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
 
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
-    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (fabric_tensix_config != tt::tt_metal::experimental::fabric::FabricTensixConfig::DISABLED) {
         // dispatcher uses different fabric router, which still has the default buffer size.
         const auto& default_edm_config = fabric_context.get_fabric_router_config();
         fill_connection_info_fields(
@@ -2135,7 +2135,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     local_data.local_host_rank_id = this->get_local_host_rank_id_binding();
     local_data.router_port_directions_map = router_port_directions_to_physical_eth_chan_map_;
 
-    auto serialized_data = tt::tt_fabric::serialize_router_port_directions_to_bytes(local_data);
+    auto serialized_data = tt::tt_metal::experimental::fabric::serialize_router_port_directions_to_bytes(local_data);
     std::vector<uint8_t> serialized_remote_data;
     auto my_rank = *(distributed_context.rank());
 
@@ -2166,7 +2166,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
                 tt::tt_metal::distributed::multihost::Rank{bcast_root});
 
             RouterPortDirectionsData deserialized_remote_data =
-                tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
+                tt::tt_metal::experimental::fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
 
             // Merge remote data into local router_port_directions_to_physical_eth_chan_map_
             for (const auto& [fabric_node_id, direction_map] : deserialized_remote_data.router_port_directions_map) {
@@ -2710,15 +2710,15 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     return intermesh_connections;
 }
 
-bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const {
-    if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+bool ControlPlane::is_fabric_config_valid(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const {
+    if (fabric_config == tt::tt_metal::experimental::fabric::FabricConfig::DISABLED) {
         return false;
     }
 
-    static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+    static const std::unordered_set<tt::tt_metal::experimental::fabric::FabricConfig> torus_fabric_configs = {
+        tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D_TORUS_XY,
     };
 
     if (torus_fabric_configs.count(fabric_config)) {
@@ -2731,7 +2731,7 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
     return true;
 }
 
-void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+void ControlPlane::validate_torus_setup(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const {
     TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
 
     auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
@@ -2757,7 +2757,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
 }
 
-std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_metal::experimental::fabric::FabricConfig fabric_config) const {
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     TT_FATAL(
         cluster_type == tt::tt_metal::ClusterType::GALAXY,
@@ -2787,4 +2787,4 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 
 ControlPlane::~ControlPlane() = default;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

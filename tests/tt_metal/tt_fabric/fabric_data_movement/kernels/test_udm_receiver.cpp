@@ -27,7 +27,7 @@ constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
  */
 void kernel_main() {
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
+    tt::tt_metal::experimental::fabric::udm::fabric_local_state_init();
 
     uint32_t time_seed = time_seed_init;
 
@@ -56,7 +56,7 @@ void kernel_main() {
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
                 // Send write ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_write_ack(received_header);
 
                 // Check for data correctness
                 match = check_packet_data(
@@ -65,7 +65,7 @@ void kernel_main() {
             } break;
             case NOC_UNICAST_INLINE_WRITE: {
                 // Send write ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_write_ack(received_header);
 
                 // Check data correctness for a single uint32_t
                 uint32_t received_value = *start_addr;
@@ -80,7 +80,7 @@ void kernel_main() {
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
                 // Send atomic ACK back to the sender
-                tt::tt_fabric::udm::fabric_fast_atomic_ack(received_header);
+                tt::tt_metal::experimental::fabric::udm::fabric_fast_atomic_ack(received_header);
 
                 uint32_t received_value = *start_addr;
                 uint32_t expected_value = time_seed;
@@ -104,7 +104,7 @@ void kernel_main() {
     }
 
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
+    tt::tt_metal::experimental::fabric::udm::close_fabric_connection();
 
     if (!match) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;

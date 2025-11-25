@@ -64,11 +64,11 @@ FORCE_INLINE void send_next_data(
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     host_interface->d2h.fabric_sender_channel_index =
-        tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
+        tt::tt_metal::experimental::fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
             host_interface->d2h.fabric_sender_channel_index);
 
-    remote_receiver_buffer_index = tt::tt_fabric::BufferIndex{
-        tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(remote_receiver_buffer_index.get())};
+    remote_receiver_buffer_index = tt::tt_metal::experimental::fabric::BufferIndex{
+        tt::tt_metal::experimental::fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(remote_receiver_buffer_index.get())};
     receiver_buffer_channel.set_cached_next_buffer_slot_addr(
         receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
@@ -111,7 +111,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     tt_l1_ptr lite_fabric::FabricLiteHeader* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
-    tt::tt_fabric::SenderEthChannel<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>&
+    tt::tt_metal::experimental::fabric::SenderEthChannel<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>&
         sender_buffer_channel) {
     invalidate_l1_cache();
     const auto& header = *packet_start;
@@ -182,7 +182,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 // Tell ourselves there is data to send
                 // NOTE: sender_buffer_channel index will be incremented in send_next_data
                 host_interface->h2d.sender_host_write_index =
-                    tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
+                    tt::tt_metal::experimental::fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
                         host_interface->h2d.sender_host_write_index);
             }
         } break;
@@ -249,7 +249,7 @@ FORCE_INLINE void run_receiver_channel_step() {
         completion_counter.increment();
         if (on_mmio_chip) {
             host_interface->d2h.fabric_receiver_channel_index =
-                tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
+                tt::tt_metal::experimental::fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
                     host_interface->d2h.fabric_receiver_channel_index);
         }
     }

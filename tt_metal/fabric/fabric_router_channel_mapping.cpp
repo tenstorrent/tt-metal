@@ -6,7 +6,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
     Topology topology, eth_chan_directions direction, bool has_tensix_extension) :
@@ -126,4 +126,4 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
     return it->second;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

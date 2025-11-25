@@ -15,7 +15,7 @@
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class TopologyMapperTest : public ::testing::Test {
 protected:
@@ -858,4 +858,4 @@ INSTANTIATE_TEST_SUITE_P(
     T3kTopologyMapperWithCustomMappingFixture,
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 // routing mode macro for (mainly) kernel code
 #define ROUTING_MODE_UNDEFINED 0x0000
 #define ROUTING_MODE_1D 0x0001
@@ -16,4 +16,4 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_TORUS 0x0040
 #define ROUTING_MODE_LOW_LATENCY 0x0080
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

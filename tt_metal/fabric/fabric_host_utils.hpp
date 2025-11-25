@@ -18,15 +18,15 @@
 #include <functional>
 #include <unordered_set>
 #include <optional>
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class FabricNodeId;
-bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+bool is_tt_fabric_config(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
 
 void set_routing_mode(uint16_t routing_mode);
 void set_routing_mode(Topology topology, uint32_t dimension = 1);
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
+FabricType get_fabric_type(tt::tt_metal::experimental::fabric::FabricConfig fabric_config);
 
 // Helper to validate that requested FabricType doesn't require more connectivity than available FabricType provides
 // Returns true if requested_type requires more connections than available_type provides
@@ -48,4 +48,4 @@ struct IntraMeshAdjacencyMap {
     std::uint32_t ew_size{};         // East-West size (columns)
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -19,7 +19,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
@@ -143,4 +143,4 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
 }
 
 }  // namespace physical_discovery
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

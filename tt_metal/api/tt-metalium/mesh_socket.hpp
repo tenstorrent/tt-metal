@@ -84,7 +84,7 @@ public:
     // Access the socket endpoint type (SENDER or RECEIVER).
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
 
-    tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
+    tt::tt_metal::experimental::fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
 
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
@@ -108,7 +108,7 @@ private:
     SocketEndpoint socket_endpoint_type_;
     // TODO: replace with enchantum::array
     std::
-        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
+        array<std::unordered_map<MeshCoordinate, tt::tt_metal::experimental::fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
             fabric_node_id_map_;
 };
 

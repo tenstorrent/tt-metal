@@ -27,8 +27,8 @@ void kernel_main() {
     noc_semaphore_inc(worker_config_sem_noc_addr, 1);
 
     size_t rt_args_idx = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 

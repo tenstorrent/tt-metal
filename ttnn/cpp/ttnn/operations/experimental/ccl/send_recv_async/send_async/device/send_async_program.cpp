@@ -32,8 +32,8 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     std::vector<CoreCoord> sender_core_coords;
     std::vector<CoreCoord> receiver_core_coords;
-    std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
-    std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> sender_fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> receiver_fabric_node_ids;
     std::vector<size_t> connection_indices;
 
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
@@ -55,7 +55,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
         auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            tt::tt_metal::experimental::fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -81,7 +81,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto fabric_max_payload_size = tt::round_down(
         std::min(
-            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+            tt::tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     CreateCircularBuffer(program, sender_core_range_set, cb_src0_config);
 
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto packet_header_cb_index = tt::CBIndex::c_1;
 
@@ -209,10 +209,10 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
-        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+        auto link_indices = tt::tt_metal::experimental::fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,

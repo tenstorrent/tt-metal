@@ -6,7 +6,7 @@
 
 #include "risc_attribs.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 template <typename T, typename Parameter>
 class NamedType {
@@ -24,4 +24,4 @@ private:
     T value_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -21,7 +21,7 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
 
 inline void setup_connection_and_headers(
-    tt::tt_fabric::WorkerToFabricEdmSender& connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint64_t noc_dest_addr,
     uint32_t packet_payload_size_bytes) {
@@ -36,7 +36,7 @@ inline void send_packet(
     uint32_t source_l1_buffer_address,
     uint32_t packet_payload_size_bytes,
     uint32_t seed,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection) {
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
     // fill packet data for sanity testing
     tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
@@ -70,10 +70,10 @@ void set_mcast_header(
         (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
-inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
+inline void teardown_connection(tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     size_t rt_args_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -88,13 +88,13 @@ void kernel_main() {
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
 
-    tt::tt_fabric::WorkerToFabricEdmSender fwd_fabric_connection;
-    tt::tt_fabric::WorkerToFabricEdmSender bwd_fabric_connection;
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fwd_fabric_connection;
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender bwd_fabric_connection;
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
 
     fwd_fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));

@@ -72,7 +72,7 @@ void kernel_main() {
             // unicast barrier semaphore
             uint64_t barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-            pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            pkt_hdr_barrier_sem_inc->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                 barrier_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
             // Write the unicast packet
@@ -115,7 +115,7 @@ void kernel_main() {
 
                 uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
 
-                pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
+                pkt_hdr->to_noc_unicast_write(tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
                 if (direction) {
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
@@ -142,7 +142,7 @@ void kernel_main() {
         // unicast output ready semaphore
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
         // Write the unicast packet
         if (direction) {

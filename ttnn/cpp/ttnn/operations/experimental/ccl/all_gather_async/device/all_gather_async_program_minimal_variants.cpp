@@ -94,8 +94,8 @@ using namespace ccl;
 
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type,
+    const tt::tt_metal::experimental::fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
@@ -109,11 +109,11 @@ void fabric_mux_connection_ct_args(
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
-    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type,
     const CoreCoord& mux_virtual_core,
     const uint32_t worker_id,
     const CoreCoord& worker_logical_core,
-    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::experimental::fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args) {
@@ -378,7 +378,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     // scatter-write currently only supports 2 distinct noc addresses
@@ -487,8 +487,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
-    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    size_t buffer_size_bytes_full_size_channel = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto mux_kernel_config = tt::tt_metal::experimental::fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -557,7 +557,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     };
     fabric_mux_connection_ct_args(
         num_workers_per_direction,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         sender_writer_compile_args);
 
@@ -712,7 +712,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 fabric_mux_connection_rt_args(
                     mux_connection_valid(dir),
                     worker == 0,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                    tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_virtual_core,
                     worker,
                     core,
@@ -915,7 +915,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -930,7 +930,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -1101,14 +1101,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         if (forward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
         }
 

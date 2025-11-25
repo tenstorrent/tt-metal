@@ -6,7 +6,7 @@
 
 #include "hostdevcommon/fabric_common.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Device-side (HW) inline implementations for direction_table_t
 // Host-side functionality is implemented in tt_metal/fabric/compressed_direction_table.cpp
@@ -50,4 +50,4 @@ inline std::uint8_t direction_table_t<ArraySize>::get_original_direction(std::ui
     return decompress_value(get_direction(index));
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

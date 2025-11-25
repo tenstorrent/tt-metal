@@ -4,7 +4,7 @@
 
 #include "channel_to_pool_mapping.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 ChannelToPoolMapping::ChannelToPoolMapping(const FabricRouterRecipe& recipe) :
     sender_channel_to_pool_index_(recipe.get_sender_channel_to_pool_index()),
@@ -42,4 +42,4 @@ void ChannelToPoolMapping::emit_ct_args(std::vector<uint32_t>& ct_args) const {
     ct_args.insert(ct_args.end(), receiver_channel_to_pool_type_.begin(), receiver_channel_to_pool_type_.end());
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

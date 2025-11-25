@@ -67,16 +67,16 @@ uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
 }
 
 void validate_fabric_config_for_sockets(
-    tt_fabric::FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config, tt_metal::experimental::fabric::FabricNodeId sender_node, tt_metal::experimental::fabric::FabricNodeId recv_node) {
     if (sender_node != recv_node) {
-        TT_FATAL(fabric_config != tt_fabric::FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+        TT_FATAL(fabric_config != tt_metal::experimental::fabric::FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
     }
 
-    static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
-        tt_fabric::FabricConfig::FABRIC_1D,
-        tt_fabric::FabricConfig::FABRIC_1D_RING,
-        tt_fabric::FabricConfig::FABRIC_2D,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
+    static const std::unordered_set<tt_metal::experimental::fabric::FabricConfig> supported_fabrics = {
+        tt_metal::experimental::fabric::FabricConfig::FABRIC_1D,
+        tt_metal::experimental::fabric::FabricConfig::FABRIC_1D_RING,
+        tt_metal::experimental::fabric::FabricConfig::FABRIC_2D,
+        tt_metal::experimental::fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
                                            // physical device
     };
 
@@ -86,16 +86,16 @@ void validate_fabric_config_for_sockets(
 
 // This does not return a FabricNodeId because for 1D fabric, we return a distance between the sender and receiver
 // instead of a chip id (FabricNodeId also stores its chip_id as uint32_t)
-std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
-    tt_fabric::FabricNodeId sender_node_id,
-    tt_fabric::FabricNodeId recv_node_id,
-    tt_fabric::FabricConfig fabric_config,
+std::pair<tt_metal::experimental::fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
+    tt_metal::experimental::fabric::FabricNodeId sender_node_id,
+    tt_metal::experimental::fabric::FabricNodeId recv_node_id,
+    tt_metal::experimental::fabric::FabricConfig fabric_config,
     SocketEndpoint socket_endpoint) {
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     validate_fabric_config_for_sockets(fabric_config, sender_node_id, recv_node_id);
 
-    if (fabric_config == tt_fabric::FabricConfig::FABRIC_1D or fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
+    if (fabric_config == tt_metal::experimental::fabric::FabricConfig::FABRIC_1D or fabric_config == tt_metal::experimental::fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -279,7 +279,7 @@ void write_socket_configs(
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
     const SocketSenderSize sender_size;
-    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_metal::experimental::fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
@@ -319,8 +319,8 @@ void write_socket_configs(
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        tt_fabric::FabricNodeId(
-                            tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
+                        tt_metal::experimental::fabric::FabricNodeId(
+                            tt_metal::experimental::fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                         fabric_config,
                         SocketEndpoint::SENDER);
                     auto recv_virtual_core = mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
@@ -347,8 +347,8 @@ void write_socket_configs(
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                    tt_fabric::FabricNodeId(
-                        tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
+                    tt_metal::experimental::fabric::FabricNodeId(
+                        tt_metal::experimental::fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                     mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
@@ -467,21 +467,21 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     return remote_desc;
 }
 
-std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
+std::array<std::unordered_map<MeshCoordinate, tt::tt_metal::experimental::fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
     const SocketPeerDescriptor& sender_descriptor,
     const SocketPeerDescriptor& receiver_descriptor) {
-    std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> fabric_node_id_map;
+    std::array<std::unordered_map<MeshCoordinate, tt::tt_metal::experimental::fabric::FabricNodeId>, 2> fabric_node_id_map;
     for (uint32_t i = 0; i < config.socket_connection_config.size(); ++i) {
         const auto& connection = config.socket_connection_config[i];
         fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::SENDER)].emplace(
             connection.sender_core.device_coord,
-            tt::tt_fabric::FabricNodeId(
-                tt_fabric::MeshId{sender_descriptor.mesh_ids[i]}, sender_descriptor.chip_ids[i]));
+            tt::tt_metal::experimental::fabric::FabricNodeId(
+                tt_metal::experimental::fabric::MeshId{sender_descriptor.mesh_ids[i]}, sender_descriptor.chip_ids[i]));
         fabric_node_id_map[static_cast<std::underlying_type_t<SocketEndpoint>>(SocketEndpoint::RECEIVER)].emplace(
             connection.receiver_core.device_coord,
-            tt::tt_fabric::FabricNodeId(
-                tt_fabric::MeshId{receiver_descriptor.mesh_ids[i]}, receiver_descriptor.chip_ids[i]));
+            tt::tt_metal::experimental::fabric::FabricNodeId(
+                tt_metal::experimental::fabric::MeshId{receiver_descriptor.mesh_ids[i]}, receiver_descriptor.chip_ids[i]));
     }
     return fabric_node_id_map;
 }

@@ -4,10 +4,10 @@
 
 #ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_metal::experimental::fabric::linear::experimental;
 #elif defined(API_TYPE_Mesh)
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
-using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_metal::experimental::fabric::mesh::experimental;
 #else
 #error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
 #endif
@@ -52,7 +52,7 @@ void kernel_main() {
 #endif
 
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
-    tt::tt_fabric::RoutingPlaneConnectionManager connections;
+    tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager connections;
     open_connections(connections, num_send_dir, rt_arg_idx);
 
     zero_l1_buf(test_results, test_results_size_bytes);
@@ -74,13 +74,13 @@ void kernel_main() {
                         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
                     } else {
                         fabric_multicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true},
                             hop_info.mcast.start_distance,
                             hop_info.mcast.range);
@@ -94,7 +94,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
@@ -105,7 +105,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
@@ -125,13 +125,13 @@ void kernel_main() {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
                     } else {
                         fabric_unicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true},
                             hop_info.ucast.num_hops);
                     }
@@ -144,7 +144,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
@@ -155,7 +155,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
@@ -176,14 +176,14 @@ void kernel_main() {
                         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
                     } else {
                         fabric_multicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
                             ranges,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
                     }
                 } break;
@@ -195,7 +195,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
@@ -207,7 +207,7 @@ void kernel_main() {
                             ranges,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,
@@ -225,13 +225,13 @@ void kernel_main() {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, false));
                     } else {
                         fabric_unicast_noc_unicast_atomic_inc(
                             connections,
                             route_id,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1, true});
                     }
                 } break;
@@ -243,7 +243,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader(
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 0,
@@ -254,7 +254,7 @@ void kernel_main() {
                             route_id,
                             source_l1_buffer_address,
                             packet_payload_size_bytes,
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address),
                                 get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
                                 1,

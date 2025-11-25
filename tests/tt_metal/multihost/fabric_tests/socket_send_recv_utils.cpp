@@ -18,7 +18,7 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests::multihost {
 
 namespace multihost_utils {
@@ -56,8 +56,8 @@ bool test_socket_send_recv(
 
     bool is_data_match = true;
 
-    auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto fabric_max_packet_size = tt_metal::experimental::fabric::get_tt_fabric_max_payload_size_bytes();
+    auto packet_header_size_bytes = tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
 
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto sender_rank = socket.get_config().sender_rank;
@@ -162,7 +162,7 @@ bool test_socket_send_recv(
                 CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
 
                 std::vector<uint32_t> sender_rtas;
-                tt_fabric::append_fabric_connection_rt_args(
+                tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
@@ -212,7 +212,7 @@ bool test_socket_send_recv(
                             static_cast<uint32_t>(recv_data_buffer->address())}});
 
                 std::vector<uint32_t> recv_rtas;
-                tt_fabric::append_fabric_connection_rt_args(
+                tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                     recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
                 recv_mesh_workload.add_program(
@@ -539,4 +539,4 @@ void test_multi_mesh_multi_conn_bidirectional(
 }  // namespace multihost_utils
 
 }  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

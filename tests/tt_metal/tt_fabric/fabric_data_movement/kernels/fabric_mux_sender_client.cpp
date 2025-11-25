@@ -67,7 +67,7 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    auto mux_connection_handle = tt::tt_metal::experimental::fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_id,
@@ -97,11 +97,11 @@ void kernel_main() {
     uint64_t base_noc_dest_address = get_noc_addr_helper(receiver_noc_xy_encoding, base_l1_target_address);
 
     // need to wait for fabric mux to be ready to accept connections
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
+    tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     for (uint32_t iter = 0; iter < num_open_close_iters; iter++) {
-        tt::tt_fabric::fabric_client_connect(mux_connection_handle);
+        tt::tt_metal::experimental::fabric::fabric_client_connect(mux_connection_handle);
 
         uint64_t noc_dest_addr = base_noc_dest_address;
         uint32_t seed = time_seed ^ sender_id ^ (iter + 1);
@@ -122,7 +122,7 @@ void kernel_main() {
             noc_semaphore_inc(local_credit_handshake_noc_address, -1);
             noc_async_atomic_barrier();
 
-            tt::tt_fabric::fabric_async_write(
+            tt::tt_metal::experimental::fabric::fabric_async_write(
                 mux_connection_handle, packet_header, payload_buffer_address, packet_payload_size_bytes);
 
             // update the slot id for next packet
@@ -135,14 +135,14 @@ void kernel_main() {
         while (credit_handshake_ptr[0] != num_credits) {
             invalidate_l1_cache();
         }
-        tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
+        tt::tt_metal::experimental::fabric::fabric_client_disconnect(mux_connection_handle);
     }
 
     if constexpr (terminate_from_kernel) {
         if constexpr (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            tt::tt_metal::experimental::fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             uint64_t dest_addr = get_noc_addr_helper(termination_master_noc_xy_encoding, termination_sync_address);
             noc_semaphore_inc(dest_addr, 1);

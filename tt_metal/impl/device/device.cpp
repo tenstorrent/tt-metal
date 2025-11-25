@@ -345,7 +345,7 @@ void Device::init_command_queue_device() {
 }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_metal::experimental::fabric::create_and_compile_fabric_program(this);
     return fabric_program_ != nullptr;
 }
 
@@ -354,7 +354,7 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    tt::tt_metal::experimental::fabric::configure_fabric_cores(this);
 
     fabric_program_->impl().finalize_offsets(this);
 

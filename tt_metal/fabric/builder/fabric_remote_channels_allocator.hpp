@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Remote channels allocator for tracking channel information about the remote ethernet core.
@@ -97,4 +97,4 @@ inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
     os << "}";
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

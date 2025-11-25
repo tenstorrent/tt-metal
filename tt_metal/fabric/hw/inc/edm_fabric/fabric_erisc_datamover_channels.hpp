@@ -26,7 +26,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/outbound_channel.hpp"
 #include "hostdevcommon/fabric_common.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 /* Ethernet channel structure is as follows (for both sender and receiver):
               &header->  |----------------|\  <-  channel_base_address
                          |    header      | \
@@ -338,10 +338,10 @@ struct ChannelTuple {
 
 // Specific aliases
 template <typename HEADER_TYPE, size_t... BufferSizes>
-using EthChannelBufferTuple = ChannelTuple<tt::tt_fabric::EthChannelBuffer, HEADER_TYPE, BufferSizes...>;
+using EthChannelBufferTuple = ChannelTuple<tt::tt_metal::experimental::fabric::EthChannelBuffer, HEADER_TYPE, BufferSizes...>;
 
 template <typename HEADER_TYPE, size_t... BufferSizes>
-using SenderEthChannelTuple = ChannelTuple<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, BufferSizes...>;
+using SenderEthChannelTuple = ChannelTuple<tt::tt_metal::experimental::fabric::SenderEthChannel, HEADER_TYPE, BufferSizes...>;
 
 template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, auto& ChannelBuffers>
 struct StaticSizedChannelBuffersHelper {
@@ -650,7 +650,7 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+        *this->connection_live_semaphore = tt::tt_metal::experimental::fabric::connection_interface::unused_connection_value;
 
         this->copy_read_counter_to_worker_location_info();
 
@@ -669,11 +669,11 @@ struct EdmChannelWorkerInterface {
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+        return *connection_live_semaphore == tt::tt_metal::experimental::fabric::connection_interface::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
         invalidate_l1_cache();
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::open_connection_value;
+        return *connection_live_semaphore == tt::tt_metal::experimental::fabric::connection_interface::open_connection_value;
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
@@ -808,7 +808,7 @@ struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
 template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
     // tuple of StaticSizedSenderChannelWorkerInterface<BufferSizes>...
-    std::tuple<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
+    std::tuple<tt::tt_metal::experimental::fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
         channel_worker_interfaces;
 
     template <size_t I>
@@ -825,4 +825,4 @@ struct EdmChannelWorkerInterfaces {
     }
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

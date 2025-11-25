@@ -13,7 +13,7 @@
 #include "erisc_datamover_builder_helper.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 std::vector<CoreCoord> reorder_connected_sockets(
     const tt::tt_metal::IDevice* local_device, const std::vector<CoreCoord>& connected_sockets) {
@@ -52,16 +52,16 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
-    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
+    const tt::tt_metal::experimental::fabric::FabricRouterBufferConfig& edm_buffer_config) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
     }
 
     static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader);
+    const auto config = tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
@@ -122,46 +122,46 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
         // set edm types based on topology and device ids.
         [[maybe_unused]] bool dateline = false;
-        auto src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-        auto dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+        auto src_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Default;
+        auto dest_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Default;
         if (topology == Topology::Ring) {
             if (src_device->id() == device_sequence.back()->id() &&
                 dest_device->id() == device_sequence.front()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
+                src_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Dateline;
+                dest_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::Dateline;
                 dateline = true;
             } else if (
                 src_device->id() == device_sequence.front()->id() &&
                 dest_device->id() != device_sequence.back()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+                src_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::DatelineUpstream;
+                dest_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
             } else if (
                 src_device->id() != device_sequence.front()->id() &&
                 dest_device->id() == device_sequence.back()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
+                src_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+                dest_device_edm_type = tt::tt_metal::experimental::fabric::FabricEriscDatamoverType::DatelineUpstream;
             }
         }
 
-        auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+        auto edm_axis = tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis::Short;
         // change to long axis variantion, and using more buffer slots.
         if (device_sequence.size() >=
-            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
-            edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
+            tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+            edm_axis = tt::tt_metal::experimental::fabric::FabricEriscDatamoverAxis::Long;
         }
         // if ring topology set extra buffer on dateline edms.
-        auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        auto src_edm_options = tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions{
             .edm_type = src_device_edm_type,
             .edm_axis = edm_axis,
             .edm_buffer_config = edm_buffer_config,
         };
-        auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        auto dest_edm_options = tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions{
             .edm_type = dest_device_edm_type,
             .edm_axis = edm_axis,
             .edm_buffer_config = edm_buffer_config,
         };
         const auto src_curr_edm_config =
-            tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
+            tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
         log_debug(
             tt::LogFabric,
             "FabricEriscDatamoverConfig for src_device {}: buffer_size={}, topology={}",
@@ -169,7 +169,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             edm_buffer_size,
             (int)topology);
         const auto dest_curr_edm_config =
-            tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
+            tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
         log_debug(
             tt::LogFabric,
             "FabricEriscDatamoverConfig for dest_device {}: buffer_size={}, topology={}",
@@ -192,7 +192,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device->id(),
                 dateline);
             edm_builders_forward_direction[src_device->id()].push_back(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::build(
                     src_device,
                     *src_program,
                     local_link_cores[l],
@@ -208,7 +208,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 dest_device->id(),
                 edm_builders_backward_direction[dest_device->id()].size());
             edm_builders_backward_direction[dest_device->id()].push_back(
-                tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::build(
                     dest_device,
                     *dest_program,
                     remote_link_cores[l],
@@ -220,7 +220,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         }
     };
 
-    tt::tt_fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
     // Construct the builders
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
         auto src_device = device_sequence[hop];
@@ -284,12 +284,12 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
 
-                tt::tt_fabric::core_placement::CorePlacementContext cctx{
+                tt::tt_metal::experimental::fabric::core_placement::CorePlacementContext cctx{
                     .topology = topology,
                     .is_galaxy = is_galaxy,
                     .num_links = num_links,
                 };
-                tt::tt_fabric::core_placement::apply_core_placement_optimizations(cctx, edm_fwd, edm_bwd, l);
+                tt::tt_metal::experimental::fabric::core_placement::apply_core_placement_optimizations(cctx, edm_fwd, edm_bwd, l);
             }
         }
 
@@ -318,9 +318,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     Topology topology) :
     device_sequence({local_device}), programs({program}) {
     static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader);
+    const auto config = tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 
     log_trace(tt::LogFabric, "device id={}", local_device->id());
     log_trace(tt::LogFabric, "EDM Fabric Factory ctor on device: {}", local_device->id());
@@ -338,7 +338,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
     static_assert(EdmLineFabricOpInterface::Direction::FORWARD < 2);
     static_assert(EdmLineFabricOpInterface::Direction::BACKWARD < 2);
-    std::array<std::unordered_map<size_t, std::vector<tt::tt_fabric::FabricEriscDatamoverBuilder>>*, 2>
+    std::array<std::unordered_map<size_t, std::vector<tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder>>*, 2>
         edm_builders_maps{};
     edm_builders_maps[EdmLineFabricOpInterface::Direction::FORWARD] = &this->edm_builders_forward_direction;
     edm_builders_maps[EdmLineFabricOpInterface::Direction::BACKWARD] = &this->edm_builders_backward_direction;
@@ -379,7 +379,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 (void*)program,
                 core.x,
                 core.y);
-            edm_builders[local_device->id()].push_back(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+            edm_builders[local_device->id()].push_back(tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::build(
                 local_device,
                 *program,
                 core,
@@ -463,7 +463,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
                             risc_id);
-                        tt::tt_fabric::generate_edm_kernel(
+                        tt::tt_metal::experimental::fabric::generate_edm_kernel(
                             *program,
                             device,
                             edm_builder,
@@ -484,14 +484,14 @@ void EdmLineFabricOpInterface::build_kernels() const {
     }
 }
 
-std::vector<tt::tt_fabric::edm_termination_info_t>
+std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t>
 EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_metal::IDevice* device) const {
     auto generate_termination_info =
-        [](const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) -> tt::tt_fabric::edm_termination_info_t {
-        return tt::tt_fabric::edm_termination_info_t{
+        [](const tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder) -> tt::tt_metal::experimental::fabric::edm_termination_info_t {
+        return tt::tt_metal::experimental::fabric::edm_termination_info_t{
             0, edm_builder.get_noc_x(), edm_builder.get_noc_y(), edm_builder.config.termination_signal_address};
     };
-    std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;
+    std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(this->num_links * 2);
     if (edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end()) {
         std::ranges::transform(
@@ -508,16 +508,16 @@ EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_me
     return edm_termination_infos;
 }
 
-std::vector<tt::tt_fabric::edm_termination_info_t>
+std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t>
 EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest() const {
     static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    static const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+        tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader);
+    static const auto config = tt::tt_metal::experimental::fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     TT_ASSERT(!device_sequence.empty());
     const size_t num_hops = device_sequence.size() - 1;
     TT_ASSERT(num_hops > 0);
-    std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;
+    std::vector<tt::tt_metal::experimental::fabric::edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(num_hops * 2 * this->num_links);
     for (int i = num_hops - 1; i >= 0; i--) {
         log_trace(tt::LogFabric, "Generating termination info for hop {}", i);
@@ -583,4 +583,4 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

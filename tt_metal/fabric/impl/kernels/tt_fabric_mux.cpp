@@ -43,13 +43,13 @@ constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 18;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
@@ -59,8 +59,8 @@ void wait_for_static_connection_to_ready(
 
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
-    tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_metal::experimental::fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
+    tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -69,21 +69,21 @@ void setup_channel(
     size_t& connection_handshake_address,
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
-    new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
+    new (channel_ptr) tt::tt_metal::experimental::fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
         channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE));
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
     auto connection_worker_info_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
-    connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
+        reinterpret_cast<volatile tt::tt_metal::experimental::fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
+    connection_info_address += sizeof(tt::tt_metal::experimental::fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+        tt::tt_metal::experimental::fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
@@ -92,9 +92,9 @@ void setup_channel(
 
 template <uint8_t NUM_BUFFERS>
 void forward_data(
-    tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
-    tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
+    tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_metal::experimental::fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
 
@@ -128,7 +128,7 @@ void forward_data(
         }
     }
 
-    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+    tt::tt_metal::experimental::fabric::check_worker_connections<tt::tt_metal::experimental::fabric::USE_DYNAMIC_CREDIT_ADDR>(
         worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 
@@ -137,7 +137,7 @@ void kernel_main() {
     size_t rt_args_idx = 0;
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::FabricMuxStatus::STARTED;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -147,20 +147,20 @@ void kernel_main() {
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
-    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
+    auto fabric_connection = tt::tt_metal::experimental::fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
+    std::array<tt::tt_metal::experimental::fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
         NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
+    std::array<tt::tt_metal::experimental::fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
     std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        tt::tt_metal::experimental::fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
         NUM_HEADER_ONLY_CHANNELS>
         header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
@@ -204,11 +204,11 @@ void kernel_main() {
     }
 
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+        reinterpret_cast<volatile tt::tt_metal::experimental::fabric::TerminationSignal*>(termination_signal_address);
 
     // wait for fabric router to be ready before setting up the connection
     if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
             fabric_connection.edm_noc_x,
             fabric_connection.edm_noc_y,
             fabric_router_status_address,
@@ -218,7 +218,7 @@ void kernel_main() {
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;
@@ -272,6 +272,6 @@ void kernel_main() {
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
 }

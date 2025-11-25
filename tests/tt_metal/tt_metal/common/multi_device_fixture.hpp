@@ -105,7 +105,7 @@ protected:
         uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
         uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
-        tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
+        tt_metal::experimental::fabric::FabricConfig fabric_config = tt_metal::experimental::fabric::FabricConfig::DISABLED;
     };
 
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -142,8 +142,8 @@ protected:
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
-        if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
-            tt_fabric::SetFabricConfig(config_.fabric_config);
+        if (config_.fabric_config != tt_metal::experimental::fabric::FabricConfig::DISABLED) {
+            tt_metal::experimental::fabric::SetFabricConfig(config_.fabric_config);
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
@@ -161,8 +161,8 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
-        if (config_.fabric_config != tt_fabric::FabricConfig::DISABLED) {
-            tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+        if (config_.fabric_config != tt_metal::experimental::fabric::FabricConfig::DISABLED) {
+            tt_metal::experimental::fabric::SetFabricConfig(tt_metal::experimental::fabric::FabricConfig::DISABLED);
         }
     }
 
@@ -206,20 +206,20 @@ class MeshDevice2x4Fabric1DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric1DFixture() :
         MeshDeviceFixtureBase(
-            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_1D}) {}
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_metal::experimental::fabric::FabricConfig::FABRIC_1D}) {}
 };
 
 class GenericMeshDeviceFabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMeshDeviceFabric2DFixture() :
-        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .fabric_config = tt_metal::experimental::fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 class MeshDevice2x4Fabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric2DFixture() :
         MeshDeviceFixtureBase(
-            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_metal::experimental::fabric::FabricConfig::FABRIC_2D}) {}
 };
 
 }  // namespace tt::tt_metal

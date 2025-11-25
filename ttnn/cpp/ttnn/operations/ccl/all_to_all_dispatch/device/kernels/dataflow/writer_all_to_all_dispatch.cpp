@@ -73,7 +73,7 @@ void kernel_main() {
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
 
     constexpr uint32_t num_links = get_compile_time_arg_val(21);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
+    constexpr tt::tt_metal::experimental::fabric::Topology topology = (tt::tt_metal::experimental::fabric::Topology)get_compile_time_arg_val(22);
 
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
@@ -114,7 +114,7 @@ void kernel_main() {
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
 
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, num_directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);

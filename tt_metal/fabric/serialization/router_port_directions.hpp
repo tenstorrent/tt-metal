@@ -12,7 +12,7 @@
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <tt-metalium/routing_table_generator.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Structure to hold router port directions data for serialization
 struct RouterPortDirectionsData {
@@ -31,4 +31,4 @@ std::vector<uint8_t> serialize_router_port_directions_to_bytes(
     const RouterPortDirectionsData& router_port_directions_data);
 RouterPortDirectionsData deserialize_router_port_directions_from_bytes(const std::vector<uint8_t>& data);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

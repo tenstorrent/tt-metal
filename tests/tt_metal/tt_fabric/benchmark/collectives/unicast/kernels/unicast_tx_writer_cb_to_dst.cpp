@@ -13,7 +13,7 @@
 #include "accessor/tensor_accessor_args.h"
 
 using namespace tt;
-using namespace tt::tt_fabric;
+using namespace tt::tt_metal::experimental::fabric;
 
 //
 // Writer (fabric sender) kernel — sends pages from CB c_0 to the dst device.

@@ -58,7 +58,7 @@ void py_bind_reduce_scatter(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_metal::experimental::fabric::Topology> topology) {
                 return self(
                     input_tensor,
                     dim,

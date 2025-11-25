@@ -38,54 +38,54 @@ const std::string default_built_tests_dump_file = "built_tests.yaml";
 // CI will always check the following folder for artifacts to upload
 const std::string ci_artifacts_dir = "generated/test_reports";
 
-using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
-using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
-using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
-using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
-using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
-using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
-using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
-using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
-using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
-using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
-using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
-using CommonMemoryMap = tt::tt_fabric::fabric_tests::CommonMemoryMap;
-using ProgressMonitorConfig = tt::tt_fabric::fabric_tests::ProgressMonitorConfig;
-using TestProgressMonitor = tt::tt_fabric::fabric_tests::TestProgressMonitor;
-using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
-using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
-using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
+using TestFixture = tt::tt_metal::experimental::fabric::fabric_tests::TestFixture;
+using TestDevice = tt::tt_metal::experimental::fabric::fabric_tests::TestDevice;
+using TestConfig = tt::tt_metal::experimental::fabric::fabric_tests::TestConfig;
+using TestFabricSetup = tt::tt_metal::experimental::fabric::fabric_tests::TestFabricSetup;
+using TrafficParameters = tt::tt_metal::experimental::fabric::fabric_tests::TrafficParameters;
+using TestTrafficConfig = tt::tt_metal::experimental::fabric::fabric_tests::TestTrafficConfig;
+using TestTrafficSenderConfig = tt::tt_metal::experimental::fabric::fabric_tests::TestTrafficSenderConfig;
+using TestTrafficReceiverConfig = tt::tt_metal::experimental::fabric::fabric_tests::TestTrafficReceiverConfig;
+using SenderCreditInfo = tt::tt_metal::experimental::fabric::fabric_tests::SenderCreditInfo;
+using ReceiverCreditInfo = tt::tt_metal::experimental::fabric::fabric_tests::ReceiverCreditInfo;
+using TestWorkerType = tt::tt_metal::experimental::fabric::fabric_tests::TestWorkerType;
+using CommonMemoryMap = tt::tt_metal::experimental::fabric::fabric_tests::CommonMemoryMap;
+using ProgressMonitorConfig = tt::tt_metal::experimental::fabric::fabric_tests::ProgressMonitorConfig;
+using TestProgressMonitor = tt::tt_metal::experimental::fabric::fabric_tests::TestProgressMonitor;
+using SenderMemoryMap = tt::tt_metal::experimental::fabric::fabric_tests::SenderMemoryMap;
+using IDeviceInfoProvider = tt::tt_metal::experimental::fabric::fabric_tests::IDeviceInfoProvider;
+using TrafficPatternConfig = tt::tt_metal::experimental::fabric::fabric_tests::TrafficPatternConfig;
 
-using ChipSendType = tt::tt_fabric::ChipSendType;
-using NocSendType = tt::tt_fabric::NocSendType;
-using FabricNodeId = tt::tt_fabric::FabricNodeId;
-using MeshId = tt::tt_fabric::MeshId;
-using RoutingDirection = tt::tt_fabric::RoutingDirection;
+using ChipSendType = tt::tt_metal::experimental::fabric::ChipSendType;
+using NocSendType = tt::tt_metal::experimental::fabric::NocSendType;
+using FabricNodeId = tt::tt_metal::experimental::fabric::FabricNodeId;
+using MeshId = tt::tt_metal::experimental::fabric::MeshId;
+using RoutingDirection = tt::tt_metal::experimental::fabric::RoutingDirection;
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
-using TestConfigBuilder = tt::tt_fabric::fabric_tests::TestConfigBuilder;
-using YamlConfigParser = tt::tt_fabric::fabric_tests::YamlConfigParser;
-using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
-using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
-using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
+using TestConfigBuilder = tt::tt_metal::experimental::fabric::fabric_tests::TestConfigBuilder;
+using YamlConfigParser = tt::tt_metal::experimental::fabric::fabric_tests::YamlConfigParser;
+using CmdlineParser = tt::tt_metal::experimental::fabric::fabric_tests::CmdlineParser;
+using YamlTestConfigSerializer = tt::tt_metal::experimental::fabric::fabric_tests::YamlTestConfigSerializer;
+using ParsedTestConfig = tt::tt_metal::experimental::fabric::fabric_tests::ParsedTestConfig;
 
-using Topology = tt::tt_fabric::Topology;
-using FabricConfig = tt::tt_fabric::FabricConfig;
-using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
+using Topology = tt::tt_metal::experimental::fabric::Topology;
+using FabricConfig = tt::tt_metal::experimental::fabric::FabricConfig;
+using FabricTensixConfig = tt::tt_metal::experimental::fabric::FabricTensixConfig;
 
-using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
-using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
-using GoldenCsvEntry = tt::tt_fabric::fabric_tests::GoldenCsvEntry;
-using ComparisonResult = tt::tt_fabric::fabric_tests::ComparisonResult;
-using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyzer;
+using BandwidthResult = tt::tt_metal::experimental::fabric::fabric_tests::BandwidthResult;
+using BandwidthResultSummary = tt::tt_metal::experimental::fabric::fabric_tests::BandwidthResultSummary;
+using GoldenCsvEntry = tt::tt_metal::experimental::fabric::fabric_tests::GoldenCsvEntry;
+using ComparisonResult = tt::tt_metal::experimental::fabric::fabric_tests::ComparisonResult;
+using PostComparisonAnalyzer = tt::tt_metal::experimental::fabric::fabric_tests::PostComparisonAnalyzer;
 
 // Helper functions for parsing traffic pattern parameters
-using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
-using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
-using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
-using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
-using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
+using tt::tt_metal::experimental::fabric::fabric_tests::fetch_first_traffic_pattern;
+using tt::tt_metal::experimental::fabric::fabric_tests::fetch_pattern_ftype;
+using tt::tt_metal::experimental::fabric::fabric_tests::fetch_pattern_ntype;
+using tt::tt_metal::experimental::fabric::fabric_tests::fetch_pattern_num_packets;
+using tt::tt_metal::experimental::fabric::fabric_tests::fetch_pattern_packet_size;
 
 // Bandwidth Summary Statistics
 // If you want to add new statistics, populate this enum with their names
@@ -114,7 +114,7 @@ class TestContext {
 public:
     void init(
         std::shared_ptr<TestFixture> fixture,
-        const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
+        const tt::tt_metal::experimental::fabric::fabric_tests::AllocatorPolicies& policies,
         bool use_dynamic_policies = true) {
         fixture_ = std::move(fixture);
         allocation_policies_ = policies;
@@ -126,12 +126,12 @@ public:
         // Create dynamic policy manager if needed
         if (use_dynamic_policies_) {
             policy_manager_ =
-                std::make_unique<tt::tt_fabric::fabric_tests::DynamicPolicyManager>(*this->fixture_, *this->fixture_);
+                std::make_unique<tt::tt_metal::experimental::fabric::fabric_tests::DynamicPolicyManager>(*this->fixture_, *this->fixture_);
         }
 
         // Create allocator with memory maps
         // Note: Memory maps will be updated in prepare_for_test() if using dynamic policies
-        this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+        this->allocator_ = std::make_unique<tt::tt_metal::experimental::fabric::fabric_tests::GlobalAllocator>(
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
     }
 
@@ -150,7 +150,7 @@ public:
             update_memory_maps(new_policy.value());
 
             allocator_.reset();
-            allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
+            allocator_ = std::make_unique<tt::tt_metal::experimental::fabric::fabric_tests::GlobalAllocator>(
                 *fixture_, *fixture_, new_policy.value(), sender_memory_map_, receiver_memory_map_);
         }
 
@@ -770,16 +770,16 @@ private:
         update_memory_maps(allocation_policies_);
     }
 
-    void update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
+    void update_memory_maps(const tt::tt_metal::experimental::fabric::fabric_tests::AllocatorPolicies& policies) {
         // Get uniform L1 memory layout (same across all devices)
         auto l1_unreserved_base = fixture_->get_l1_unreserved_base();
         auto l1_unreserved_size = fixture_->get_l1_unreserved_size();
         auto l1_alignment = fixture_->get_l1_alignment();
 
         sender_memory_map_ =
-            tt::tt_fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
+            tt::tt_metal::experimental::fabric::fabric_tests::SenderMemoryMap(l1_unreserved_base, l1_unreserved_size, l1_alignment);
 
-        receiver_memory_map_ = tt::tt_fabric::fabric_tests::ReceiverMemoryMap(
+        receiver_memory_map_ = tt::tt_metal::experimental::fabric::fabric_tests::ReceiverMemoryMap(
             l1_unreserved_base,
             l1_unreserved_size,
             l1_alignment,
@@ -1678,14 +1678,14 @@ private:
 
     std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
-    std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
-    std::unique_ptr<tt::tt_fabric::fabric_tests::DynamicPolicyManager>
+    std::unique_ptr<tt::tt_metal::experimental::fabric::fabric_tests::GlobalAllocator> allocator_;
+    std::unique_ptr<tt::tt_metal::experimental::fabric::fabric_tests::DynamicPolicyManager>
         policy_manager_;  // Manages dynamic policy computation and caching
 
     // Uniform memory maps shared across all devices
-    tt::tt_fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
-    tt::tt_fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
-    tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies_;
+    tt::tt_metal::experimental::fabric::fabric_tests::SenderMemoryMap sender_memory_map_;
+    tt::tt_metal::experimental::fabric::fabric_tests::ReceiverMemoryMap receiver_memory_map_;
+    tt::tt_metal::experimental::fabric::fabric_tests::AllocatorPolicies allocation_policies_;
 
     // Dynamic allocation policy control
     bool use_dynamic_policies_ = true;  // Whether to compute dynamic policies per test

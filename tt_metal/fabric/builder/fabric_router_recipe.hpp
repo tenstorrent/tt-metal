@@ -9,7 +9,7 @@
 #include <vector>
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Types of channel pools supported by the fabric router.
@@ -110,4 +110,4 @@ private:
     std::vector<size_t> receiver_channel_to_pool_index_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

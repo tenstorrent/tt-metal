@@ -18,7 +18,7 @@
 #include <tt-metalium/fabric_types.hpp>
 
 // Forward declaration
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace proto {
 // Forward declare the enum with its underlying type to avoid including the full protobuf header
@@ -237,4 +237,4 @@ private:
     void add_connection_to_fast_lookups(const ConnectionData& connection, const std::string& type);
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

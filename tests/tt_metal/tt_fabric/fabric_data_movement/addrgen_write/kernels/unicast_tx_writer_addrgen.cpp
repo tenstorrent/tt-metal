@@ -15,8 +15,8 @@
 #include "kernel_common.hpp"
 
 using namespace tt;
-using namespace tt::tt_fabric;
-using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_metal::experimental::fabric;
+using namespace tt::tt_metal::experimental::fabric::mesh::experimental;
 
 //
 // Unified unicast writer (fabric sender) kernel — consolidates 9 variants.
@@ -89,11 +89,11 @@ void kernel_main() {
     // WithState pattern: manually set send type
     if constexpr (api_variant == ApiVariant::WithState) {
         if constexpr (operation_type == OperationType::BasicWrite) {
-            header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+            header->noc_send_type = tt::tt_metal::experimental::fabric::NOC_UNICAST_WRITE;
         } else if constexpr (operation_type == OperationType::Scatter) {
-            header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+            header->noc_send_type = tt::tt_metal::experimental::fabric::NOC_UNICAST_SCATTER_WRITE;
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+            header->noc_send_type = tt::tt_metal::experimental::fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
         }
     }
 
@@ -114,19 +114,19 @@ void kernel_main() {
     // Pre-loop setup for WithState and SetState variants
     if constexpr (api_variant == ApiVariant::WithState) {
         if constexpr (operation_type == OperationType::BasicWrite) {
-            auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
-            header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{initial_noc_addr}, PAGE_SIZE);
+            auto initial_noc_addr = tt::tt_metal::experimental::fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
+            header->to_noc_unicast_write(tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{initial_noc_addr}, PAGE_SIZE);
         } else if constexpr (operation_type == OperationType::Scatter) {
             // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-            auto noc_addr0 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
-            auto noc_addr1 = tt::tt_fabric::addrgen_detail::get_noc_address(scatter_acc, 1, 0);
+            auto noc_addr0 = tt::tt_metal::experimental::fabric::addrgen_detail::get_noc_address(scatter_acc, 0, 0);
+            auto noc_addr1 = tt::tt_metal::experimental::fabric::addrgen_detail::get_noc_address(scatter_acc, 1, 0);
             header->to_noc_unicast_scatter_write(
-                tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
+                tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{{noc_addr0, noc_addr1}, static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE)},
                 SRC_ALIGNED_PAGE_SIZE * 2);
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            auto initial_noc_addr = tt::tt_fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
+            auto initial_noc_addr = tt::tt_metal::experimental::fabric::addrgen_detail::get_noc_address(dst_acc, 0, 0);
             header->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{initial_noc_addr, sem_noc, 1, true}, PAGE_SIZE);
+                tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader{initial_noc_addr, sem_noc, 1, true}, PAGE_SIZE);
         }
     } else if constexpr (api_variant == ApiVariant::SetState) {
         if constexpr (operation_type == OperationType::BasicWrite) {
@@ -281,7 +281,7 @@ void kernel_main() {
             header,
             dst_dev_id,
             dst_mesh_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
+            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
     }
 
     sender.close();

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Encapsulates the channel-to-pool mappings for both sender and receiver channels.
@@ -57,4 +57,4 @@ private:
     std::vector<uint32_t> receiver_channel_to_pool_type_;  // FabricChannelPoolType as uint32_t
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

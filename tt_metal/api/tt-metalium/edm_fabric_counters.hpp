@@ -11,7 +11,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-volatile"
 #endif
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 struct EdmFabricReceiverChannelCounters {
     uint32_t n_pkts_processed = 0;
@@ -81,7 +81,7 @@ struct EdmFabricSenderChannelCounters {
 };
 static constexpr uint32_t sender_channel_counters_l1_size = sizeof(EdmFabricSenderChannelCounters);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 #ifdef __clang__
 #pragma clang diagnostic pop

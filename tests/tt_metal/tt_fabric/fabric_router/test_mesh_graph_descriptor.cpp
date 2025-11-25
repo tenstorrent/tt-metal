@@ -13,7 +13,7 @@
 
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 
-using namespace tt::tt_fabric;
+using namespace tt::tt_metal::experimental::fabric;
 
 // Helper functions for hierarchy testing
 namespace {
@@ -130,7 +130,7 @@ void check_connections(
 }
 }
 
-namespace tt::tt_fabric::fabric_router_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_router_tests {
 
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     const std::string text_proto = R"proto(
@@ -1423,4 +1423,4 @@ TEST(MeshGraphDescriptorTests, SwitchMixedWithMeshesInGraph) {
     EXPECT_EQ(desc.all_switches().size(), 1) << "Should have 1 switch instance";
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_router_tests

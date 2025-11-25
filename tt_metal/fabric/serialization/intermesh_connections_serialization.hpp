@@ -10,7 +10,7 @@
 #include <utility>
 #include "tt_metal/api/tt-metalium/mesh_graph.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Serializes AnnotatedIntermeshConnections to Protobuf
@@ -23,4 +23,4 @@ std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedInt
  */
 AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const std::vector<uint8_t>& data);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

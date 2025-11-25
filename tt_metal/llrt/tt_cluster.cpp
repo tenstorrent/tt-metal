@@ -1045,8 +1045,8 @@ std::unordered_set<ChipId> Cluster::get_ethernet_connected_device_ids(ChipId chi
 }
 
 void Cluster::configure_ethernet_cores_for_fabric_routers(
-    tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
-    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
+    tt_metal::experimental::fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    if (fabric_config != tt_metal::experimental::fabric::FabricConfig::DISABLED) {
         TT_FATAL(num_routing_planes.has_value(), "num_routing_planes should be set for reserving cores for fabric");
         TT_FATAL(num_routing_planes.value() > 0, "Expected non-zero num_routing_planes for reserving cores for fabric");
         this->reserve_ethernet_cores_for_fabric_routers(num_routing_planes.value());
@@ -1149,8 +1149,8 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
     this->initialize_ethernet_sockets();
 }
 
-std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip_id) const {
-    std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
+std::set<tt_metal::experimental::fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip_id) const {
+    std::set<tt_metal::experimental::fabric::chan_id_t> fabric_ethernet_channels;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& active_eth_cores = control_plane.get_active_ethernet_cores(chip_id, false);
     for (const auto& eth_core : active_eth_cores) {

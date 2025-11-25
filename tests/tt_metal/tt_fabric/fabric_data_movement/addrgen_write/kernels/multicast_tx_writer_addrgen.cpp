@@ -14,8 +14,8 @@
 #include "kernel_common.hpp"
 
 using namespace tt;
-using namespace tt::tt_fabric;
-using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_metal::experimental::fabric;
+using namespace tt::tt_metal::experimental::fabric::mesh::experimental;
 
 // Helper function to handle directional fanout logic
 template <OperationType operation_type, ApiVariant api_variant, typename DstAccT, typename ScatterAccT>
@@ -213,11 +213,11 @@ void kernel_main() {
     // Pre-loop setup for WithState and SetState variants
     if constexpr (api_variant == ApiVariant::WithState) {
         // Determine the appropriate NOC send type based on operation
-        auto noc_send_type_for_op = tt::tt_fabric::NOC_UNICAST_WRITE;
+        auto noc_send_type_for_op = tt::tt_metal::experimental::fabric::NOC_UNICAST_WRITE;
         if constexpr (operation_type == OperationType::Scatter) {
-            noc_send_type_for_op = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+            noc_send_type_for_op = tt::tt_metal::experimental::fabric::NOC_UNICAST_SCATTER_WRITE;
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            noc_send_type_for_op = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+            noc_send_type_for_op = tt::tt_metal::experimental::fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
         }
 
         // Manually configure routing for each direction

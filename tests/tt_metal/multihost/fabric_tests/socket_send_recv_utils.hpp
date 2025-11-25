@@ -16,7 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests::multihost {
 
 namespace multihost_utils {
@@ -80,4 +80,4 @@ void test_multi_mesh_multi_conn_bidirectional(
 }  // namespace multihost_utils
 
 }  // namespace fabric_router_tests::multihost
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

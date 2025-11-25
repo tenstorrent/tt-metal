@@ -26,7 +26,7 @@ void line_sync(
     size_t sync_noc_x,
     size_t sync_noc_y,
     size_t sync_val) {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     auto dest_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
@@ -60,22 +60,22 @@ struct TestParams {
     size_t dest_noc_y_bwd = 0;
     size_t dest_bank_addr_bwd = 0;
     size_t payload_size_bytes = 0;
-    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST;
+    tt::tt_metal::experimental::fabric::ChipSendType chip_send_type = tt::tt_metal::experimental::fabric::CHIP_UNICAST;
     bool flush = true;
 };
 
 static FORCE_INLINE void setup_packet_header(
-    volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_fabric::ChipSendType chip_send_type) {
+    volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_metal::experimental::fabric::ChipSendType chip_send_type) {
     if (num_hops > 0) {
-        if (chip_send_type == tt::tt_fabric::CHIP_UNICAST) {
+        if (chip_send_type == tt::tt_metal::experimental::fabric::CHIP_UNICAST) {
             fabric_set_unicast_route<false>(pkt_hdr, num_hops);
         } else {
-            pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
+            pkt_hdr->to_chip_multicast(tt::tt_metal::experimental::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
         }
     }
 }
 
-template <tt::tt_fabric::NocSendType T>
+template <tt::tt_metal::experimental::fabric::NocSendType T>
 static void send_packets(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
@@ -95,7 +95,7 @@ FORCE_INLINE void send_packets_unicast_write_impl(
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
     const TestParams& params,
     size_t source_buffer_address) {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     // Setup packet headers for both directions
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
@@ -148,7 +148,7 @@ FORCE_INLINE void send_packets_unicast_write_impl(
 }
 
 template <>
-FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
+FORCE_INLINE void send_packets<tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_WRITE>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -158,7 +158,7 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
 }
 
 template <>
-FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
+FORCE_INLINE void send_packets<tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -168,13 +168,13 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_W
 }
 
 template <>
-void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
+void send_packets<tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
     const TestParams& params,
     size_t source_buffer_address) {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     // Setup packet headers for both directions
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
@@ -254,13 +254,13 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
 }
 
 template <>
-void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
+void send_packets<tt::tt_metal::experimental::fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
     const TestParams& params,
     size_t source_buffer_address) {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
 
     // Setup packet headers for both directions
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
@@ -316,7 +316,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
 }
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
+    using namespace tt::tt_metal::experimental::fabric;
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);

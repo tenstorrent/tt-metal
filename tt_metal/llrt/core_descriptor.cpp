@@ -68,9 +68,9 @@ inline std::string get_core_descriptor_file(
         };
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
-        tt_fabric::FabricTensixConfig fabric_tensix_config =
+        tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config =
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+        bool use_fabric_tensix = (fabric_tensix_config == tt_metal::experimental::fabric::FabricTensixConfig::MUX);
 
         switch (arch) {
             default:
@@ -107,7 +107,7 @@ const core_descriptor_t& get_core_descriptor_config(
             std::string,
             std::unordered_map<
                 tt_metal::DispatchCoreConfig,
-                std::unordered_map<tt_fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
+                std::unordered_map<tt_metal::experimental::fabric::FabricTensixConfig, std::unordered_map<uint8_t, core_descriptor_t>>>>>
         config_by_arch;
 
     ARCH arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
@@ -133,7 +133,7 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
-    tt_fabric::FabricTensixConfig fabric_tensix_config =
+    tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config =
         tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     std::unordered_map<uint8_t, core_descriptor_t>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];

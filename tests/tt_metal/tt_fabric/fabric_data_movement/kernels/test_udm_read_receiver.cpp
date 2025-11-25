@@ -27,7 +27,7 @@ constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
  */
 void kernel_main() {
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::fabric_local_state_init();
+    tt::tt_metal::experimental::fabric::udm::fabric_local_state_init();
 
     uint32_t time_seed = time_seed_init;
 
@@ -51,13 +51,13 @@ void kernel_main() {
         fill_packet_data(buffer_addr, packet_payload_size_bytes / 16, time_seed);
 
         // Process the read request and send the data back
-        tt::tt_fabric::udm::fabric_fast_read_any_len_ack(request_header, curr_local_data_addr);
+        tt::tt_metal::experimental::fabric::udm::fabric_fast_read_any_len_ack(request_header, curr_local_data_addr);
 
         bytes_sent += packet_payload_size_bytes;
     }
 
     // TODO: move this into fw once consolidated
-    tt::tt_fabric::udm::close_fabric_connection();
+    tt::tt_metal::experimental::fabric::udm::close_fabric_connection();
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;

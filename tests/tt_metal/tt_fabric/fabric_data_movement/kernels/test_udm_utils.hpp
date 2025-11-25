@@ -27,7 +27,7 @@ inline void notify_receiver(
     // First, copy the packet header that contains source information
     // For reads: This header will be used by fabric_fast_read_any_len_ack on the receiver side
     // For writes: This header contains the sender information for ACK
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* allocated_header = tt::tt_fabric::udm::get_or_allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* allocated_header = tt::tt_metal::experimental::fabric::udm::get_or_allocate_header();
     uint32_t header_size_words = sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t);
     for (uint32_t j = 0; j < header_size_words; j++) {
         notification_buffer[j] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(allocated_header)[j];
@@ -37,7 +37,7 @@ inline void notify_receiver(
     notification_buffer[req_notification_size_bytes / 4 - 1] = time_seed + req_notification_size_bytes / 4 - 1;
 
     // Send the notification to receiver's remote_notification_addr as a posted write
-    tt::tt_fabric::udm::fabric_fast_write_any_len(
+    tt::tt_metal::experimental::fabric::udm::fabric_fast_write_any_len(
         dst_dev_id,
         dst_mesh_id,
         notification_buffer_addr,

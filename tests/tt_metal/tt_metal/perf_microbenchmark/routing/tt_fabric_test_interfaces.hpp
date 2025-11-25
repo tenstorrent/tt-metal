@@ -13,12 +13,12 @@
 #include <random>
 
 namespace tt {
-namespace tt_fabric {
+namespace tt_metal::experimental::fabric {
 class FabricNodeId;
-}  // namespace tt_fabric
+}  // namespace tt_metal::experimental::fabric
 }  // namespace tt
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -125,4 +125,4 @@ private:
 };
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

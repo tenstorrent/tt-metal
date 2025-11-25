@@ -20,7 +20,7 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include <tt-metalium/tt_align.hpp>
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 // ======================================================================================
 // Memory Management
@@ -1198,4 +1198,4 @@ inline std::vector<CoreCoord> GlobalAllocator::get_pristine_cores_for_device(con
     return it->second->collect_remaining_pristine_cores();
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

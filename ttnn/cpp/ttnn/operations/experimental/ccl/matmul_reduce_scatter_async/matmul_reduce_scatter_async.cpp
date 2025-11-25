@@ -31,7 +31,7 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     return ttnn::operations::experimental::ccl::matmul_reduce_scatter_async(
         input_tensor,
         weight_tensor,

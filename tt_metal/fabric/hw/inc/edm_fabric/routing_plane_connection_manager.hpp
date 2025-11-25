@@ -10,7 +10,7 @@
 #include "dataflow_api.h"
 #include "edm_fabric_worker_adapters.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Determine maximum number of routing-plane connections if not provided by the build.
 #ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
@@ -27,7 +27,7 @@ namespace tt::tt_fabric {
 class RoutingPlaneConnectionManager final {
 public:
     static constexpr std::size_t MaxConnections = TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS;
-    using Sender = tt::tt_fabric::WorkerToFabricEdmSender;
+    using Sender = tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender;
 
     enum BuildFromArgsMode : uint8_t {
         BUILD_ONLY,
@@ -66,7 +66,7 @@ public:
             auto& conn = mgr.slots_[i];
             conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             conn.sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
                 conn.sender.open_start();
             }
@@ -159,4 +159,4 @@ private:
     uint32_t num_active_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

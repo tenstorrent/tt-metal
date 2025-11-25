@@ -11,7 +11,7 @@
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 struct SenderWorkerAdapterSpec {
     size_t edm_noc_x = 0;
@@ -75,7 +75,7 @@ class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnection
 public:
     StaticSizedChannelConnectionWriterAdapter(
         FabricStaticSizedChannelsAllocator& allocator,
-        tt::tt_fabric::Topology topology,
+        tt::tt_metal::experimental::fabric::Topology topology,
         eth_chan_directions my_direction);
 
     void add_downstream_connection(
@@ -144,4 +144,4 @@ private:
 };
 
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

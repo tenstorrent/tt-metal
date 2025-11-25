@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // A base sender channel interface class that will be specialized for different
 // channel architectures (e.g. static vs elastic sizing)
@@ -32,4 +32,4 @@ public:
     }
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

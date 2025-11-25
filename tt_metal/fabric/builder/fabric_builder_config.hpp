@@ -12,7 +12,7 @@
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 
 /**
@@ -137,4 +137,4 @@ struct AllocatorConstructionParams {
         memory_regions(memory_regions) {}
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

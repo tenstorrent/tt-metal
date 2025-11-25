@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <numeric>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Base FabricChannelAllocator implementation
 FabricChannelAllocator::FabricChannelAllocator(
-    tt::tt_fabric::Topology topology,
-    const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+    tt::tt_metal::experimental::fabric::Topology topology,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions& options,
     const std::vector<MemoryRegion>& memory_regions) :
     topology_(topology), options_(options), memory_regions_(memory_regions) {
     TT_FATAL(!memory_regions_.empty(), "At least one memory region must be provided");
@@ -39,8 +39,8 @@ size_t FabricChannelAllocator::get_total_available_memory() const {
 
 // ElasticChannelsAllocator implementation
 ElasticChannelsAllocator::ElasticChannelsAllocator(
-    tt::tt_fabric::Topology topology,
-    const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+    tt::tt_metal::experimental::fabric::Topology topology,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions& options,
     const std::vector<MemoryRegion>& memory_regions,
     size_t /*buffer_slot_size_bytes*/,
     size_t /*min_buffers_per_chunk*/,
@@ -51,4 +51,4 @@ ElasticChannelsAllocator::ElasticChannelsAllocator(
 
 void ElasticChannelsAllocator::emit_ct_args(std::vector<uint32_t>& /*ct_args*/) const { TT_THROW("Not implemented"); }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

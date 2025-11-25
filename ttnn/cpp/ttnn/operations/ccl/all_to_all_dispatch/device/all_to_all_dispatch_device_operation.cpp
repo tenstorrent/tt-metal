@@ -164,7 +164,7 @@ AllToAllDispatchDeviceOperation::invoke(
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     AllToAllTransferType impl,

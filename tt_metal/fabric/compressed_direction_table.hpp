@@ -6,9 +6,9 @@
 
 #include "hostdevcommon/fabric_common.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 extern template struct direction_table_t<MAX_MESH_SIZE>;
 extern template struct direction_table_t<MAX_NUM_MESHES>;
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

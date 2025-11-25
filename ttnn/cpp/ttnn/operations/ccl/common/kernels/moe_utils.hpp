@@ -51,7 +51,7 @@ inline void open_direction_connections(
     for (uint32_t i = 0; i < Size; i++) {
         if (directions[i]) {
             connections[i] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+                tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             connections[i].open();
         }
     }
@@ -65,7 +65,7 @@ inline void open_direction_connections_async(
     for (uint32_t i = 0; i < Size; i++) {
         if (directions[i]) {
             connections[i] =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+                tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             connections[i].open_start();
         }
     }
@@ -115,19 +115,19 @@ bool is_configured_target(uint32_t linearized_dest_mesh_coord) {
     }
 }
 
-template <tt::tt_fabric::Topology Topology>
+template <tt::tt_metal::experimental::fabric::Topology Topology>
 constexpr bool has_wrap_around() {
-    return Topology == tt::tt_fabric::Topology::Ring || Topology == tt::tt_fabric::Topology::Torus;
+    return Topology == tt::tt_metal::experimental::fabric::Topology::Ring || Topology == tt::tt_metal::experimental::fabric::Topology::Torus;
 }
 
-template <tt::tt_fabric::Topology Topology>
+template <tt::tt_metal::experimental::fabric::Topology Topology>
 constexpr bool is_1d_topology() {
-    return Topology == tt::tt_fabric::Topology::Linear || Topology == tt::tt_fabric::Topology::Ring;
+    return Topology == tt::tt_metal::experimental::fabric::Topology::Linear || Topology == tt::tt_metal::experimental::fabric::Topology::Ring;
 }
 
-template <tt::tt_fabric::Topology Topology>
+template <tt::tt_metal::experimental::fabric::Topology Topology>
 constexpr bool is_2d_topology() {
-    return Topology == tt::tt_fabric::Topology::Mesh || Topology == tt::tt_fabric::Topology::Torus;
+    return Topology == tt::tt_metal::experimental::fabric::Topology::Mesh || Topology == tt::tt_metal::experimental::fabric::Topology::Torus;
 }
 
 template <uint32_t MeshRows, uint32_t MeshCols>
@@ -136,7 +136,7 @@ std::pair<uint32_t, uint32_t> get_mesh_coords(uint32_t linearized_mesh_coord) {
     return {linearized_mesh_coord / MeshCols, linearized_mesh_coord % MeshCols};
 }
 
-template <tt::tt_fabric::Topology Topology>
+template <tt::tt_metal::experimental::fabric::Topology Topology>
 uint32_t topological_distance(uint32_t position_1, uint32_t position_2, uint32_t axis_size) {
     if (position_1 == position_2) {
         return 0;
@@ -158,7 +158,7 @@ uint32_t directional_wrap_distance(uint32_t position_1, uint32_t position_2, Pol
     }
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+template <tt::tt_metal::experimental::fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
@@ -166,7 +166,7 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
            topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
-template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+template <tt::tt_metal::experimental::fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
@@ -199,7 +199,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
 template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
 inline void fabric_send_noc_unicast(
     AddrGenType addrgen,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
     uint64_t noc_page,
@@ -209,7 +209,7 @@ inline void fabric_send_noc_unicast(
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
 
-        tt::tt_fabric::linear::to_noc_unicast_write(
+        tt::tt_metal::experimental::fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
         perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
@@ -235,7 +235,7 @@ template <
     typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t dest_chip_id,
     const uint32_t dest_mesh_id,
@@ -262,7 +262,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
 
 template <uint32_t FabricMaxPacketSzBytes>
 inline void l1_only_fabric_send_noc_unicast_with_semaphore(
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
     uint64_t noc_payload_write_address,
@@ -278,13 +278,13 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
         if ((uint32_t)size_bytes == curr_packet_size) {
             // Fill header for fused unicast + atomic increment command when it is the last packet
             packet_header->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                tt::tt_metal::experimental::fabric::NocUnicastAtomicIncFusedCommandHeader(
                     noc_payload_write_address, noc_remote_semaphore_address, increment_value, flush),
                 align(curr_packet_size, alignment));
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
             packet_header->to_noc_unicast_write(
-                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
+                tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
         }
 
         // Send payload followed by header over the fabric.
@@ -301,7 +301,7 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
 template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
 inline void fabric_send_noc_unicast_with_semaphore(
     AddrGenType addrgen,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
     uint32_t payload_page_id,
@@ -316,16 +316,16 @@ inline void fabric_send_noc_unicast_with_semaphore(
 
         if ((uint32_t)size_bytes == curr_packet_size) {
             // Fill header for fused unicast + atomic increment command when it is the last packet
-            tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_metal::experimental::fabric::linear::to_noc_fused_unicast_write_atomic_inc(
                 align(curr_packet_size, alignment),
                 packet_header,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush},
+                tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush},
                 payload_page_id,
                 addrgen,
                 offset);
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
-            tt::tt_fabric::linear::to_noc_unicast_write(
+            tt::tt_metal::experimental::fabric::linear::to_noc_unicast_write(
                 align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen);
         }
 
@@ -340,7 +340,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
 // Insert helper that handles the remote-device metadata path with fused atomic increment
 template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, uint32_t FabricMaxPacketSzBytes>
 inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
@@ -378,7 +378,7 @@ template <
     typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
@@ -412,7 +412,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
 // Fabric send for NOC unicast semaphore increment only (no payload)
 template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
@@ -421,7 +421,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
+        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
@@ -436,14 +436,14 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
 
 template <
     uint32_t LinearizedSrcMeshCoord,
-    tt::tt_fabric::Topology Topology,
+    tt::tt_metal::experimental::fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast_1d(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint32_t payload_l1_address,
@@ -469,12 +469,12 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
 
 template <
     uint32_t LinearizedSrcMeshCoord,
-    tt::tt_fabric::Topology Topology,
+    tt::tt_metal::experimental::fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes>
 inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint32_t payload_l1_address,
@@ -504,14 +504,14 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
 
 template <
     uint32_t LinearizedSrcMeshCoord,
-    tt::tt_fabric::Topology Topology,
+    tt::tt_metal::experimental::fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes,
     typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     AddrGenType addrgen,
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint32_t payload_l1_address,
@@ -542,9 +542,9 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
 }
 
 // Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
-template <uint32_t LinearizedSrcMeshCoord, tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
+template <uint32_t LinearizedSrcMeshCoord, tt::tt_metal::experimental::fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint64_t noc_remote_semaphore_address,
@@ -552,7 +552,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
+        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
@@ -588,14 +588,14 @@ inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
 // Send initialization semaphore to configured target devices for synchronization
 template <
     uint32_t LinearizedSrcMeshCoord,
-    tt::tt_fabric::Topology Topology,
+    tt::tt_metal::experimental::fabric::Topology Topology,
     uint32_t SrcChipId,
     uint32_t MeshRows,
     uint32_t MeshCols,
     ReplicateGroup Axis,
     uint32_t NumDevices>
 inline void send_init_semaphore_to_configured_targets(
-    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    std::array<tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint8_t dest_chip_ids[NumDevices],
     const uint8_t dest_mesh_ids[NumDevices],

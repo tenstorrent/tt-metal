@@ -79,7 +79,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_metal::experimental::fabric::Topology> topology) {
                 return self(
                     input_tensor,
                     expert_mapping_tensor,

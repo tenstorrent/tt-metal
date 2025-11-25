@@ -24,7 +24,7 @@
 
 using namespace tt::tt_metal::distributed;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace {
 
@@ -1507,4 +1507,4 @@ void MeshGraphDescriptor::print_all_nodes() {
     // Start from top-level and recursively print in local-id order
     print_node(top_level_id_, 0);
 }
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

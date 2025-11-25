@@ -13,7 +13,7 @@
 #include <vector>
 #include <ostream>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Static-sized channels allocator implementation.
@@ -27,7 +27,7 @@ namespace tt::tt_fabric {
 class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
     FabricStaticSizedChannelsAllocator(
-        tt::tt_fabric::Topology topology,
+        tt::tt_metal::experimental::fabric::Topology topology,
         const FabricEriscDatamoverOptions& options,
         size_t num_used_sender_channels,
         size_t num_used_receiver_channels,
@@ -77,12 +77,12 @@ private:
      * Helper function that decides the number of buffer slots for each channel.
     */
     void configure_buffer_slots_helper(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        std::array<size_t, tt::tt_fabric::builder_config::num_sender_channels>& num_sender_buffer_slots,
-        std::array<size_t, tt::tt_fabric::builder_config::num_sender_channels>& num_remote_sender_buffer_slots,
-        std::array<size_t, tt::tt_fabric::builder_config::num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, tt::tt_fabric::builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots);
+        tt::tt_metal::experimental::fabric::Topology topology,
+        const tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions& options,
+        std::array<size_t, tt::tt_metal::experimental::fabric::builder_config::num_sender_channels>& num_sender_buffer_slots,
+        std::array<size_t, tt::tt_metal::experimental::fabric::builder_config::num_sender_channels>& num_remote_sender_buffer_slots,
+        std::array<size_t, tt::tt_metal::experimental::fabric::builder_config::num_receiver_channels>& num_receiver_buffer_slots,
+        std::array<size_t, tt::tt_metal::experimental::fabric::builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots);
 
     // Configuration parameters
     size_t num_used_sender_channels = 0;
@@ -177,4 +177,4 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
     os << "}";
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

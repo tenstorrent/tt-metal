@@ -236,7 +236,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
-        [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
+        [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_metal::experimental::fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
             auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
             return std::make_tuple(
@@ -252,7 +252,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         } else {
             // Initialize fabric node ids manually.
             // TODO: #22087 - Remove this code path.
-            std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+            std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids;
             TT_FATAL(
                 config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
             const auto& supplied_ids = config.physical_device_ids();
@@ -313,7 +313,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config);
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids;
     for (const auto& device_id : device_ids) {
         auto fabric_node_id =
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
@@ -402,7 +402,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
     // Create mesh device view for the submesh.
     std::vector<MaybeRemote<IDevice*>> submesh_devices;
-    std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
     for (const auto& coord : submesh_range) {
         if (view_->is_local(coord)) {
@@ -489,7 +489,7 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
-tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
+tt_metal::experimental::fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
     return view_->get_fabric_node_id(coord);
 }
 
@@ -547,7 +547,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     // For a 2x2 mesh shape:
     // - Preserves original 2x2 physical connectivity
     // - Row-major order will be: [0,1,3,2]
-    std::unordered_set<tt::tt_fabric::FabricNodeId> current_fabric_nodes;
+    std::unordered_set<tt::tt_metal::experimental::fabric::FabricNodeId> current_fabric_nodes;
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {
         current_fabric_nodes.insert(view_->get_fabric_node_id(coord));
     }
@@ -555,7 +555,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
     std::vector<MaybeRemote<IDevice*>> new_device_order;
-    std::vector<tt::tt_fabric::FabricNodeId> new_fabric_node_ids;
+    std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> new_fabric_node_ids;
     new_device_order.reserve(num_devices);
     new_fabric_node_ids.reserve(num_devices);
     if (new_shape.is_line_topology()) {

@@ -303,8 +303,8 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(!found_relay_mux, "DISPATCH_H has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;
 
-                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
-                    tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+                constexpr tt::tt_metal::experimental::fabric::FabricMuxChannelType ch_type =
+                    tt::tt_metal::experimental::fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
                 tt::tt_metal::assemble_fabric_mux_client_config_args(
                     node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
             } else {
@@ -371,8 +371,8 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(!found_relay_mux, "DISPATCH_D has multiple downstream RELAY_MUX kernels.");
                 found_relay_mux = true;
 
-                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+                constexpr tt::tt_metal::experimental::fabric::FabricMuxChannelType ch_type =
+                    tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
                 tt::tt_metal::assemble_fabric_mux_client_config_args(
                     node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
             } else {

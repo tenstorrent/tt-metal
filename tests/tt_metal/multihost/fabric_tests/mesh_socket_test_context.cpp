@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/hal_types.hpp>
 
-namespace tt::tt_fabric::mesh_socket_tests {
+namespace tt::tt_metal::experimental::fabric::mesh_socket_tests {
 
 MeshSocketTestContext::MeshSocketTestContext(const MeshSocketTestConfiguration& config) :
     config_(config), mesh_device_(nullptr), control_plane_ptr_(nullptr) {
@@ -84,12 +84,12 @@ void MeshSocketTestContext::cleanup() {
     log_info(tt::LogTest, "MeshSocketTestContext cleanup completed");
 }
 
-const tt::tt_fabric::MeshGraph& MeshSocketTestContext::get_mesh_graph() const {
+const tt::tt_metal::experimental::fabric::MeshGraph& MeshSocketTestContext::get_mesh_graph() const {
     TT_FATAL(control_plane_ptr_, "Control plane not initialized");
     return control_plane_ptr_->get_mesh_graph();
 }
 
-const std::unordered_map<Rank, tt::tt_fabric::MeshId>& MeshSocketTestContext::get_rank_to_mesh_mapping() const {
+const std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId>& MeshSocketTestContext::get_rank_to_mesh_mapping() const {
     return rank_to_mesh_mapping_;
 }
 
@@ -150,16 +150,16 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
 void MeshSocketTestContext::setup_fabric_configuration() {
     log_info(tt::LogTest, "Setting up fabric configuration...");
 
-    tt::tt_fabric::FabricConfig fabric_config;
+    tt::tt_metal::experimental::fabric::FabricConfig fabric_config;
     // TODO: Add support for other Fabric Configs as well
     switch (config_.fabric_config.topology) {
-        case tt::tt_fabric::Topology::Mesh: {
-            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
+        case tt::tt_metal::experimental::fabric::Topology::Mesh: {
+            fabric_config = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D;
         } break;
         default: TT_THROW("Unsupported fabric topology, must be Mesh");
     }
 
-    tt::tt_fabric::SetFabricConfig(fabric_config);
+    tt::tt_metal::experimental::fabric::SetFabricConfig(fabric_config);
 }
 
 void MeshSocketTestContext::expand_test_configurations() {
@@ -222,7 +222,7 @@ void MeshSocketTestContext::execute_socket_test(
     tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test) {
     // Use the existing test_socket_send_recv function from socket_send_recv_utils.cpp
     TT_FATAL(
-        tt::tt_fabric::fabric_router_tests::multihost::multihost_utils::test_socket_send_recv(
+        tt::tt_metal::experimental::fabric::fabric_router_tests::multihost::multihost_utils::test_socket_send_recv(
             mesh_device_,
             socket,
             test.memory_config.data_size,
@@ -248,7 +248,7 @@ bool MeshSocketTestContext::should_participate_in_test(const ParsedTestConfig& t
     Need this to generate high level patterns such as all to all, since we need to know the mesh_ id to
     know the number of devices per host.
 */
-std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_rank_to_mesh_mapping() {
+std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId> MeshSocketTestContext::create_rank_to_mesh_mapping() {
     auto world_size = *distributed_context_->size();
 
     std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
@@ -256,7 +256,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_mesh_id_), sizeof(local_mesh_id_)),
         tt::stl::Span<std::byte>(recv_buffer));
 
-    std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
+    std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId> rank_to_mesh_id;
     for (uint32_t rank = 0; rank < world_size; ++rank) {
         uint32_t mesh_id_val;
         std::memcpy(&mesh_id_val, recv_buffer.data() + (rank * sizeof(uint32_t)), sizeof(uint32_t));
@@ -268,7 +268,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
                 [&mesh_id_val](const auto& pair) { return *(pair.second) == mesh_id_val; }),
             "Mesh id {} is already in use",
             mesh_id_val);
-        rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
+        rank_to_mesh_id[Rank{rank}] = tt::tt_metal::experimental::fabric::MeshId{mesh_id_val};
     }
 
     return rank_to_mesh_id;
@@ -304,4 +304,4 @@ void MeshSocketTestContext::share_seed() {
     log_info(tt::LogTest, "Random number generator initialized with seed: {}", seed);
 }
 
-}  // namespace tt::tt_fabric::mesh_socket_tests
+}  // namespace tt::tt_metal::experimental::fabric::mesh_socket_tests

@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 struct BaseMemoryRegion {
     uint32_t start;
@@ -398,4 +398,4 @@ struct ReceiverMemoryMap {
     uint32_t get_payload_chunk_size() const { return payload_chunk_size_; }
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

@@ -133,7 +133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     }
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t max_scatter_write_pages = 2;
     const uint32_t num_pages_per_packet =
@@ -158,7 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_forward_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -424,10 +424,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         writer_forward_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
             const auto backward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 backward_fabric_node_id,
                 link,
@@ -465,10 +465,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         writer_backward_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
             const auto forward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            tt::tt_fabric::append_fabric_connection_rt_args(
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 forward_fabric_node_id,
                 link,

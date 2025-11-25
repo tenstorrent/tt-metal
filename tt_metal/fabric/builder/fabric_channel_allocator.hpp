@@ -13,7 +13,7 @@
 #include <sstream>
 #include <fmt/format.h>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Base interface class for fabric channel allocators.
@@ -29,8 +29,8 @@ public:
      * @param memory_regions Vector of memory regions available for allocation
      */
     explicit FabricChannelAllocator(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+        tt::tt_metal::experimental::fabric::Topology topology,
+        const tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions& options,
         const std::vector<MemoryRegion>& memory_regions);
 
     virtual ~FabricChannelAllocator() = default;
@@ -78,8 +78,8 @@ public:
     }
 
 protected:
-    tt::tt_fabric::Topology topology_;
-    tt::tt_fabric::FabricEriscDatamoverOptions options_;
+    tt::tt_metal::experimental::fabric::Topology topology_;
+    tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions options_;
     std::vector<MemoryRegion> memory_regions_;
 };
 
@@ -102,8 +102,8 @@ public:
      * @param max_buffers_per_chunk Maximum buffer slots per chunk
      */
     ElasticChannelsAllocator(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+        tt::tt_metal::experimental::fabric::Topology topology,
+        const tt::tt_metal::experimental::fabric::FabricEriscDatamoverOptions& options,
         const std::vector<MemoryRegion>& memory_regions,
         size_t buffer_slot_size_bytes,
         size_t min_buffers_per_chunk,
@@ -115,12 +115,12 @@ public:
     void print(std::ostream& os) const override { os << "ElasticChannelsAllocator (not yet fully implemented)"; }
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 // fmt formatter specialization for FabricChannelAllocator
 template <>
-struct fmt::formatter<tt::tt_fabric::FabricChannelAllocator> : fmt::formatter<std::string> {
-    auto format(const tt::tt_fabric::FabricChannelAllocator& allocator, fmt::format_context& ctx) const {
+struct fmt::formatter<tt::tt_metal::experimental::fabric::FabricChannelAllocator> : fmt::formatter<std::string> {
+    auto format(const tt::tt_metal::experimental::fabric::FabricChannelAllocator& allocator, fmt::format_context& ctx) const {
         std::ostringstream stream;
         stream << allocator;
         return formatter<std::string>::format(stream.str(), ctx);

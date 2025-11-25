@@ -61,7 +61,7 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+    auto mux_connection_handle = tt::tt_metal::experimental::fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
         fabric_mux_channel_id,
@@ -85,13 +85,13 @@ void kernel_main() {
         packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_dest_address, 1});
     }
 
-    tt::tt_fabric::wait_for_fabric_endpoint_ready(
+    tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     if constexpr (is_master_sender) {
         // wait for drainer kernel as well, we need to ensure that the connection b/w mux and drainer
         // is established before we send packets
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+        tt::tt_metal::experimental::fabric::wait_for_fabric_endpoint_ready(
             drainer_x, drainer_y, drainer_status_address, local_fabric_mux_status_address);
 
         auto senders_sync_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(senders_sync_address);
@@ -105,20 +105,20 @@ void kernel_main() {
         while (senders_sync_ptr[0] == 0);
     }
 
-    tt::tt_fabric::fabric_client_connect(mux_connection_handle);
+    tt::tt_metal::experimental::fabric::fabric_client_connect(mux_connection_handle);
 
     uint64_t start_timestamp = get_timestamp();
     for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
         if constexpr (is_full_size_channel_sender) {
-            tt::tt_fabric::fabric_async_write(
+            tt::tt_metal::experimental::fabric::fabric_async_write(
                 mux_connection_handle, packet_header, payload_buffer_address, packet_payload_size_bytes);
         } else {
-            tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, packet_header);
+            tt::tt_metal::experimental::fabric::fabric_atomic_inc(mux_connection_handle, packet_header);
         }
     }
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-    tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
+    tt::tt_metal::experimental::fabric::fabric_client_disconnect(mux_connection_handle);
     noc_async_write_barrier();
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;

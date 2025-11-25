@@ -42,7 +42,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_router_tests {
 
 // hack to let topology.cpp to know the binary is a unit test
@@ -1321,4 +1321,4 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
 }
 
 }  // namespace fabric_router_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

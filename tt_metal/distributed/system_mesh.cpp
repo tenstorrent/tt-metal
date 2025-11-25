@@ -31,17 +31,17 @@ namespace {
 // Helper type to keep track of device ID and fabric node ID for a given mesh coordinate.
 struct MappedDevice {
     MaybeRemote<int> device_id;
-    tt::tt_fabric::FabricNodeId fabric_node_id;
+    tt::tt_metal::experimental::fabric::FabricNodeId fabric_node_id;
 };
 
 // Initializes a mesh container with MappedDevice objects, with configured fabric node IDs.
-MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
+MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_metal::experimental::fabric::MeshId mesh_id, const MeshShape& shape) {
     std::vector<MappedDevice> system_mesh_devices;
     system_mesh_devices.reserve(shape.mesh_size());
     for (int linear_index = 0; linear_index < shape.mesh_size(); ++linear_index) {
         system_mesh_devices.push_back(MappedDevice{
             .device_id = MaybeRemote<int>::remote(),
-            .fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, linear_index)});
+            .fabric_node_id = tt::tt_metal::experimental::fabric::FabricNodeId(mesh_id, linear_index)});
     }
     return MeshContainer<MappedDevice>(shape, std::move(system_mesh_devices));
 }
@@ -49,7 +49,7 @@ MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshI
 }  // namespace
 class SystemMesh::Impl {
 private:
-    tt::tt_fabric::MeshId mesh_id_;
+    tt::tt_metal::experimental::fabric::MeshId mesh_id_;
     DistributedCoordinateTranslator coordinate_translator_;
     MeshContainer<MappedDevice> system_mapped_devices_;
 
@@ -90,10 +90,10 @@ SystemMesh::Impl::Impl() :
     coordinate_translator_(
         MetalContext::instance().get_control_plane().get_physical_mesh_shape(
             mesh_id_,  //
-            tt::tt_fabric::MeshScope::GLOBAL),
+            tt::tt_metal::experimental::fabric::MeshScope::GLOBAL),
         MetalContext::instance().get_control_plane().get_physical_mesh_shape(
             mesh_id_,  //
-            tt::tt_fabric::MeshScope::LOCAL),
+            tt::tt_metal::experimental::fabric::MeshScope::LOCAL),
         MetalContext::instance().get_control_plane().get_local_mesh_offset()),
     system_mapped_devices_(initialize_mapped_devices(mesh_id_, coordinate_translator_.global_shape())) {
     log_debug(

@@ -24,7 +24,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 // NOLINTBEGIN(misc-unused-parameters)
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
@@ -74,10 +74,10 @@ struct RoutingFields {
     static constexpr uint8_t START_DISTANCE_FIELD_BIT_WIDTH = 4;
     static constexpr uint8_t RANGE_HOPS_FIELD_BIT_WIDTH = 4;
     static constexpr uint8_t LAST_HOP_DISTANCE_VAL = 1;
-    static constexpr uint8_t LAST_CHIP_IN_MCAST_VAL = 1 << tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
-    static constexpr uint8_t HOP_DISTANCE_MASK = (1 << tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1;
-    static constexpr uint8_t RANGE_MASK = ((1 << tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1)
-                                          << tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t LAST_CHIP_IN_MCAST_VAL = 1 << tt::tt_metal::experimental::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t HOP_DISTANCE_MASK = (1 << tt::tt_metal::experimental::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1;
+    static constexpr uint8_t RANGE_MASK = ((1 << tt::tt_metal::experimental::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1)
+                                          << tt::tt_metal::experimental::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
     static constexpr uint8_t LAST_MCAST_VAL = LAST_CHIP_IN_MCAST_VAL | LAST_HOP_DISTANCE_VAL;
 
     uint8_t value;
@@ -468,7 +468,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
     // To simplify worker kernel code, we for now decide to pad up the packet header
-    // to 32B so the user can simplify shift into their CB chunk by sizeof(tt::tt_fabric::PacketHeader)
+    // to 32B so the user can simplify shift into their CB chunk by sizeof(tt::tt_metal::experimental::fabric::PacketHeader)
     // and automatically work around the DRAM read alignment bug.
     //
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
@@ -670,8 +670,8 @@ static_assert(
 #define TOSTRING(x) STRINGIFY(x)
 
 #ifndef ROUTING_MODE
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_metal::experimental::fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_metal::experimental::fabric::LowLatencyRoutingFields
 #else
 
 // Check if UDM_MODE is defined
@@ -688,8 +688,8 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_metal::experimental::fabric::UDMHybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields
 #else
 static_assert(false, "UDM mode requires LOW_LATENCY routing for 2D fabric");
 #endif
@@ -704,20 +704,20 @@ static_assert(false, "non supported ROUTING_MODE with UDM: " TOSTRING(ROUTING_MO
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
 #if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_metal::experimental::fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_metal::experimental::fabric::LowLatencyRoutingFields
 
 #else
-#define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
+#define PACKET_HEADER_TYPE tt::tt_metal::experimental::fabric::PacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_metal::experimental::fabric::RoutingFields
 #endif
 
 #elif (                                                              \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_metal::experimental::fabric::HybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
 #endif
@@ -729,7 +729,7 @@ static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 
 #endif  // ROUTING_MODE
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 #pragma GCC diagnostic pop
 // NOLINTEND(misc-unused-parameters)

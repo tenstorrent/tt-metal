@@ -33,7 +33,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};

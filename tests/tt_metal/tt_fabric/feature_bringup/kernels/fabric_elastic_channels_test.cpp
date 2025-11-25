@@ -22,7 +22,7 @@ constexpr bool BIDIRECTIONAL_MODE = get_compile_time_arg_val(4);
 constexpr int32_t pkts_received_stream_id = 0;  // read by receiver, written by sender
 constexpr int32_t pkts_acked_stream_id = 1;     // read by sender, written by receiver
 
-using namespace tt::tt_fabric;
+using namespace tt::tt_metal::experimental::fabric;
 
 // Timing tracking structure
 struct TimingStats {

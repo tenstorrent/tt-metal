@@ -16,10 +16,10 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 
-using MeshId = tt::tt_fabric::MeshId;
-using ControlPlane = tt::tt_fabric::ControlPlane;
+using MeshId = tt::tt_metal::experimental::fabric::MeshId;
+using ControlPlane = tt::tt_metal::experimental::fabric::ControlPlane;
 
-namespace tt::tt_fabric::mesh_socket_tests {
+namespace tt::tt_metal::experimental::fabric::mesh_socket_tests {
 
 class MeshSocketTestContext {
 public:
@@ -33,8 +33,8 @@ public:
     void cleanup();
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_distributed_context() const;
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_mesh_device() const;
-    const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
-    const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
+    const tt::tt_metal::experimental::fabric::MeshGraph& get_mesh_graph() const;
+    const std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId>& get_rank_to_mesh_mapping() const;
     std::mt19937 get_rng() const { return gen_; }
 
 private:
@@ -43,7 +43,7 @@ private:
     void initialize_mesh_device();
     void setup_fabric_configuration();
     void share_seed();
-    std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
+    std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId> create_rank_to_mesh_mapping();
     void expand_test_configurations();
 
     std::vector<tt::tt_metal::distributed::MeshSocket> create_sockets_for_test(const ParsedTestConfig& test);
@@ -67,7 +67,7 @@ private:
     // Control plane and mesh configuration
     ControlPlane* control_plane_ptr_;
     MeshId local_mesh_id_;
-    std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
+    std::unordered_map<Rank, tt::tt_metal::experimental::fabric::MeshId> rank_to_mesh_mapping_;
 
     // Random number generation
     std::mt19937 gen_;
@@ -76,4 +76,4 @@ private:
     static constexpr uint32_t DEFAULT_NUM_ITERATIONS = 1;
 };
 
-}  // namespace tt::tt_fabric::mesh_socket_tests
+}  // namespace tt::tt_metal::experimental::fabric::mesh_socket_tests

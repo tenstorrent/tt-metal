@@ -16,11 +16,11 @@
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
-constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+constexpr auto k_FabricConfig = tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D;
+constexpr auto k_ReliabilityMode = tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+std::unique_ptr<tt::tt_metal::experimental::fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_metal::experimental::fabric::ControlPlane>(graph_desc.string());
     control_plane->initialize_fabric_context(k_FabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
     return control_plane;
@@ -28,7 +28,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 
 }  // namespace
 
-namespace tt::tt_fabric::fabric_router_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_router_tests {
 
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
@@ -54,4 +54,4 @@ TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
-}  // namespace tt::tt_fabric::fabric_router_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_router_tests

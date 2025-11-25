@@ -65,7 +65,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
             const auto& eth_cores =
                 control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
             for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                const tt::tt_metal::experimental::fabric::chan_id_t eth_channel = eth_cores.at(link_index);
                 const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
 
                 // Create result entry with metadata using aggregate initialization
@@ -95,7 +95,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
             const auto& eth_cores =
                 control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
             for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
+                const tt::tt_metal::experimental::fabric::chan_id_t eth_channel = eth_cores.at(link_index);
                 const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
 
                 TT_FATAL(

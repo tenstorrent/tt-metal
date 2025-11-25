@@ -8,7 +8,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 inline uint32_t get_worker_connected_sender_channel() {
     // Sender channel 0 is always for local worker in the new design
@@ -16,9 +16,9 @@ inline uint32_t get_worker_connected_sender_channel() {
 }
 
 inline uint32_t get_vc1_connected_sender_channel(Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Ring) {
+    if (topology == tt::tt_metal::experimental::fabric::Topology::Ring) {
         return builder_config::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
+    } else if (topology == tt::tt_metal::experimental::fabric::Topology::Torus) {
         return builder_config::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
     }
     return 0;  // invalid
@@ -27,9 +27,9 @@ inline uint32_t get_vc1_connected_sender_channel(Topology topology) {
 inline uint32_t get_worker_or_vc1_connected_sender_channel(Topology topology) {
     uint32_t target_channel = get_worker_connected_sender_channel();
     // if without vc1, return worker channel, otherwise return vc1 channel
-    if (topology == tt::tt_fabric::Topology::Ring) {
+    if (topology == tt::tt_metal::experimental::fabric::Topology::Ring) {
         return builder_config::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
+    } else if (topology == tt::tt_metal::experimental::fabric::Topology::Torus) {
         return builder_config::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
     }
     return target_channel;  // Default to target_channel for Linear/Mesh
@@ -106,4 +106,4 @@ inline size_t get_receiver_channel_compact_index(
     }
     return compact_index;
 }
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

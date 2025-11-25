@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 /**
  * Channel traits system for extracting compile-time properties from channel types.
@@ -74,4 +74,4 @@ constexpr bool is_elastic_channel() {
     return ChannelTraits<ChannelT>::is_elastic;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

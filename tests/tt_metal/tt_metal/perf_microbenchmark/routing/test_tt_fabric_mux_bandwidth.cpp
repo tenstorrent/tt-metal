@@ -51,14 +51,14 @@ struct TestParams {
 };
 
 struct MuxTestConfig {
-    tt::tt_fabric::FabricMuxConfig* mux_kernel_config = nullptr;
+    tt::tt_metal::experimental::fabric::FabricMuxConfig* mux_kernel_config = nullptr;
     CoreCoord mux_logical_core;
     CoreCoord mux_virtual_core;
 };
 
 struct DrainerTestConfig {
     // we can re-use the mux infra to get the address layout for the drainer kernel as well
-    tt::tt_fabric::FabricMuxConfig* drainer_kernel_config = nullptr;
+    tt::tt_metal::experimental::fabric::FabricMuxConfig* drainer_kernel_config = nullptr;
     CoreCoord drainer_logical_core;
     CoreCoord drainer_virtual_core;
 };
@@ -79,7 +79,7 @@ struct WorkerTestConfig {
     WorkerMemoryMap* memory_map = nullptr;
     CoreCoord worker_logical_core;
     uint8_t worker_id = 0;
-    tt::tt_fabric::FabricMuxChannelType channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    tt::tt_metal::experimental::fabric::FabricMuxChannelType channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     uint32_t num_buffers = 0;
     uint32_t buffer_size_bytes = 0;
     uint32_t receiver_noc_xy_encoding = 0;
@@ -145,7 +145,7 @@ void create_mux_kernel(
     // default mux config works with edm's status address and buffers
     // std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
 
-    auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    auto default_channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
@@ -171,8 +171,8 @@ void create_mux_kernel(
     }
 
     // mux to drainer will always be a full size channel connection
-    auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    tt::tt_fabric::SenderWorkerAdapterSpec sender_worker_adapter_spec{
+    auto drainer_channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    tt::tt_metal::experimental::fabric::SenderWorkerAdapterSpec sender_worker_adapter_spec{
         .edm_noc_x = drainer_test_config.drainer_virtual_core.x,
         .edm_noc_y = drainer_test_config.drainer_virtual_core.y,
         .edm_buffer_base_addr = drainer_kernel_config->get_channel_base_address(drainer_channel_type, 0),
@@ -183,10 +183,10 @@ void create_mux_kernel(
         .edm_worker_location_info_addr = drainer_kernel_config->get_connection_info_address(drainer_channel_type, 0),
         .buffer_size_bytes = drainer_kernel_config->get_buffer_size_bytes(drainer_channel_type),
         .buffer_index_semaphore_id = drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
-        .edm_direction = tt::tt_fabric::eth_chan_directions::EAST, /* ignored, direction */
+        .edm_direction = tt::tt_metal::experimental::fabric::eth_chan_directions::EAST, /* ignored, direction */
     };
     std::vector<uint32_t> mux_fabric_connection_rt_args;
-    tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+    tt::tt_metal::experimental::fabric::append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},
@@ -211,7 +211,7 @@ void create_drainer_kernel(
     CoreCoord mux_virtual_coord) {
     auto drainer_kernel_config = drainer_test_config.drainer_kernel_config;
     auto drainer_logical_core = drainer_test_config.drainer_logical_core;
-    auto drainer_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    auto drainer_channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
     // This is dummy channel as drainer kernel terminates incomming packet without forwarding outbound channel
     // This number can be any in 0-15 (WH), 0-12 (BH)
@@ -275,7 +275,7 @@ void create_worker_kernel(
         mux_kernel_config->get_buffer_index_address(channel_type, worker_id),
         mux_kernel_config->get_status_address(),
         worker_test_config.mcast_encoding.has_value(),
-        channel_type == tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        channel_type == tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config->get_channel_credits_stream_id(channel_type, worker_id)};
 
     auto worker_memory_map = worker_test_config.memory_map;
@@ -363,11 +363,11 @@ int main(int argc, char** argv) {
     }
 
     test_params.buffer_size_bytes_full_size_channel =
-        sizeof(tt::tt_fabric::PacketHeader) + test_params.packet_payload_size_bytes;
-    test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_fabric::PacketHeader);
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader) + test_params.packet_payload_size_bytes;
+    test_params.buffer_size_bytes_header_only_channel = sizeof(tt::tt_metal::experimental::fabric::PacketHeader);
 
-    tt::tt_fabric::SetFabricConfig(
-        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::experimental::fabric::SetFabricConfig(
+        tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_1D, tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     std::vector<tt::ChipId> all_device_ids;
     all_device_ids.reserve(num_devices);
@@ -414,7 +414,7 @@ int main(int argc, char** argv) {
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    auto mux_kernel_config = tt::tt_metal::experimental::fabric::FabricMuxConfig(
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
         test_params.num_buffers_full_size_channel,
@@ -427,12 +427,12 @@ int main(int argc, char** argv) {
         .mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core),
     };
 
-    auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
+    auto drainer_kernel_config = tt::tt_metal::experimental::fabric::FabricMuxConfig(
         1,                                          /* num_full_size_channels */
         0,                                          /* num_header_only_channels */
         16,                                         /* num_buffers_full_size_channel */
         8,                                          /* num_buffers_header_only_channel */
-        sizeof(tt::tt_fabric::PacketHeader) + 4096, /* buffer_size_bytes_full_size_channel (4K packet) */
+        sizeof(tt::tt_metal::experimental::fabric::PacketHeader) + 4096, /* buffer_size_bytes_full_size_channel (4K packet) */
         l1_unreserved_base_address);
     DrainerTestConfig drainer_test_config = {
         .drainer_kernel_config = &drainer_kernel_config,
@@ -459,7 +459,7 @@ int main(int argc, char** argv) {
             .memory_map = &worker_memory_map,
             .worker_logical_core = logical_core,
             .worker_id = i,
-            .channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+            .channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
             .num_buffers = test_params.num_buffers_full_size_channel,
             .buffer_size_bytes = test_params.buffer_size_bytes_full_size_channel,
             .receiver_noc_xy_encoding = default_receiver_noc_xy_encoding,
@@ -476,7 +476,7 @@ int main(int argc, char** argv) {
             .memory_map = &worker_memory_map,
             .worker_logical_core = logical_core,
             .worker_id = i,
-            .channel_type = tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL,
+            .channel_type = tt::tt_metal::experimental::fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL,
             .num_buffers = test_params.num_buffers_header_only_channel,
             .buffer_size_bytes = test_params.buffer_size_bytes_header_only_channel,
             .receiver_noc_xy_encoding = default_receiver_noc_xy_encoding,
@@ -503,14 +503,14 @@ int main(int argc, char** argv) {
     }
 
     log_info(tt::LogTest, "Workers done, terminating mux kernel");
-    std::vector<uint32_t> termiation_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    std::vector<uint32_t> termiation_signal(1, tt::tt_metal::experimental::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     tt::tt_metal::detail::WriteToDeviceL1(
         device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for mux kernel to terminate");
     // need to wait before terminating driner core otherwise the mux kernel will hang while closing connection
     std::vector<uint32_t> mux_status(1, 0);
-    while (mux_status[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
+    while (mux_status[0] != tt::tt_metal::experimental::fabric::EDMStatus::TERMINATED) {
         tt::tt_metal::detail::ReadFromDeviceL1(
             device, mux_logical_core, mux_kernel_config.get_status_address(), 4, mux_status);
     }
@@ -538,8 +538,8 @@ int main(int argc, char** argv) {
     for (auto& [_, unit_mesh_device] : mesh_device_map) {
         unit_mesh_device->close();
     }
-    tt::tt_fabric::SetFabricConfig(
-        tt::tt_fabric::FabricConfig::DISABLED, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::experimental::fabric::SetFabricConfig(
+        tt::tt_metal::experimental::fabric::FabricConfig::DISABLED, tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     size_t total_bytes_sent =
         (test_params.num_full_size_channels * test_params.buffer_size_bytes_full_size_channel +

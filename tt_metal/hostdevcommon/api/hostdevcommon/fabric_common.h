@@ -9,7 +9,7 @@
 #include <array>
 #include <type_traits>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 // Forward declaration to avoid including heavy host-only headers here
 class FabricNodeId;
@@ -240,7 +240,7 @@ struct fabric_routing_l1_info_t {
     routing_l1_info_t routing_info;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 

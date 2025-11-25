@@ -18,26 +18,26 @@
 
 namespace tt::tt_metal {
 
-class MeshDeviceDual2x4SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceDual2x4Fixture,
+class MeshDeviceDual2x4SendRecvFixture : public tt::tt_metal::experimental::fabric::fabric_router_tests::MeshDeviceDual2x4Fixture,
                                          public testing::WithParamInterface<SocketTestArgs> {};
 
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceDual2x4SendRecvTests, MeshDeviceDual2x4SendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
 
-class MeshDeviceSplit2x2SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceSplit2x2Fixture,
+class MeshDeviceSplit2x2SendRecvFixture : public tt::tt_metal::experimental::fabric::fabric_router_tests::MeshDeviceSplit2x2Fixture,
                                           public testing::WithParamInterface<SocketTestArgs> {};
 
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceSplit2x2SendRecvTests, MeshDeviceSplit2x2SendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
 
-class MeshDeviceSplit1x2SendRecvFixture : public tt::tt_fabric::fabric_router_tests::MeshDeviceSplit1x2Fixture,
+class MeshDeviceSplit1x2SendRecvFixture : public tt::tt_metal::experimental::fabric::fabric_router_tests::MeshDeviceSplit1x2Fixture,
                                           public testing::WithParamInterface<SocketTestArgs> {};
 
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceSplit1x2SendRecvTests, MeshDeviceSplit1x2SendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
 
 class MeshDeviceNanoExabox2x4SendRecvFixture
-    : public tt::tt_fabric::fabric_router_tests::MeshDeviceNanoExabox2x4Fixture,
+    : public tt::tt_metal::experimental::fabric::fabric_router_tests::MeshDeviceNanoExabox2x4Fixture,
       public testing::WithParamInterface<SocketTestArgs> {};
 INSTANTIATE_TEST_SUITE_P(
     MeshDeviceNanoExabox2x4SendRecvTests,

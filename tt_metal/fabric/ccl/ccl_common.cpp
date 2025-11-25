@@ -10,13 +10,13 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace {
 // Template helper function for generating EDM kernels
 tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     tt::tt_metal::Program& program,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
@@ -53,7 +53,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::IDevice* /*device*/,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const tt::tt_metal::experimental::fabric::FabricEriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
@@ -67,4 +67,4 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         tt::tt_metal::KernelBuildOptLevel::O3);
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

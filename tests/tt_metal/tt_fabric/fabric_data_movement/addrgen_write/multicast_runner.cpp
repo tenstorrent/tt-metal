@@ -24,10 +24,10 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/device_pool.hpp>
 
-namespace tt::tt_fabric::test {
+namespace tt::tt_metal::experimental::fabric::test {
 
 // Import needed types
-using tt::tt_fabric::test::AddrgenTestParams;
+using tt::tt_metal::experimental::fabric::test::AddrgenTestParams;
 
 // ---------- helpers (validation / utilities) ----------
 
@@ -91,8 +91,8 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         defines["FABRIC_2D"] = "1";
     }
 
-    tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
-    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
+    tt::tt_metal::experimental::fabric::FabricNodeId src{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.src_chip};
+    tt::tt_metal::experimental::fabric::FabricNodeId dst{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.dst_chip};
 
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
@@ -328,17 +328,17 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     }
 
     // === Per-direction fabric connections (W,E,N,S) ===
-    auto coord_to_fabric_id = [&](Dist::MeshCoordinate mc) -> tt::tt_fabric::FabricNodeId {
+    auto coord_to_fabric_id = [&](Dist::MeshCoordinate mc) -> tt::tt_metal::experimental::fabric::FabricNodeId {
         auto dev = view.get_device(mc);
         TT_FATAL(dev != nullptr, "No device at mesh coord ({}, {})", (int)mc[0], (int)mc[1]);
         ChipId phys = dev->id();
         return cp.get_fabric_node_id_from_physical_chip_id(phys);
     };
-    auto src_fn = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
+    auto src_fn = tt::tt_metal::experimental::fabric::FabricNodeId{tt::tt_metal::experimental::fabric::MeshId{p.mesh_id}, p.src_chip};
 
     auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
         auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+        auto links = tt::tt_metal::experimental::fabric::get_forwarding_link_indices(src_fn, dst_fn);
         if (links.empty()) {
             ADD_FAILURE() << "No forwarding link from src to representative";
             return false;
@@ -385,19 +385,19 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Append the fabric connection blocks in fixed order: W, E, N, S
     if (w_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
     }
     if (e_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
     }
     if (n_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
     }
     if (s_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
     }
 
@@ -430,4 +430,4 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     }
 }
 
-}  // namespace tt::tt_fabric::test
+}  // namespace tt::tt_metal::experimental::fabric::test

@@ -4,7 +4,7 @@
 
 #include "tt_fabric_test_device_setup.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 // ====================================
@@ -86,7 +86,7 @@ void FabricConnectionManager::process(
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
-            const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            const size_t buffer_size_bytes_full_size_channel = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
             // Create the mux config
@@ -384,7 +384,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     // but the routing tables cause packets to fail to reach the destination properly in some cases,
     // due to torus links. In this case, we use node IDs instead of hops.
     RoutingDirection outgoing_direction;
-    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_metal::experimental::fabric::Topology::Torus) &&
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
@@ -1240,4 +1240,4 @@ uint64_t TestSender::get_total_packets() const {
 }
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

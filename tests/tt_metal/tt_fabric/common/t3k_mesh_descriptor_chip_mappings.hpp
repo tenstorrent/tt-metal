@@ -10,7 +10,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 namespace fabric_router_tests {
 
@@ -136,4 +136,4 @@ static const std::array t3k_disjoint_mesh_descriptor_chip_mappings = {
 
 }  // namespace fabric_router_tests
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -43,8 +43,8 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
     }
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_broadcast operation");
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_metal::experimental::fabric::Topology topology_ = topology.value_or(
+        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_metal::experimental::fabric::get_fabric_topology(), cluster_axis));
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 

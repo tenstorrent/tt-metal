@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 enum class Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
 
@@ -82,4 +82,4 @@ struct EDMChannelWorkerLocationInfo {
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

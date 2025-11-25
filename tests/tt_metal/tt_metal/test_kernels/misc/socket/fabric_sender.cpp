@@ -8,7 +8,7 @@
 
 void fabric_write_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     uint32_t src_addr,
     uint64_t dst_addr,
     uint32_t xfer_size,
@@ -39,8 +39,8 @@ void kernel_main() {
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing writes to downstream data cores

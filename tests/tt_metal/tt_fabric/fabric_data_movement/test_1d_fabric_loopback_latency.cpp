@@ -129,8 +129,8 @@ inline void RunPersistent1dFabricLatencyTest(
     LatencyTestWriterSpecs writer_specs,
     size_t line_size,
     bool enable_fused_payload_with_sync,
-    tt::tt_fabric::Topology topology) {
-    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
+    tt::tt_metal::experimental::fabric::Topology topology) {
+    const bool is_ring = topology == tt::tt_metal::experimental::fabric::Topology::Ring;
 
     size_t num_links = 1;
 
@@ -177,7 +177,7 @@ inline void RunPersistent1dFabricLatencyTest(
             coord.coords()[0],
             coord.coords()[1],
             d->id(),
-            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(d->id()));
+            tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(d->id()));
     }
 
     // Find latency writer specs and location
@@ -198,7 +198,7 @@ inline void RunPersistent1dFabricLatencyTest(
 
     // Temporary until we move this to be under tt_metal and migrate to device init fabric
     // OR packet header management is removed from user space, whichever comes first
-    constexpr size_t packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    constexpr size_t packet_header_size_bytes = sizeof(tt::tt_metal::experimental::fabric::PacketHeader);
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
@@ -265,19 +265,19 @@ inline void RunPersistent1dFabricLatencyTest(
                                     Program& program,
                                     CoreCoord worker_core_logical,
                                     bool is_connected_in_direction,
-                                    tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
+                                    tt::tt_metal::experimental::fabric::EdmLineFabricOpInterface::Direction direction,
                                     std::vector<uint32_t>& rt_args_out) {
         rt_args_out.push_back(is_connected_in_direction);
 
         if (is_connected_in_direction) {
             const auto device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
-            ChipId connected_chip_id = direction == tt::tt_fabric::EdmLineFabricOpInterface::FORWARD
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+            ChipId connected_chip_id = direction == tt::tt_metal::experimental::fabric::EdmLineFabricOpInterface::FORWARD
                                            ? forward_device->get_devices()[0]->id()
                                            : backward_device->get_devices()[0]->id();
             const auto connected_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
-            tt::tt_fabric::append_fabric_connection_rt_args(
+                tt::tt_metal::experimental::fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
+            tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
                 device_fabric_node_id, connected_device_fabric_node_id, 0, program, {worker_core_logical}, rt_args_out);
         }
     };
@@ -420,7 +420,7 @@ inline void RunPersistent1dFabricLatencyTest(
             program,
             worker_core_logical,
             has_forward_connection,
-            tt::tt_fabric::EdmLineFabricOpInterface::FORWARD,
+            tt::tt_metal::experimental::fabric::EdmLineFabricOpInterface::FORWARD,
             rt_args);
         build_connection_args(
             device,
@@ -429,7 +429,7 @@ inline void RunPersistent1dFabricLatencyTest(
             program,
             worker_core_logical,
             has_backward_connection,
-            tt::tt_fabric::EdmLineFabricOpInterface::BACKWARD,
+            tt::tt_metal::experimental::fabric::EdmLineFabricOpInterface::BACKWARD,
             rt_args);
         tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core_logical, rt_args);
 
@@ -470,7 +470,7 @@ inline void RunPersistent1dFabricLatencyTest(
             ack_writer_program,
             latency_writer_spec->worker_core_logical,
             true,
-            tt::tt_fabric::EdmLineFabricOpInterface::BACKWARD,
+            tt::tt_metal::experimental::fabric::EdmLineFabricOpInterface::BACKWARD,
             rt_args);
         auto ack_writer_kernel = tt_metal::CreateKernel(
             ack_writer_program,
@@ -578,13 +578,13 @@ int main(int argc, char** argv) {
             .message_size_bytes = congestion_writers_message_size};
     }
 
-    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
+    tt::tt_metal::experimental::fabric::Topology topology = tt::tt_metal::experimental::fabric::Topology::Linear;
     if (topology_str == "linear") {
-        topology = tt::tt_fabric::Topology::Linear;
+        topology = tt::tt_metal::experimental::fabric::Topology::Linear;
     } else if (topology_str == "ring") {
-        topology = tt::tt_fabric::Topology::Ring;
+        topology = tt::tt_metal::experimental::fabric::Topology::Ring;
     } else if (topology_str == "mesh") {
-        topology = tt::tt_fabric::Topology::Mesh;
+        topology = tt::tt_metal::experimental::fabric::Topology::Mesh;
         TT_THROW("Topology \"mesh\" is currently unsupported.");
     } else {
         TT_THROW("Invalid topology: {}", topology_str);

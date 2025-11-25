@@ -10,7 +10,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 struct SenderMetadataFields {
@@ -240,7 +240,7 @@ struct TrafficParameters {
     uint32_t seed;
     bool is_2D_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
-    tt::tt_fabric::Topology topology;
+    tt::tt_metal::experimental::fabric::Topology topology;
 };
 
 struct TestTrafficConfig {
@@ -561,4 +561,4 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
 }
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

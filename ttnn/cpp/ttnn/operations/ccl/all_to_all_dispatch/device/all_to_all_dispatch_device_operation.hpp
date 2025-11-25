@@ -41,7 +41,7 @@ struct AllToAllDispatchDeviceOperation {
         const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
-        const tt::tt_fabric::Topology topology;
+        const tt::tt_metal::experimental::fabric::Topology topology;
         const AllToAllTransferType impl;
         const uint32_t output_concat_dim;
         static constexpr auto attribute_names = std::forward_as_tuple(
@@ -121,7 +121,7 @@ struct AllToAllDispatchDeviceOperation {
         std::optional<uint32_t> axis,
         const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology,
+        tt::tt_metal::experimental::fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
         const CoreRangeSet& worker_core_range_set,
         AllToAllTransferType impl,

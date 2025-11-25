@@ -19,7 +19,7 @@
 
 #include "debug/assert.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 using BufferIndex = NamedType<uint8_t, struct BufferIndexType>;
 using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
@@ -154,7 +154,7 @@ private:
     // different sized channels
     FORCE_INLINE bool is_caught_up_to(const BufferPtr& leading_ptr) const { return this->get_ptr() == leading_ptr; }
     FORCE_INLINE uint8_t distance_behind(const BufferPtr& leading_ptr) const {
-        return tt::tt_fabric::distance_behind<NUM_BUFFERS>(this->ptr, leading_ptr);
+        return tt::tt_metal::experimental::fabric::distance_behind<NUM_BUFFERS>(this->ptr, leading_ptr);
     }
     BufferPtr ptr = BufferPtr{0};
 };
@@ -274,4 +274,4 @@ struct ChannelPointersTuple {
     }
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

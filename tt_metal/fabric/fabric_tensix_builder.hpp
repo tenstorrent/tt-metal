@@ -18,7 +18,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 class FabricTensixDatamoverConfig {
 public:
@@ -46,7 +46,7 @@ public:
     CoreCoord get_core_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the mux config for a specific RISC ID
-    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> get_mux_config(size_t risc_id) const;
+    std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig> get_mux_config(size_t risc_id) const;
 
     // Check if a RISC ID is active (has channels)
     bool is_risc_id_active(size_t risc_id) const;
@@ -98,7 +98,7 @@ private:
     std::unordered_map<ChipId, std::unordered_map<size_t, size_t>> eth_chan_to_risc_id_;
 
     // Mux configs per RISC ID, [risc id] -> [mux config] mapping
-    std::unordered_map<size_t, std::shared_ptr<tt::tt_fabric::FabricMuxConfig>> mux_configs_;
+    std::unordered_map<size_t, std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig>> mux_configs_;
 
     // Helper methods for initialization
     bool initialize_channel_mappings();
@@ -116,22 +116,22 @@ public:
     // Constructor for fabric tensix datamover builder
     FabricTensixDatamoverBuilder(
         const CoreCoord& my_core_logical,
-        tt::tt_fabric::FabricNodeId local_fabric_node_id,
-        tt::tt_fabric::FabricNodeId remote_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId local_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         uint32_t link_idx,
         size_t risc_id,
         uint32_t noc_x,
         uint32_t noc_y,
-        std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
+        std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig> fabric_mux_config,
         eth_chan_directions direction);
 
     // Static builder method called from topology to construct a tensix builder
     static FabricTensixDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
-        tt::tt_fabric::FabricNodeId local_fabric_node_id,
-        tt::tt_fabric::FabricNodeId remote_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId local_fabric_node_id,
+        tt::tt_metal::experimental::fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         eth_chan_directions direction);
 
@@ -139,12 +139,12 @@ public:
     void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect to this mux
-    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
+    tt::tt_metal::experimental::fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
     const CoreCoord& get_logical_core() const { return my_core_logical_; }
-    tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
-    tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
+    tt::tt_metal::experimental::fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
+    tt::tt_metal::experimental::fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
     size_t get_risc_id() const { return risc_id_; }
 
@@ -153,8 +153,8 @@ public:
 private:
     // Core and fabric configuration
     CoreCoord my_core_logical_;
-    tt::tt_fabric::FabricNodeId local_fabric_node_id_;
-    tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
+    tt::tt_metal::experimental::fabric::FabricNodeId local_fabric_node_id_;
+    tt::tt_metal::experimental::fabric::FabricNodeId remote_fabric_node_id_;
     uint32_t ethernet_channel_id_;
     uint32_t link_idx_;
 
@@ -162,7 +162,7 @@ private:
     size_t risc_id_;
 
     // Mux configuration
-    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config_;
+    std::shared_ptr<tt::tt_metal::experimental::fabric::FabricMuxConfig> fabric_mux_config_;
 
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
@@ -176,4 +176,4 @@ private:
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

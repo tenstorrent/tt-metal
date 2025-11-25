@@ -25,9 +25,9 @@
 #include <unordered_set>
 #include <vector>
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 class ControlPlane;
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 namespace tt::tt_metal {
 struct ProfilerStateManager;
@@ -77,31 +77,31 @@ public:
 
     // Control plane accessors
     void initialize_control_plane();
-    tt::tt_fabric::ControlPlane& get_control_plane();
+    tt::tt_metal::experimental::fabric::ControlPlane& get_control_plane();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        const std::map<tt_metal::experimental::fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_fabric_topology();
     void set_fabric_config(
-        tt_fabric::FabricConfig fabric_config,
-        tt_fabric::FabricReliabilityMode reliability_mode =
-            tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt_metal::experimental::fabric::FabricConfig fabric_config,
+        tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode =
+            tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::optional<uint8_t> num_routing_planes = std::nullopt,
-        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED,
-        tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED);
+        tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config = tt_metal::experimental::fabric::FabricTensixConfig::DISABLED,
+        tt_metal::experimental::fabric::FabricUDMMode fabric_udm_mode = tt_metal::experimental::fabric::FabricUDMMode::DISABLED);
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
-    tt_fabric::FabricConfig get_fabric_config() const;
+    tt_metal::experimental::fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
-    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+    void set_fabric_tensix_config(tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config);
+    tt_metal::experimental::fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
     // Fabric UDM mode configuration
-    tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
+    tt_metal::experimental::fabric::FabricUDMMode get_fabric_udm_mode() const;
 
     // This is used to track the current thread's command queue id stack
     using CommandQueueIdStack = std::vector<uint8_t>;
@@ -186,10 +186,10 @@ private:
     std::unique_ptr<DataCollector> data_collector_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
+    std::unique_ptr<tt::tt_metal::experimental::fabric::ControlPlane> control_plane_;
+    tt_metal::experimental::fabric::FabricConfig fabric_config_ = tt_metal::experimental::fabric::FabricConfig::DISABLED;
+    tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config_ = tt_metal::experimental::fabric::FabricTensixConfig::DISABLED;
+    tt_metal::experimental::fabric::FabricUDMMode fabric_udm_mode_ = tt_metal::experimental::fabric::FabricUDMMode::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
@@ -201,9 +201,9 @@ private:
     // is expected that any downed devices/links will result in some sort of error condition being
     // reported. When set to false, the control plane is free to instantiate fewer routing planes
     // according to which links are available.
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    tt_metal::experimental::fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
-    std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::map<tt_metal::experimental::fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 };
 

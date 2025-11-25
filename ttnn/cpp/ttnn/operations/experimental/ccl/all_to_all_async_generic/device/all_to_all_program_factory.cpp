@@ -87,7 +87,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
 
     // Create CB
     const uint32_t page_size = op_config.get_page_size();
-    const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t packet_size = tt::tt_metal::experimental::fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const uint32_t number_pages_per_packet = 2;
     const uint32_t cb_size = (packet_size / page_size) * page_size * number_pages_per_packet;  // round_down
@@ -100,7 +100,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
 
     // Create CB for fabric
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto packet_header_size_bytes = tt::tt_metal::experimental::fabric::get_tt_fabric_packet_header_size_bytes();
     const uint32_t num_packet_headers_storable = 4;
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
@@ -198,7 +198,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
     if (forward_coord.has_value()) {
         const auto sender_device_fabric_node_id = device->get_fabric_node_id(target_device.value());
         const auto forward_device_fabric_node_id = device->get_fabric_node_id(forward_coord.value());
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             sender_device_fabric_node_id,
             forward_device_fabric_node_id,
             0,
@@ -211,7 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_generic_program(
     if (backward_coord.has_value()) {
         const auto sender_device_fabric_node_id = device->get_fabric_node_id(target_device.value());
         const auto backward_device_fabric_node_id = device->get_fabric_node_id(backward_coord.value());
-        tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_metal::experimental::fabric::append_fabric_connection_rt_args(
             sender_device_fabric_node_id,
             backward_device_fabric_node_id,
             0,

@@ -44,7 +44,7 @@ using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig
 using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
 using BufferDistributionSpec = tt::tt_metal::BufferDistributionSpec;
 using Shape = tt::tt_metal::Shape;
-using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
+using MeshHostRankId = tt::tt_metal::experimental::fabric::MeshHostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
 using HalProgrammableCoreType = tt::tt_metal::HalProgrammableCoreType;
@@ -55,9 +55,9 @@ using BufferType = tt::tt_metal::BufferType;
 using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
 using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
-using Topology = tt::tt_fabric::Topology;
+using Topology = tt::tt_metal::experimental::fabric::Topology;
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 namespace fabric_tests {
 
 struct pair_hash {
@@ -88,9 +88,9 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
 
-    static const std::unordered_map<Topology, tt::tt_fabric::FabricConfig> topology_to_fabric_config_map;
+    static const std::unordered_map<Topology, tt::tt_metal::experimental::fabric::FabricConfig> topology_to_fabric_config_map;
 
-    static const std::unordered_map<std::pair<Topology, std::string>, tt::tt_fabric::FabricConfig, pair_hash>
+    static const std::unordered_map<std::pair<Topology, std::string>, tt::tt_metal::experimental::fabric::FabricConfig, pair_hash>
         torus_topology_to_fabric_config_map;
 
 public:
@@ -100,7 +100,7 @@ public:
         }
 
         // to ensure fabric config is set first, which affects mesh graph descriptor selection
-        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
+        current_fabric_config_ = tt::tt_metal::experimental::fabric::FabricConfig::DISABLED;
     }
 
     MeshCoordinateRange get_host_local_device_coordinates() const {
@@ -115,8 +115,8 @@ public:
         // Fabric Reliability Mode
         // Default to STRICT; if runtime option (from rtoptions) is set, it takes precedence over
         // fabric_setup.fabric_reliability_mode
-        tt::tt_fabric::FabricReliabilityMode reliability_mode =
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        tt::tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
         if (reliability_mode_override.has_value()) {
             reliability_mode = reliability_mode_override.value();
@@ -196,7 +196,7 @@ public:
             return;
         }
         mesh_device_->close();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(tt::tt_metal::experimental::fabric::FabricConfig::DISABLED);
 
         // Clear all class members
         local_available_node_ids_.clear();
@@ -204,9 +204,9 @@ public:
         available_mesh_ids_.clear();
         mesh_device_.reset();
         mesh_workload_.reset();
-        current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
-        current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-        current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        current_fabric_config_ = tt::tt_metal::experimental::fabric::FabricConfig::DISABLED;
+        current_fabric_tensix_config_ = tt_metal::experimental::fabric::FabricTensixConfig::DISABLED;
+        current_fabric_reliability_mode_ = tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         are_devices_open_ = false;
     }
 
@@ -869,11 +869,11 @@ public:
     uint32_t get_num_sync_devices() const {
         uint32_t num_devices;
         switch (topology_) {
-            case tt::tt_fabric::Topology::Linear: {
+            case tt::tt_metal::experimental::fabric::Topology::Linear: {
                 num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
                 return num_devices;
             }
-            case tt::tt_fabric::Topology::Ring: {
+            case tt::tt_metal::experimental::fabric::Topology::Ring: {
                 if (wrap_around_mesh_) {
                     // sync using full ring mcast, ie, mcast on both forward/backward path.
                     num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
@@ -883,8 +883,8 @@ public:
                 return num_devices;
             }
             // for torus, the handling should be same as mesh since we need to sync with all the devices
-            case tt::tt_fabric::Topology::Torus:
-            case tt::tt_fabric::Topology::Mesh: {
+            case tt::tt_metal::experimental::fabric::Topology::Torus:
+            case tt::tt_metal::experimental::fabric::Topology::Mesh: {
                 num_devices = mesh_shape_[NS_DIM] * mesh_shape_[EW_DIM];
                 return num_devices;
             }
@@ -1115,7 +1115,7 @@ public:
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_id,
         const RoutingDirection& direction) const override {
-        return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
+        return tt::tt_metal::experimental::fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
     }
 
     FabricNodeId get_neighbor_node_id(
@@ -1144,7 +1144,7 @@ public:
         uint32_t global_sync_val = 0;
 
         switch (topology_) {
-            case tt::tt_fabric::Topology::Ring: {
+            case tt::tt_metal::experimental::fabric::Topology::Ring: {
                 if (wrap_around_mesh_) {
                     // Get ring neighbors - returns nullopt for non-perimeter devices
                     auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
@@ -1184,15 +1184,15 @@ public:
                     2 * num_sync_devices - 2;  // minus 2 because in a full ring pattern we dont mcast to self (twice).
                 break;
             }
-            case tt::tt_fabric::Topology::Linear: {
+            case tt::tt_metal::experimental::fabric::Topology::Linear: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
                 global_sync_val = this->get_num_sync_devices() - 1;
                 break;
             }
             // for torus, the handling should be same as mesh since we need to sync with all the devices
             // it doesnt matter if we use torus links or internal links to get the sync pacekts across
-            case tt::tt_fabric::Topology::Torus:
-            case tt::tt_fabric::Topology::Mesh: {
+            case tt::tt_metal::experimental::fabric::Topology::Torus:
+            case tt::tt_metal::experimental::fabric::Topology::Mesh: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
                 global_sync_val = this->get_num_sync_devices() - 1;
                 break;
@@ -1478,10 +1478,10 @@ private:
     std::set<MeshId> available_mesh_ids_;
     std::vector<FabricNodeId> local_available_node_ids_;
     std::vector<FabricNodeId> global_available_node_ids_;
-    tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
-    tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
-    tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
+    tt::tt_metal::experimental::fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
+    tt_metal::experimental::fabric::FabricTensixConfig current_fabric_tensix_config_{tt_metal::experimental::fabric::FabricTensixConfig::DISABLED};
+    tt_metal::experimental::fabric::FabricReliabilityMode current_fabric_reliability_mode_{
+        tt_metal::experimental::fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1523,11 +1523,11 @@ private:
     }
 
     void open_devices_internal(
-        tt::tt_fabric::FabricConfig fabric_config,
-        tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt_fabric::FabricReliabilityMode reliability_mode) {
+        tt::tt_metal::experimental::fabric::FabricConfig fabric_config,
+        tt_metal::experimental::fabric::FabricTensixConfig fabric_tensix_config,
+        tt_metal::experimental::fabric::FabricReliabilityMode reliability_mode) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
+        tt::tt_metal::experimental::fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
@@ -1836,13 +1836,13 @@ private:
 
     MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
         if (topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_);
+            auto fabric_type = tt::tt_metal::experimental::fabric::get_fabric_type(current_fabric_config_);
             switch (fabric_type) {
-                case tt::tt_fabric::FabricType::TORUS_X:
+                case tt::tt_metal::experimental::fabric::FabricType::TORUS_X:
                     return (dim == EW_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_Y:
+                case tt::tt_metal::experimental::fabric::FabricType::TORUS_Y:
                     return (dim == NS_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_XY: return MeshCoordinate::BoundaryMode::WRAP;
+                case tt::tt_metal::experimental::fabric::FabricType::TORUS_XY: return MeshCoordinate::BoundaryMode::WRAP;
                 default: return MeshCoordinate::BoundaryMode::NONE;
             }
         }
@@ -1887,4 +1887,4 @@ private:
 };
 
 }  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

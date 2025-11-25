@@ -16,12 +16,12 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
-    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
+auto fmt::formatter<tt::tt_metal::experimental::fabric::FabricNodeId>::format(
+    const tt::tt_metal::experimental::fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
     return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
 }
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
     mesh_id(mesh_id_val), chip_id(chip_id_val) {}
@@ -380,4 +380,4 @@ FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
         *dst_mesh_id);
     return FabricNodeId(src_mesh_id, exit_chip);
 }
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

@@ -25,7 +25,7 @@ struct TransactionIdCounter {
     FORCE_INLINE void init() { this->next_trid = 0; }
 
     FORCE_INLINE void increment() {
-        this->next_trid = tt::tt_fabric::wrap_increment<MAX_TRANSACTION_IDS>(this->next_trid);
+        this->next_trid = tt::tt_metal::experimental::fabric::wrap_increment<MAX_TRANSACTION_IDS>(this->next_trid);
     }
 
     FORCE_INLINE uint8_t get() const { return this->next_trid; }
@@ -63,7 +63,7 @@ struct WriteTransactionIdTracker {
             }
         }
     }
-    FORCE_INLINE void set_buffer_slot_trid(uint8_t trid, tt::tt_fabric::BufferIndex buffer_index) {
+    FORCE_INLINE void set_buffer_slot_trid(uint8_t trid, tt::tt_metal::experimental::fabric::BufferIndex buffer_index) {
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             ASSERT(OFFSET_PARAM <= trid && trid <= INVALID_TRID);
             this->buffer_slot_trids[buffer_index] = trid;
@@ -71,7 +71,7 @@ struct WriteTransactionIdTracker {
     }
 
     FORCE_INLINE uint8_t
-    update_buffer_slot_to_next_trid_and_advance_trid_counter(tt::tt_fabric::BufferIndex buffer_index) {
+    update_buffer_slot_to_next_trid_and_advance_trid_counter(tt::tt_metal::experimental::fabric::BufferIndex buffer_index) {
         if constexpr (BOTH_PARAMS_ARE_EQUAL) {
             return OFFSET_PARAM + buffer_index;
         } else if constexpr (BOTH_PARAMS_ARE_POW2) {
@@ -84,13 +84,13 @@ struct WriteTransactionIdTracker {
         }
     }
 
-    FORCE_INLINE void clear_trid_at_buffer_slot(tt::tt_fabric::BufferIndex buffer_index) {
+    FORCE_INLINE void clear_trid_at_buffer_slot(tt::tt_metal::experimental::fabric::BufferIndex buffer_index) {
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             this->buffer_slot_trids[buffer_index] = INVALID_TRID;
         }
     }
 
-    FORCE_INLINE uint8_t get_buffer_slot_trid(tt::tt_fabric::BufferIndex buffer_index) const {
+    FORCE_INLINE uint8_t get_buffer_slot_trid(tt::tt_metal::experimental::fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_EQUAL) {
             return OFFSET_PARAM + buffer_index;
         } else if constexpr (BOTH_PARAMS_ARE_POW2) {
@@ -99,7 +99,7 @@ struct WriteTransactionIdTracker {
             return this->buffer_slot_trids[buffer_index];
         }
     }
-    FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
+    FORCE_INLINE bool transaction_flushed(tt::tt_metal::experimental::fabric::BufferIndex buffer_index) const {
         auto trid = this->get_buffer_slot_trid(buffer_index);
         if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
             return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);

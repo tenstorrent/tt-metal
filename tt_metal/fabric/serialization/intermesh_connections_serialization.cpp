@@ -7,10 +7,10 @@
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include "protobuf/intermesh_connection_table.pb.h"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 std::vector<uint8_t> serialize_intermesh_connections_to_bytes(const AnnotatedIntermeshConnections& connections) {
-    tt::fabric::proto::ConnectionsTable proto_table;
+    tt::tt_metal::experimental::fabric::proto::ConnectionsTable proto_table;
 
     // Create connection pairs
     for (const auto& [first_pair, second_pair] : connections) {
@@ -44,7 +44,7 @@ AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const
     AnnotatedIntermeshConnections result;
 
     // Parse the protobuf
-    tt::fabric::proto::ConnectionsTable proto_table;
+    tt::tt_metal::experimental::fabric::proto::ConnectionsTable proto_table;
     if (!proto_table.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse ConnectionsTable from protobuf binary format");
     }
@@ -76,4 +76,4 @@ AnnotatedIntermeshConnections deserialize_intermesh_connections_from_bytes(const
     return result;
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric

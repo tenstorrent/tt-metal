@@ -80,7 +80,7 @@ public:
                                               << FORWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_forward_connection()) {
             connection_manager.forward_fabric_sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
                 connection_manager.forward_fabric_sender.open_start();
             }
@@ -89,7 +89,7 @@ public:
                                                << BACKWARD_CONNECTION_FLAG_OFFSET;
         if (connection_manager.has_backward_connection()) {
             connection_manager.backward_fabric_sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+                tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
                 connection_manager.backward_fabric_sender.open_start();
             }
@@ -115,11 +115,11 @@ public:
         }
     }
 
-    tt::tt_fabric::WorkerToFabricEdmSender& get_forward_connection() {
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& get_forward_connection() {
         ASSERT(has_forward_connection());
         return forward_fabric_sender;
     }
-    tt::tt_fabric::WorkerToFabricEdmSender& get_backward_connection() {
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& get_backward_connection() {
         ASSERT(has_backward_connection());
         return backward_fabric_sender;
     }
@@ -129,7 +129,7 @@ private:
     static constexpr uint8_t BACKWARD_CONNECTION_FLAG_MASK = 0x02;
     static constexpr uint8_t FORWARD_CONNECTION_FLAG_OFFSET = 0x0;
     static constexpr uint8_t BACKWARD_CONNECTION_FLAG_OFFSET = 0x1;
-    tt::tt_fabric::WorkerToFabricEdmSender forward_fabric_sender;
-    tt::tt_fabric::WorkerToFabricEdmSender backward_fabric_sender;
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender forward_fabric_sender;
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender backward_fabric_sender;
     uint8_t connection_flags;
 };

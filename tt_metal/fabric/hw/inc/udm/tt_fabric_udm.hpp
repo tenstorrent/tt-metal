@@ -16,7 +16,7 @@
 #include "tt_fabric_udm_impl.hpp"
 #include "debug/dprint.h"
 
-namespace tt::tt_fabric::udm {
+namespace tt::tt_metal::experimental::fabric::udm {
 
 // Placeholder max page size for the addrgen until the page size is properly visible by the worker
 // https://github.com/tenstorrent/tt-metal/issues/25966
@@ -582,4 +582,4 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
 }
 
-}  // namespace tt::tt_fabric::udm
+}  // namespace tt::tt_metal::experimental::fabric::udm

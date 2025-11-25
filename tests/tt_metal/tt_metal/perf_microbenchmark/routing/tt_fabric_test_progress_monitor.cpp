@@ -15,7 +15,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_metal::experimental::fabric::fabric_tests {
 
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
     ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {}
@@ -55,13 +55,13 @@ void TestProgressMonitor::poll_until_complete() {
     std::cout << std::endl;
 }
 
-std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMonitor::poll_devices() {
-    std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> device_progress;
+std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress> TestProgressMonitor::poll_devices() {
+    std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress> device_progress;
 
     auto* device_info = ctx_->get_device_info_provider();
 
     for (const auto& [coord, test_device] : ctx_->get_test_devices()) {
-        tt::tt_fabric::FabricNodeId device_id = test_device.get_node_id();
+        tt::tt_metal::experimental::fabric::FabricNodeId device_id = test_device.get_node_id();
 
         if (!device_info->is_local_fabric_node_id(device_id)) {
             continue;
@@ -108,7 +108,7 @@ DeviceProgress TestProgressMonitor::poll_device_senders(const MeshCoordinate& co
     return progress;
 }
 
-bool TestProgressMonitor::is_device_hung(tt::tt_fabric::FabricNodeId device_id, uint64_t current_packets) {
+bool TestProgressMonitor::is_device_hung(tt::tt_metal::experimental::fabric::FabricNodeId device_id, uint64_t current_packets) {
     auto& state = device_states_[device_id];
     auto now = std::chrono::steady_clock::now();
 
@@ -130,7 +130,7 @@ bool TestProgressMonitor::is_device_hung(tt::tt_fabric::FabricNodeId device_id, 
 }
 
 void TestProgressMonitor::check_for_hung_devices(
-    const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress) {
+    const std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress>& progress) {
     for (const auto& [device_id, prog] : progress) {
         // Skip devices that have already completed
         if (prog.current_packets >= prog.total_packets) {
@@ -160,7 +160,7 @@ void TestProgressMonitor::check_for_hung_devices(
 }
 
 void TestProgressMonitor::display_progress(
-    const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
+    const std::unordered_map<tt::tt_metal::experimental::fabric::FabricNodeId, DeviceProgress>& progress,
     std::chrono::duration<double> elapsed) {
     uint64_t total_current = 0, total_target = 0;
     for (const auto& [_, prog] : progress) {
@@ -242,4 +242,4 @@ std::optional<double> TestProgressMonitor::estimate_eta(
     return remaining / throughput;
 }
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace tt::tt_metal::experimental::fabric::fabric_tests

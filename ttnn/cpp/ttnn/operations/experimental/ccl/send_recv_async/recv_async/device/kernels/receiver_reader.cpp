@@ -21,7 +21,7 @@ constexpr bool is_dram = get_compile_time_arg_val(4);
 template <uint32_t page_size, uint32_t cb_id, bool is_dram>
 FORCE_INLINE void read_data_from_remote_core(
     SocketReceiverInterface& receiver_socket,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     uint32_t bank_id,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr,
     uint32_t num_pages_per_block) {
@@ -50,8 +50,8 @@ void kernel_main() {
     uint32_t num_pages_per_block = get_arg_val<uint32_t>(rt_args_idx++);    // pages per block
     uint32_t block_remainder_pages = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
 
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores

@@ -46,32 +46,32 @@ public:
     explicit MeshDeviceView(
         const MeshShape& shape,
         const std::vector<IDevice*>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
+        const std::vector<tt::tt_metal::experimental::fabric::FabricNodeId>& fabric_node_ids);
     explicit MeshDeviceView(
         const MeshShape& shape,
         const std::vector<MaybeRemote<IDevice*>>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
+        const std::vector<tt::tt_metal::experimental::fabric::FabricNodeId>& fabric_node_ids);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
     [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<IDevice*> get_devices() const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
     [[nodiscard]] const MeshShape& shape() const noexcept;
-    [[nodiscard]] tt::tt_fabric::MeshId mesh_id() const noexcept;
+    [[nodiscard]] tt::tt_metal::experimental::fabric::MeshId mesh_id() const noexcept;
     [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
 
     // Returns `IDevice*` instance for `coord`.
     // In multi-host context, throws if `coord` is querying a remote device.
     [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
 
-    // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
+    // Returns `tt::tt_metal::experimental::fabric::FabricNodeId` for `coord`.
     // In multi-host context, fabric node IDs are always available, even for remote devices.
-    [[nodiscard]] tt::tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+    [[nodiscard]] tt::tt_metal::experimental::fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     auto begin() const { return devices_.values().begin(); }
     auto end() const { return devices_.values().end(); }
@@ -85,8 +85,8 @@ public:
     [[nodiscard]] size_t num_cols() const;
     [[nodiscard]] std::vector<IDevice*> get_devices_on_row(size_t row) const;
     [[nodiscard]] std::vector<IDevice*> get_devices_on_column(size_t col) const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
 
     // These utility methods linearize the set of devices in a mesh into a line or ring.
     // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
@@ -106,8 +106,8 @@ public:
     [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_ring_fabric_node_ids() const;
+    [[nodiscard]] std::vector<tt::tt_metal::experimental::fabric::FabricNodeId> get_line_fabric_node_ids() const;
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
@@ -119,8 +119,8 @@ public:
 
 private:
     DistributedMeshContainer<IDevice*> devices_;
-    MeshContainer<tt::tt_fabric::FabricNodeId> fabric_node_ids_;
-    tt::tt_fabric::MeshId mesh_id_;
+    MeshContainer<tt::tt_metal::experimental::fabric::FabricNodeId> fabric_node_ids_;
+    tt::tt_metal::experimental::fabric::MeshId mesh_id_;
 
     std::unordered_map<ChipId, MeshCoordinate> device_coordinates_;
 

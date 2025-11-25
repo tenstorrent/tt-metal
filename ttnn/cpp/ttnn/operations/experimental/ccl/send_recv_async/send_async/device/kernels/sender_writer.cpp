@@ -23,7 +23,7 @@ constexpr bool is_dram = get_compile_time_arg_val(8);
 
 template <uint32_t cb_id, bool is_dram>
 FORCE_INLINE void write_data_to_remote_core(
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender& fabric_connection,
     uint64_t dst_addr,
     uint32_t packet_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
@@ -50,8 +50,8 @@ void kernel_main() {
     uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets for this core
     uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
 
-    tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender fabric_connection =
+        tt::tt_metal::experimental::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing writes to downstream data cores
@@ -72,7 +72,7 @@ void kernel_main() {
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
 
     uint64_t receiver_noc_coord_addr =
-        get_noc_addr_from_bank_id<is_dram>(bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
+        get_noc_addr_from_bank_id<is_dram>(bank_id, 0, tt::tt_metal::experimental::fabric::connection_interface::edm_fabric_write_noc_index);
 
     if constexpr (num_pages_per_packet > 0) {
         constexpr uint32_t full_packet_size = num_pages_per_packet * socket_page_size;

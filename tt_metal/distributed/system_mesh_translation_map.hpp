@@ -25,7 +25,7 @@ namespace tt::tt_metal::distributed {
 class PhysicalMeshCoordinate {
 public:
     using ChipId = uint32_t;
-    using MeshId = tt::tt_fabric::MeshId;
+    using MeshId = tt::tt_metal::experimental::fabric::MeshId;
     PhysicalMeshCoordinate() = delete;
     PhysicalMeshCoordinate(MeshId mesh_id, ChipId chip_id) : mesh_id_(mesh_id), chip_id_(chip_id) {}
     MeshId mesh_id() const { return mesh_id_; }

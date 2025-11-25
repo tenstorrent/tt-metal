@@ -23,13 +23,13 @@ constexpr size_t sender_flow_control_address = get_compile_time_arg_val(6);
 constexpr size_t channel_base_address = get_compile_time_arg_val(7);
 constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 using DrainerChannelWorkerInterface =
-    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
+    StaticSizedSenderChannelWorkerInterface<tt::tt_metal::experimental::fabric::worker_handshake_noc, NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
 
 void kernel_main() {
     size_t rt_args_idx = 0;
@@ -47,7 +47,7 @@ void kernel_main() {
     auto mux_virtual_coord_x = get_arg_val<uint32_t>(rt_args_idx++);
     auto mux_virtual_coord_y = get_arg_val<uint32_t>(rt_args_idx++);
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
-    status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::DrainerStatus::STARTED;
 
     // This mirrors an EDM interface. The Worker -> EDM interface has the worker communicate to the EDM interface via a
     // autoinc stream register where the register holds #slots free.
@@ -72,26 +72,26 @@ void kernel_main() {
 
     init_ptr_val(slots_free_stream_id, NUM_BUFFERS);
 
-    tt::tt_fabric::DrainerChannelBuffer drainer_channel(
+    tt::tt_metal::experimental::fabric::DrainerChannelBuffer drainer_channel(
         channel_base_address, BUFFER_SIZE_BYTES, sizeof(PACKET_HEADER_TYPE));
 
     auto connection_worker_info_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::DrainerChannelClientLocationInfo*>(connection_info_address);
+        reinterpret_cast<volatile tt::tt_metal::experimental::fabric::DrainerChannelClientLocationInfo*>(connection_info_address);
     connection_worker_info_ptr->edm_read_counter = 0;
 
-    tt::tt_fabric::DrainerChannelWorkerInterface worker_interface(
+    tt::tt_metal::experimental::fabric::DrainerChannelWorkerInterface worker_interface(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);
+        tt::tt_metal::experimental::fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);
 
     bool connection_established = false;
 
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
+        reinterpret_cast<volatile tt::tt_metal::experimental::fabric::TerminationSignal*>(termination_signal_address);
 
-    status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::DrainerStatus::READY_FOR_TRAFFIC;
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         invalidate_l1_cache();
         bool has_unsent_payload = get_ptr_val(slots_free_stream_id) != NUM_BUFFERS;
@@ -101,11 +101,11 @@ void kernel_main() {
             worker_interface.notify_worker_of_read_counter_update();
             increment_local_update_ptr_val(slots_free_stream_id, 1);
         }
-        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+        tt::tt_metal::experimental::fabric::check_worker_connections<my_eth_channel_id>(
             worker_interface, connection_established, slots_free_stream_id);
     }
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
-    status_ptr[0] = tt::tt_fabric::DrainerStatus::TERMINATED;
+    status_ptr[0] = tt::tt_metal::experimental::fabric::DrainerStatus::TERMINATED;
 }

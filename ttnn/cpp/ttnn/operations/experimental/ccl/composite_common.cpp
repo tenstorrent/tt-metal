@@ -63,7 +63,7 @@ ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     const int32_t dim,
     const uint32_t num_links,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
@@ -260,7 +260,7 @@ bool use_composite_all_gather(
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+    if (tt::tt_metal::experimental::fabric::GetFabricConfig() == tt::tt_metal::experimental::fabric::FabricConfig::FABRIC_2D) {
         return true;  // 2D dynamic and 1D both work, but 2D standard does not
     }
     // Use composite for row-major tensors

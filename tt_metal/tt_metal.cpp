@@ -1037,7 +1037,7 @@ KernelHandle CreateDataMovementKernel(
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
         auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+        if (udm_mode == tt::tt_metal::experimental::fabric::FabricUDMMode::ENABLED) {
             kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
         }
     }
@@ -1069,7 +1069,7 @@ KernelHandle CreateEthernetKernel(
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
         auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
-        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+        if (udm_mode == tt::tt_metal::experimental::fabric::FabricUDMMode::ENABLED) {
             kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
         }
     }

@@ -17,7 +17,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
-using namespace tt::tt_fabric::linear::experimental;
+using namespace tt::tt_metal::experimental::fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -68,7 +68,7 @@ void kernel_main() {
     auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
+    tt::tt_metal::experimental::fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
     typedef ShardedInfo<
         get_compile_time_arg_val(sharded_args_start_idx),
@@ -121,14 +121,14 @@ void kernel_main() {
         sem_route_id,
         starts,
         ranges,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         sem_route_id,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+        tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -152,7 +152,7 @@ void kernel_main() {
                         fabric_connection,
                         unicast_route_id,
                         l1_read_addr + offset,
-                        tt::tt_fabric::NocUnicastCommandHeader{
+                        tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, offset)},
                         packet_size);
                     noc_async_writes_flushed();
@@ -168,7 +168,7 @@ void kernel_main() {
                         fabric_connection,
                         unicast_route_id,
                         l1_read_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{
+                        tt::tt_metal::experimental::fabric::NocUnicastCommandHeader{
                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0)},
                         page_size);
                     noc_async_writes_flushed();
@@ -181,7 +181,7 @@ void kernel_main() {
                         fabric_connection,
                         scatter_route_id,
                         l1_read_addr,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                        tt::tt_metal::experimental::fabric::NocUnicastScatterCommandHeader{
                             {linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, 0),
                              linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id + 1, 0)},
                             static_cast<uint16_t>(page_size)},  // ignore
@@ -203,7 +203,7 @@ void kernel_main() {
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+            tt::tt_metal::experimental::fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);

@@ -11,7 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-namespace tt::tt_fabric::bench {
+namespace tt::tt_metal::experimental::fabric::bench {
 
 using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
 
@@ -70,4 +70,4 @@ PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_
 // Utility used by multiple tests
 tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id);
 
-}  // namespace tt::tt_fabric::bench
+}  // namespace tt::tt_metal::experimental::fabric::bench

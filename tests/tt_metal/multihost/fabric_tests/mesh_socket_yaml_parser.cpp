@@ -16,7 +16,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/tt_stl/caseless_comparison.hpp>
 
-namespace tt::tt_fabric::mesh_socket_tests {
+namespace tt::tt_metal::experimental::fabric::mesh_socket_tests {
 
 std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     std::string yaml_config = test_args::get_command_option(input_args_, "--test_config", "");
@@ -353,7 +353,7 @@ FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
 
     std::string topology_str = node["topology"].as<std::string>();
 
-    auto topology = enchantum::cast<tt::tt_fabric::Topology>(topology_str, ttsl::ascii_caseless_comp);
+    auto topology = enchantum::cast<tt::tt_metal::experimental::fabric::Topology>(topology_str, ttsl::ascii_caseless_comp);
     if (topology.has_value()) {
         config.topology = topology.value();
     } else {
@@ -787,4 +787,4 @@ void MeshSocketYamlParser::throw_parse_error(const std::string& message, const Y
     TT_THROW("{}", error_msg);
 }
 
-}  // namespace tt::tt_fabric::mesh_socket_tests
+}  // namespace tt::tt_metal::experimental::fabric::mesh_socket_tests

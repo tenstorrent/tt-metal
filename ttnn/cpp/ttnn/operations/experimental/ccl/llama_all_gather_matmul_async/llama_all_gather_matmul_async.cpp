@@ -27,7 +27,7 @@ ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
-    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    tt::tt_metal::experimental::fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     return ttnn::operations::experimental::ccl::llama_all_gather_matmul_async(
         input_tensor,
         input1,

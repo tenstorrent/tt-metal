@@ -129,7 +129,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     bool use_noc1_only) {
     return {
         operation_attributes_t{

@@ -20,21 +20,21 @@ static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
-FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHeader* const packet_start) {
+FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_metal::experimental::fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
-        case tt::tt_fabric::CHIP_UNICAST: {
+        case tt::tt_metal::experimental::fabric::CHIP_UNICAST: {
             DPRINT << "C_UNI: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
+                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_metal::experimental::fabric::RoutingFields::HOP_DISTANCE_MASK)
                    << "\n";
             break;
         }
-        case tt::tt_fabric::CHIP_MULTICAST: {
+        case tt::tt_metal::experimental::fabric::CHIP_MULTICAST: {
             DPRINT << "C_MCST: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
+                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_metal::experimental::fabric::RoutingFields::HOP_DISTANCE_MASK)
                    << ", rng:"
-                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
-                                 tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
+                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_metal::experimental::fabric::RoutingFields::RANGE_MASK) >>
+                                 tt::tt_metal::experimental::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
                    << "\n";
             break;
         }
@@ -42,7 +42,7 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 #endif
 }
 
-FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
+FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_metal::experimental::fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
 #endif
@@ -52,10 +52,10 @@ template <typename T>
 FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_WRITE: {
             DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_write.noc_address << "\n";
         } break;
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_seminc.noc_address
                    << ", val:" << (uint32_t)packet_start->command_fields.unicast_seminc.val << "\n";
 
@@ -67,7 +67,7 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #endif
 }
 
-FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const packet_start) {
+FORCE_INLINE void print_pkt_header(volatile tt::tt_metal::experimental::fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
     DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
@@ -79,7 +79,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 #endif
 }
 
-FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
+FORCE_INLINE void print_pkt_header(volatile tt::tt_metal::experimental::fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
     DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
@@ -95,26 +95,26 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            if constexpr (tt::tt_metal::experimental::fabric::local_chip_noc_equals_downstream_noc) {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_local_chip_noc, i));
             } else {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_downstream_noc, i));
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_local_chip_noc, i));
             }
         }
     } else {
         for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            if constexpr (tt::tt_metal::experimental::fabric::local_chip_noc_equals_downstream_noc) {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_local_chip_noc, i));
             } else {
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_downstream_noc, i));
                 while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_metal::experimental::fabric::edm_to_local_chip_noc, i));
             }
         }
     }
@@ -137,24 +137,24 @@ FORCE_INLINE
 
     constexpr bool update_counter = false;
 
-    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    tt::tt_metal::experimental::fabric::NocSendType noc_send_type = header.noc_send_type;
+    if (noc_send_type > tt::tt_metal::experimental::fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_metal::experimental::fabric::local_chip_data_cmd_buf,
+                tt::tt_metal::experimental::fabric::edm_to_local_chip_noc,
+                tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc);
         } break;
 
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
             if (header.command_fields.unicast_seminc.flush) {
@@ -163,32 +163,32 @@ FORCE_INLINE
             noc_semaphore_inc<true>(
                 dest_address,
                 increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_metal::experimental::fabric::edm_to_local_chip_noc,
+                tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc);
 
         } break;
 
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
                 0xF,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_metal::experimental::fabric::edm_to_local_chip_noc,
+                tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc);
         } break;
 
-        case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
-                tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_metal::experimental::fabric::local_chip_data_cmd_buf,
+                tt::tt_metal::experimental::fabric::edm_to_local_chip_noc,
+                tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc);
 
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
@@ -198,11 +198,11 @@ FORCE_INLINE
             noc_semaphore_inc<true>(
                 semaphore_dest_address,
                 increment,
-                tt::tt_fabric::edm_to_local_chip_noc,
-                tt::tt_fabric::forward_and_local_write_noc_vc);
+                tt::tt_metal::experimental::fabric::edm_to_local_chip_noc,
+                tt::tt_metal::experimental::fabric::forward_and_local_write_noc_vc);
         } break;
 
-        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             size_t offset = 0;
             size_t chunk_size;
             for (size_t i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; ++i) {
@@ -217,13 +217,13 @@ FORCE_INLINE
                     dest_address,
                     chunk_size,
                     transaction_id,
-                    tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_metal::experimental::fabric::local_chip_data_cmd_buf,
+                    tt::tt_metal::experimental::fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
             }
         } break;
-        case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
-        case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_MULTICAST_WRITE:
+        case tt::tt_metal::experimental::fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {
             ASSERT(false);
         } break;
@@ -231,26 +231,26 @@ FORCE_INLINE
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_metal::experimental::fabric::PacketHeader* packet_header, tt::tt_metal::experimental::fabric::RoutingFields cached_routing_fields) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
     // TODO [optimization]: If we can make the terminal value 0, then we can save an instruction on the eq insn
-    bool decrement_range = (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
-                           tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+    bool decrement_range = (cached_routing_fields.value & tt::tt_metal::experimental::fabric::RoutingFields::HOP_DISTANCE_MASK) ==
+                           tt::tt_metal::experimental::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
     uint8_t decrement_val = static_cast<uint8_t>(1)
-                            << (decrement_range * tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH);
+                            << (decrement_range * tt::tt_metal::experimental::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH);
     packet_header->routing_fields.value = cached_routing_fields.value - decrement_val;
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_metal::experimental::fabric::LowLatencyPacketHeader* packet_header,
+    tt::tt_metal::experimental::fabric::LowLatencyRoutingFields cached_routing_fields) {
     packet_header->routing_fields.value =
-        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+        cached_routing_fields.value >> tt::tt_metal::experimental::fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_metal::experimental::fabric::HybridMeshPacketHeader* packet_header,
+    tt::tt_metal::experimental::fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         packet_header->routing_fields.value = cached_routing_fields.value + 1;
     }
@@ -258,12 +258,12 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
+    tt::tt_metal::experimental::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
+        tt::tt_metal::experimental::fabric::HybridMeshPacketHeader* packet_base = nullptr;
         std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
         downstream_edm_interface.template update_edm_buffer_slot_word(
-            offset, value, tt::tt_fabric::edm_to_downstream_noc);
+            offset, value, tt::tt_metal::experimental::fabric::edm_to_downstream_noc);
     }
 }
 
@@ -291,7 +291,7 @@ FORCE_INLINE
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         uint16_t payload_size_bytes,
         ROUTING_FIELDS_TYPE cached_routing_fields,
-        tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
+        tt::tt_metal::experimental::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
         uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
@@ -304,7 +304,7 @@ FORCE_INLINE
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_deadlock_avoidance,
         vc1_has_different_downstream_dest,
-        tt::tt_fabric::edm_to_downstream_noc,
+        tt::tt_metal::experimental::fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);

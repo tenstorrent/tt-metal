@@ -5,13 +5,13 @@
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 
-namespace tt::tt_fabric {
+namespace tt::tt_metal::experimental::fabric {
 
 StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAdapter(
     FabricStaticSizedChannelsAllocator& /*allocator*/,
-    tt::tt_fabric::Topology topology,
+    tt::tt_metal::experimental::fabric::Topology topology,
     eth_chan_directions my_direction) :
-    is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus),
+    is_2D_routing(topology == tt::tt_metal::experimental::fabric::Topology::Mesh || topology == tt::tt_metal::experimental::fabric::Topology::Torus),
     my_direction(my_direction) {}
 
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
@@ -174,4 +174,4 @@ void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_
     }
 }
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_metal::experimental::fabric
