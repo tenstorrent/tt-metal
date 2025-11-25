@@ -102,7 +102,7 @@ EmbeddingsDeviceOperation::invoke(
     bool tilized,
     EmbeddingsType embeddings_type,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<int>& pad_token,
+    const std::optional<uint32_t>& pad_token,
     const std::optional<Tensor>& optional_output_tensor) {
     return {
         operation_attributes_t{
