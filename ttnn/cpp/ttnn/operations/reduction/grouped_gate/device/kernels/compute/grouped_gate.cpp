@@ -50,6 +50,7 @@ void MAIN {
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         uint32_t base_page = height_tile * width_tiles;
+
         // Perform sigmoid on scores
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             cb_wait_front(scores_cb_index, 1);
@@ -73,6 +74,29 @@ void MAIN {
             cb_push_back(sigmoid_input_cb_index, 1);
 
             cb_pop_front(scores_cb_index, 1);
+        }
+
+        // Perform add bias on sigmoid input – should I do full or partial init here?
+        add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
+        for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+            cb_wait_front(bias_cb_index, 1);
+            cb_wait_front(sigmoid_input_cb_index, 1);
+
+            tile_regs_acquire();
+            add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, width_tile, 0);
+            if (width_tile == 0) {
+                dprint_tensix_dest_reg(0);
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(add_bias_cb_index, 1);
+            tile_regs_wait();
+            pack_tile(0, add_bias_cb_index, width_tile);
+            tile_regs_release();
+            cb_push_back(add_bias_cb_index, 1);
+
+            cb_pop_front(sigmoid_input_cb_index, 1);
+            cb_pop_front(bias_cb_index, 1);
         }
     }
 }
