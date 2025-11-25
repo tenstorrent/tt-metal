@@ -4,6 +4,7 @@
 
 #include "grouped_gate_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/cb_utils.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -30,11 +31,74 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
 
     auto device = scores.device();
     TT_FATAL(device != nullptr, "Device must be non-null");
-    auto program = CreateProgram();
+    // Create program
+    tt::tt_metal::Program program{};
 
-    CoreRangeSet all_cores({
-        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))  // Dummy core range
-    });
+    // auto grid = device->compute_with_storage_grid_size();
+    auto grid = CoreCoord(1, 1);
+    auto num_tiles = scores.buffer()->num_pages();
+    auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
+    auto height_tiles = num_tiles / width_tiles;
+    log_debug(tt::LogOp, "height_tiles: {} width_tiles: {}", height_tiles, width_tiles);
+
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_height_tiles_per_core_group_1,
+         num_height_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, height_tiles);
+
+    auto scores_cb_index = tt::CBIndex::c_0;
+    auto bias_cb_index = tt::CBIndex::c_1;
+    auto weights_cb_index = tt::CBIndex::c_2;
+    auto indices_cb_index = tt::CBIndex::c_3;
+    // input/output circular buffers
+    auto scores_data_format = tt::tt_metal::datatype_to_dataformat_converter(scores.dtype());
+    auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.dtype());
+    auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
+    auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
+
+    tt::tt_metal::create_cb(scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
+    tt::tt_metal::create_cb(bias_cb_index, program, all_cores, bias.buffer()->page_size(), 2, bias_data_format);
+    tt::tt_metal::create_cb(
+        weights_cb_index, program, all_cores, output_weights.buffer()->page_size(), 2, weights_data_format);
+    tt::tt_metal::create_cb(
+        indices_cb_index, program, all_cores, output_indices.buffer()->page_size(), 2, indices_data_format);
+
+    // sigmoid input + add bias block CBs
+    auto sigmoid_input_cb_index = tt::CBIndex::c_4;
+    auto add_bias_cb_index = tt::CBIndex::c_5;
+    tt::tt_metal::create_cb(
+        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+    tt::tt_metal::create_cb(
+        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+
+    // Reader kernel compile time arguments
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"scores_cb_index", scores_cb_index},
+        {"bias_cb_index", bias_cb_index},
+        {"width_tiles", width_tiles},
+    };
+
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
+
+    // Reader kernel
+    auto reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/dataflow/reader_grouped_gate.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
+
+    // Compute kernel compile time arguments
+    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+        {"sigmoid_input_cb_index", sigmoid_input_cb_index},
+        {"add_bias_cb_index", add_bias_cb_index},
+    };
+
+    std::vector<uint32_t> compute_compile_time_args = {};
 
     // Compute kernel
     auto compute_kernel_id = CreateKernel(
@@ -43,13 +107,6 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         all_cores,
         ComputeConfig{.math_approx_mode = true, .compile_args = {}});
 
-    // Reader kernel
-    auto reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/dataflow/reader_grouped_gate.cpp",
-        all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
     // Writer kernel
     auto writer_kernel_id = CreateKernel(
         program,
@@ -57,7 +114,34 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         all_cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id}};
+    std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
+    std::vector<uint32_t> writer_runtime_args = {
+        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0};
+
+    uint32_t start_height_tile = 0;
+    uint32_t end_height_tile = 0;
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    for (const auto& core : cores) {
+        uint32_t workload_per_core = 0;
+        if (core_group_1.contains(core)) {
+            workload_per_core = num_height_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            workload_per_core = num_height_tiles_per_core_group_2;
+        } else {
+            // no-op
+            workload_per_core = 0;
+        }
+        start_height_tile = end_height_tile;
+        end_height_tile = start_height_tile + workload_per_core;
+        reader_runtime_args[2] = start_height_tile;
+        reader_runtime_args[3] = end_height_tile;
+        writer_runtime_args[2] = start_height_tile;
+        writer_runtime_args[3] = end_height_tile;
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+    }
+
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, cores}};
 }
 
 void GroupedGateDeviceOperation::ProgramFactory::override_runtime_arguments(
@@ -66,6 +150,18 @@ void GroupedGateDeviceOperation::ProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     // Placeholder for runtime argument override logic
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& cores = cached_program.shared_variables.cores;
+    for (const auto& core : cores) {
+        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_runtime_args[0] = tensor_args.scores.buffer()->address();
+        reader_runtime_args[1] = tensor_args.bias.buffer()->address();
+        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+        writer_runtime_args[0] = tensor_return_value[0].buffer()->address();
+        writer_runtime_args[1] = tensor_return_value[1].buffer()->address();
+    }
 }
 
 }  // namespace ttnn::operations::reduction
