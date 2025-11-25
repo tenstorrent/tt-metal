@@ -31,6 +31,7 @@ jobs:
 
   galaxy-quick-test:
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -38,4 +39,3 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
-    secrets: inherit
