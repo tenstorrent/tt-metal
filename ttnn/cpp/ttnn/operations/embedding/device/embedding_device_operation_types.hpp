@@ -13,8 +13,8 @@ enum class EmbeddingsIndexType { UINT32, BFP16 };
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
-    bool tilized;
-    EmbeddingsType embeddings_type;
+    bool tilized = false;
+    EmbeddingsType embeddings_type = GENERIC;
     std::optional<uint32_t> pad_token;
 };
 
