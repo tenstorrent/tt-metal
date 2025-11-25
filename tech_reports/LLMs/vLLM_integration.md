@@ -36,7 +36,7 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       read_decode_output(tt_out : ttnn.Tensor, async_read : bool)
       ```
-    - `proprocess_decode_output_host` (V0 only): returns torch decode outputs on host. The `tt_out` argument is the output of `read_decode_output`. The `is_tokens` argument specifies whether `tt_out` is logits or tokens. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py (V0)](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
+    - `process_decode_output_host` (V0 only): returns torch decode outputs on host. The `tt_out` argument is the output of `read_decode_output`. The `is_tokens` argument specifies whether `tt_out` is logits or tokens. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py (V0)](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
       ```python
       process_decode_output_host(tt_out : ttnn.Tensor, is_tokens : bool)
       ```
