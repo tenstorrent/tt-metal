@@ -4,7 +4,6 @@
 
 #include <cstdlib>
 #include "dataflow_api.h"
-#include "hw/inc/dataflow_api.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or

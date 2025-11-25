@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -27,9 +27,6 @@ void kernel_main() {
     experimental::CircularBuffer cb_in1(cb_id_in1);
     experimental::Noc noc;
     uint32_t tile_bytes = cb_in0.get_tile_size();
-
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
 
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i1 = 0;
