@@ -1,0 +1,7 @@
+Test Configuration,Metric,Unit,GCC Result,LLVM Result,Difference,% Change,Notes
+batch_size=16,Inference Time,ms,1.843,1.843,0.000,0.00%,5 warmup 15 measurement iterations
+batch_size=16,FPS,fps,8679.67,8683.11,3.44,0.04%,5 warmup 15 measurement iterations
+batch_size=16,Compile Time,s,9.72,14.08,4.36,44.86%,First run compile time
+batch_size=32,Inference Time,ms,2.822,2.831,0.009,0.32%,5 warmup 15 measurement iterations
+batch_size=32,FPS,fps,11340.94,11302.86,-38.08,-0.34%,5 warmup 15 measurement iterations
+batch_size=32,Compile Time,s,9.75,4.86,-4.89,-50.15%,First run compile time
