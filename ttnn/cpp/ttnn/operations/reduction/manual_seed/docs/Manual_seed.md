@@ -4,7 +4,34 @@
 
 The TTNN Manual Seed operation is a device-level utility designed to initialize random number generator (RNG) seeds on Tenstorrent hardware cores. This operation provides flexible control over seed initialization across compute cores, enabling deterministic and reproducible random number generation in subsequent operations.
 
+### Parameters
+
+- **seeds**: Either a scalar `uint32_t` value or a `Tensor` of `uint32_t` values representing the seed(s) to initialize the random number generator(s)
+- **device**: The target device on which to set the seed(s). Required when seeds is a scalar value. Can be a single device or multi-chip mesh device
+- **user_ids**: Optional parameter that specifies which core(s) should receive the seed(s). Can be:
+  - A scalar `uint32_t` representing a single core ID (valid range: 0-31)
+  - A `Tensor` of `uint32_t` values representing multiple core IDs
+  - Omitted (None) to apply the seed to all cores
+- **sub_core_grids**: Optional custom core range set for advanced use cases
+
 The operation supports multiple seeding strategies, from setting a single seed across all cores to fine-grained control where individual cores receive specific seeds based on user-provided mappings.
+
+### Input Combinations
+
+The following table shows all valid combinations of input parameters and their behavior:
+
+| Seeds Type | User IDs Type | Device Type | Behavior |
+|------------|---------------|-------------|----------|
+| `uint32_t` | None | Single or Multi-chip | Push seed to all cores on all devices (single device or all devices in mesh_device) |
+| `uint32_t` | `uint32_t` (core ID) | Single or Multi-chip | Push seed to the same core_id on each device in mesh_device (or single device based on input) |
+| `uint32_t` | 1D Tensor (`uint32_t`) | Derived from tensor | Set same seed to all core IDs listed in user_ids tensor on the device(s) where the user_ids tensor is placed |
+| 1D Tensor (`uint32_t`) | 1D Tensor (`uint32_t`) | Derived from tensors | Elements in seeds tensor correspond to user_ids elements at matching indices; seeds are pushed to the relevant device(s) where the user_ids tensor is placed |
+
+**Notes:**
+- When seeds and user_ids are both tensors, they must have the same shape and volume
+- Scalar user_ids values must be in the range [0, 31]
+- When seeds is a scalar, the device parameter must be explicitly provided
+- When seeds is a tensor, the device is derived from the tensor's placement
 
 ## Brief Functional Description
 
@@ -23,9 +50,10 @@ The operation provides four distinct strategies for seed distribution:
 - Supported tensor layout: `ROW_MAJOR` only
 - Tensor inputs must be 1-dimensional
 - When providing tensor seeds and user_ids, they must have the same shape and volume
-- Scalar user_ids must be in range [0, 31]
+- Scalar user_ids represents a single core ID and must be in range [0, 31]
 - Device must be provided when seeds is a scalar value
-- Cannot provide both scalar and tensor forms of seeds or user_ids simultaneously
+- When seeds is provided as a tensor, user_ids must also be a tensor (or omitted)
+- Cannot provide user_ids as a scalar when seeds is a tensor
 
 ## Strategy Comparison Overview
 
@@ -43,6 +71,8 @@ The TTNN Manual Seed operation provides four distinct strategies for initializin
 ### Single Seed to All Cores
 
 This strategy sets the same seed value across all available compute cores on the device. It is the simplest and most straightforward seeding approach.
+
+**Invocation Pattern**: `seeds` as scalar, `user_ids` omitted
 
 #### Overview:
 
@@ -72,23 +102,19 @@ void MAIN {
 }
 ```
 
-**Characteristics:**
-- **Overhead**: Minimal - no data movement, single kernel compilation
-- **Execution Time**: Very fast - parallel execution on all cores
-- **Memory Usage**: Zero L1 memory (no circular buffers needed)
-- **Typical Use**: Default initialization for uniform random operations
-
 ---
 
 ### Single Seed to Single Core
 
-This strategy sets a seed to one specific compute core, identified by a core ID. It targets a single core while leaving others unmodified.
+This strategy sets a seed to one specific compute core, identified by a core ID provided as a scalar value. It targets a single core while leaving others unmodified.
+
+**Invocation Pattern**: `seeds` as scalar, `user_ids` as scalar (core ID in range 0-31)
 
 #### Overview:
 
 1. **Core Selection**:
    * Computes the full device core grid
-   * Selects the specific core based on the provided `user_ids` scalar value
+   * Selects the specific core based on the provided `user_ids` scalar value (core ID)
    * Core ID is converted to physical core coordinates
 
 2. **Targeted Kernel Deployment**:
@@ -113,17 +139,13 @@ const auto& core_chosen = cores.at(operation_attributes.user_ids.value_or(0));
 // Deployed to: core_chosen only
 ```
 
-**Characteristics:**
-- **Overhead**: Minimal - no data movement, single core kernel
-- **Execution Time**: Very fast - single core execution
-- **Memory Usage**: Zero L1 memory
-- **Typical Use**: Testing, debugging, or operations requiring RNG on specific cores only
-
 ---
 
 ### Single Seed to Set of Cores
 
-This strategy sets the same seed value to multiple cores specified by a tensor of core IDs. It combines the uniformity of a single seed with the selectivity of core targeting.
+This strategy sets the same seed value to multiple cores specified by a tensor of core IDs. It combines the uniformity of a single seed with the selectivity of core targeting. Unlike the "Single Seed to All Cores" strategy which seeds all available cores, this strategy only seeds the cores whose IDs are listed in the user_ids tensor.
+
+**Invocation Pattern**: `seeds` as scalar, `user_ids` as tensor (containing core IDs)
 
 #### Overview:
 
@@ -138,9 +160,9 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 
 3. **Core Matching and Seed Initialization**:
    * Each core's compute kernel reads the user_ids tensor from the CB
-   * The kernel iterates through the user_ids to check if its core ID matches
+   * The kernel iterates through the user_ids to check if its core ID matches any entry
    * If a match is found, the core calls `rand_tile_init(seed)` to initialize RNG
-   * Non-matching cores skip initialization
+   * Non-matching cores skip initialization and remain unmodified
 
 4. **Runtime Arguments**:
    * User_ids tensor buffer address (updated on cache hit)
@@ -189,17 +211,13 @@ void MAIN {
 }
 ```
 
-**Characteristics:**
-- **Overhead**: Moderate - requires DRAM read and CB setup
-- **Execution Time**: Fast - parallel execution, but includes data movement
-- **Memory Usage**: One tile per core in L1 (for user_ids CB)
-- **Typical Use**: Selective core initialization with uniform seeding
-
 ---
 
 ### Multiple Seeds to Set of Cores
 
-This strategy provides maximum flexibility by allowing different seeds to be assigned to different cores through paired tensors. Each core receives a unique seed based on the mapping provided.
+This strategy provides maximum flexibility by allowing different seeds to be assigned to different cores through paired tensors. Each core receives a unique seed based on the mapping provided by matching core IDs to their corresponding seed values.
+
+**Invocation Pattern**: `seeds` as tensor, `user_ids` as tensor (must have same shape and volume)
 
 #### Overview:
 
@@ -209,16 +227,17 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
 
 2. **Data Movement - Dual Tensors**:
    * Two circular buffers are created:
-     * CB 0: user_ids tensor
-     * CB 1: seeds tensor
+     * CB 0: user_ids tensor (containing core IDs)
+     * CB 1: seeds tensor (containing corresponding seed values)
    * Each core's reader kernel loads both tensors from DRAM to L1
-   * Tensors must have identical shapes and volumes
+   * Tensors must have identical shapes and volumes (1-dimensional)
 
 3. **Core Matching and Unique Seed Initialization**:
    * Each core's compute kernel reads both user_ids and seeds tensors
    * Iterates through user_ids to find its core ID
    * When found, retrieves the corresponding seed from the seeds tensor at the same index
    * Calls `rand_tile_init(seed)` with the matched seed value
+   * Cores not listed in user_ids remain unmodified
 
 4. **Runtime Arguments**:
    * User_ids tensor buffer address
@@ -285,31 +304,19 @@ void MAIN {
 }
 ```
 
-**Characteristics:**
-- **Overhead**: Higher - requires two DRAM reads and two CBs per core
-- **Execution Time**: Moderate - parallel execution with dual data movement
-- **Memory Usage**: Two tiles per core in L1 (user_ids CB + seeds CB)
-- **Typical Use**: Operations requiring independent random streams per core, reproducible parallel random generation with distinct seeds
-
 ---
 
 ## Program Factory Selection Logic
 
 The operation automatically selects the appropriate program factory based on the input arguments:
 
-```cpp
-// Selection logic from manual_seed_operation.cpp
-if (seeds is uint32_t && user_ids is None)
-    → ManualSeedSingleSeedToAllCoresProgramFactory
+| Seeds Type | User IDs Type | Selected Strategy |
+|------------|---------------|-------------------|
+| uint32_t   | None (omitted) | Single Seed to All Cores |
+| uint32_t   | uint32_t (core ID) | Single Seed to Single Core |
+| uint32_t   | Tensor (core IDs) | Single Seed to Set of Cores |
+| Tensor     | Tensor (core IDs) | Multiple Seeds to Set of Cores |
 
-else if (seeds is uint32_t && user_ids is uint32_t)
-    → ManualSeedSingleSeedSingleCoreProgramFactory
-
-else if (seeds is uint32_t && user_ids is Tensor)
-    → ManualSeedSingleSeedSetCoresProgramFactory
-
-else if (seeds is Tensor && user_ids is Tensor)
-    → ManualSeedSetSeedsSetCoresProgramFactory
-```
+Note: When seeds is provided as a Tensor, user_ids must also be provided as a Tensor with matching shape and volume, or the operation will fail validation.
 
 © Tenstorrent AI ULC 2025

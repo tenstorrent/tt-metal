@@ -81,7 +81,7 @@ def test_manual_seed_base_functionality(device):
     for i in range(5):
         ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, seed=i + 1)
 
-    # Get first sampling result with seed 42
+    # Get second sampling result with seed 42
     ttnn.manual_seed(seeds=42, device=device)
     tensor_2 = ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor)
 
