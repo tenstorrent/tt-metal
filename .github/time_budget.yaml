@@ -69,3 +69,7 @@ models:
     skus:
       wh_llmbox:
         time_budget: 660
+  demo:
+    skus:
+      wh_llmbox:
+        time_budget: 1050
