@@ -14,7 +14,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 

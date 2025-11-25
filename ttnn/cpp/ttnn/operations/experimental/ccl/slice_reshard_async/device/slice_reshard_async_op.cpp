@@ -4,7 +4,7 @@
 
 #include "slice_reshard_async_op.hpp"
 #include "slice_reshard_async_program.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"

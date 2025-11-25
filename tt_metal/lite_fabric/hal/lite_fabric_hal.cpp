@@ -7,7 +7,7 @@
 #include "wormhole_impl.hpp"
 #include "blackhole_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace {

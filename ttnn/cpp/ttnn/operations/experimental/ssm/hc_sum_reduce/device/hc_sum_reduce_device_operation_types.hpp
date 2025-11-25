@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/base_types.hpp>
 
-namespace ttnn::operations::experimental::ssm {
+namespace ttnn::operations::experimental::ssm::hc_sum_reduce {
 
 struct operation_attributes_t {
     const tt::tt_metal::MemoryConfig memory_config;
@@ -23,4 +23,4 @@ using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::experimental::ssm
+}  // namespace ttnn::operations::experimental::ssm::hc_sum_reduce

@@ -31,7 +31,8 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& lhs,
@@ -42,7 +43,8 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -57,7 +59,8 @@ struct BinaryOperationWithFastApprox {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& lhs,
@@ -69,7 +72,8 @@ struct BinaryOperationWithFastApprox {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
+        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -83,7 +87,8 @@ struct RelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const ttnn::Tensor& lhs,
@@ -94,7 +99,8 @@ struct RelationalBinary {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     // rhs - tensor combination not available on Pytorch for this op
     static Tensor invoke(
@@ -226,7 +232,8 @@ struct WhereOperationWithScalar {
         const Tensor& true_false_tensor,  // For TTS variant, true_tensor; For TST variant, false_tensor
         unary::ScalarVariant scalar_value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::binary

@@ -220,23 +220,13 @@ class GroupNorm:
         self.channels = self.channels // num_splits
 
         # Generate input mask
-        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
-        input_mask_tensor = ttnn.from_torch(
-            input_mask_tensor,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y, ttnn.bfloat16)
+        input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
         if negative_mask:
-            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(self.channels, self.num_groups, grid_y)
-            input_nmask_tensor = ttnn.from_torch(
-                input_nmask_tensor,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(
+                self.channels, self.num_groups, grid_y, ttnn.bfloat16
             )
+            input_nmask_tensor = ttnn.to_device(input_nmask_tensor, device)
         else:
             input_nmask_tensor = None
         # Generate gamma/beta tensors

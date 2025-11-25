@@ -158,23 +158,6 @@ profiler = Profiler()
 
 
 ### Turn flags on/off ###
-def enable_persistent_kernel_cache():
-    """
-    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
-    """
-    logger.warning(
-        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
-    )
-    ttnn.device.EnablePersistentKernelCache()
-
-
-def disable_persistent_kernel_cache():
-    """
-    Disables persistent compiled kernel caching. This is the default state.
-    """
-    ttnn.device.DisablePersistentKernelCache()
-
-
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir

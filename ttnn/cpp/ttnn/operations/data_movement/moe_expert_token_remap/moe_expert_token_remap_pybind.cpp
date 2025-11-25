@@ -10,7 +10,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_expert_token_remap.hpp"
 #include "moe_expert_token_remap_pybind.hpp"

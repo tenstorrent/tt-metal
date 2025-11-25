@@ -34,8 +34,6 @@ Tests:
   - name: "TestName"
     fabric_setup:
       topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
-      # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
-      (optional) routing_type: LowLatency
       # Tensix extension for fabric routers, used to build connections between worker->fabric router, upstream fabric router->downstream fabric router.
       (optional) fabric_tensix_config: Default/Mux
       # Controls the number of ETH links on each chip that is used in the test.

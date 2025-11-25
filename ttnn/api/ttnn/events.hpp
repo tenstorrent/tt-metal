@@ -26,10 +26,10 @@ struct MultiDeviceEvent {
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,
-    QueueId cq_id,
+    std::optional<QueueId> cq_id,
     const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {},
     const std::optional<ttnn::MeshCoordinateRange>& device_range = std::nullopt);
-void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event);
+void wait_for_mesh_event(std::optional<QueueId> cq_id, const MeshEvent& event);
 
 void event_synchronize(const MeshEvent& event);
 

@@ -69,6 +69,8 @@ ttnn::SmallVector<int> generate_reduce_dim(
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
         }
+        // It's already sorted and all are non-negative.
+        return dim;
     }
 
     for (int i = 0; i < dim.size(); i++) {

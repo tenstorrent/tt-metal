@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/padded_slice_op.hpp"
+#include "device/padded_slice_device_operation.hpp"
 #include <array>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
-#include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -128,14 +127,13 @@ ttnn::Tensor PaddedSliceOperation::invoke(
             actual_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), memory_config);
     }
 
-    auto res =
-        tt::tt_metal::operation::run(
-            PaddedSliceDeviceOperation{
-                ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
-            {input_tensor},
-            {},
-            {optional_output_tensor})
-            .at(0);
+    auto res = ttnn::prim::padded_slice(
+        input_tensor,
+        ttnn::Shape(modified_begins),
+        ttnn::Shape(padded_ends),
+        ttnn::Shape(modified_step),
+        memory_config,
+        optional_output_tensor);
 
     // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
     // memory config

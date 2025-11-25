@@ -65,7 +65,7 @@ def base_model_name_from_env():
     if LLAMA_DIR:
         model_name = LLAMA_DIR.strip("/").split("/")[-1]
     elif HF_MODEL:
-        model_name = HF_MODEL.split("/")[-1]
+        model_name = HF_MODEL.strip("/").split("/")[-1]
     else:
         return None
 
