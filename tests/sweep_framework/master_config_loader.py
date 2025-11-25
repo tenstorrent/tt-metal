@@ -206,21 +206,8 @@ class MasterConfigLoader:
             if not mem_config:
                 return False
 
-            # Check shard spec if present
-            if hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
-                shard_shape = mem_config.shard_spec.shape
-                core_range_set = mem_config.shard_spec.core_range_set
-
-                # Check tile alignment
-                if shard_shape and len(shard_shape) >= 2:
-                    height, width = shard_shape[0], shard_shape[1]
-                    if height % 32 != 0 or width % 32 != 0:
-                        return False
-
-                # Trust traced configs - no core count validation needed
-                # Traced configs come from real model runs that worked
-                pass
-
+            # Trust traced configs - no validation needed
+            # Traced configs come from real model runs that worked
             return True
         except Exception:
             return True  # If we can't check, assume valid
@@ -272,8 +259,6 @@ class MasterConfigLoader:
                 shard_spec = nd_shard_spec
 
             if shard_spec and shard_spec != "std::nullopt" and tensor_shape:
-                import re
-
                 # Extract shard shape - prefer cleaner array format from nd_shard_spec
                 shard_shape = None
                 if "shard_shape" in shard_spec:
@@ -685,9 +670,6 @@ class MasterConfigLoader:
                                     element_info = arg["UnparsedElement"].get("element_info", "")
                                     if "MemoryConfig" in element_info:
                                         try:
-                                            import json
-                                            import re
-
                                             # Apply regex fixes for C++ style formats (same as extract_tensor_config)
                                             fixed_json_str = element_info
                                             # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
@@ -933,24 +915,9 @@ class MasterConfigLoader:
                     # Check for invalid shard specs (too many cores, non-tile-aligned shard shapes)
                     invalid_reasons = []
 
-                    if mem_config and hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
-                        # Use shard shape directly from config - no validation or adjustment
-                        # Traced configs come from real model runs, so use them as-is
-                        pass
-
-                        # Trust traced configs - no core count validation needed
-                        # Traced configs come from real model runs that worked
-                        pass
-
-                    # Check output memory config too
-                    if output_mem_config and hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
-                        # Use shard shape directly from config - no validation or adjustment
-                        # Traced configs come from real model runs, so use them as-is
-                        pass
-
-                        # Trust traced configs - no core count validation needed
-                        # Traced configs come from real model runs that worked
-                        pass
+                    # Trust traced configs - no validation needed
+                    # Traced configs come from real model runs that worked
+                    # Input and output memory configs are used directly from config
 
                     # Check operation-specific requirements (report but don't convert)
                     # Note: tilize and upsample are hardcoded above, so these checks are just for reporting
@@ -1622,8 +1589,6 @@ class MasterConfigLoader:
                 value = value.strip()
                 if value.startswith("[") and value.endswith("]"):
                     # Use json.loads for safer parsing
-                    import json
-
                     return json.loads(value.replace("'", '"'))
             return None
         except Exception as e:
