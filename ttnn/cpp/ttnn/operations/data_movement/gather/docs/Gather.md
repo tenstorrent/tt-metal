@@ -20,7 +20,7 @@ Both input tensors must have the same number of dimensions, and for all dimensio
 - **sparse_grad (bool, optional)**: If True, the gradient computation will be sparse. Defaults to False. **Note: Currently not supported.**
 - **memory_config (MemoryConfig, optional)**: Specifies memory configuration for the output tensor. Defaults to None.
 - **optional_output_tensor (Tensor, optional)**: Preallocated tensor for the gathered values. Defaults to None.
-- **sub_core_grids (CoreRangeSet, optional)**: Custom core range set for multi-user execution. Allows specification of which cores should be used for the operation. Defaults to None (uses all available cores).
+- **sub_core_grids (CoreRangeSet, optional)**: Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to None (uses all available cores).
 
 ### Usage
 

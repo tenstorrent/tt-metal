@@ -28,7 +28,7 @@ void bind_gather_operation(py::module& module) {
             sparse_grad (bool, optional): If `True`, the gradient computation will be sparse. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
-            sub_core_grids (optional): Custom core range set must be provided for multi-user execution. Defaults to `None`.
+            sub_core_grids (optional): Custom core range set for operation execution. Defaults to `None`.
 
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
