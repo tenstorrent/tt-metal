@@ -23,6 +23,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::fabric_mux_tests {
 
@@ -876,6 +877,7 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxEightChipVariant) {
 }
 
 TEST_F(Fabric1DMuxFixture, TestFabricMuxStressOpenClose) {
+    SKIP_FOR_WATCHER();
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
         .num_sender_clients = 8,

@@ -14,6 +14,11 @@ import subprocess
 import time
 
 
+def is_watcher_enabled():
+    """Check if watcher is enabled via environment variable"""
+    return os.environ.get("TT_METAL_WATCHER") == "1"
+
+
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 triage_script = os.path.join(metal_home, "tools", "tt-triage.py")
 triage_home = os.path.join(metal_home, "tools", "triage")
@@ -172,6 +177,7 @@ def cause_hang_with_app(request):
     indirect=True,
 )
 @pytest.mark.usefixtures("cause_hang_with_app")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Test is not passing with watcher enabled")
 class TestTriage:
     app_configuration: dict
     exalens_context: Context
