@@ -5,6 +5,7 @@
 #include "rms_allgather_device_operation.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -31,7 +32,6 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
-    const auto& stats = tensor_args.stats;
 
     TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
     TT_FATAL(
@@ -121,81 +121,55 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             b.value().padded_shape()[-2] == input_height, "Only residual tensors with batch size = 32 are supported");
     }
-    std::visit(
-        [&](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            TT_FATAL(
-                (std::is_same_v<
-                    ProgramConfigType,
-                    ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>),
-                "Fused RMS Allgather only supports Sharded");
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                if (program_config.inplace) {
-                    TT_FATAL(
-                        args.output_mem_config.is_sharded(),
-                        "Output memory config must be sharded for inplace operation");
-                }
-                TT_FATAL(
-                    a.memory_config().buffer_type() == args.output_mem_config.buffer_type(),
-                    "Input tensor buffer type ({}) must match output memory config buffer type ({})",
-                    a.memory_config().buffer_type(),
-                    args.output_mem_config.buffer_type());
-                TT_FATAL(
-                    a.memory_config().memory_layout() == args.output_mem_config.memory_layout(),
-                    "Input tensor memory layout ({}) must match output memory config layout ({})",
-                    a.memory_config().memory_layout(),
-                    args.output_mem_config.memory_layout());
 
-                // tensor shape
-                const auto& shape = a.padded_shape();
-                uint32_t M = a.physical_volume() / shape[-1];
-                uint32_t K = shape[-1];
+    if (args.inplace) {
+        TT_FATAL(args.output_mem_config.is_sharded(), "Output memory config must be sharded for inplace operation");
+    }
+    TT_FATAL(
+        a.memory_config().buffer_type() == args.output_mem_config.buffer_type(),
+        "Input tensor buffer type ({}) must match output memory config buffer type ({})",
+        a.memory_config().buffer_type(),
+        args.output_mem_config.buffer_type());
+    TT_FATAL(
+        a.memory_config().memory_layout() == args.output_mem_config.memory_layout(),
+        "Input tensor memory layout ({}) must match output memory config layout ({})",
+        a.memory_config().memory_layout(),
+        args.output_mem_config.memory_layout());
 
-                uint32_t Mt = M / input_height;
-                uint32_t Kt = K / input_width;
-                // block
-                const auto shard_spec = a.shard_spec().value();
-                // check dims
-                TT_FATAL(
-                    program_config.block_w % program_config.subblock_w == 0,
-                    "block_w must be divisible by subblock_w.");
-                TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
-                TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
-                const auto bbox = shard_spec.grid.bounding_box();
-                TT_FATAL(
-                    bbox.end_coord.x - bbox.start_coord.x < program_config.compute_with_storage_grid_size.x &&
-                        bbox.end_coord.y - bbox.start_coord.y < program_config.compute_with_storage_grid_size.y,
-                    "Error");
+    // tensor shape
+    const auto& shape = a.padded_shape();
+    uint32_t M = a.physical_volume() / shape[-1];
+    uint32_t K = shape[-1];
 
-                TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
-                TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
-                TT_FATAL(
-                    tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
-                    "block_w must equal to K / num_cores.");
-                TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                TT_FATAL(
-                    a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-                    "Input tensor memory layout must not be HEIGHT_SHARDED but got {}",
-                    a.memory_config().memory_layout());
-                if (b.has_value()) {
-                    TT_FATAL(b.value().is_sharded(), "Tensor B must be sharded");
-                    TT_FATAL(
-                        b.value().shard_spec() == shard_spec, "Tensor B shard spec must match input tensor shard spec");
-                }
-                TT_FATAL(
-                    program_config.block_w * input_width == shard_spec.shape[1],
-                    "Program config block_w ({}) * input_width ({}) must equal shard_spec shape[1] ({})",
-                    program_config.block_w,
-                    input_width,
-                    shard_spec.shape[1]);
-                TT_FATAL(
-                    program_config.block_w % program_config.subblock_w == 0,
-                    "block_w must be divisible by subblock_w.");
-            }
-        },
-        args.program_config);
+    uint32_t Kt = K / input_width;
+    // block
+    const auto shard_spec = a.shard_spec().value();
+    // check dims
+    TT_FATAL(args.block_wt % args.subblock_wt == 0, "block_w must be divisible by subblock_w.");
+    TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
+    TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
+    const auto bbox = shard_spec.grid.bounding_box();
+    TT_FATAL(
+        bbox.end_coord.x - bbox.start_coord.x < args.grid_size.x &&
+            bbox.end_coord.y - bbox.start_coord.y < args.grid_size.y,
+        "Shard grid bounding box must fit within compute grid size");
+
+    TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
+    TT_FATAL(tt::div_up(Kt, shard_spec.num_cores()) == args.block_wt, "block_w must equal to K / num_cores.");
+    TT_FATAL(
+        a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
+        "Input tensor memory layout must not be HEIGHT_SHARDED but got {}",
+        a.memory_config().memory_layout());
+    if (b.has_value()) {
+        TT_FATAL(b.value().is_sharded(), "Tensor B must be sharded");
+        TT_FATAL(b.value().shard_spec() == shard_spec, "Tensor B shard spec must match input tensor shard spec");
+    }
+    TT_FATAL(
+        args.block_wt * input_width == shard_spec.shape[1],
+        "block_w ({}) * input_width ({}) must equal shard_spec shape[1] ({})",
+        args.block_wt,
+        input_width,
+        shard_spec.shape[1]);
 }
 
 spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
@@ -204,40 +178,28 @@ spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
 
-    return std::visit(
-        [&](const auto& program_config) -> spec_return_value_t {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                auto output_shard_spec = args.output_mem_config.shard_spec().value();
-                auto input_shard_spec = input_tensor.shard_spec().value();
-                if (output_shard_spec != input_shard_spec) {
-                    output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
-                }
-                if (program_config.inplace) {
-                    return input_tensor.tensor_spec();
-                }
+    auto output_shard_spec = args.output_mem_config.shard_spec().value();
+    auto input_shard_spec = input_tensor.shard_spec().value();
+    if (output_shard_spec != input_shard_spec) {
+        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
+    }
+    if (args.inplace) {
+        return input_tensor.tensor_spec();
+    }
 
-                auto mem_config = args.output_mem_config;
-                if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
-                }
+    auto mem_config = args.output_mem_config;
+    if (!mem_config.shard_spec().has_value()) {
+        mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+    }
 
-                return ttnn::TensorSpec(
-                    output_shape,
-                    TensorLayout::fromPaddedShape(
-                        args.dtype.value_or(input_tensor.dtype()),
-                        PageConfig(Layout::TILE),
-                        mem_config,
-                        output_shape,
-                        output_padded_shape));
-            }
-            TT_FATAL(false, "Tensor Spec does not match");
-            return TensorSpec(
-                output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), args.output_mem_config));
-        },
-        args.program_config);
+    return ttnn::TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            args.dtype.value_or(input_tensor.dtype()),
+            PageConfig(Layout::TILE),
+            mem_config,
+            output_shape,
+            output_padded_shape));
 }
 
 tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
@@ -246,20 +208,11 @@ tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
         return *tensor_args.preallocated_output;
     }
 
-    return std::visit(
-        [&](const auto& program_config) -> tensor_return_value_t {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                if (program_config.inplace) {
-                    return tensor_args.input;
-                }
-            }
-            auto output_spec = compute_output_specs(args, tensor_args);
-            return create_device_tensor(output_spec, tensor_args.input.device());
-        },
-        args.program_config);
+    if (args.inplace) {
+        return tensor_args.input;
+    }
+    auto output_spec = compute_output_specs(args, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
@@ -291,7 +244,7 @@ tt::stl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
 std::tuple<RMSAllGatherDeviceOperation::operation_attributes_t, RMSAllGatherDeviceOperation::tensor_args_t>
 RMSAllGatherDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const layernorm::LayerNormProgramConfig& program_config,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -309,7 +262,7 @@ RMSAllGatherDeviceOperation::invoke(
     bool use_noc1_only) {
     auto arch = is_device_tensor(input_tensor)
                     ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+                    : ::ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     const auto& mesh_view = mesh_device.get_view();
@@ -317,10 +270,29 @@ RMSAllGatherDeviceOperation::invoke(
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
+    auto [subblock_wt, block_wt, inplace, grid_size] = std::visit(
+        [](const auto& config) -> std::tuple<uint32_t, uint32_t, bool, CoreCoord> {
+            using T = std::decay_t<decltype(config)>;
+            if constexpr (std::is_same_v<T, layernorm::LayerNormShardedMultiCoreProgramConfig>) {
+                return {
+                    static_cast<uint32_t>(config.subblock_w),
+                    static_cast<uint32_t>(config.block_w),
+                    config.inplace,
+                    config.compute_with_storage_grid_size};
+            } else {
+                TT_FATAL(false, "RMSAllGather only supports LayerNormShardedMultiCoreProgramConfig");
+                return {0, 0, false, CoreCoord{0, 0}};
+            }
+        },
+        program_config);
+
     operation_attributes_t operation_attributes(
         epsilon,
         memory_config.value_or(input_tensor.memory_config()),
-        program_config,
+        subblock_wt,
+        block_wt,
+        inplace,
+        grid_size,
         kernel_config_val,
         dtype,
         topology_,

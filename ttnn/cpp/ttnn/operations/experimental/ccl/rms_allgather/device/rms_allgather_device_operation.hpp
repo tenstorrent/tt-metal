@@ -8,8 +8,11 @@
 #include "rms_allgather_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::operations::fused::normalization {
+
+namespace layernorm = ttnn::operations::normalization;
 
 struct RMSAllGatherDeviceOperation {
     using operation_attributes_t = fused::normalization::operation_attributes_t;
@@ -33,7 +36,7 @@ struct RMSAllGatherDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+        const layernorm::LayerNormProgramConfig& program_config,
         uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const GlobalSemaphore& semaphore,
