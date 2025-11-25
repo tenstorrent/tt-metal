@@ -8,7 +8,13 @@ from loguru import logger
 import pathlib
 import graphviz
 
-from ttnn._ttnn.graph import RunMode, begin_graph_capture, end_graph_capture, extract_calltrace
+from ttnn._ttnn.graph import (
+    RunMode,
+    begin_graph_capture,
+    end_graph_capture,
+    extract_calltrace,
+    extract_levelized_graph,
+)
 
 
 class ExitStackWithPop(contextlib.ExitStack):
@@ -38,15 +44,19 @@ def pretty_format(captured_graph):
         elif node["node_type"] == "buffer_deallocate":
             node_string = format_string.format("Deallocate Device Buffer")
         elif node["node_type"] == "function_start":
-            node_string = format_string.format("Function Start: " + node["params"]["name"])
+            node_string = format_string.format(
+                "Function Start: " + node["params"]["name"])
         elif node["node_type"] == "function_end":
-            node_string = format_string.format("Function End:   " + node["params"]["name"])
+            node_string = format_string.format(
+                "Function End:   " + node["params"]["name"])
         elif node["node_type"] == "tensor":
-            node_string = format_string.format("Add Tensor: " + node["params"]["tensor_id"])
+            node_string = format_string.format(
+                "Add Tensor: " + node["params"]["tensor_id"])
         elif node["node_type"] == "circular_buffer_allocate":
             node_string = format_string.format("Allocate Circular Buffer")
         elif node["node_type"] == "circular_buffer_deallocate_all":
-            node_string = format_string.format("Deallocate All Circular Buffers")
+            node_string = format_string.format(
+                "Deallocate All Circular Buffers")
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 
@@ -117,7 +127,8 @@ def _visualize(
     for node in captured_graph:
         if node["node_type"] == "function_start":
             graph_stack.append(graphviz_graph)
-            graphviz_graph = context_stack.enter_context(graphviz_graph.subgraph(name=f"subgraph_{subgraph_counter}"))
+            graphviz_graph = context_stack.enter_context(
+                graphviz_graph.subgraph(name=f"subgraph_{subgraph_counter}"))
             subgraph_counter += 1
             level += 1
 
@@ -148,7 +159,8 @@ def _visualize(
     if file_name is not None:
         file_name = pathlib.Path(file_name)
         if file_name.suffix not in {".svg", ".png", ".pdf"}:
-            raise ValueError(f"file_name must have a .svg, .png or .pdf suffix, not {file_name.suffix}")
+            raise ValueError(
+                f"file_name must have a .svg, .png or .pdf suffix, not {file_name.suffix}")
         format = file_name.suffix[1:]
         graphviz_graph.render(file_name.with_suffix(""), format=format)
         logger.info(f'Graph visualization saved to "{file_name}"')
