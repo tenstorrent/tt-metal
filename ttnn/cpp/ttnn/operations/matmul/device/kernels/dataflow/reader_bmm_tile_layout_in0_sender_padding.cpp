@@ -171,17 +171,17 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
-                    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
-                    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
-                    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+                    // ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, true);
+                    // ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, true);
+                    // ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, true);
                 }
 
-                if (!is_batch_valid) {
-                    if constexpr (!bcast_A) {
-                        in0_tensor_start_tile_id += MtKt;
-                    }
-                    continue;
-                }
+                // if (!is_batch_valid) {
+                //     if constexpr (!bcast_A) {
+                //         in0_tensor_start_tile_id += MtKt;
+                //     }
+                //     continue;
+                // }
             }
 
 #ifdef IN0_SHARDED

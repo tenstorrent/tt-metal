@@ -144,12 +144,12 @@ void MAIN {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid = false;
-            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            if (!is_batch_valid) {
-                continue;
-            }
+            // UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            // MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            // PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            // if (!is_batch_valid) {
+            //     continue;
+            // }
         }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {

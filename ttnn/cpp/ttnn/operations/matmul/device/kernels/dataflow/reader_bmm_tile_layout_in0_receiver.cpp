@@ -54,14 +54,14 @@ void kernel_main() {
             const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
-            ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
-            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+            // ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, true);
+            // ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, true);
+            // ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, true);
 
             // Skip sending the input tensor for this batch as it is not valid.
-            if (!is_batch_valid) {
-                continue;
-            }
+            // if (!is_batch_valid) {
+            //     continue;
+            // }
         }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
