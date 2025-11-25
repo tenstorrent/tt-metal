@@ -93,7 +93,6 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec):
     # Test failing with watcher enabled, github issue #29024
     if (
         is_watcher_enabled()
-        and in_place == False
         and in_dtype == ttnn.bfloat16
         and input_spec == [1, 1, 59, 59, 3, 5, 4, 2, 1, 1, 5, 4, True]
     ):
