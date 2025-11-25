@@ -30,9 +30,9 @@ struct DramPrefetcherOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         std::vector<ttnn::Tensor>& tensors,
-        const uint32_t num_layers,
+        uint32_t num_layers,
         const std::optional<const GlobalCircularBuffer>& global_cb,
-        const bool enable_performance_mode);
+        bool enable_performance_mode);
 };
 
 }  // namespace ttnn::operations::dram_prefetcher
