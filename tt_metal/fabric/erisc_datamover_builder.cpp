@@ -370,6 +370,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
+    // ----------- Local Tensix Relay Connection (UDM mode only)
+    // Dedicated connection buffer index for the local tensix relay interface
+    this->tensix_relay_connection_buffer_index_id = buffer_address;
+    buffer_address += field_size;
+
     // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
     // the hang is root caused for multiprocess test.
     this->edm_local_tensix_sync_address = buffer_address;
@@ -417,7 +422,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
     // Update sender channel servicing based on fabric tensix configuration
-    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
@@ -1045,6 +1050,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(remote_worker_sender_channel);
     }
 
+    // Add UDM mode flag and relay buffer count
+    ct_args.push_back(this->udm_mode ? 1 : 0);
+    if (this->udm_mode) {
+        ct_args.push_back(this->local_tensix_relay_num_buffers);
+    }
+
     // special tag
     ct_args.push_back(0xabcd9876);
 
@@ -1173,6 +1184,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     rt_args.reserve(rt_args.size() + args_pt2.size());
     std::ranges::copy(args_pt2, std::back_inserter(rt_args));
+
+    // Pack relay connection args at the end (UDM mode only)
+    receiver_channel_to_downstream_adapter->pack_adaptor_to_relay_rt_args(rt_args);
+
     return rt_args;
 }
 
