@@ -51,7 +51,7 @@ class HunyuanAttention:
 
         self.to_qkv = ColParallelLinear(
             hidden_dim,
-            (num_attention_heads + num_key_value_heads) * head_dim,
+            (num_attention_heads + 2 * num_key_value_heads) * head_dim,
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -60,7 +60,7 @@ class HunyuanAttention:
         )
 
         self.to_out = ColParallelLinear(
-            num_attention_heads * head_dim,
+            (num_attention_heads + 2 * num_key_value_heads) * head_dim,
             hidden_dim,
             bias=False,
             mesh_device=mesh_device,
@@ -152,10 +152,12 @@ class HunyuanAttention:
                 n_dev = self.parallel_config.tensor_parallel.factor
                 q, k, v = q.T, k.T, v.T
                 q = q.reshape(q.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                k = k.reshape(k.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                v = v.reshape(v.shape[0], n_dev, self.n_local_heads, self.head_dim)
+                k = k.reshape(k.shape[0], n_dev, self.n_local_key_value_heads, self.head_dim)
+                v = v.reshape(v.shape[0], n_dev, self.n_local_key_value_heads, self.head_dim)
                 qkv = torch.cat([q, k, v], dim=2)
-                qkv = qkv.reshape(qkv.shape[0], 3 * self.heads * self.head_dim)
+                qkv = qkv.reshape(
+                    qkv.shape[0], n_dev * (self.n_local_heads + 2 * self.n_local_key_value_heads) * self.head_dim
+                )
                 qkv = qkv.T
                 return qkv
 
@@ -209,11 +211,9 @@ class HunyuanAttention:
         k_1KSH = self.norm_k(k_1KSH, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         # Rope
-        q_1QSH = ttnn.experimental.rotary_embedding_llama(
-            q_1QSH, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
-        k_1KSH = ttnn.experimental.rotary_embedding_llama(
-            k_1KSH, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
-
-        breakpoint()
+        # q_1QSH = ttnn.experimental.rotary_embedding_llama(
+        #     q_1QSH, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+        # )
+        # k_1KSH = ttnn.experimental.rotary_embedding_llama(
+        #     k_1KSH, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+        # )

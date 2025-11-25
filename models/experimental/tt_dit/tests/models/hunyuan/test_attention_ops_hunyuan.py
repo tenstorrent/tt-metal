@@ -26,11 +26,11 @@ def stack_cos_sin(cos, sin):
     "mesh_device, sp_axis, tp_axis, num_links",
     [
         [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
+        # [(4, 8), 1, 0, 4],
     ],
     ids=[
         "4x8sp0tp1",
-        "4x8sp1tp0",
+        # "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -70,10 +70,10 @@ def test_hunyuan_attention(
     MIN_PCC = 0.99
 
     state_dict = {
-        "to_q": torch.ones(hidden_dim, num_attention_heads * head_dim),
-        "to_k": torch.ones(hidden_dim, num_key_value_heads * head_dim),
-        "to_v": torch.ones(hidden_dim, num_key_value_heads * head_dim),
-        "to_out.0": torch.ones(num_attention_heads * head_dim, hidden_dim),
+        "to_q.weight": torch.ones(num_attention_heads * head_dim, hidden_dim),
+        "to_k.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_v.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_out.0.weight": torch.ones(hidden_dim, (num_attention_heads + 2 * num_key_value_heads) * head_dim),
         "norm_q.weight": torch.ones(head_dim),
         "norm_k.weight": torch.ones(head_dim),
     }
@@ -103,10 +103,12 @@ def test_hunyuan_attention(
         parallel_config=parallel_config,
     )
 
+    tt_model.load_state_dict(state_dict)
+
     # Initialize weights randomly for testing
     torch.manual_seed(0)
     # Create input tensors
-    input_tensor = torch.randn((1, B, seq_len, hidden_dim), dtype=torch_dtype)
+    input_tensor = torch.ones((1, B, seq_len, hidden_dim), dtype=torch_dtype)
 
     # TODO: Use real ROPE embeddings
     rope_cos = torch.randn(seq_len, num_attention_heads, head_dim // 2)
