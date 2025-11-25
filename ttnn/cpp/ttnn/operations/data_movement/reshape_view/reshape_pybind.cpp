@@ -30,7 +30,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
@@ -48,7 +48,14 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, logical_shape, padded_shape, memory_config, pad_value, reshape_tile_mode);
+                return self(
+                    input_tensor,
+                    logical_shape,
+                    padded_shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("logical_shape"),
@@ -66,7 +73,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::arg("shape"),

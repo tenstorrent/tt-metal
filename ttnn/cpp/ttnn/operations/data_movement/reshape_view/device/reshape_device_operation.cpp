@@ -79,6 +79,13 @@ tt::tt_metal::operation::Hash ReshapeDeviceOperation::compute_program_hash(
     // don't hash on ReshapeDeviceOperation::recreate_mapping_tensor
 
     return tt::tt_metal::operation::hash_operation<ReshapeDeviceOperation>(
-        input_shape, layout, input_mem_config, input_dtype, this->logical_output_shape, this->output_mem_config);
+        input_shape,
+        layout,
+        input_mem_config,
+        input_dtype,
+        this->logical_output_shape,
+        this->output_mem_config,
+        this->sub_core_grid.has_value(),
+        sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(CoreRange({0, 0}, {0, 0})));
 }
 }  // namespace ttnn

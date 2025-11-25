@@ -220,7 +220,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(
     const Tensor& input, const Tensor& output, std::optional<CoreRangeSet> sub_core_grid) {
-    return rm_reshape_preparer_single_risk(input, output, sub_core_grid);
+    return rm_reshape_preparer_single_risk(input, output, std::move(sub_core_grid));
 }
 
 };  // namespace ttnn::operations::data_movement::reshape
