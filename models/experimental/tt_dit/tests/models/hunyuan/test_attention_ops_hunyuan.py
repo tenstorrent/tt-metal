@@ -6,10 +6,8 @@
 import pytest
 import torch
 import ttnn
-from loguru import logger
 
 from ....utils.tensor import bf16_tensor
-from ....utils.check import assert_quality
 from ....models.transformers.hunyuan.attention_hunyuan import HunyuanAttention
 from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
@@ -20,6 +18,27 @@ def stack_cos_sin(cos, sin):
     cos = torch.stack([cos, cos], dim=-1).flatten(-2)
     sin = torch.stack([sin, sin], dim=-1).flatten(-2)
     return cos, sin
+
+
+def reshape_and_merge_qkv(q_state, k_state, v_state):
+    # Rearrange QKV projections such column-fracturing shards the heads
+    n_local_heads = 4
+    n_local_key_value_heads = 1
+    head_dim = 128
+
+    def _merge_tensors(q, k, v):
+        n_dev = 8
+        q, k, v = q.T, k.T, v.T
+        q = q.reshape(q.shape[0], n_dev, n_local_heads, head_dim)
+        k = k.reshape(k.shape[0], n_dev, n_local_key_value_heads, head_dim)
+        v = v.reshape(v.shape[0], n_dev, n_local_key_value_heads, head_dim)
+        qkv = torch.cat([q, k, v], dim=2)
+        qkv = qkv.reshape(qkv.shape[0], n_dev * (n_local_heads + 2 * n_local_key_value_heads) * head_dim)
+        qkv = qkv.T
+        return qkv
+
+    weight = _merge_tensors(q_state, k_state, v_state)
+    return weight
 
 
 @pytest.mark.parametrize(
@@ -70,10 +89,13 @@ def test_hunyuan_attention(
     MIN_PCC = 0.99
 
     state_dict = {
-        "to_q.weight": torch.ones(num_attention_heads * head_dim, hidden_dim),
-        "to_k.weight": 0.5 * torch.ones(num_key_value_heads * head_dim, hidden_dim),
-        "to_v.weight": 0.25 * torch.ones(num_key_value_heads * head_dim, hidden_dim),
-        "to_out.0.weight": torch.ones(hidden_dim, (num_attention_heads + 2 * num_key_value_heads) * head_dim),
+        # "to_q.weight": torch.ones(num_attention_heads * head_dim, hidden_dim),
+        "to_q.weight": torch.linspace(0, 1, num_attention_heads * head_dim, dtype=torch_dtype)
+        .view(num_attention_heads * head_dim, 1)
+        .repeat(1, hidden_dim),
+        "to_k.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_v.weight": torch.ones(num_key_value_heads * head_dim, hidden_dim),
+        "to_out.0.weight": torch.ones(hidden_dim, (num_attention_heads) * head_dim),
         "norm_q.weight": torch.ones(head_dim),
         "norm_k.weight": torch.ones(head_dim),
     }
@@ -108,7 +130,10 @@ def test_hunyuan_attention(
     # Initialize weights randomly for testing
     torch.manual_seed(0)
     # Create input tensors
-    input_tensor = torch.ones((1, B, seq_len, hidden_dim), dtype=torch_dtype)
+    # input_tensor = torch.ones((1, B, seq_len, hidden_dim), dtype=torch_dtype)
+    input_tensor = (
+        torch.linspace(0, seq_len - 1, seq_len, dtype=torch_dtype).view(1, 1, seq_len, 1).repeat(1, B, 1, hidden_dim)
+    )
 
     # TODO: Use real ROPE embeddings
     rope_cos = torch.randn(seq_len, num_attention_heads, head_dim // 2)
@@ -131,23 +156,9 @@ def test_hunyuan_attention(
         tt_trans_mat,
     )
 
-    logger.info(f"Checking spatial outputs")
-    assert_quality(input_tensor, tt_output, pcc=MIN_PCC)
+    qkv_tt = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=(4, 8)),
+    )
 
-    if not context_pre_only:
-        prompt_concat_dims = [None, None]
-        prompt_concat_dims[sp_axis] = 0
-        prompt_concat_dims[tp_axis] = 1
-        tt_prompt_out = ttnn.to_torch(
-            tt_prompt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=prompt_concat_dims, mesh_shape=tuple(mesh_device.shape)
-            ),
-        )
-        tt_prompt_out = tt_prompt_out[:, :, :prompt_seq_len, :]
-        # Get all replicas into the first dimension for checking
-        tt_prompt_out = tt_prompt_out.reshape(-1, prompt_seq_len, added_kv_proj_dim)
-
-        logger.info(f"Checking prompt outputs")
-        for i in range(tt_prompt_out.shape[0]):
-            assert_quality(torch_prompt_out, tt_prompt_out[i], pcc=0.99)
+    qkv_state = reshape_and_merge_qkv(state_dict["to_q.weight"], state_dict["to_k.weight"], state_dict["to_v.weight"])

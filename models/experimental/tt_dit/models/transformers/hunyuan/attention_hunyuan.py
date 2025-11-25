@@ -60,7 +60,7 @@ class HunyuanAttention:
         )
 
         self.to_out = ColParallelLinear(
-            (num_attention_heads + 2 * num_key_value_heads) * head_dim,
+            num_attention_heads * head_dim,
             hidden_dim,
             bias=False,
             mesh_device=mesh_device,
@@ -181,10 +181,9 @@ class HunyuanAttention:
             substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
         )
         self.to_qkv.load_state_dict(qkv_state)
-
         self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
 
-    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat, mode="gen_image", first_step=True, cur_pos=None):
+    def __call__(self, x_1BSD, rope_cos, rope_sin, trans_mat, mode="gen_text", first_step=False, cur_pos=None):
         """
         x_1BSD: fractured N on SP, replicated D on TP
         rope_cos: fractured on SP, TP
@@ -305,6 +304,7 @@ class HunyuanAttention:
             attn_output_1QSH,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
         attn_output_11SH = ttnn.experimental.all_gather_async(
             attn_output_11SH,
             persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
