@@ -298,12 +298,6 @@ void kernel_main() {
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     // ========== Create channel arrays grouped by type ==========
-    // Worker channels (WORKER_CHANNEL)
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS> worker_channels;
-    std::array<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>, NUM_WORKER_CHANNELS>
-        worker_channel_interfaces;
-    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_connection_established;
-
     // Relay-to-mux channels (RELAY_TO_MUX_CHANNEL)
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_RELAY_TO_MUX>, NUM_RELAY_TO_MUX_CHANNELS>
         relay_to_mux_channels;
@@ -356,6 +350,29 @@ void kernel_main() {
     // Whether this mux has a fabric router to connect to
     // False for missing directions (inter-mux forwarding only, no actual router)
     constexpr bool has_fabric_router = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 2) == 1;
+
+    // Channel storage address (L1 address for storing worker channel arrays only)
+    constexpr size_t channel_storage_base_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX + 3);
+
+    // ========== Set up L1-based storage pointers for worker channels only ==========
+    constexpr size_t worker_channels_storage_size =
+        NUM_WORKER_CHANNELS * sizeof(tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>);
+    constexpr size_t worker_interfaces_storage_size =
+        NUM_WORKER_CHANNELS * sizeof(tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>);
+    constexpr size_t total_worker_storage_size = worker_channels_storage_size + worker_interfaces_storage_size;
+
+    // Verify 4KB is enough for worker channel storage
+    static_assert(total_worker_storage_size <= 4096, "Worker channel storage exceeds 4KB L1 allocation");
+
+    size_t storage_offset = channel_storage_base_address;
+    auto worker_channels = reinterpret_cast<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_WORKER>*>(storage_offset);
+    storage_offset += worker_channels_storage_size;
+    auto worker_channel_interfaces =
+        reinterpret_cast<tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_WORKER>*>(
+            storage_offset);
+
+    // Worker channel connection status (stack-allocated)
+    bool worker_channel_connection_established[NUM_WORKER_CHANNELS];
 
     // ========== Setup worker channels (WORKER_CHANNEL) ==========
     size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];

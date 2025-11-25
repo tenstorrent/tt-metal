@@ -130,6 +130,12 @@ public:
     std::pair<uint32_t, uint32_t> get_noc_xy_for_direction(
         tt::tt_metal::IDevice* device, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
 
+    // Get the worker-to-tensix core mapping (UDM mode only)
+    // Returns the per-device map: [worker coord] -> [tensix core coord]
+    const std::unordered_map<ChipId, std::map<CoreCoord, CoreCoord>>& get_worker_to_tensix_core_map() const {
+        return worker_to_tensix_core_map_;
+    }
+
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
@@ -189,6 +195,9 @@ private:
     uint32_t dispatch_link_idx_ = 0;
     bool has_dispatch_tunnel_ = false;
 
+    // Number of non-dispatch routing planes (excluding dispatch link if present)
+    size_t num_non_dispatch_routing_planes_ = 0;
+
     // Per-device missing (routing_plane_id, direction) pairs without active eth channels
     // Only populated in UDM mode - for edge devices that don't have neighbors in all 4 directions
     // Each pair represents a routing plane that needs a tensix builder in that direction
@@ -202,6 +211,11 @@ private:
     // Populated for both active directions (from eth channels) and missing directions (UDM mode)
     std::unordered_map<ChipId, std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, size_t>>>
         direction_to_core_index_;
+
+    // [device_id][worker coord] -> [tensix core coord] mapping for UDM mode
+    // Maps each worker in the compute grid to the tensix core that handles its traffic
+    // Workers are assigned by column (y first) to distribute evenly across routing planes
+    std::unordered_map<ChipId, std::map<CoreCoord, CoreCoord>> worker_to_tensix_core_map_;
 
     // Helper methods for initialization
 
@@ -254,6 +268,24 @@ private:
     // Helper methods for config creation
     std::shared_ptr<FabricTensixDatamoverMuxConfig> create_mux_config(FabricTensixCoreType core_id);
     std::shared_ptr<FabricTensixDatamoverRelayConfig> create_relay_config(FabricTensixCoreType core_id);
+
+    // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
+    // Also builds worker_to_tensix_core_map_ in UDM mode
+    std::map<ChannelTypes, uint32_t> calculate_mux_channel_counts(
+        const std::vector<tt_metal::IDevice*>& all_active_devices);
+
+    // UDM mode helper: builds list of workers sorted by column (y first, then x)
+    std::vector<CoreCoord> build_workers_by_column(tt::tt_metal::IDevice* device) const;
+
+    // UDM mode helper: gets unique tensix cores for worker assignment (excludes dispatch routing plane)
+    std::vector<CoreCoord> get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const;
+
+    // UDM mode helper: assigns workers to tensix cores in contiguous chunks
+    void assign_workers_to_tensix_cores(
+        ChipId device_id,
+        const std::vector<CoreCoord>& workers_by_column,
+        const std::vector<CoreCoord>& tensix_cores_for_workers,
+        uint32_t num_worker_channels);
 };
 
 /**

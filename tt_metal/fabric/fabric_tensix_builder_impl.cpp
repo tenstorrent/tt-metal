@@ -377,6 +377,11 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
         current_address = downstream_mux_buffer_index_semaphore_regions_[i].get_end_address();
     }
 
+    // Allocate channel storage region for storing channel arrays in L1 (4KB)
+    constexpr size_t channel_storage_size = 4 * 1024;  // 4KB for channel storage
+    channel_storage_region_ = MemoryRegion(current_address, channel_storage_size, 1);
+    current_address = channel_storage_region_.get_end_address();
+
     memory_map_end_address_ = current_address;
 
     TT_FATAL(
@@ -1072,8 +1077,13 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     // Add direction
     ct_args.push_back(static_cast<uint32_t>(direction_));
 
-    // Add has_fabric_router flag (1 = has router, 0 = no router / missing direction)
-    ct_args.push_back(static_cast<uint32_t>(has_fabric_router_ ? 1 : 0));
+    // Only needed in UDM mode
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // Add has_fabric_router flag (1 = has router, 0 = no router / missing direction)
+        ct_args.push_back(static_cast<uint32_t>(has_fabric_router_ ? 1 : 0));
+        // Add channel storage address (L1 address for storing worker channel arrays)
+        ct_args.push_back(config_->get_channel_storage_base_address());
+    }
 
     return ct_args;
 }

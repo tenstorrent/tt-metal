@@ -315,6 +315,15 @@ private:
     // Buffer index synchronization (mux → downstream mux direction) for each downstream mux connection
     // - Stored in current MUX's L1 memory
     std::array<MemoryRegion, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_index_semaphore_regions_{};
+
+    // Channel storage region: L1 memory for storing channel objects and interfaces
+    // Used by the kernel to place channel buffers and interfaces instead of global memory
+    MemoryRegion channel_storage_region_{};
+
+public:
+    // Getter for channel storage address
+    size_t get_channel_storage_base_address() const { return channel_storage_region_.get_address(); }
+    size_t get_channel_storage_size() const { return channel_storage_region_.get_total_size(); }
 };
 
 /**

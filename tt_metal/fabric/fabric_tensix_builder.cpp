@@ -44,6 +44,7 @@ bool device_has_dispatch_tunnel(ChipId device_id) {
 void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices) {
     min_eth_channels_ = SIZE_MAX;
     max_eth_channels_ = 0;
+    num_non_dispatch_routing_planes_ = 0;
 
     auto device_id = all_active_devices.front()->id();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -76,6 +77,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         }
 
         std::vector<chan_id_t> non_dispatch_active_channels;
+        std::set<routing_plane_id_t> non_dispatch_routing_planes;
         for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
             dispatch_link_idx_ =
                 tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
@@ -85,6 +87,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 
                 if (!(has_dispatch_tunnel_ && link_idx == dispatch_link_idx_)) {
                     non_dispatch_active_channels.push_back(eth_chan);
+                    non_dispatch_routing_planes.insert(link_idx);
                 }
             }
         }
@@ -93,6 +96,11 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
         size_t channel_count = non_dispatch_active_channels.size();
         max_eth_channels_ = std::max(max_eth_channels_, channel_count);
         min_eth_channels_ = std::min(min_eth_channels_, channel_count);
+
+        // Track number of unique non-dispatch routing planes
+        // Should be the same across all devices, so just take the max
+        num_non_dispatch_routing_planes_ =
+            std::max(num_non_dispatch_routing_planes_, non_dispatch_routing_planes.size());
     }
 
     // If no channels found, set min to 0
@@ -356,8 +364,69 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     return true;
 }
 
+// UDM mode helper: builds list of workers sorted by column (y first, then x)
+std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt::tt_metal::IDevice* device) const {
+    auto compute_grid = device->compute_with_storage_grid_size();
+    uint32_t total_workers = compute_grid.x * compute_grid.y;
+
+    std::vector<CoreCoord> workers_by_column;
+    workers_by_column.reserve(total_workers);
+
+    // Sort by column: y first (outer loop), then x (inner loop)
+    for (uint32_t y = 0; y < compute_grid.y; y++) {
+        for (uint32_t x = 0; x < compute_grid.x; x++) {
+            CoreCoord logical_worker(x, y);
+            CoreCoord translated_worker = device->worker_core_from_logical_core(logical_worker);
+            workers_by_column.push_back(translated_worker);
+        }
+    }
+
+    return workers_by_column;
+}
+
+// UDM mode helper: gets unique tensix cores for worker assignment
+std::vector<CoreCoord> FabricTensixDatamoverConfig::get_tensix_cores_for_workers(tt::tt_metal::IDevice* device) const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+    const auto& node_map = fabric_tensix_noc_coords_map_.at(fabric_node_id);
+
+    // Collect unique tensix cores across all routing planes and directions
+    std::set<CoreCoord> unique_tensix_cores;
+    for (const auto& [routing_plane_id, direction_map] : node_map) {
+        for (const auto& [direction, noc_coords] : direction_map) {
+            const auto& [noc_x, noc_y] = noc_coords;
+            unique_tensix_cores.insert(CoreCoord(noc_x, noc_y));
+        }
+    }
+
+    // Convert set to vector (maintains sorted order)
+    return std::vector<CoreCoord>(unique_tensix_cores.begin(), unique_tensix_cores.end());
+}
+
+// UDM mode helper: assigns workers to tensix cores in contiguous chunks
+void FabricTensixDatamoverConfig::assign_workers_to_tensix_cores(
+    ChipId device_id,
+    const std::vector<CoreCoord>& workers_by_column,
+    const std::vector<CoreCoord>& tensix_cores_for_workers,
+    uint32_t num_worker_channels) {
+    auto& device_map = worker_to_tensix_core_map_[device_id];
+    device_map.clear();
+
+    for (size_t i = 0; i < workers_by_column.size(); i++) {
+        size_t tensix_idx = i / num_worker_channels;
+        // Handle case where last tensix may have fewer workers
+        if (tensix_idx >= tensix_cores_for_workers.size()) {
+            tensix_idx = tensix_cores_for_workers.size() - 1;
+        }
+        device_map[workers_by_column[i]] = tensix_cores_for_workers[tensix_idx];
+    }
+}
+
 // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
-std::map<ChannelTypes, uint32_t> get_num_mux_channels() {
+// Also builds worker_to_tensix_core_map_ in UDM mode
+std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_channel_counts(
+    const std::vector<tt_metal::IDevice*>& all_active_devices) {
     std::map<ChannelTypes, uint32_t> channel_counts;
 
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
@@ -366,8 +435,33 @@ std::map<ChannelTypes, uint32_t> get_num_mux_channels() {
         // UDM mode: calculate channels based on compute grid
         // UDM has WORKER_CHANNEL, RELAY_TO_MUX_CHANNEL, MUX_TO_MUX_CHANNEL (NO ROUTER_CHANNEL)
 
-        // TODO: this is just testing original behave, later PR will support full grid of workers
-        channel_counts[ChannelTypes::WORKER_CHANNEL] = 1;  // Always 1 worker channel in legacy mode
+        // Calculate num_worker_channels using first device (all devices have same configuration)
+        auto first_device = all_active_devices.front();
+        auto workers_by_column = build_workers_by_column(first_device);
+        auto tensix_cores_for_workers = get_tensix_cores_for_workers(first_device);
+
+        uint32_t total_workers = workers_by_column.size();
+        uint32_t num_worker_channels = static_cast<uint32_t>(
+            (total_workers + tensix_cores_for_workers.size() - 1) / tensix_cores_for_workers.size());
+
+        log_debug(
+            tt::LogMetal,
+            "UDM mode: total_workers={}, tensix_cores={}, num_worker_channels={}",
+            total_workers,
+            tensix_cores_for_workers.size(),
+            num_worker_channels);
+
+        // Build per-device worker-to-tensix maps
+        // fabric_tensix_noc_coords_map_ is indexed by fabric_node_id, so process each device
+        for (auto device : all_active_devices) {
+            auto device_workers = build_workers_by_column(device);
+            auto device_tensix_cores = get_tensix_cores_for_workers(device);
+
+            // Assign workers to tensix cores in contiguous chunks for this device
+            assign_workers_to_tensix_cores(device->id(), device_workers, device_tensix_cores, num_worker_channels);
+        }
+
+        channel_counts[ChannelTypes::WORKER_CHANNEL] = num_worker_channels;
 
         // Relay channels: 3 channels (LOCAL_RELAY, EAST_OR_NORTH_RELAY, WEST_OR_SOUTH_RELAY)
         channel_counts[ChannelTypes::RELAY_TO_MUX_CHANNEL] =
@@ -415,7 +509,8 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Determine num_channels_for_mux and build channel type maps based on mode
     // The helper function handles both UDM and Legacy modes internally
-    mux_channel_counts_ = get_num_mux_channels();
+    // Also builds worker_to_tensix_core_map_ in UDM mode
+    mux_channel_counts_ = calculate_mux_channel_counts(all_active_devices);
 
     // Calculate total number of mux channels
     num_channels_for_mux_ = 0;
