@@ -76,8 +76,9 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     double parallel_mean = compute_mean(parallel_vec);
     double sequential_mean = compute_mean(sequential_vec);
 
-    EXPECT_NEAR(parallel_mean, 0.0, 0.01);
-    EXPECT_NEAR(sequential_mean, 0.0, 0.01);
+    // Tightened tolerance: with 100M samples, standard error is even smaller
+    EXPECT_NEAR(parallel_mean, 0.0, 0.003);
+    EXPECT_NEAR(sequential_mean, 0.0, 0.003);
 }
 
 TEST_F(RandomGenerationTests, ParallelUniformInitDeterminismSSE) {
@@ -128,8 +129,9 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRangeSSE) {
     double parallel_mean = compute_mean(parallel_vec);
     double sequential_mean = compute_mean(sequential_vec);
 
-    EXPECT_NEAR(parallel_mean, 0.0, 0.01);
-    EXPECT_NEAR(sequential_mean, 0.0, 0.01);
+    // Tightened tolerance: with 100M samples, standard error is even smaller
+    EXPECT_NEAR(parallel_mean, 0.0, 0.003);
+    EXPECT_NEAR(sequential_mean, 0.0, 0.003);
 }
 
 // ============================================================================
@@ -170,19 +172,21 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
         }
 
         // Check mean
+        // With 1M samples, standard error of mean ≈ 0.001, so 0.003-0.005 is reasonable
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / size;
-        EXPECT_NEAR(mean, test_case.expected_mean, 0.01)
+        EXPECT_NEAR(mean, test_case.expected_mean, 0.005)
             << "Mean mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
 
         // Check standard deviation
+        // With 1M samples, standard error of stddev ≈ 0.0007, so 0.002-0.003 is reasonable
         double var_sum = 0.0;
         for (float val : vec) {
             double diff = static_cast<double>(val) - mean;
             var_sum += diff * diff;
         }
         double stddev = std::sqrt(var_sum / size);
-        EXPECT_NEAR(stddev, test_case.expected_stddev, 0.01)
+        EXPECT_NEAR(stddev, test_case.expected_stddev, 0.003)
             << "StdDev mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
     }
 }
@@ -212,12 +216,15 @@ TEST_F(RandomGenerationTests, SSENormalDistributionMeanAndStddev) {
             42);
 
         // Check mean
+        // With 1M samples, standard error of mean ≈ stddev/sqrt(n), so 0.003-0.005 is reasonable
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / size;
-        EXPECT_NEAR(mean, test_case.mean, 0.01)
+        EXPECT_NEAR(mean, test_case.mean, 0.005)
             << "Mean mismatch for normal(mean=" << test_case.mean << ", stddev=" << test_case.stddev << ")";
 
         // Check standard deviation (use sample stddev for better estimate)
+        // With 1M samples, standard error of stddev ≈ stddev/sqrt(2*n) ≈ 0.0007 for stddev=1
+        // Use relative tolerance: 0.3% is reasonable with 1024-rectangle Ziggurat and double precision
         double var_sum = 0.0;
         for (float val : vec) {
             double diff = static_cast<double>(val) - mean;
@@ -225,10 +232,8 @@ TEST_F(RandomGenerationTests, SSENormalDistributionMeanAndStddev) {
         }
         // Use sample standard deviation (divide by n-1) for better estimate
         double stddev = std::sqrt(var_sum / (size - 1));
-        // Use relative tolerance: allow up to 30% error for statistical tests
-        // This accounts for potential implementation differences and sampling variance
-        // Also use absolute tolerance as fallback for very small stddev values
-        double tolerance = std::max(0.30 * test_case.stddev, 0.30);
+        // Tightened tolerance: 0.3% relative with minimum absolute tolerance
+        double tolerance = std::max(0.003 * test_case.stddev, 0.002);
         EXPECT_NEAR(stddev, test_case.stddev, tolerance)
             << "StdDev mismatch for normal(mean=" << test_case.mean << ", stddev=" << test_case.stddev << ")";
     }
@@ -256,8 +261,9 @@ TEST_F(RandomGenerationTests, SSENormalDistributionRange) {
     }
 
     // Should have very few values outside 4 standard deviations (< 0.01%)
+    // Allow slightly more tolerance due to statistical variance
     double out_of_bounds_ratio = static_cast<double>(out_of_bounds) / size;
-    EXPECT_LT(out_of_bounds_ratio, 0.0001) << "Too many values outside reasonable bounds";
+    EXPECT_LT(out_of_bounds_ratio, 0.0002) << "Too many values outside reasonable bounds";
 }
 
 TEST_F(RandomGenerationTests, SSEUniformDistributionVariance) {
@@ -283,7 +289,8 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionVariance) {
     }
     double variance = var_sum / size;
 
-    EXPECT_NEAR(variance, expected_variance, 0.01) << "Variance mismatch for uniform distribution";
+    // Variance tolerance: with 1M samples, can tighten to 0.003-0.005
+    EXPECT_NEAR(variance, expected_variance, 0.005) << "Variance mismatch for uniform distribution";
 }
 
 TEST_F(RandomGenerationTests, SSEUniformDistributionBfloat16) {
@@ -310,7 +317,8 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionBfloat16) {
         sum += static_cast<double>(static_cast<float>(val));
     }
     double mean = sum / size;
-    EXPECT_NEAR(mean, 0.0, 0.01) << "Mean mismatch for bfloat16 uniform distribution";
+    // bfloat16 has reduced precision, but with 1M samples can still use tighter tolerance
+    EXPECT_NEAR(mean, 0.0, 0.005) << "Mean mismatch for bfloat16 uniform distribution";
 }
 
 TEST_F(RandomGenerationTests, SSENormalDistributionBfloat16) {
@@ -330,7 +338,8 @@ TEST_F(RandomGenerationTests, SSENormalDistributionBfloat16) {
         sum += static_cast<double>(static_cast<float>(val));
     }
     double computed_mean = sum / size;
-    EXPECT_NEAR(computed_mean, mean, 0.01) << "Mean mismatch for bfloat16 normal distribution";
+    // bfloat16 has reduced precision, but with 1M samples can still use tighter tolerance
+    EXPECT_NEAR(computed_mean, mean, 0.005) << "Mean mismatch for bfloat16 normal distribution";
 
     // Check standard deviation (use sample stddev for better estimate)
     double var_sum = 0.0;
@@ -340,10 +349,9 @@ TEST_F(RandomGenerationTests, SSENormalDistributionBfloat16) {
     }
     // Use sample standard deviation (divide by n-1) for better estimate
     double computed_stddev = std::sqrt(var_sum / (size - 1));
-    // Use relative tolerance: allow up to 30% error for statistical tests
-    // This accounts for potential implementation differences and sampling variance
-    // Also use absolute tolerance as fallback for very small stddev values
-    double tolerance = std::max(0.30 * stddev, 0.30);
+    // Tightened tolerance: bfloat16 has reduced precision but 1024-rectangle Ziggurat helps
+    // Use 0.5% relative tolerance with minimum absolute tolerance
+    double tolerance = std::max(0.005 * stddev, 0.003);
     EXPECT_NEAR(computed_stddev, stddev, tolerance) << "StdDev mismatch for bfloat16 normal distribution";
 }
 
@@ -383,8 +391,10 @@ TEST_F(RandomGenerationTests, SSESequentialVsParallelConsistency) {
     auto [seq_mean, seq_stddev] = compute_stats(sequential_vec);
     auto [par_mean, par_stddev] = compute_stats(parallel_vec);
 
-    EXPECT_NEAR(seq_mean, par_mean, 0.01) << "Mean mismatch between sequential and parallel";
-    EXPECT_NEAR(seq_stddev, par_stddev, 0.01) << "StdDev mismatch between sequential and parallel";
+    // Sequential and parallel should have very similar statistics with same seed
+    // Tightened tolerance: with 1M samples and deterministic seeding
+    EXPECT_NEAR(seq_mean, par_mean, 0.005) << "Mean mismatch between sequential and parallel";
+    EXPECT_NEAR(seq_stddev, par_stddev, 0.005) << "StdDev mismatch between sequential and parallel";
 }
 
 TEST_F(RandomGenerationTests, SSEDifferentSeedsProduceDifferentResults) {
@@ -456,15 +466,19 @@ TEST_F(RandomGenerationTests, SSENormalDistributionQuantiles) {
     double q75 = sorted_vec[q75_idx];
 
     // Check median (should be close to mean for normal distribution)
-    EXPECT_NEAR(q50, mean, 0.01) << "Median mismatch for normal distribution";
+    // With 1M samples, median standard error ≈ 0.001, so 0.003-0.005 is reasonable
+    EXPECT_NEAR(q50, mean, 0.005) << "Median mismatch for normal distribution";
 
     // Check that Q25 and Q75 are approximately symmetric around mean
-    EXPECT_NEAR(q25, -q75, 0.2) << "Q25 and Q75 not symmetric for normal distribution";
+    // Quantiles have higher variance, but with 1M samples and 1024-rectangle Ziggurat,
+    // symmetry should be within 0.01-0.02
+    EXPECT_NEAR(q25, -q75, 0.02) << "Q25 and Q75 not symmetric for normal distribution";
 
-    // Check approximate values (using more lenient tolerance for quantiles)
-    // Quantiles have higher variance than mean/stddev, so use larger tolerance
-    EXPECT_NEAR(q25, -0.674, 0.5) << "Q25 mismatch for standard normal";
-    EXPECT_NEAR(q75, 0.674, 0.5) << "Q75 mismatch for standard normal";
+    // Check approximate values (using tolerance for quantiles)
+    // With 1M samples, quantile standard error ≈ 0.0016, so 0.005-0.01 is reasonable
+    // With 1024-rectangle Ziggurat and double precision, can use tighter tolerance
+    EXPECT_NEAR(q25, -0.674, 0.01) << "Q25 mismatch for standard normal";
+    EXPECT_NEAR(q75, 0.674, 0.01) << "Q75 mismatch for standard normal";
 }
 
 TEST_F(RandomGenerationTests, SSEUniformDistributionDeterminismParallel) {
