@@ -11,12 +11,12 @@ namespace ttnn::operations::conv::conv2d::program {
 struct Conv2dShardedProgramFactory {
     struct shared_variables_t {
         std::vector<CoreCoord> mcast_sender_cores_vec;
-        tt::tt_metal::KernelHandle writer_mcast_sender_id;
-        tt::tt_metal::CBHandle cb_sharded_act;
-        tt::tt_metal::CBHandle cb_output;
-        tt::tt_metal::CBHandle cb_partials;
-        bool partials_cb_uses_output;
-        bool has_bias;
+        tt::tt_metal::KernelHandle writer_mcast_sender_id{};
+        tt::tt_metal::CBHandle cb_sharded_act{};
+        tt::tt_metal::CBHandle cb_output{};
+        tt::tt_metal::CBHandle cb_partials{};
+        bool partials_cb_uses_output = false;
+        bool has_bias = false;
         tt::tt_metal::DeviceStorage conv_reader_indices_storage;
     };
 

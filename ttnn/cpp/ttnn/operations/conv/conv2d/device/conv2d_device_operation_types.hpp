@@ -181,30 +181,30 @@ struct Conv2dBlockConfig {
 };
 
 struct operation_attributes_t {
-    const sliding_window::SlidingWindowConfig sliding_window_config;
-    const uint32_t output_channels;
-    const uint32_t groups;
-    bool untilize_out;
-    bool has_bias;
-    std::optional<ttnn::operations::unary::UnaryWithParam> activation;
-    Conv2dParallelizationConfig parallelization_config;
-    Conv2dBlockConfig block_config;
+    sliding_window::SlidingWindowConfig sliding_window_config{};
+    uint32_t output_channels = 0;
+    uint32_t groups = 0;
+    bool untilize_out = false;
+    bool has_bias = false;
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
+    Conv2dParallelizationConfig parallelization_config{};
+    Conv2dBlockConfig block_config{};
     tt::tt_metal::MemoryConfig memory_config;
-    tt::tt_metal::DataType dtype;
-    std::array<std::uint32_t, 4> input_tensor_shape;
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+    std::array<std::uint32_t, 4> input_tensor_shape{};
     DeviceComputeKernelConfig compute_kernel_config;
-    bool enable_act_double_buffer;
-    bool enable_weights_double_buffer;
-    bool full_inner_dim;
-    bool enable_activation_reuse;
-    bool config_tensors_in_dram;
-    uint32_t pre_op_l1_allocation_size_bytes{};
-    std::optional<bool> force_split_reader;
+    bool enable_act_double_buffer = false;
+    bool enable_weights_double_buffer = false;
+    bool full_inner_dim = false;
+    bool enable_activation_reuse = false;
+    bool config_tensors_in_dram = false;
+    uint32_t pre_op_l1_allocation_size_bytes = 0;
+    std::optional<bool> force_split_reader = std::nullopt;
 };
 
 struct tensor_args_t {
-    const Tensor a;
-    const Tensor b;
+    Tensor a;
+    Tensor b;
     std::optional<Tensor> bias;
 };
 
