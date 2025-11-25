@@ -65,3 +65,7 @@ models:
     skus:
       wh_llmbox:
         time_budget: 420
+  perf:
+    skus:
+      wh_llmbox:
+        time_budget: 660
