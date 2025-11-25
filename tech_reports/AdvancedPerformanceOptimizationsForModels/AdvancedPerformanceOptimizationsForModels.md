@@ -163,7 +163,7 @@ Using a second command queue only for writes enables us to eliminate the gap bet
 
 ### 2.2 APIs
 
-Configuring multiple command queues require the following APIs:
+Configuring multiple command queues requires the following APIs:
 
 * `num_command_queues`
 
