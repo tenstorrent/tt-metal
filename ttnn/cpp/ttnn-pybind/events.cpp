@@ -36,7 +36,7 @@ void py_module(py::module& module) {
         "record_event",
         py::overload_cast<
             MeshDevice*,
-            QueueId,
+            std::optional<QueueId>,
             const std::vector<SubDeviceId>&,
             const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
         py::arg("mesh_device"),
@@ -58,7 +58,7 @@ void py_module(py::module& module) {
 
     module.def(
         "wait_for_event",
-        py::overload_cast<QueueId, const MeshEvent&>(&wait_for_mesh_event),
+        py::overload_cast<std::optional<QueueId>, const MeshEvent&>(&wait_for_mesh_event),
         py::arg("cq_id"),
         py::arg("mesh_event"),
         R"doc(

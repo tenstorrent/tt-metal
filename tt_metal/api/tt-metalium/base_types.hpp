@@ -5,8 +5,7 @@
 #pragma once
 
 #include <ostream>
-
-#include <tt-metalium/constants.hpp>
+#include <cstdint>
 
 enum class MathFidelity : uint8_t {
     LoFi = 0,

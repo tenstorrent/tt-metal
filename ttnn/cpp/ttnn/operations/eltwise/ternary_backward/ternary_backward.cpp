@@ -8,7 +8,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 
