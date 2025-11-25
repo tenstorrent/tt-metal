@@ -368,7 +368,6 @@ static std::vector<Tensor> pool2d_DRAM(
         .padding = padding_4d,
         .dilation_hw = {dilation.at(0), dilation.at(1)},
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     Tensor input_tensor_on_device = input_tensor;
     input_tensor_on_device = ttnn::to_memory_config(
@@ -660,7 +659,6 @@ Pool2dSliceAttr::Pool2dSliceAttr(
         .padding = padding_n4,
         .dilation_hw = {dilation.at(0), dilation.at(1)},
         .ceil_mode = ceil_mode,
-        .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto full_output_shape = sliding_window_config.get_output_shape();
     this->output_shape = IOShape{full_output_shape[1], full_output_shape[2]};

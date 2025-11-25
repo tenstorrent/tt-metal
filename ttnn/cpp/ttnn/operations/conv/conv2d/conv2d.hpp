@@ -55,59 +55,7 @@ struct Conv2dOperation {
         bool return_weights_and_bias = false);
 };
 
-<<<<<<< HEAD
 }  // namespace ttnn::operations::conv::conv2d
-=======
-class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
-    uint32_t batch_size;
-    IOShape input_shape;
-    uint32_t input_channels;
-    uint32_t output_channels;
-    std::array<uint32_t, 2> kernel_size;
-    std::array<uint32_t, 2> stride;
-    std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> dilation;
-    uint32_t groups;
-    Layout input_layout;
-    DataType input_dtype;
-    DataType output_dtype;
-    Tensor& weight_tensor;
-    OptionalRefTensor bias_tensor;
-    Conv2dConfig conv_config;
-    DeviceComputeKernelConfig compute_config;
-    MeshDevice* device;
-
-public:
-    Conv2dSliceAttr(
-        uint32_t batch_size,
-        IOShape input_shape,
-        uint32_t input_channels,
-        uint32_t output_channels,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 4> padding_n4,
-        std::array<uint32_t, 2> dilation,
-        uint32_t groups,
-        Layout input_layout,
-        DataType input_dtype,
-        DataType output_dtype,
-        Tensor& weight_tensor,
-        OptionalRefTensor bias_tensor,
-        Conv2dConfig& conv_config,
-        DeviceComputeKernelConfig& compute_config,
-        MeshDevice* device);
-    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
-    uint32_t get_L1_usage() override;
-    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
-    std::vector<ttnn::Tensor> run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
-    std::string name() override;
-};
-
-}  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
->>>>>>> 77e92cef4f5 (#0: Added op slicing infra for multiple output tensors)
 
 namespace ttnn {
 constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
