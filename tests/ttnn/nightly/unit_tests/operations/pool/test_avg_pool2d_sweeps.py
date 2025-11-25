@@ -60,7 +60,7 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
     run_avg_pool2d(
         device=device,
         tensor_map=tensor_map,
-        input_shape=(in_n, in_c, in_h, in_w),
+        input_shape=[in_n, in_c, in_h, in_w],
         kernel_size=(kernel_h, kernel_w),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),

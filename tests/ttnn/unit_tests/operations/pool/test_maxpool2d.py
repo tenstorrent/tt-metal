@@ -4,7 +4,16 @@
 
 import ttnn
 import pytest
-from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
+
+
+# Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
+@pytest.fixture(scope="module")
+def tensor_map(request):
+    tensor_map = {}
+
+    return tensor_map
+
 
 parameters = {
     "height_shard_tests": {
@@ -23,8 +32,8 @@ parameters = {
             [1, 224, 20, 20, 8, 8, 6, 6, 2, 4, 1, 1, False],  # 8x8 kernel, uneven padding
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, False],  # massive kernel, wide
             [1, 290, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, False],  # non-tile multiple NHW
-            [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, True],  # massive kernel, wide, ceil mode
-            [1, 290, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
+            [1, 320, 48, 48, 36, 36, 2, 2, 0, 0, 1, 1, True],  # massive kernel, wide, ceil mode
+            [1, 290, 47, 47, 36, 36, 2, 2, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
             [1, 32, 6, 6, 3, 3, 1, 1, 1, 1, 1, 1, False],  # partial grid on WH to use noop cores
             [1, 32, 13, 8, 4, 3, 6, 5, 2, 1, 1, 1, True],  # ceil mode output shape adjustment edge case
             # requires reversed local reads on some cores, and forward reads on others
@@ -72,7 +81,7 @@ parameters = {
 @pytest.mark.parametrize("input_spec", parameters["height_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["height_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_height_shard(device, in_dtype, input_spec):
+def test_max_pool2d_height_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
         in_c,
@@ -89,15 +98,14 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
-        [kernel_h, kernel_w],
-        [pad_h, pad_w],
-        [stride_h, stride_w],
-        [dilation_h, dilation_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        torch_tensor_map,
+        tensor_map,
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
@@ -108,7 +116,7 @@ def test_max_pool2d_height_shard(device, in_dtype, input_spec):
 @pytest.mark.parametrize("input_spec", parameters["width_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["width_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_width_shard(device, in_dtype, input_spec):
+def test_max_pool2d_width_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
         in_c,
@@ -125,15 +133,14 @@ def test_max_pool2d_width_shard(device, in_dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
-        [kernel_h, kernel_w],
-        [pad_h, pad_w],
-        [stride_h, stride_w],
-        [dilation_h, dilation_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        torch_tensor_map,
+        tensor_map,
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
@@ -144,7 +151,7 @@ def test_max_pool2d_width_shard(device, in_dtype, input_spec):
 @pytest.mark.parametrize("input_spec", parameters["block_shard_tests"]["input_specs"])
 @pytest.mark.parametrize("in_dtype", parameters["block_shard_tests"]["in_dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_block_shard(device, in_dtype, input_spec):
+def test_max_pool2d_block_shard(device, in_dtype, input_spec, tensor_map):
     (
         in_n,
         in_c,
@@ -161,15 +168,14 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec):
         ceil_mode,
     ) = input_spec
 
-    torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
-        [kernel_h, kernel_w],
-        [pad_h, pad_w],
-        [stride_h, stride_w],
-        [dilation_h, dilation_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        torch_tensor_map,
+        tensor_map,
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
@@ -181,7 +187,7 @@ def test_max_pool2d_block_shard(device, in_dtype, input_spec):
 @pytest.mark.parametrize("in_dtype", parameters["mem_config_tests"]["in_dtype"])
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config):
+def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config, tensor_map):
     (
         in_n,
         in_c,
@@ -198,15 +204,14 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config):
         ceil_mode,
     ) = input_spec
 
-    torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
-        [kernel_h, kernel_w],
-        [pad_h, pad_w],
-        [stride_h, stride_w],
-        [dilation_h, dilation_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        torch_tensor_map,
+        tensor_map,
         in_dtype,
         memory_config=memory_config,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -219,7 +224,7 @@ def test_max_pool2d_mem_config(device, in_dtype, input_spec, memory_config):
 @pytest.mark.parametrize("in_dtype", parameters["tiled_out_tests"]["in_dtype"])
 @pytest.mark.parametrize("out_dtype", parameters["tiled_out_tests"]["out_dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype):
+def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype, tensor_map):
     output_layout = ttnn.TILE_LAYOUT
 
     (
@@ -238,15 +243,14 @@ def test_max_pool2d_tiled_out(device, in_dtype, input_spec, out_dtype):
         ceil_mode,
     ) = input_spec
 
-    torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
-        [kernel_h, kernel_w],
-        [pad_h, pad_w],
-        [stride_h, stride_w],
-        [dilation_h, dilation_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        torch_tensor_map,
+        tensor_map,
         in_dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,

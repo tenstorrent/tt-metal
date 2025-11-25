@@ -246,7 +246,6 @@ tests/sweep_framework/sweeps/losses/ @patrickroberts @sjameelTT @ntarafdar @dche
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-tests/sweep_framework/sweep_utils/max_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
 # TTNN Distributed

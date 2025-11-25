@@ -36,7 +36,7 @@ def randomize_torch_tensor(tensor_map, tensor_shape):
     return torch_tensor
 
 
-def run_max_pool(
+def run_max_pool2d(
     input_shape,
     kernel_size,
     padding,
@@ -75,11 +75,6 @@ def run_max_pool(
     if (out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
 
-    # skips to avoid unimportant combinations
-    if ceil_mode:
-        if stride == (1, 1):
-            pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
-
     if dilation_h > 1 or dilation_w > 1:
         effective_kernel_h = dilation_h * (kernel_h - 1) + 1
         effective_kernel_w = dilation_w * (kernel_w - 1) + 1
@@ -95,6 +90,10 @@ def run_max_pool(
             if kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
+            if stride == (1, 1):
+                # note we would normally always skip this not just for nightly, but some sweep test include this
+                # combo and we want to test all the sweeps
+                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
         if dilation != (1, 1) and stride != (1, 1):
@@ -285,7 +284,7 @@ def run_max_pool(
 def test_run_max_pool_height_shard(
     input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype, ceil_mode
 ):
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         kernel_size,
         padding,
@@ -360,7 +359,7 @@ def test_run_max_pool_width_shard(
     in_dtype,
     ceil_mode,
 ):
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         kernel_size,
         padding,
@@ -435,7 +434,7 @@ def test_run_max_pool_block_shard(
     in_dtype,
     ceil_mode,
 ):
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         kernel_size,
         padding,
@@ -466,7 +465,7 @@ def test_run_max_pool_mem_config(
     tensor_map,
     memory_config,
 ):
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         (3, 3),
         (1, 1),
@@ -519,7 +518,7 @@ def test_run_max_pool_yolov4(
     tensor_map,
     in_dtype,
 ):
-    run_max_pool(input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype)
+    run_max_pool2d(input_shape, kernel_size, padding, stride, dilation, device, tensor_map, in_dtype)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -553,7 +552,7 @@ def test_run_max_pool_squeeze_net_model(
     in_dtype,
     ceil_mode,
 ):
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         kernel_size,
         padding,
@@ -605,7 +604,7 @@ def test_max_pool2d_output_formats_and_layouts(
     stride = (1, 1)
     dilation = (1, 1)
 
-    run_max_pool(
+    run_max_pool2d(
         input_shape,
         kernel_size,
         padding,
