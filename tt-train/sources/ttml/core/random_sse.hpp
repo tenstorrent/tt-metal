@@ -228,7 +228,6 @@ inline __m128 _mm_log_ps(__m128 x) noexcept {
 
     // 6th order polynomial with Remez coefficients for high precision
     // These coefficients minimize maximum error over [1, 2)
-    const __m128 c0 = _mm_set1_ps(1.0f);
     const __m128 c1 = _mm_set1_ps(-0.5f);
     const __m128 c2 = _mm_set1_ps(0.3333333333333333f);  // 1/3
     const __m128 c3 = _mm_set1_ps(-0.25f);
