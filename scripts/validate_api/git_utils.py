@@ -26,16 +26,33 @@ def get_blame_timestamps(file_path: str, line_ranges: List[Tuple[int, int]], ref
     for start, end in line_ranges:
         try:
             output = run_git(["git", "blame", "--porcelain", f"-L{start},{end}", ref, "--", file_path])
+
+            # Parse git blame porcelain format
+            # Git blame omits full metadata for consecutive lines from the same commit,
+            # so we cache commit timestamps and map lines to commits
+            commit_timestamps = {}  # {commit_hash: timestamp}
+            line_commits = {}  # {line_number: commit_hash}
+
             lines = output.split("\n")
             for i, line in enumerate(lines):
                 parts = line.split()
+                # Check if this is a header line: commit_hash original_line final_line [num_lines]
                 if len(parts) >= 3 and parts[1].isdigit():
+                    commit_hash = parts[0]
                     line_num = int(parts[2])
-                    # Look ahead for committer-time
-                    for j in range(i + 1, min(i + 10, len(lines))):
+                    line_commits[line_num] = commit_hash
+
+                    # Look ahead for committer-time (only present in full entries)
+                    for j in range(i + 1, min(i + 15, len(lines))):
                         if lines[j].startswith("committer-time "):
-                            timestamps[line_num] = int(lines[j].split()[1])
+                            commit_timestamps[commit_hash] = int(lines[j].split()[1])
                             break
+
+            # Map line numbers to timestamps using cached commit data
+            for line_num, commit_hash in line_commits.items():
+                if commit_hash in commit_timestamps:
+                    timestamps[line_num] = commit_timestamps[commit_hash]
+
         except (RuntimeError, ValueError) as e:
             print(f"Warning: git blame failed for {file_path}:{start}-{end}: {e}", file=sys.stderr)
             continue
