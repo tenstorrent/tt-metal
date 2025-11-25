@@ -9,7 +9,7 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/hal_types.hpp>
 
