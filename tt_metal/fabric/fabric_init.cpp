@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fabric.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <umd/device/types/arch.hpp>
 #include <variant>
@@ -16,7 +16,7 @@
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "device.hpp"
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "metal_soc_descriptor.h"
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"

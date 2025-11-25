@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include "tt_metal/hw/inc/utils/utils.h"
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/lite_fabric/hw/inc/constants.hpp"
 #include "tt_metal/lite_fabric/hw/inc/header.hpp"
 
