@@ -37,6 +37,11 @@ class MochiVAEParallelConfig(NamedTuple):
     w_parallel: ParallelFactor
 
 
+class MoEParallelConfig(NamedTuple):
+    tensor_parallel: ParallelFactor
+    expert_parallel: ParallelFactor
+
+
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
     factor: int
