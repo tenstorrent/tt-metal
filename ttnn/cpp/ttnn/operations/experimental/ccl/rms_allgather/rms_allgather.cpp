@@ -4,7 +4,6 @@
 
 #include "rms_allgather.hpp"
 #include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 namespace operations::fused::normalization {
