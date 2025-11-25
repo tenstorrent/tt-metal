@@ -11,8 +11,7 @@
 namespace ckernel {
 
 inline void llk_math_sfpu_reduce_max_sdpa_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reduce, false>(
-        sfpu::_init_reduce_<PoolType::MAX, DataFormat::Float16_b>);
+    ckernel::sfpu::_init_reduce_<PoolType::MAX, DataFormat::Float16_b>();
 }
 
 inline void llk_math_sfpu_reduce_max_sdpa(
@@ -24,7 +23,16 @@ inline void llk_math_sfpu_reduce_max_sdpa(
         block_height);
 }
 
-inline void llk_math_sfpu_reduce_max_col_epilogue() { ckernel::sfpu::epilogue_reduce_max_col_(); }
+inline void llk_math_sfpu_reduce_max_col_epilogue() {
+    ckernel::sfpu::_reuce_max_epilogue_();
+}
 
-inline void llk_math_sfpu_reduce_max_load_initial_values() { ckernel::sfpu::sfpu_reduce_max_load_initial_values(); }
+inline void llk_math_sfpu_reduce_max_load_initial_values() {
+    ckernel::sfpu::sfpu_reduce_max_load_initial_values();
+}   
+
+inline void llk_math_sfpu_reduce_max_prologue() {
+    ckernel::sfpu::_reduce_max_prologue_();
+}   
+
 }  // namespace ckernel
