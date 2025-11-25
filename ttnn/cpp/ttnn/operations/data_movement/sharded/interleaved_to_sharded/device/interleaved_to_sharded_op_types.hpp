@@ -17,7 +17,7 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     tt::tt_metal::Tensor input_tensor;
-    std::optional<tt::tt_metal::Tensor> preallocated_output;
+    std::optional<tt::tt_metal::Tensor> output_tensor;
 };
 
 using spec_return_value_t = tt::tt_metal::TensorSpec;

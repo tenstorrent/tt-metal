@@ -22,8 +22,8 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
-    if (tensor_args.preallocated_output.has_value()) {
-        const auto& output_tensor = tensor_args.preallocated_output.value();
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& output_tensor = tensor_args.output_tensor.value();
         TT_FATAL(output_tensor.logical_shape() == input_tensor.logical_shape(), "Mismatched output shape");
         TT_FATAL(output_tensor.memory_config() == output_mem_config, "Mismatched output memory config");
         TT_FATAL(output_tensor.dtype() == output_dtype, "Mismatched output dtype");
@@ -62,8 +62,8 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_hit(
 
 InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value().tensor_spec();
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value().tensor_spec();
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -79,8 +79,8 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
 
 InterleavedToShardedDeviceOperation::tensor_return_value_t InterleavedToShardedDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor.value();
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
