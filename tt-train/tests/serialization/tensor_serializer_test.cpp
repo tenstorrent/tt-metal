@@ -7,6 +7,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -17,26 +18,60 @@
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
 
+namespace {
+std::string generate_unique_temp_dir_name() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
+
+    constexpr int name_length = 16;
+    std::string name = "tensor_test_";
+
+    for (int i = 0; i < name_length; ++i) {
+        name += "0123456789abcdef"[dis(gen)];
+    }
+
+    return name;
+}
+
+std::filesystem::path create_unique_temp_dir() {
+    std::filesystem::path base_dir = std::filesystem::temp_directory_path();
+
+    size_t max_attempts = 1024;
+    while (--max_attempts > 0) {
+        std::string random_name = generate_unique_temp_dir_name();
+        std::filesystem::path temp_dir = base_dir / random_name;
+
+        if (!std::filesystem::exists(temp_dir)) {
+            std::filesystem::create_directories(temp_dir);
+            return temp_dir;
+        }
+    }
+
+    throw std::runtime_error("Failed to create unique temporary directory after maximum attempts");
+}
+}  // namespace
+
 class TensorFileTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Remove test file if it exists
-        if (std::filesystem::exists(test_filename)) {
-            std::filesystem::remove(test_filename);
-        }
+        temp_dir = create_unique_temp_dir();
+        test_filename = (temp_dir / "test_tensor.flatbuffer").string();
 
         ttml::autograd::ctx().open_device();
     }
 
     void TearDown() override {
-        // Clean up test file after each test
-        if (std::filesystem::exists(test_filename)) {
-            std::filesystem::remove(test_filename);
-        }
         ttml::autograd::ctx().close_device();
+
+        // Clean up temp directory after each test
+        if (std::filesystem::exists(temp_dir)) {
+            std::filesystem::remove_all(temp_dir);
+        }
     }
 
-    const std::string test_filename = "/tmp/test_tensor.flatbuffer";
+    std::filesystem::path temp_dir;
+    std::string test_filename;
 };
 
 TEST_F(TensorFileTest, SerializeDeserializeTensor) {
