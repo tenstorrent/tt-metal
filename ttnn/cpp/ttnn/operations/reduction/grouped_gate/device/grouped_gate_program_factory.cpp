@@ -37,8 +37,12 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     // auto grid = device->compute_with_storage_grid_size();
     auto grid = CoreCoord(1, 1);
     auto num_tiles = scores.buffer()->num_pages();
+    uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
     auto height_tiles = num_tiles / width_tiles;
+    uint32_t experts = scores.logical_shape()[-1];
+    uint32_t tokens = scores.logical_shape().volume() / experts;
+
     log_debug(tt::LogOp, "height_tiles: {} width_tiles: {}", height_tiles, width_tiles);
 
     auto
@@ -82,9 +86,25 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto sigmoid_input_cb_index = tt::CBIndex::c_4;
     auto add_bias_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::create_cb(
-        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        sigmoid_input_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
-        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        add_bias_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
+
+    // topk intermediate CBs
+    auto topk_input_cb_index = tt::CBIndex::c_6;
+    auto topk_index_cb_index = tt::CBIndex::c_7;
+    auto topk_index_creation_cb_index = tt::CBIndex::c_8;
+    tt::tt_metal::create_cb(
+        topk_input_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+    tt::tt_metal::create_cb(
+        topk_index_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, tt::DataFormat::UInt16);
+    tt::tt_metal::create_cb(
+        topk_index_creation_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        width_tiles,
+        tt::DataFormat::UInt16);
 
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
@@ -119,6 +139,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"bias_page_size", bias.buffer()->page_size()},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
+        {"topk_input_cb_index", topk_input_cb_index},
+        {"topk_index_cb_index", topk_index_cb_index},
+        {"topk_index_creation_cb_index", topk_index_creation_cb_index},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -135,11 +158,29 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
             .named_compile_args = compute_named_compile_time_args});
 
     // Writer kernel
+
+    // Writer kernel compile time arguments
+    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"weights_cb_index", weights_cb_index},
+        {"indices_cb_index", indices_cb_index},
+        {"topk_index_creation_cb_index", topk_index_creation_cb_index},
+        {"weights_page_size", output_weights.buffer()->page_size()},
+        {"indices_page_size", output_indices.buffer()->page_size()},
+        {"experts", experts},
+        {"width_tiles", width_tiles},
+        {"tile_width", tile_width},
+        {"tokens", tokens},
+    };
+
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/dataflow/writer_grouped_gate.cpp",
         all_cores,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
     std::vector<uint32_t> compute_runtime_args = {0, 0};

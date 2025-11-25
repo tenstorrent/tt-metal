@@ -62,9 +62,6 @@ void MAIN {
 
             sigmoid_tile_init();
             sigmoid_tile(0);
-            if (width_tile == 0) {
-                dprint_tensix_dest_reg(0);
-            }
             tile_regs_commit();
 
             cb_reserve_back(sigmoid_input_cb_index, 1);
@@ -84,9 +81,6 @@ void MAIN {
 
             tile_regs_acquire();
             add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, width_tile, 0);
-            if (width_tile == 0) {
-                dprint_tensix_dest_reg(0);
-            }
             tile_regs_commit();
 
             cb_reserve_back(add_bias_cb_index, 1);

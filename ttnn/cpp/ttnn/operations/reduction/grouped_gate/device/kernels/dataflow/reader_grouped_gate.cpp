@@ -27,7 +27,6 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
 }
 
 void kernel_main() {
-    // Dummy reader kernel
     constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
     constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb_index");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
