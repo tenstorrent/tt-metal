@@ -104,9 +104,7 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
-          mkdir -p generated/test_reports
-          source tests/scripts/t3000/run_t3000_unit_tests.sh
+          echo ${{ matrix.test-group.cmd }}
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
