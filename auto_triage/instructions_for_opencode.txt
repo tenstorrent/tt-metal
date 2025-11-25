@@ -33,7 +33,7 @@ Shared Workflow (All Cases)
      - The **oldest failing run** (first failure after the last success) and
      - The **two most recent failing runs**.
    - If there are fewer than three failures total, download all of them.
-   - Before pulling logs for any run, execute `./get_annotations.sh <job_url> [output_json]`. If the annotations contain meaningful test-level errors, rely on them and skip log downloads for that run. Only fall back to `./get_logs.sh` when annotations are missing or generic (e.g., “process exited with error code 1”, runner disconnects, etc.).
+   - Before pulling logs for any run, execute `./get_annotations.sh <job_url> [output_json]`. Use annotations only when they include actionable details (file/line, specific assert, inputs). If annotations are missing or generic (e.g., just exit codes, restating the test name, or vague asserts), immediately fall back to `./get_logs.sh` for that run to gather real context.
 - If the oldest failing run cannot be downloaded (logs expired or `get_logs.sh` errors), treat this as a strong signal toward Case 2. Continue the investigation using the most recent logs you can obtain, but remain open to switching to Case 3 if those logs indicate the job never ran the test or otherwise point to external causes.
    - If the downloaded errors match, rely on that signature. If they differ, continue with the most recent error unless you need an extra run to resolve ambiguity. Avoid additional downloads unless absolutely necessary (they are expensive).
 - If you truly need additional evidence, you may download more runs, but justify the cost and stop as soon as you have enough data.
