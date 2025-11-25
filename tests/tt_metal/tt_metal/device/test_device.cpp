@@ -321,7 +321,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, base_pcie_dst_address, 0, num_16b_writes}});
+            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
