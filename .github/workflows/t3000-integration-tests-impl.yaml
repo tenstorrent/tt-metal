@@ -1,4 +1,4 @@
-name: "[internal] T3000 frequent tests impl"
+name: "[internal] T3000 integration tests impl"
 
 on:
   workflow_call:
@@ -18,7 +18,7 @@ on:
         default: "in-service"
 
 jobs:
-  t3000-frequent-tests:
+  t3000-integration-tests:
     strategy:
       fail-fast: false
       matrix:

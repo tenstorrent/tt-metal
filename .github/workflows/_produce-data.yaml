@@ -26,7 +26,7 @@ on:
       - "(Single-card) Fast dispatch frequent tests"
       - "(Single-card) Frequent model and ttnn tests"
       - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 frequent tests"
+      - "(T3K) T3000 integration tests"
       - "(T3K) T3000 model perf tests"
       - "(T3K) T3000 e2e tests"
       - "(T3K) T3000 perplexity tests"
