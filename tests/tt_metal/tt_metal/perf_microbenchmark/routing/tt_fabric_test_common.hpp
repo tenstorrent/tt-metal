@@ -724,28 +724,16 @@ public:
         return hops;
     }
 
-    std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
-        switch (topology_) {
-            case Topology::NeighborExchange:
-            case Topology::Mesh:
-            case Topology::Torus:
-                return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
-            case Topology::Linear: return {RoutingDirection::E, RoutingDirection::W};
-            case Topology::Ring:
-                // Ring topology handled separately - no directional logic
-                return {};
-        }
-        return {};
-    }
-
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const override {
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        auto directions = get_neighbor_directions_for_topology();
+        // Ring topology is handled separately
+        if (topology_ != Topology::Ring) {
+            // Handle mesh, torus, neighbor exchange and linear topologies with directional neighbors
+            const std::vector<RoutingDirection> directions = {
+                RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-        if (!directions.empty()) {
-            // Handle mesh, torus, and linear topologies with directional neighbors
             for (const auto& src_node : device_ids) {
                 for (const auto& direction : directions) {
                     // Check if neighbor exists in this direction
@@ -777,7 +765,7 @@ public:
                     }
                 }
             }
-        } else if (topology_ == Topology::Ring) {
+        } else {
             // Handle ring topology with logical ring neighbors
             for (const auto& src_node : device_ids) {
                 auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
