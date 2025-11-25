@@ -39,7 +39,7 @@ struct EmbeddingsDeviceOperation {
         bool tilized,
         EmbeddingsType embeddings_type,
         const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<int>& pad_token = std::nullopt,
+        const std::optional<uint32_t>& pad_token = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
