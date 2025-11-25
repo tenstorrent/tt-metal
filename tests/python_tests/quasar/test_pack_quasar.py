@@ -48,8 +48,6 @@ def generate_qsr_pack_combinations(
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        if in_fmt != fmt.output_format:
-            continue
 
         dest_acc_modes = (
             (DestAccumulation.Yes,)
@@ -57,8 +55,17 @@ def generate_qsr_pack_combinations(
             else (DestAccumulation.No, DestAccumulation.Yes)
         )
         for dest_acc in dest_acc_modes:
+            if (
+                in_fmt != DataFormat.Float32
+                and fmt.output_format == DataFormat.Float32
+                and dest_acc == DestAccumulation.No
+            ):
+                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # This combination is not supported in the Quasar Packer format conversions
+                continue
             for dimensions in dimensions_cache[dest_acc]:
                 combinations.append((fmt, dest_acc, dimensions))
+
     return combinations
 
 
@@ -66,7 +73,7 @@ PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        # DataFormat.Float32,   # Revisit the Fp16->Fp32 test sequence
+        DataFormat.Float32,
     ]
 )
 ALL_PACK_COMBINATIONS = generate_qsr_pack_combinations(PACK_FORMATS)
@@ -81,9 +88,6 @@ def test_pack_quasar(
     test_name, formats_dest_acc_input_dims, boot_mode=BootMode.DEFAULT
 ):
     formats, dest_acc, input_dimensions = formats_dest_acc_input_dims
-
-    if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("Fails for now.")
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format,

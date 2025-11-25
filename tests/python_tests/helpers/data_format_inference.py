@@ -106,6 +106,14 @@ def infer_pack_in(
         chip_arch = get_chip_architecture()
 
     is_wormhole = chip_arch == ChipArchitecture.WORMHOLE
+    is_quasar = chip_arch == ChipArchitecture.QUASAR
+
+    if is_quasar:
+        return (
+            DataFormat.Float32
+            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            else input_format
+        )
 
     # Wormhole + FP32 dest reg datums + Float16 output: keep Float32 for packer input for conversion to desired output format
     if (
@@ -265,8 +273,8 @@ def data_formats(
     if chip_arch is None:
         chip_arch = get_chip_architecture()
 
-    if chip_arch == ChipArchitecture.QUASAR or disable_format_inference:
-        # Data Format Inference is not supported for Quasar architecture, so we return a single FormatConfig where all formats are the same.
+    if disable_format_inference:
+        # Return a single FormatConfig where all formats are the same if format inference is disabled or not supported for the architecture
         return [
             FormatConfig(
                 unpack_A_src=input_format,

@@ -59,8 +59,6 @@ def generate_unpack_unary_operand_combinations(
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        if in_fmt != fmt.output_format:
-            continue
 
         dest_acc_modes = (
             (DestAccumulation.Yes,)
@@ -77,6 +75,14 @@ def generate_unpack_unary_operand_combinations(
         )
 
         for dest_acc in dest_acc_modes:
+            if (
+                in_fmt != DataFormat.Float32
+                and fmt.output_format == DataFormat.Float32
+                and dest_acc == DestAccumulation.No
+            ):
+                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # This combination is not supported in the Quasar Packer format conversions
+                continue
             for transpose_en in transpose_modes:
                 for unpacker_sel in unpacker_engines:
                     for dimensions in dimensions_cache[dest_acc]:
@@ -91,7 +97,7 @@ UNPACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        # DataFormat.Float32, # Revisit the Fp16->Fp32 test sequence
+        DataFormat.Float32,
     ]
 )
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
@@ -112,9 +118,6 @@ def test_unpack_unary_operand_quasar(
     transpose_en = formats_dest_acc_transpose_unpack_sel_dims[2]
     unpacker_sel = formats_dest_acc_transpose_unpack_sel_dims[3]
     input_dimensions = formats_dest_acc_transpose_unpack_sel_dims[4]
-
-    if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("Fails.")
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format,

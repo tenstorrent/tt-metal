@@ -55,13 +55,20 @@ def generate_eltwise_unary_datacopy_combinations(
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        if in_fmt != fmt.output_format:
-            continue
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
 
         for dest_acc in dest_acc_modes:
+            if (
+                in_fmt != DataFormat.Float32
+                and fmt.output_format == DataFormat.Float32
+                and dest_acc == DestAccumulation.No
+            ):
+                # Skip if input format is not Float32 and output format is Float32 and dest_acc is No
+                # This combination is not supported in the Quasar Packer format conversions
+                continue
+
             for data_copy_type in data_copy_types:
                 for dimensions in dimensions_cache[dest_acc]:
                     for _, edgecase_dest_index in calculate_edgecase_dest_indices(
@@ -108,9 +115,6 @@ def test_eltwise_unary_datacopy_quasar(
     data_copy_type = formats_dest_acc_data_copy_type_dims_dest_indices[2]
     input_dimensions = formats_dest_acc_data_copy_type_dims_dest_indices[3]
     dest_index = formats_dest_acc_data_copy_type_dims_dest_indices[4]
-
-    if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("Fails.")
 
     src_A, src_B, tile_cnt = generate_stimuli(
         formats.input_format,
