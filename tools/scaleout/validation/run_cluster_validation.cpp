@@ -155,8 +155,6 @@ AsicTopology run_connectivity_validation(
         return {};
     }
     YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
-
-    log_output_rank0("Obtaining Factory System Descriptor");
     auto fsd_proto = get_factory_system_descriptor(
         input_args.cabling_descriptor_path, input_args.deployment_descriptor_path, input_args.fsd_path);
 
