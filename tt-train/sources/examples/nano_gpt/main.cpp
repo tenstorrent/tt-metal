@@ -382,14 +382,16 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
 
-    std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    std::variant<std::string, YAML::Node> text_or_tokens;
+
     try {
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
             text_or_tokens = read_file_to_str(training_config.data_path);
         } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(training_config.data_path);
+            auto yaml_data = YAML::LoadFile(training_config.data_path);
+            yaml_data["sequence_length"] = sequence_length;
+            text_or_tokens = yaml_data;
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
@@ -397,30 +399,35 @@ int main(int argc, char **argv) {
     }
 
     auto create_dataset =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
+        [](const auto &data_source, const auto sequence_length, const auto &train_config, auto &model_config) {
+            std::string tokenizer_type = train_config.tokenizer_type;
+
             if (tokenizer_type == "char") {
                 auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<std::string>(text), sequence_length);
+                    std::get<std::string>(data_source), sequence_length);
+
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
 
                 return dataset;
             }
             else if (tokenizer_type == "bpe") {
-                try
-                {
-                    return ttml::datasets::InMemoryTokenDataset(std::get<std::vector<uint32_t>>(text), sequence_length);
 
-                } catch (const std::exception &e) {
-                    std::cerr << e.what() << std::endl;
-                    std::cerr << "\nDid you tokenize the dataset? See the README for details." << std::endl;
-                    exit(-1);
-                }
+                auto& yaml_node = std::get<YAML::Node>(data_source);
+
+                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+
+                std::visit(
+                    [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); }, model_config.transformer_config);
+
+                return dataset;
             }
             else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
         };
 
-    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config.tokenizer_type);
+    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
