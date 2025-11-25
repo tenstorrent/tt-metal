@@ -289,7 +289,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "GetDefaultDevice",
-        []() { return dynamic_cast<MeshDevice*>(ttnn::GetDefaultDevice()); },
+        []() { return ttnn::GetDefaultDevice(); },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
