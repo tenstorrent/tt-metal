@@ -10,9 +10,9 @@
 namespace ttnn::operations::pool::upsample {
 
 struct operation_attributes_t {
-    int scale_factor_h;
-    int scale_factor_w;
-    std::string mode;
+    int scale_factor_h = 0;
+    int scale_factor_w = 0;
+    std::string mode = "nearest";
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

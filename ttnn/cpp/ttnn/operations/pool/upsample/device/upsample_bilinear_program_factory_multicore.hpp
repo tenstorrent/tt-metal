@@ -10,10 +10,10 @@ namespace ttnn::operations::pool::upsample::program {
 
 struct UpsampleBilinearProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel;
-        tt::tt_metal::KernelHandle writer_kernel;
-        tt::tt_metal::CBHandle cb_src0;
-        tt::tt_metal::CBHandle out_cb;
+        tt::tt_metal::KernelHandle reader_kernel{};
+        tt::tt_metal::KernelHandle writer_kernel{};
+        tt::tt_metal::CBHandle cb_src0{};
+        tt::tt_metal::CBHandle out_cb{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
