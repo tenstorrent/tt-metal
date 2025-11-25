@@ -21,27 +21,30 @@ volatile inline uint32_t* flag_disable = (uint32_t*)(eth_l1_mem::address_map::LA
 #endif
 
 namespace internal_ {
-inline __attribute__((always_inline)) void risc_context_switch() {
+inline __attribute__((always_inline)) void risc_context_switch([[maybe_unused]] bool skip_sync = false) {
 #if defined(COMPILE_FOR_ERISC)
 #if defined(COOPERATIVE_ERISC)
     ncrisc_noc_full_sync();
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-
-#if defined(NOC_MODE) && (NOC_MODE == DM_DEDICATED_NOC)
-    // Sync and init NOC0
-    ncrisc_noc_full_sync<1>();
-#endif
+    // Skip sync if kernel group is using Dynamic NOC. Firmware doesn't define NOC_MODE so
+    // this needs to be checked at runtime.
+    // Note, <1> means only sync NOC0. NOC1 can be skipped because base firmware only uses NOC0
+    if (!skip_sync) {
+        ncrisc_noc_full_sync<1>();
+    }
     service_eth_msg();
     update_boot_results_eth_link_status_check();
+
+    // Not harmful to initialize the counters again
     ncrisc_noc_counters_init<1>();
 
 #if defined(NOC_MODE) && (NOC_MODE == DM_DYNAMIC_NOC)
     // Reprogram cmd bufs for dynamic NOC
     dynamic_noc_init();
-    // Base firmware using the same counters as us. No need
-    // to reinit them with dynamic_noc_local_state_init()
+    // Base firmware counters are shared in L1. No need
+    // to reinit them using dynamic_noc_local_state_init()
 #endif  // NOC_MODE == DM_DYNAMIC_NOC
 
 #endif  // (COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)

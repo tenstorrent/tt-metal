@@ -269,9 +269,7 @@ void build_and_run_program_ethernet(
 
     log_info(
         tt::LogTest,
-        "Created ethernet kernels: ERISC0={}, ERISC1={} for both programs (program1: Dynamic NOC, program2: {})",
-        eth_erisc0_kernel1,
-        eth_erisc1_kernel1,
+        "Created ethernet kernels: ERISC0 NOC0, ERISC1 NOC1 for both programs (program1: Dynamic NOC, program2: {})",
         mix_noc_mode ? "Dedicated NOC" : "Dynamic NOC");
 
     // Get physical coordinates for ethernet core

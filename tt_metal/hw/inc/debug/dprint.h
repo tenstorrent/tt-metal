@@ -78,7 +78,7 @@
 #define DPRINT_DATA1(x)
 #endif
 namespace internal_ {
-void risc_context_switch();
+void risc_context_switch(bool);
 }
 
 struct BF16 {
