@@ -23,7 +23,9 @@ using ::tt::tt_metal::HostBuffer;
 
 Tensor all_gather(const Tensor& tensor) {
     TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::HOST, "Tensor must be on host");
+    log_info(tt::LogAlways, "All gathering tensor");
     const auto& ctx = tensor.host_storage().buffer().context();
+    log_info(tt::LogAlways, "Context size={}", *ctx->size());
     if (*ctx->size() == 1) {
         // Single-host deployment. Validate this host has all the data.
         for (const auto& coord : tensor.host_storage().buffer().shard_coords()) {
@@ -32,15 +34,15 @@ Tensor all_gather(const Tensor& tensor) {
         }
         return tensor;
     }
-
+    log_info(tt::LogAlways, "All gathering tensor: not single-host");
     // Destination buffer for all-gather data is fully local on each host.
     auto all_gather_buffer = DistributedHostBuffer::create(tensor.host_storage().buffer().shape());
-
+    log_info(tt::LogAlways, "All gathering buffer created");
     // Prepare shard presence data: first element is rank, rest are 1/0 for shard presence
     const int this_rank = *ctx->rank();
     constexpr int kShardPresent = 1;
     constexpr int kShardAbsent = 0;
-
+    log_info(tt::LogAlways, "This rank={}", this_rank);
     // Note the use of `std::set` is required to ensure the ordering of the shard coordinates.
     const std::set<distributed::MeshCoordinate>& shard_coords = tensor.host_storage().buffer().shard_coords();
     std::vector<int> local_shard_info;
@@ -101,6 +103,7 @@ Tensor all_gather(const Tensor& tensor) {
         }
     }
 
+    log_info(tt::LogAlways, "Returning tensor");
     return Tensor(
         tt::tt_metal::HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), tensor.tensor_topology());
 }

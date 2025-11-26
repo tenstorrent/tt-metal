@@ -324,6 +324,7 @@ def run_test_forward_pass_mla2d(
     )
 
     # Set up model config
+    logger.debug("Getting test weight config")
     weight_config = get_test_weight_config(
         MLA2D,
         hf_config_short,
@@ -332,9 +333,17 @@ def run_test_forward_pass_mla2d(
         mesh_device,
         force_recalculate_weight_config,
     )
+    logger.debug("Getting model config")
     model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
+    logger.debug("Model config created")
+
+    logger.debug("Creating model state")
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
+    logger.debug("Model state created")
+
+    logger.debug("Creating run config")
     run_config = create_run_config(model_config, weight_config, model_state)
+    logger.debug("Run config created")
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")

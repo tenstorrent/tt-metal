@@ -517,8 +517,11 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         `None`: tensor saved to a specified file.
     """
     file_name = pathlib.Path(file_name)
+    logger.debug(f"ttnn.dump_tensor: begin file={file_name}")
     _validate_file_extension(file_name)
+    logger.debug(f"ttnn.dump_tensor: validate file extension done={file_name}")
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    logger.debug(f"ttnn.dump_tensor: dump tensor done={file_name}")
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")

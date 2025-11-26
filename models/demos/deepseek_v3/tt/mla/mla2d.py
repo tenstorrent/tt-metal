@@ -98,6 +98,11 @@ class MLA2D(MLA1D):
     ) -> ModelDecodeConfig:
         super_cfg = super().decode_model_config(hf_config, mesh_device)
         input_memory_config = super_cfg.pop("input_memory_config")
+        from loguru import logger
+
+        logger.debug("Decode model config created")
+        logger.debug("Input memory config={}", input_memory_config)
+        logger.debug("Super config={}", super_cfg)
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,

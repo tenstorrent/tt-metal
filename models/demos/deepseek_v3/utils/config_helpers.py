@@ -677,7 +677,10 @@ def shard_and_save(
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
+
+    logger.debug(f"ttnn.dump_tensor: begin file={path}")
     ttnn.dump_tensor(path, ttnn_tensor)
+    logger.debug(f"ttnn.dump_tensor: dump tensor done={path}")
 
     if not convert_meta:
         path_str = str(path)

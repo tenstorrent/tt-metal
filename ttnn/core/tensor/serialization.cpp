@@ -39,14 +39,24 @@ constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     Tensor cpu_tensor = tensor.cpu();
 
+    log_info(tt::LogAlways, "Dumping tensor to disk: file_name={}", file_name);
+
     // Dump tensor to disk from (global) rank 0 host.
     // Note we use global context as opposed to context embedded to the host-side tensor, since the tensor may already
     // be fully host-local. In this latter case, host buffer context will consist of a single (local) host rank, and
     // each host will attempt to flush the serialized tensor file to disk.
+    log_info(tt::LogAlways, "All gathering tensor");
     cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
+    log_info(tt::LogAlways, "All gathering tensor done");
+
+    log_info(tt::LogAlways, "Getting current world");
     const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+    log_info(tt::LogAlways, "Current world rank={}", ctx->rank());
+
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
+        log_info(tt::LogAlways, "Opening file for writing");
         FILE* output_file = fopen(file_name.c_str(), "wb");
+        log_info(tt::LogAlways, "File opened");
         TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
         auto cleanup = ttsl::make_cleanup([f = output_file]() {
             if (f && fclose(f) != 0) {
@@ -54,25 +64,33 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
             }
         });
 
+        log_info(tt::LogAlways, "Creating buffers");
         std::vector<HostBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
         auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
         // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
         // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
         // which is already what we need for `mmap` to work.
+        log_info(tt::LogAlways, "Aligning builder");
         builder.Align(kFlatbufferAlignment);
+        log_info(tt::LogAlways, "Finishing builder");
         builder.Finish(tensor_offset);
+        log_info(tt::LogAlways, "Builder finished");
 
         uint64_t header_size = builder.GetSize();
         safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
         safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
 
+        log_info(tt::LogAlways, "Writing buffers");
         for (const auto& buffer : buffers) {
             auto buffer_view = buffer.view_bytes();
             safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
         }
+        log_info(tt::LogAlways, "Writing buffers done");
     }
+    log_info(tt::LogAlways, "Barrier");
     ctx->barrier();
+    log_info(tt::LogAlways, "Barrier done");
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {

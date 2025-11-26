@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 import os
+import time
 from copy import deepcopy
 from pathlib import Path
 
@@ -42,8 +43,13 @@ def mesh_device(request, device_params):
     """
     import ttnn
 
+    t0 = time.time()
     device_ids = ttnn.get_device_ids()
+    logger.debug(f"Device IDs took {time.time() - t0:.2f}s to collect")
+
+    t1 = time.time()
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
+    logger.debug(f"PCIe device IDs took {time.time() - t1:.2f}s to collect")
 
     # Override mesh shape based on MESH_DEVICE environment variable
     mesh_device_env = os.getenv("MESH_DEVICE")
@@ -63,9 +69,12 @@ def mesh_device(request, device_params):
         ttnn.set_fabric_config(fabric_config)
 
     updated_device_params.setdefault("mesh_shape", default_mesh_shape)
-    mesh_device = ttnn.open_mesh_device(**updated_device_params)
 
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
+    t2 = time.time()
+    mesh_device = ttnn.open_mesh_device(**updated_device_params)
+    logger.debug(f"Mesh device took {time.time() - t2:.2f}s to open")
+
+    logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
     yield mesh_device
 
     for submesh in mesh_device.get_submeshes():
@@ -91,7 +100,12 @@ def hf_config(model_path):
 
 @pytest.fixture(scope="session")
 def state_dict(model_path):
-    return load_state_dict(model_path, "")
+    logger.debug(f"Loading state_dict from {model_path}...")
+    start = time.time()
+    state_dict = load_state_dict(model_path, "")
+    end = time.time()
+    logger.debug(f"Reference model state_dict loading complete in {end - start:.2f}s")
+    return state_dict
 
 
 @pytest.fixture(scope="session")
