@@ -377,6 +377,11 @@ jobs:
             fi
           done
 
+          # If no workflows were enabled, exit early with a log message
+          if [ ${#pids[@]} -eq 0 ]; then
+            echo "ℹ️ No workflows to monitor"
+            exit 0
+          fi
           # Wait for all background processes to complete and collect exit codes
           echo "⏳ Waiting for all workflows to complete..."
           exit_code=0
