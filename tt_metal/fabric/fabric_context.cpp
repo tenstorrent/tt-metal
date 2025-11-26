@@ -298,7 +298,6 @@ chan_id_t FabricContext::get_fabric_master_router_chan(ChipId chip_id) const {
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
     std::vector<size_t> addresses_to_clear = {
-
         this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
 
     if (this->router_config_->sender_txq_id != this->router_config_->receiver_txq_id) {

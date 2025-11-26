@@ -308,7 +308,7 @@ struct FabricEriscDatamoverConfig {
     size_t to_sender_channel_remote_completion_counters_base_addr = 0;
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
-    size_t router_buffer_clear_size = 1;
+    size_t router_buffer_clear_size_words = 1;
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
