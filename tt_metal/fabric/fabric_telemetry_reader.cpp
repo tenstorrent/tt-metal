@@ -76,11 +76,10 @@ std::vector<FabricTelemetrySample> read_fabric_telemetry(const tt::tt_fabric::Fa
 
         const auto view = factory.create_view<fabric_telemetry::FabricTelemetry>(scratch.data());
 
-        FabricTelemetrySample sample{};
+        auto& sample = samples.emplace_back();
         sample.fabric_node_id = fabric_node_id;
         sample.channel_id = channel.channel_id;
         sample.snapshot = fabric_telemetry_converter::unpack_snapshot_from_hal(view);
-        samples.push_back(std::move(sample));
     }
 
     return samples;
