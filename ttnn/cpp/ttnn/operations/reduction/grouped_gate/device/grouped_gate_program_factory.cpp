@@ -149,7 +149,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     std::vector<uint32_t> compute_compile_time_args = {};
 
     // Compute kernel
-    bool fp32_dest_acc_en = true;
+    bool fp32_dest_acc_en =
+        false;  // has to be false otherwise transpose_wh_tile of the index tiles corrupts dest reg 1 bfp16 somehow?
     auto compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/grouped_gate/device/kernels/compute/grouped_gate.cpp",
