@@ -504,6 +504,9 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     trace_id_counter = deviceOp.get("metal_trace_replay_session_id", -1)
                     global_call_count = deviceOp["global_call_count"]
 
+                    # add device freq for use later
+                    deviceOp["freq"] = deviceData["deviceInfo"]["freq"]
+
                     # SFPU Counter
                     deviceOp["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
                     deviceOp["SFPU Util Median (%)"] = agg_sfpu_util_median.get(
@@ -1008,14 +1011,18 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 kernel_duration = (
                     float(rowDict["DEVICE KERNEL DURATION [ns]"]) if "DEVICE KERNEL DURATION [ns]" in rowDict else nan
                 )
+                freq = float(opData.get("freq")) if "freq" in opData else nan
+                kernel_duration_cycles = kernel_duration * freq / 1000
                 if "SFPU Util Min (%)" in opData:
                     rowDict["SFPU Util Min (%)"] = opData.get("SFPU Util Min (%)")
                 if "SFPU Util Median (%)" in opData:
                     rowDict["SFPU Util Median (%)"] = opData.get("SFPU Util Median (%)")
                 if "SFPU Util Max (%)" in opData:
                     rowDict["SFPU Util Max (%)"] = opData.get("SFPU Util Max (%)")
-                if "avg_sfpu_count" in opData and not isnan(kernel_duration):
-                    rowDict["Avg SFPU util on full grid (%)"] = opData.get("avg_sfpu_count") / kernel_duration * 100
+                if "avg_sfpu_count" in opData and not isnan(kernel_duration_cycles):
+                    rowDict["Avg SFPU util on full grid (%)"] = (
+                        opData.get("avg_sfpu_count") / kernel_duration_cycles * 100
+                    )
 
                 if "FPU Util Min (%)" in opData:
                     rowDict["FPU Util Min (%)"] = opData.get("FPU Util Min (%)")
@@ -1023,8 +1030,10 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["FPU Util Median (%)"] = opData.get("FPU Util Median (%)")
                 if "FPU Util Max (%)" in opData:
                     rowDict["FPU Util Max (%)"] = opData.get("FPU Util Max (%)")
-                if "avg_fpu_count" in opData and not isnan(kernel_duration):
-                    rowDict["Avg FPU util on full grid (%)"] = opData.get("avg_fpu_count") / kernel_duration * 100
+                if "avg_fpu_count" in opData and not isnan(kernel_duration_cycles):
+                    rowDict["Avg FPU util on full grid (%)"] = (
+                        opData.get("avg_fpu_count") / kernel_duration_cycles * 100
+                    )
 
                 if "MATH Util Min (%)" in opData:
                     rowDict["MATH Util Min (%)"] = opData.get("MATH Util Min (%)")
@@ -1032,8 +1041,10 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["MATH Util Median (%)"] = opData.get("MATH Util Median (%)")
                 if "MATH Util Max (%)" in opData:
                     rowDict["MATH Util Max (%)"] = opData.get("MATH Util Max (%)")
-                if "avg_math_count" in opData and not isnan(kernel_duration):
-                    rowDict["Avg Math util on full grid (%)"] = opData.get("avg_math_count") / kernel_duration * 100
+                if "avg_math_count" in opData and not isnan(kernel_duration_cycles):
+                    rowDict["Avg Math util on full grid (%)"] = (
+                        opData.get("avg_math_count") / kernel_duration_cycles * 100
+                    )
 
             rowDicts.append(rowDict)
 
