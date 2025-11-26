@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
-namespace program {
 
 using namespace tt::constants;
 using namespace tt;
