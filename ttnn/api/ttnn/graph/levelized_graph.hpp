@@ -61,7 +61,7 @@ public:
     std::size_t size() const;
     nlohmann::json to_json() const;
     auto get_vertices_at_level(std::size_t level) const {
-        return graph | std::views::filter([&](const Vertex& vertex) { return vertex.stacking_level == level; });
+        return graph | std::views::filter([level](const Vertex& vertex) { return vertex.stacking_level == level; });
     }
 
 private:
