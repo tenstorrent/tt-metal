@@ -15,6 +15,15 @@ Possible path forward is:
 After an initial investigation, approach and details will be discussed/aligned with Artem Yerofieiev.
 
 
+~ !! CI run
+    https://github.com/tenstorrent/tt-metal/actions/runs/19714864166
+~ locally
+      pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/rand tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode"
+
+      pytest tests/ttnn/unit_tests/operations/reduce/test_argmax.py -v
+      pytest tests/ttnn/unit_tests/operations/reduce/ -v
+
+
 - !!! To verify that per-OP mds correspond to he refernce implementation
 - to cleanup C++ code validator PoC from a branch
 
