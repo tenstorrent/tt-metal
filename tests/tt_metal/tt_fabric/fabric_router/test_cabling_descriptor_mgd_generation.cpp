@@ -27,13 +27,31 @@ namespace {
 constexpr std::string_view kMeshType = "MESH";
 constexpr std::string_view kTempTestFile = "test_mgd_generation.textproto";
 
-constexpr std::string_view kArchitecture = "WORMHOLE_B0";
-constexpr std::string_view k16NodeCablingPath = "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto";
+// Topology configuration for different cluster types
+struct TopologyConfig {
+    std::string_view name;
+    std::string_view cabling_path;
+    std::string_view architecture;
+    size_t devices_per_mesh;
+    size_t num_meshes;
+};
 
-constexpr size_t kN300DevicesPerMesh = 8;
+constexpr TopologyConfig k16NodeClosetBoxConfig{
+    .name = "16NodeClosetBox",
+    .cabling_path = "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+    .architecture = "WORMHOLE_B0",
+    .devices_per_mesh = 8,
+    .num_meshes = 16};
+
+constexpr TopologyConfig kDualT3KConfig{
+    .name = "DualT3K",
+    .cabling_path = "tools/tests/scaleout/cabling_descriptors/dual_t3k.textproto",
+    .architecture = "WORMHOLE_B0",
+    .devices_per_mesh = 8,
+    .num_meshes = 2};
+
 constexpr size_t kNumSuperpods = 4;
 constexpr size_t kNodesPerSuperpod = 4;
-constexpr size_t kTotalMeshes = kNumSuperpods * kNodesPerSuperpod;
 
 void check_instance_count_by_type(const MeshGraphDescriptor& desc, std::string_view type, size_t expected_count) {
     const auto& ids = desc.instances_by_type(std::string(type));
@@ -106,15 +124,17 @@ void check_total_connection_count(const MeshGraphDescriptor& desc, size_t expect
         << "Expected " << expected_count << " bidirectional connections";
 }
 
-void verify_16node_mgd_structure(const MeshGraphDescriptor& desc) {
-    check_instance_count_by_type(desc, kMeshType, kTotalMeshes);
-    check_architecture(desc, kArchitecture);
+void verify_mgd_structure(const MeshGraphDescriptor& desc, const TopologyConfig& config) {
+    check_instance_count_by_type(desc, kMeshType, config.num_meshes);
+    check_architecture(desc, config.architecture);
 
-    for (uint32_t i = 0; i < kTotalMeshes; ++i) {
+    for (uint32_t i = 0; i < config.num_meshes; ++i) {
         check_mesh_exists(desc, i);
-        check_mesh_device_count(desc, i, kN300DevicesPerMesh);
+        check_mesh_device_count(desc, i, config.devices_per_mesh);
     }
+}
 
+void verify_16node_closetbox_connections(const MeshGraphDescriptor& desc) {
     // Verify total connection count
     constexpr size_t kIntraSuperpodConnections = 6;
     constexpr size_t kInterSuperpodConnections = 6;
@@ -139,22 +159,40 @@ void verify_16node_mgd_structure(const MeshGraphDescriptor& desc) {
     check_intermesh_connection_exists(desc, 7, 15, 2);   // Superpod2.Node4 (M7) <-> Superpod4.Node4 (M15)
 }
 
+void verify_dual_t3k_connections(const MeshGraphDescriptor& desc) {
+    // Dual T3K has 1 connection between the two meshes
+    check_total_connection_count(desc, 1);
+    check_intermesh_connection_exists(desc, 0, 1, 8);  // M0 <-> M1 with 8 channels
+}
+
 }  // namespace
 
 namespace tt::tt_fabric::mgd_generation_tests {
 
 TEST(CablingDescriptorMGDGenerationTests, Generate16NodeClosetBox) {
-    const auto mgd_proto = generate_mgd_from_cabling(std::string(k16NodeCablingPath), false);
+    const auto mgd_proto = generate_mgd_from_cabling(std::string(k16NodeClosetBoxConfig.cabling_path), false);
 
     std::string mgd_text;
     google::protobuf::TextFormat::PrintToString(mgd_proto, &mgd_text);
     const MeshGraphDescriptor desc(mgd_text);
 
-    verify_16node_mgd_structure(desc);
+    verify_mgd_structure(desc, k16NodeClosetBoxConfig);
+    verify_16node_closetbox_connections(desc);
+}
+
+TEST(CablingDescriptorMGDGenerationTests, GenerateDualT3K) {
+    const auto mgd_proto = generate_mgd_from_cabling(std::string(kDualT3KConfig.cabling_path), false);
+
+    std::string mgd_text;
+    google::protobuf::TextFormat::PrintToString(mgd_proto, &mgd_text);
+    const MeshGraphDescriptor desc(mgd_text);
+
+    verify_mgd_structure(desc, kDualT3KConfig);
+    verify_dual_t3k_connections(desc);
 }
 
 TEST(CablingDescriptorMGDGenerationTests, ProtobufAPIUsage) {
-    if (std::ifstream input{std::string(k16NodeCablingPath)}; input.is_open()) {
+    if (std::ifstream input{std::string(k16NodeClosetBoxConfig.cabling_path)}; input.is_open()) {
         const std::string cabling_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 
         cabling_generator::proto::ClusterDescriptor cluster_desc;
@@ -166,7 +204,8 @@ TEST(CablingDescriptorMGDGenerationTests, ProtobufAPIUsage) {
         google::protobuf::TextFormat::PrintToString(mgd_proto, &mgd_text);
         const MeshGraphDescriptor desc(mgd_text);
 
-        verify_16node_mgd_structure(desc);
+        verify_mgd_structure(desc, k16NodeClosetBoxConfig);
+        verify_16node_closetbox_connections(desc);
     } else {
         FAIL() << "Failed to open cabling descriptor";
     }
@@ -182,27 +221,29 @@ TEST(CablingDescriptorMGDGenerationTests, WriteToFileTextProto) {
     const fs::path temp_output = fs::temp_directory_path() / kTempTestFile;
     auto _ = ttsl::make_cleanup([&temp_output]() { fs::remove(temp_output); });
 
-    const auto mgd_proto = generate_mgd_from_cabling(std::string(k16NodeCablingPath), false);
+    const auto mgd_proto = generate_mgd_from_cabling(std::string(k16NodeClosetBoxConfig.cabling_path), false);
     write_mgd_to_file(mgd_proto, temp_output);
 
     EXPECT_TRUE(fs::exists(temp_output));
     EXPECT_GT(fs::file_size(temp_output), 0) << "Output file is empty";
 
     const MeshGraphDescriptor desc(temp_output);
-    verify_16node_mgd_structure(desc);
+    verify_mgd_structure(desc, k16NodeClosetBoxConfig);
+    verify_16node_closetbox_connections(desc);
 }
 
 TEST(CablingDescriptorMGDGenerationTests, EndToEndConvenienceAPI) {
     const fs::path temp_output = fs::temp_directory_path() / kTempTestFile;
     auto _ = ttsl::make_cleanup([&temp_output]() { fs::remove(temp_output); });
 
-    generate_mesh_graph_descriptor(std::string(k16NodeCablingPath), temp_output, false);
+    generate_mesh_graph_descriptor(std::string(k16NodeClosetBoxConfig.cabling_path), temp_output, false);
 
     EXPECT_TRUE(fs::exists(temp_output));
     EXPECT_GT(fs::file_size(temp_output), 0) << "Output file is empty";
 
     const MeshGraphDescriptor desc(temp_output);
-    verify_16node_mgd_structure(desc);
+    verify_mgd_structure(desc, k16NodeClosetBoxConfig);
+    verify_16node_closetbox_connections(desc);
 }
 
 }  // namespace tt::tt_fabric::mgd_generation_tests
