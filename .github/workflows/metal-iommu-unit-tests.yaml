@@ -36,7 +36,7 @@ jobs:
         test-group:
           - name: Metal IOMMU PinnedMemory tests
             cmd: |
-              ./build/tt_metal/unit_tests_device --gtest_filter=*PinnedMemory*
+              ./build/test/tt_metal/unit_tests_device --gtest_filter=*PinnedMemory*
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
