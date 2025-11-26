@@ -45,7 +45,7 @@ void UpdateGoldenOutput(
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
 
-    if (risc != "ER0") {
+    if (risc != "ER0" && risc != "ER") {
         const std::string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
         golden_output.push_back(output_line_risc);
     }
