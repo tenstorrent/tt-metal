@@ -209,13 +209,21 @@ struct PreprocessedPyTensor {
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
 
+    std::vector<int64_t> shp;
+    shp.reserve(py_tensor.ndim());
+    for (size_t i = 0; i < py_tensor.ndim(); ++i) {
+        shp.emplace_back(static_cast<int64_t>(py_tensor.shape(i)));
+    }
+
     // try brute force...
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
     config.ndim = py_tensor.ndim();
-    config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import copies it
+    // config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import copies
+    // it
+    config.shape = shp.data();  // was getting bad sizes
 
     TT_FATAL(
         data_type != DataType::INVALID || py_tensor.is_valid(),
