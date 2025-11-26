@@ -1380,6 +1380,252 @@ pattern:
 
 ---
 
+## NOC Primitives (Dataflow Kernels)
+
+NOC (Network-on-Chip) primitives are used in **Dataflow kernels** (Reader/Writer) for memory transfers
+and inter-core communication. These run on RISC-V data movement processors.
+
+### Memory Transfer Primitives
+
+```yaml
+primitives:
+  # ===========================================================================
+  # ASYNCHRONOUS READ/WRITE
+  # ===========================================================================
+  - id: noc_async_read
+    category: noc_transfer
+    state_scope: per_transfer
+    header: "dataflow_api.h"
+    signature: "void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size)"
+    effect: "Initiate async read from NOC address (DRAM/L1) to local L1"
+    inputs:
+      - { port: src_noc_addr, type: uint64_t, desc: "Source NOC address (from get_noc_addr)" }
+      - { port: dst_local_l1_addr, type: uint32_t, desc: "Destination L1 address" }
+      - { port: size, type: uint32_t, desc: "Number of bytes to transfer" }
+    outputs: []
+    requires:
+      - { state: "L1[dst]: writable" }
+    produces:
+      - { state: "transfer: IN_FLIGHT" }
+    notes: |
+      Asynchronous operation. Must call noc_async_read_barrier before using data.
+
+  - id: noc_async_read_barrier
+    category: noc_sync
+    state_scope: global
+    header: "dataflow_api.h"
+    signature: "void noc_async_read_barrier()"
+    effect: "Block until all pending async reads complete"
+    inputs: []
+    outputs: []
+    requires:
+      - { state: "transfer: any" }
+    produces:
+      - { state: "transfer: COMPLETE" }
+    notes: |
+      Blocking call. All data from preceding noc_async_read calls is valid after this.
+
+  - id: noc_async_write
+    category: noc_transfer
+    state_scope: per_transfer
+    header: "dataflow_api.h"
+    signature: "void noc_async_write(uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size)"
+    effect: "Initiate async write from local L1 to NOC address (DRAM/L1)"
+    inputs:
+      - { port: src_local_l1_addr, type: uint32_t, desc: "Source L1 address" }
+      - { port: dst_noc_addr, type: uint64_t, desc: "Destination NOC address" }
+      - { port: size, type: uint32_t, desc: "Number of bytes to transfer" }
+    outputs: []
+    requires:
+      - { state: "L1[src]: HAS_DATA" }
+    produces:
+      - { state: "transfer: IN_FLIGHT" }
+    notes: |
+      Asynchronous operation. Must call noc_async_write_barrier before reusing source buffer.
+
+  - id: noc_async_write_barrier
+    category: noc_sync
+    state_scope: global
+    header: "dataflow_api.h"
+    signature: "void noc_async_write_barrier()"
+    effect: "Block until all pending async writes complete"
+    inputs: []
+    outputs: []
+    requires:
+      - { state: "transfer: any" }
+    produces:
+      - { state: "transfer: COMPLETE" }
+    notes: |
+      Blocking call. Source buffers can be safely modified after this.
+
+  # ===========================================================================
+  # ADDRESS GENERATION
+  # ===========================================================================
+  - id: get_noc_addr
+    category: noc_address
+    state_scope: stateless
+    header: "dataflow_api.h"
+    signature: "uint64_t get_noc_addr(uint32_t id, const InterleavedAddrGen& addr_gen)"
+    signature_alt: "uint64_t get_noc_addr(uint32_t x, uint32_t y, uint32_t local_addr)"
+    effect: "Compute NOC address for page/tile or physical coordinates"
+    inputs:
+      - { port: id, type: uint32_t, desc: "Page/tile index" }
+      - { port: addr_gen, type: InterleavedAddrGen, desc: "Address generator for tensor" }
+    outputs:
+      - { port: return, type: uint64_t, desc: "64-bit NOC address" }
+    notes: |
+      Two variants: interleaved tensor access or direct physical coordinates.
+
+  - id: get_write_ptr
+    category: cb_address
+    state_scope: stateless
+    header: "dataflow_api.h"
+    signature: "uint32_t get_write_ptr(uint32_t cbid)"
+    effect: "Get L1 write pointer address for circular buffer"
+    inputs:
+      - { port: cbid, type: uint32_t, desc: "Circular buffer index (0-31)" }
+    outputs:
+      - { port: return, type: uint32_t, desc: "L1 address for writing" }
+    notes: |
+      Returns current write position in CB. Used for direct L1 access in dataflow kernels.
+```
+
+### Semaphore Primitives (Inter-Core Synchronization)
+
+```yaml
+primitives:
+  # ===========================================================================
+  # SEMAPHORE OPERATIONS
+  # ===========================================================================
+  - id: noc_semaphore_set
+    category: semaphore
+    state_scope: per_semaphore
+    header: "dataflow_api.h"
+    signature: "void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)"
+    effect: "Set semaphore to specific value"
+    inputs:
+      - { port: sem_addr, type: "volatile tt_l1_ptr uint32_t*", desc: "Semaphore L1 address" }
+      - { port: val, type: uint32_t, desc: "Value to set" }
+    outputs: []
+    notes: |
+      Local operation. For remote cores, use noc_semaphore_set_multicast.
+
+  - id: noc_semaphore_wait
+    category: semaphore
+    state_scope: per_semaphore
+    header: "dataflow_api.h"
+    signature: "void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)"
+    effect: "Block until semaphore reaches specified value"
+    inputs:
+      - { port: sem_addr, type: "volatile tt_l1_ptr uint32_t*", desc: "Semaphore L1 address" }
+      - { port: val, type: uint32_t, desc: "Value to wait for" }
+    outputs: []
+    notes: |
+      Blocking call. Spins until *sem_addr == val.
+
+  - id: noc_semaphore_inc
+    category: semaphore
+    state_scope: per_semaphore
+    header: "dataflow_api.h"
+    signature: "void noc_semaphore_inc(uint64_t sem_noc_addr, uint32_t incr)"
+    effect: "Atomically increment remote semaphore"
+    inputs:
+      - { port: sem_noc_addr, type: uint64_t, desc: "Remote semaphore NOC address" }
+      - { port: incr, type: uint32_t, desc: "Increment value (typically 1)" }
+    outputs: []
+    notes: |
+      Atomic operation. Used by workers to signal completion to reducer.
+
+  - id: noc_semaphore_set_multicast
+    category: semaphore
+    state_scope: per_semaphore
+    header: "dataflow_api.h"
+    signature: "void noc_semaphore_set_multicast(uint32_t src_local_l1_addr, uint64_t dst_noc_addr_multicast, uint32_t num_dests)"
+    effect: "Broadcast semaphore value to range of cores"
+    inputs:
+      - { port: src_local_l1_addr, type: uint32_t, desc: "Local semaphore address" }
+      - { port: dst_noc_addr_multicast, type: uint64_t, desc: "Multicast NOC address (from get_noc_multicast_addr)" }
+      - { port: num_dests, type: uint32_t, desc: "Number of destination cores" }
+    outputs: []
+    notes: |
+      Used by reducer core to signal all workers to start an iteration.
+
+  - id: noc_async_atomic_barrier
+    category: noc_sync
+    state_scope: global
+    header: "dataflow_api.h"
+    signature: "void noc_async_atomic_barrier()"
+    effect: "Ensure all atomic operations (semaphore inc) have completed"
+    inputs: []
+    outputs: []
+    notes: |
+      Required after noc_semaphore_inc before proceeding.
+
+  - id: get_semaphore
+    category: semaphore
+    state_scope: stateless
+    header: "dataflow_api.h"
+    signature: "uint32_t get_semaphore(uint32_t semaphore_id)"
+    effect: "Get L1 address of semaphore"
+    inputs:
+      - { port: semaphore_id, type: uint32_t, desc: "Semaphore index" }
+    outputs:
+      - { port: return, type: uint32_t, desc: "L1 address of semaphore" }
+    notes: |
+      Semaphores are created in program factory with CreateSemaphore.
+
+  - id: get_noc_multicast_addr
+    category: noc_address
+    state_scope: stateless
+    header: "dataflow_api.h"
+    signature: "uint64_t get_noc_multicast_addr(uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y, uint32_t local_addr)"
+    effect: "Compute multicast NOC address for core rectangle"
+    inputs:
+      - { port: start_x, type: uint32_t, desc: "Start core X coordinate" }
+      - { port: start_y, type: uint32_t, desc: "Start core Y coordinate" }
+      - { port: end_x, type: uint32_t, desc: "End core X coordinate" }
+      - { port: end_y, type: uint32_t, desc: "End core Y coordinate" }
+      - { port: local_addr, type: uint32_t, desc: "L1 address on each core" }
+    outputs:
+      - { port: return, type: uint64_t, desc: "Multicast NOC address" }
+    notes: |
+      Used with noc_semaphore_set_multicast for broadcast operations.
+```
+
+### Dataflow-Only Pattern
+
+Some operations (like `argmax`) do not use compute kernels and perform all work in dataflow kernels
+using scalar operations. These operations use NOC primitives for memory transfer and semaphores
+for synchronization, but do not use SFPU primitives.
+
+```yaml
+dataflow_only_pattern:
+  description: |
+    Operations where all computation is done in dataflow kernels using
+    scalar C++ code on RISC-V processor. No compute kernel is used.
+
+  characteristics:
+    - "No tile_regs_acquire/commit/wait/release"
+    - "No copy_tile/pack_tile"
+    - "No SFPU init functions"
+    - "All computation via scalar loops and conditionals"
+    - "CB used as simple L1 buffers (no CB sync primitives)"
+
+  examples:
+    - { op: argmax, reason: "Reduction requires conditional branching not supported by SFPU" }
+
+  typical_flow:
+    - { step: 1, primitive: get_write_ptr, effect: "Get CB L1 address" }
+    - { step: 2, primitive: get_noc_addr, effect: "Compute source NOC address" }
+    - { step: 3, primitive: noc_async_read, effect: "Read data to L1" }
+    - { step: 4, primitive: noc_async_read_barrier, effect: "Wait for read" }
+    - { step: 5, primitive: "scalar_loop", effect: "Process data in C++" }
+    - { step: 6, primitive: noc_async_write, effect: "Write result to DRAM" }
+    - { step: 7, primitive: noc_async_write_barrier, effect: "Wait for write" }
+```
+
+---
+
 ## Deprecation Tracking
 
 Functions marked for removal by end of 2025 as part of **tt-metal#22904**.
