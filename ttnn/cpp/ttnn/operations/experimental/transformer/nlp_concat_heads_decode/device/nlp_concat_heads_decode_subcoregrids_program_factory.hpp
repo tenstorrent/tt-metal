@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
 
-struct NLPConcatHeadsDecodeSharedVariables {
+struct NLPConcatHeadsDecodeSubcoregridsSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
     std::vector<CoreCoord> cores;
@@ -17,10 +17,12 @@ struct NLPConcatHeadsDecodeSharedVariables {
     uint32_t sub_tile_line_bytes;
     uint32_t num_cores;
     tt::tt_metal::CBHandle cb_q_output;
+    uint32_t face_h;
+    uint32_t tile_w;
 };
 
-struct NLPConcatHeadsDecodeProgramFactory {
-    using shared_variables_t = NLPConcatHeadsDecodeSharedVariables;
+struct NLPConcatHeadsDecodeSubcoregridsProgramFactory {
+    using shared_variables_t = NLPConcatHeadsDecodeSubcoregridsSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

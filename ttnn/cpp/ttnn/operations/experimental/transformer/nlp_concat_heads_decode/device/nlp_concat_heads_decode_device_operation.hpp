@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <optional>
-
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "nlp_concat_heads_decode_device_operation_types.hpp"
 #include "nlp_concat_heads_decode_program_factory.hpp"
+#include "nlp_concat_heads_decode_subcoregrids_program_factory.hpp"
 
 namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
