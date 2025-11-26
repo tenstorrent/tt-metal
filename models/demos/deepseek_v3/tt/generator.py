@@ -804,5 +804,8 @@ class DeepseekGenerator:
             )
             return logits.squeeze(0).squeeze(0)
 
+    def warmup_model_prefill(self) -> None:
+        logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
+
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]

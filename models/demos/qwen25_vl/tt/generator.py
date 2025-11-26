@@ -214,6 +214,9 @@ class Generator:
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
+    def warmup_model_prefill(self) -> None:
+        logger.warning("Warmup model prefill not implemented for Qwen2_5_VL Generator")
+
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
