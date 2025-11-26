@@ -10,6 +10,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -42,13 +43,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 }
 
 ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
-    untilize_init(in0_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
-    untilize_block(in0_cb, num_tiles, out_cb);
-    cb_push_back(out_cb, num_tiles);
-    cb_pop_front(in0_cb, num_tiles);
-    untilize_uninit(in0_cb);
+    compute_kernel_lib::untilize<true, true, true>(in0_cb, num_tiles, out_cb, 1);
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
