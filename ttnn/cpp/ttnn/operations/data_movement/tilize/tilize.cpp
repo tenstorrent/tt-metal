@@ -18,17 +18,18 @@ using BaseTilizeType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilize = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
+MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optional<CoreRangeSet>& sub_core_grids) {
     auto original_shape = std::make_shared<Shape>();
     return MassagedTilize(MassagedTilizeParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeArgs {
             *original_shape = input_tensor.logical_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor, sub_core_grids);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
+            auto unsqueezed_tensor = ttnn::reshape(
+                output, *original_shape, std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
@@ -65,13 +66,14 @@ ttnn::Tensor ExecuteTilize::invoke(
                 output_dtype.value_or(input_tensor.dtype()),
                 use_multicore,
                 enough_space_width,
-                enough_space_height},
+                enough_space_height,
+                sub_core_grids},
             {input_tensor},
             {},
             {})[0];
     };
 
-    return build_ndiml_tilize(base_tilize)(input_tensor);
+    return build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);
 }
 
 }  // namespace ttnn::operations::data_movement
