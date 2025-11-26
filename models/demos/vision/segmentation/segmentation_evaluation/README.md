@@ -18,24 +18,24 @@ Each model is benchmarked using standard segmentation metrics:
 
 **_Single-Device (BS-1, N150 | P150):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-tt_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-tt_model]
 ```
 
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-tt_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-tt_model]
 ```
 
 **Segformer-b0 (512x512):**
 
 **_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-tt_model-device_params0]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-tt_model-device_params0]
 ```
 
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-tt_model-device_params0]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-tt_model-device_params0]
 ```
 
 ## To run the test of torch vs ground truth, please follow the following commands:
@@ -45,36 +45,36 @@ pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segf
 **_Single-Device (BS-1):_**<br>
 
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-1-torch_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-1-torch_model]
 ```
 
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-torch_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-torch_model]
 ```
 
 **VGG Unet (256x256):**
 
 **_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-torch_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-torch_model]
 ```
 
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-torch_model]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-torch_model]
 ```
 
 **Segformer-b0 (512x512):**
 
 **_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-torch_model-device_params0]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-torch_model-device_params0]
 ```
 
 **_Multi-Device (DP-2,N300):_**<br>
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-torch_model-device_params0]
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-torch_model-device_params0]
 ```
 
 ## Evaluation Table
