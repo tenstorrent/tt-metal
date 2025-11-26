@@ -10,6 +10,7 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
@@ -31,6 +32,7 @@ constexpr auto cb_v_t = tt::CBIndex::c_25;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
+constexpr uint32_t twice_block_size = 2 * block_size;
 
 void MAIN {
     uint32_t runtime_args_counter = 0;
@@ -126,33 +128,47 @@ void MAIN {
         copy_tile_to_dst_init_short(cb_v_t);
         reconfig_data_format(cb_v_t, cb_v_t);
         tile_regs_acquire();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            copy_tile(cb_v_t, block_idx, block_size + block_idx);
+        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
+            copy_tile(cb_v_t, cb_tile_idx, block_idx);
         }
         cb_pop_front(cb_v_t, block_size);
 
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+#if AMSGRAD
+        // TODO: I think this can be merged, check
+        copy_tile_init();
+        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
+            copy_tile(cb_max_exp_avg_sq_out, cb_tile_idx, block_idx + 1);
         }
+        max_tile_init();
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            // max_tile api is garbage, second argument is irrelevant
+            max_tile(block_idx, block_idx + 1);
+        }
+        // TODO:
+        // push every second block to max_exp_avg_out
+#endif
         sqrt_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            sqrt_tile(block_size + block_idx);
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            sqrt_tile(block_idx);
         }
         binop_with_scalar_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_unary_tile(block_size + block_idx, inv_sqrt_bc2);
-            add_unary_tile(block_size + block_idx, epsilon);
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            mul_unary_tile(block_idx, inv_sqrt_bc2);
+            add_unary_tile(block_idx, epsilon);
         }
         cb_wait_front(cb_m_t, block_size);
         copy_tile_to_dst_init_short(cb_m_t);
         reconfig_data_format(cb_m_t, cb_m_t);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            copy_tile(cb_m_t, block_idx, block_idx);
+        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
+            copy_tile(cb_m_t, cb_tile_idx, block_idx + 1);
         }
         cb_pop_front(cb_m_t, block_size);
-        // TODO: Can be put into seperate loop; Worth it?
+
         div_binary_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            div_binary_tile(block_idx, block_size + block_idx, block_idx);
+        uint32_t reg_ite = 0;
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            div_binary_tile(block_idx + 1, block_idx, reg_ite);
+            reg_ite++;
         }
         binop_with_scalar_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -166,7 +182,7 @@ void MAIN {
         }
         // is weight decay != 1?
         // 0x3F800000 is hexadecimal encoding of 1 in fp32
-        if (weight_decay != 0x3F800000) {
+        if (decay_factor != 0x3F800000) {
             binop_with_scalar_tile_init();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 mul_unary_tile(block_size + block_idx, decay_factor);
