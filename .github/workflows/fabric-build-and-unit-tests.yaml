@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 30
+        default: 120
       build-artifact-name:
         required: true
         type: string
