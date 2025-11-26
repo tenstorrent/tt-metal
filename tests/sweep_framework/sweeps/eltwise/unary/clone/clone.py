@@ -32,7 +32,41 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "legacy": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
+        "input_a_dtype": [
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat4_b,
+            ttnn.float32,
+            ttnn.int32,
+            ttnn.uint32,
+            ttnn.uint16,
+        ],
+        "output_dtype": [
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat4_b,
+            ttnn.float32,
+            ttnn.int32,
+            ttnn.uint32,
+            ttnn.uint16,
+        ],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
 }
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # ROW_MAJOR_LAYOUT is not compatible with bfloat8_b or bfloat4_b
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        if test_vector["input_a_dtype"] in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
+            return True, "ROW_MAJOR_LAYOUT is not compatible with bfloat8_b or bfloat4_b"
+        if test_vector["output_dtype"] in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
+            return True, "ROW_MAJOR_LAYOUT is not compatible with bfloat8_b or bfloat4_b output"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.

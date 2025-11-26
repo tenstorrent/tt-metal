@@ -34,7 +34,23 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "core_grid": [None],
-    }
+    },
+    "legacy": {
+        "batch_sizes": [(1,)],
+        "m_size": [32, 64, 128, 256, 512],
+        "k_size": [32, 64, 128, 256, 512],
+        "n_size": [32, 64, 128, 256, 512],
+        "batch_matrix_multiply": [True, False],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "core_grid": [None],
+    },
 }
 
 

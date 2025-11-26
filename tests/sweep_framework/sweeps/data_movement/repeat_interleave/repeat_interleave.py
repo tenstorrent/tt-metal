@@ -34,6 +34,17 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "legacy": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
+        "repeats": [1, 2, 4, 8],
+        "dim": [0, 1, 2, 3],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32, ttnn.int32, ttnn.uint16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
 }
 
 
