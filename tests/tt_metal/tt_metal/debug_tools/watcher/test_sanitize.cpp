@@ -31,7 +31,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
@@ -47,23 +46,24 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 enum watcher_features_t {
-    SanitizeAddress,
-    SanitizeAlignmentL1Write,
-    SanitizeAlignmentL1Read,
-    SanitizeZeroL1Write,
-    SanitizeMailboxWrite,
-    SanitizeInlineWriteDram,
-    SanitizeLinkedTransaction,
+    SanitizeNOCAddress,
+    SanitizeNOCAlignmentL1Write,
+    SanitizeNOCAlignmentL1Read,
+    SanitizeNOCZeroL1Write,
+    SanitizeNOCMailboxWrite,
+    SanitizeNOCInlineWriteDram,
+    SanitizeNOCLinkedTransaction,
+    SanitizeL1Overflow,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
-    return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::HalMemType::DRAM
-                                                                  : tt_metal::HalMemType::L1;
+    return feature == watcher_features_t::SanitizeNOCInlineWriteDram ? tt_metal::HalMemType::DRAM
+                                                                     : tt_metal::HalMemType::L1;
 }
 
 tt::tt_metal::BufferType get_buffer_type_for_test(watcher_features_t feature) {
-    return feature == watcher_features_t::SanitizeInlineWriteDram ? tt_metal::BufferType::DRAM
-                                                                  : tt_metal::BufferType::L1;
+    return feature == watcher_features_t::SanitizeNOCInlineWriteDram ? tt_metal::BufferType::DRAM
+                                                                     : tt_metal::BufferType::L1;
 }
 
 uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType type, bool high_address = false) {
@@ -192,27 +192,29 @@ void RunTestOnCore(
     // depending on the flags passed in.
     bool use_inline_dw_write = false;
     bool bad_linked_transaction = false;
+    uint32_t l1_overflow_addr = 0;
     switch(feature) {
-        case SanitizeAddress:
+        case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             break;
-        case SanitizeAlignmentL1Write:
+        case SanitizeNOCAlignmentL1Write:
             output_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
                                    // requirements (32 byte aligned).
             buffer_size--;
             break;
-        case SanitizeAlignmentL1Read:
+        case SanitizeNOCAlignmentL1Read:
             input_buffer_addr++;
             buffer_size--;
             break;
-        case SanitizeZeroL1Write: output_buffer_addr = 0; break;
-        case SanitizeMailboxWrite:
+        case SanitizeNOCZeroL1Write: output_buffer_addr = 0; break;
+        case SanitizeNOCMailboxWrite:
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
-        case SanitizeInlineWriteDram: use_inline_dw_write = true; break;
-        case SanitizeLinkedTransaction: bad_linked_transaction = true; break;
+        case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
+        case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
+        case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -232,7 +234,8 @@ void RunTestOnCore(
          output_buf_noc_xy.y,
          buffer_size,
          use_inline_dw_write,
-         bad_linked_transaction});
+         bad_linked_transaction,
+         l1_overflow_addr});
 
     // Run the kernel, expect an exception here
     try {
@@ -256,7 +259,7 @@ void RunTestOnCore(
         risc_name = "ncrisc";
     }
     switch(feature) {
-        case SanitizeAddress:
+        case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
@@ -273,7 +276,7 @@ void RunTestOnCore(
                 output_buf_noc_xy.str(),
                 output_buffer_addr);
             break;
-        case SanitizeAlignmentL1Write: {
+        case SanitizeNOCAlignmentL1Write: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
@@ -292,7 +295,7 @@ void RunTestOnCore(
                 output_buffer_addr);
             break;
         }
-        case SanitizeAlignmentL1Read: {
+        case SanitizeNOCAlignmentL1Read: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
@@ -310,7 +313,7 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 input_buffer_addr);
         } break;
-        case SanitizeZeroL1Write: {
+        case SanitizeNOCZeroL1Write: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
@@ -328,7 +331,7 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 output_buffer_addr);
         } break;
-        case SanitizeMailboxWrite: {
+        case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast read {} "
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
@@ -345,7 +348,7 @@ void RunTestOnCore(
                 input_buf_noc_xy.str(),
                 input_buffer_addr);
         } break;
-        case SanitizeInlineWriteDram: {
+        case SanitizeNOCInlineWriteDram: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
@@ -361,7 +364,7 @@ void RunTestOnCore(
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
         } break;
-        case SanitizeLinkedTransaction: {
+        case SanitizeNOCLinkedTransaction: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
@@ -377,6 +380,20 @@ void RunTestOnCore(
                 buffer_addr,
                 output_core_virtual_coords.str(),
                 output_buffer_addr);
+        } break;
+        case SanitizeL1Overflow: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
+                "of length {} (read or write past the end of local memory).",
+                device->id(),
+                (is_eth_core) ? "acteth" : "worker",
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                l1_overflow_addr,
+                1);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -452,61 +469,61 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitize) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeAddress);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAddress);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1Write) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Write);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAlignmentL1Write);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1Read) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Read);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAlignmentL1Read);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCAlignmentL1ReadNCrisc) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeAlignmentL1Read, true);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCAlignmentL1Read, true);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCZeroL1Write) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeZeroL1Write);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCZeroL1Write);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMailboxWrite) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWrite) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeMailboxWrite);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWrite);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeInlineWriteDram) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteDram) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeInlineWriteDram);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCInlineWriteDram);
         },
         this->devices_[0]);
 }
@@ -514,23 +531,23 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeInlineWriteDram) {
 TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEth) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeAddress);
+            RunTestEth(fixture, mesh_device, SanitizeNOCAddress);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeMailboxWrite) {
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeNOCMailboxWrite) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeMailboxWrite);
+            RunTestEth(fixture, mesh_device, SanitizeNOCMailboxWrite);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeInlineWriteDram) {
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeNOCInlineWriteDram) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestEth(fixture, mesh_device, SanitizeInlineWriteDram);
+            RunTestEth(fixture, mesh_device, SanitizeNOCInlineWriteDram);
         },
         this->devices_[0]);
 }
@@ -542,28 +559,45 @@ TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeIEth) {
     }
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestIEth(fixture, mesh_device, SanitizeAddress);
+            RunTestIEth(fixture, mesh_device, SanitizeNOCAddress);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
+TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeNOCInlineWriteDram) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-            RunTestIEth(fixture, mesh_device, SanitizeInlineWriteDram);
+            RunTestIEth(fixture, mesh_device, SanitizeNOCInlineWriteDram);
         },
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, DISABLED_SanitizeLinkedTransaction) {
+TEST_F(MeshWatcherFixture, DISABLED_SanitizeNOCLinkedTransaction) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeLinkedTransaction);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCLinkedTransaction);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeL1Overflow) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestEth(fixture, mesh_device, SanitizeL1Overflow);
         },
         this->devices_[0]);
 }

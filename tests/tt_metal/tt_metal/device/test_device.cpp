@@ -36,6 +36,7 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "math.hpp"
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
