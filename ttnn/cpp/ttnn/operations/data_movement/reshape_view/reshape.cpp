@@ -28,28 +28,6 @@
 namespace ttnn::operations::data_movement {
 namespace detail {
 
-ttnn::Tensor convert_tile_to_rm(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const uint32_t tile_first_dim,
-    const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const PadValue& pad_value) {
-    // Convert the 3D->3D reshaping to row major and back to tile
-    TT_FATAL(
-        !(((logical_shape[-1] % tile_first_dim != 0) || (logical_shape[-2] % tile_second_dim != 0) ||
-           (tensor.logical_shape()[-1] % tile_first_dim != 0) || (tensor.logical_shape()[-2] % tile_second_dim != 0)) &&
-          (tensor.dtype() == DataType::BFLOAT8_B)),
-        "illegal dimensions for a bfloat8 tensor");
-    auto new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
-    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT);
-    new_tensor = ReshapeViewOperation::invoke(new_tensor, logical_shape, padded_shape, memory_config, pad_value);
-    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config);
-    new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.dtype()) : new_tensor;
-    return new_tensor;
-}
-
 ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
@@ -60,6 +38,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     auto intermediate_out_memory_config = memory_config;
 
     if (tensor.memory_config().is_sharded()) {
+        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
     }
@@ -77,7 +56,8 @@ ttnn::Tensor perform_reshape_on_2D_RM(
                             {})
                             .at(0);
     if (memory_config.is_sharded()) {
-    return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
+        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
+        return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
     } else {
         return temp_tensor2;
     }
@@ -222,11 +202,13 @@ ttnn::Tensor reshape_tiled(
     auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
 
     if (tensor.memory_config().is_sharded()) {
+        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         tensor3d = ttnn::sharded_to_interleaved(tensor, working_input_memory_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
+        TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
     }
 
@@ -249,10 +231,12 @@ ttnn::Tensor reshape_tiled(
                                 .at(0);
 
     if (memory_config.is_sharded()) {
+        TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, memory_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
+        TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
         output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
     }
 
