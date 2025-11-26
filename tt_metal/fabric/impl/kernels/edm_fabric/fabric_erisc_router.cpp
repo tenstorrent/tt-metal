@@ -7,8 +7,8 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"

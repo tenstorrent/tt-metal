@@ -15,7 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 namespace ttnn::operations::ccl {

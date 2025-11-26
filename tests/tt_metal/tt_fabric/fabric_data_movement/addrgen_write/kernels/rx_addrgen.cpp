@@ -6,12 +6,13 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
-// Receiver-side completion wait.
+//
+// Unified receiver-side completion wait kernel.
 // Runs on the destination device and blocks until the receiver's global
-// semaphore reaches `expected_value`. In this test, the sender atomically
-// increments the semaphore after sending all pages, so reaching the target
-// value implies "all data has arrived". Fabric guarantees the semaphore
-// signal is delivered after payload data.
+// semaphore reaches `expected_value`. The sender atomically increments the
+// semaphore after sending all pages, so reaching the target value implies
+// "all data has arrived". Fabric guarantees the semaphore signal is delivered
+// after payload data.
 //
 // CT (compile-time) args: none
 // RT (runtime) args:
