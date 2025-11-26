@@ -176,6 +176,7 @@ jobs:
         if: ${{ matrix.test-group.model == 'sd35' && (inputs.model == 'all' || inputs.model == 'sd35') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
           NO_PROMPT: 1
           TT_MM_THROTTLE_PERF: 5
         run: |
@@ -186,6 +187,7 @@ jobs:
         if: ${{ matrix.test-group.model == 'flux1' && (inputs.model == 'all' || inputs.model == 'flux1') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
           NO_PROMPT: 1
           TT_MM_THROTTLE_PERF: 5
         run: |
@@ -195,6 +197,8 @@ jobs:
       - name: Run Motif-Image-6B-Preview demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'motif' && (inputs.model == 'all' || inputs.model == 'motif') }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         run: |
           pytest -n auto models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
       - name: Run Wan2.2 demo tests (direct pytest)
