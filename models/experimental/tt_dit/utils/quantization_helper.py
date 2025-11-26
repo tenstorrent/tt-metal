@@ -69,7 +69,7 @@ class QuantizationHookHelper:
         mesh_device: ttnn.MeshDevice,
         filter_key: str = None,
         write_tensors: bool = False,
-        output_dir: str = None,
+        output_dir: str = "",
         quantization_configs: list[tuple[ttnn.DataType, ttnn.MathFidelity]] = [],
         update_output: bool = False,
         min_output_pcc: float = None,
@@ -81,9 +81,10 @@ class QuantizationHookHelper:
         self.write_tensors = write_tensors
 
         self.output_dir = output_dir
-        if self.output_dir is None:
-            self.output_dir = os.path.join(os.getcwd(), "operation_tensors_" + str(uuid.uuid4()))
-        os.makedirs(self.output_dir, exist_ok=False)
+        if write_tensors:
+            if self.output_dir is None:
+                self.output_dir = os.path.join(os.getcwd(), "operation_tensors_" + str(uuid.uuid4()))
+            os.makedirs(self.output_dir, exist_ok=False)
 
         # Order quantization settings from most accurate to least accurate:
         order0_idx = {val: idx for idx, val in enumerate(DATA_TYPES)}
@@ -141,7 +142,7 @@ class QuantizationHookHelper:
                 else:
                     new_args.append(arg)
 
-            new_kwargs = kwargs.copy()
+            new_kwargs = copy.deepcopy(kwargs)
             if "compute_kernel_config" in new_kwargs:
                 kernel_config = new_kwargs["compute_kernel_config"]
                 kernel_config.math_fidelity = math_fidelity
@@ -224,5 +225,5 @@ class QuantizationHookHelper:
                 best_output = ttnn.typecast(best_output, ttnn.bfloat16)
                 if isinstance(output, ttnn._ttnn.tensor.Tensor):
                     ttnn.copy(best_output, output)
-                elif isinstance(output, tuple) and len(output) > 0 and isinstance(output, ttnn._ttnn.tensor.Tensor):
+                elif isinstance(output, tuple) and len(output) > 0 and isinstance(output[0], ttnn._ttnn.tensor.Tensor):
                     ttnn.copy(best_output, output[0])

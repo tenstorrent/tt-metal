@@ -24,7 +24,7 @@ for filename in files:
     if args.filter_key is not None and args.filter_key not in filename:
         continue
     if filename not in files_1 or filename not in files_2:
-        print(f"Warning no matching files names {filename}")
+        print(f"Warning no matching file name: {filename}")
         continue
 
     tensor_1 = torch.load(os.path.join(args.input_dir_1, filename))

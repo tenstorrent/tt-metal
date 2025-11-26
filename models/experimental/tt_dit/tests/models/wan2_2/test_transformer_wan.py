@@ -171,7 +171,6 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-
     tt_spatial_out = tt_model(
         spatial_1BND=tt_spatial,
         prompt_1BLP=tt_prompt,
