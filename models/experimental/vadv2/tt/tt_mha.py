@@ -165,7 +165,7 @@ class TtMultiheadAttention:
                     return tensor
                 raise
 
-        def matmul_with_attn_mem(lhs, rhs):
+        def matmul_with_attn_mem(lhs, rhs, program_config=None):
             nonlocal attn_mem_cfg
             lhs = ensure_attn_memory(lhs)
             rhs = ensure_attn_memory(rhs)
@@ -173,15 +173,27 @@ class TtMultiheadAttention:
                 kwargs = {"memory_config": attn_mem_cfg}
                 if attn_compute_cfg is not None:
                     kwargs["compute_kernel_config"] = attn_compute_cfg
+                if program_config is not None:
+                    kwargs["program_config"] = program_config
                 return ttnn.matmul(lhs, rhs, **kwargs)
             except RuntimeError as err:
-                if requires_dram_fallback(err) and attn_mem_cfg != ttnn.DRAM_MEMORY_CONFIG:
+                error_msg = str(err).lower()
+                # If it's a dimension mismatch error with program config, try without program config
+                if (
+                    "must divide" in error_msg
+                    or "not equal to per_core" in error_msg
+                    or "Kt must be divisible" in error_msg
+                ) and program_config is not None:
+                    # Fall back to default matmul without program config
+                    return ttnn.matmul(lhs, rhs, memory_config=attn_mem_cfg, compute_kernel_config=attn_compute_cfg)
+                elif requires_dram_fallback(err) and attn_mem_cfg != ttnn.DRAM_MEMORY_CONFIG:
                     switch_to_dram()
                     lhs = ensure_attn_memory(lhs)
                     rhs = ensure_attn_memory(rhs)
                     kwargs = {"memory_config": attn_mem_cfg}
                     if attn_compute_cfg is not None:
                         kwargs["compute_kernel_config"] = attn_compute_cfg
+                    # Note: Don't use program_config in fallback to avoid DRAM sharding issues
                     return ttnn.matmul(lhs, rhs, **kwargs)
                 raise
 
@@ -362,6 +374,7 @@ class TtMultiheadAttention:
         query_heads = ensure_attn_memory(query_heads)
         key_heads = ensure_attn_memory(key_heads)
 
+        # NOTE: Using default matmul config as program configs don't match tensor dimensions
         attn_weights = matmul_with_attn_mem(query_heads, key_heads)
 
         if attn_mask is not None:
@@ -373,6 +386,7 @@ class TtMultiheadAttention:
         attn_weights = softmax_with_attn_mem(attn_weights, dim=-1)
 
         value_heads = ensure_attn_memory(value_heads)
+        # NOTE: Using default matmul config as program configs don't match tensor dimensions
         attn_output = matmul_with_attn_mem(attn_weights, value_heads)
 
         attn_output = concat_heads_with_attn_mem(attn_output)
