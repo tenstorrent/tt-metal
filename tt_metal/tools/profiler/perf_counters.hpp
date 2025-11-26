@@ -23,6 +23,7 @@ union PerfCounter {
     } __attribute__((packed));
     uint64_t raw_data;
 
+    PerfCounter() = delete;
     PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type) :
         counter_value(counter_value), ref_cnt(ref_cnt), counter_type(counter_type) {}
 

@@ -325,8 +325,8 @@ def extract_perf_counters(events):
 
         if perf_counter_events:
             return pd.DataFrame(perf_counter_events)
-    except (KeyError, TypeError, AttributeError):
-        pass
+    except (KeyError, TypeError, AttributeError) as e:
+        logger.exception("Failed to extract perf counter events: %s", e)
     return None
 
 
