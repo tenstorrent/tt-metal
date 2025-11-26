@@ -17,9 +17,9 @@ class TtFFN:
         self.linear1_bias = params.linear1.bias
         self.linear2_bias = params.linear2.bias
 
-        # Note: VAD-v2 has very large sequence length (10,000 elements)
-        # Using simplified optimization without aggressive program configs
-        # to avoid L1 memory overflow
+        # Note: VAD-v2 has variable sequence lengths (300-64,000) with limited L1 memory
+        # Custom program configs cause L1 overflow, so we let TTNN auto-select
+        # We keep fused ReLU activation which is supported without custom configs
 
     def __call__(self, x, identity=None):
         if identity is None:
@@ -29,13 +29,13 @@ class TtFFN:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        # First linear: 256 -> 512
+        # First linear: 256 -> 512 (with fused ReLU)
         x = ttnn.linear(
             x,
             self.linear1_weight,
             bias=self.linear1_bias,
             dtype=ttnn.bfloat16,
-            activation="relu",  # Fused ReLU activation!
+            activation="relu",  # Fused ReLU activation
         )
 
         # Second linear: 512 -> 256
