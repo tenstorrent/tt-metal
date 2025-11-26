@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_reduce_api.h"
@@ -31,6 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -71,6 +73,8 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK(state_configure(icb0, icb1_scaler, ocb));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
@@ -237,6 +241,7 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb)));
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_init(icb, full_dim, ocb);

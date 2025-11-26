@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
 #endif
@@ -28,6 +29,9 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK(state_configure(icb0, icb1, ocb));
+
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
@@ -56,6 +60,8 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    PACK(state_configure(icb0, icb1));
+
     MATH((
         llk_math_eltwise_binary_init_with_operands<eltwise_binary_type, NONE, MATH_FIDELITY>(icb0, icb1, acc_to_dest)));
 
@@ -194,6 +200,7 @@ template <
     EltwiseBinaryType eltwise_binary_type = ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
+    PACK(state_configure(icb0));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false)));
 }

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -47,12 +48,7 @@ static uint32_t throttled_mop_status = 0;
  */
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim) {
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim) {
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
     volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
@@ -91,6 +87,8 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
     // Note: in0_cb_id and in1_cb_id are swapped here because internally,
     // matmul maps in0 to srcB and in1 to srcA, so the arguments must be swapped
     // to ensure the correct operand mapping for the hardware implementation.
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK(state_configure(in1_cb_id, in0_cb_id, out_cb_id));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
@@ -161,6 +159,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  */
 // clang-format on
 ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
+    PACK(state_configure(in1_cb_id, in0_cb_id));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 }
@@ -179,7 +178,7 @@ ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t t
  * | c_in_old_srca  | The identifier of the old input to src A circular buffer (CB) | uint32_t | 0 to 31                                           | False    |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set  | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
@@ -212,6 +211,9 @@ ALWI void mm_block_init(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     // Note: in0_cb_id and in1_cb_id are swapped here because of the way matmul works:
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK(state_configure(in1_cb_id, in0_cb_id, out_cb_id));
+
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
@@ -293,6 +295,7 @@ ALWI void mm_block_init_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    PACK(state_configure(in1_cb_id, in0_cb_id));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
