@@ -421,13 +421,13 @@ def serialize_result(script: TriageScript | None, result):
     failures = FAILURE_CHECKS
     FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
-            for failure in failures:
-                utils.ERROR(f"    {failure}")
-        elif script.failed:
-            utils.ERROR("  fail")
-            utils.ERROR(f"    {script.failure_message}")
+            if len(failures) > 0:
+                for failure in failures:
+                    utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return
