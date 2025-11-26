@@ -35,12 +35,26 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: "Flux.1-dev ${{ inputs.runner-label }} performance"
+          - name: "llama3.1-8b ${{ inputs.runner-label }} performance"
             arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" != "P300-viommu" ]; then echo "Skipping - not P300-viommu"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "1x2sp0tp1"
-            owner_id: U08TED0JM9D # Samuel Adesoye
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1
+            owner_id: U08GELBB1AP # Ambrose Ling
+          - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
+            owner_id: U03PUAKE719 # Miguel Tairum
+          - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
+            owner_id: U03PUAKE719 # Miguel Tairum
+          - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-2-10-1-1-False"
+            owner_id: U08GELBB1AP # Ambrose Ling
+          - name: "llama3.1-8b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-1024-2-2-1-1-False"
+            owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
@@ -86,14 +100,6 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-      - name: Download Flux.1-dev model weights from LFC
-        if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
-        timeout-minutes: 15
-        run: |
-          set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
@@ -148,18 +154,18 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: "Flux.1-dev ${{ inputs.runner-label }} performance"
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
             arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" != "BH-QB-GE" ]; then echo "Skipping - not BH-QB-GE"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/black-forest-labs pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "2x2sp0tp1"
-            owner_id: U08TED0JM9D # Samuel Adesoye
-          - name: "Wan2.2-T2V-A14B ${{ inputs.runner-label }} performance"
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            owner_id: U03PUAKE719 # Miguel Tairum
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill (layers=2)"
             arch: blackhole
-            cmd: |
-              if [ "${{ inputs.runner-label }}" != "BH-QB-GE" ]; then echo "Skipping - not BH-QB-GE"; exit 0; fi
-              HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x4sp0tp1 and resolution_480p"
-            owner_id: U08TED0JM9D # Samuel Adesoye
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-2-2-1-1-False"
+            owner_id: U08GELBB1AP # Ambrose Ling
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode (layers=10)"
+            arch: blackhole
+            cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
+            owner_id: U08GELBB1AP # Ambrose Ling
     name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
