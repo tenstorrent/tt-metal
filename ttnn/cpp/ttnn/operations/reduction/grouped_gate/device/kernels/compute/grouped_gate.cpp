@@ -16,10 +16,11 @@
 
 namespace NAMESPACE {
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = true) {
+void print_tile(
+    uint32_t cb_idx, uint32_t tile_idx, bool untilize = true, uint16_t start_row = 0, uint16_t end_row = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
+    for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
                       cb_idx,
@@ -166,6 +167,9 @@ void MAIN {
         bool switch_dir = false;
         cb_wait_front(add_bias_cb_index, width_tiles);
         cb_wait_front(topk_index_creation_cb_index, width_tiles);
+        // for (uint32_t w = 0; w < width_tiles; w++) {
+        //     UNPACK(print_tile(add_bias_cb_index, w, true, 1, 2));
+        // }
 
         topk_tile_init();
         blocks::process_and_sort_tiles(
@@ -180,10 +184,9 @@ void MAIN {
 
         cb_wait_front(topk_input_cb_index, width_tiles);
         cb_wait_front(topk_index_cb_index, width_tiles);
-        for (uint32_t w = 0; w < width_tiles; w++) {
-            UNPACK(print_tile(topk_input_cb_index, w, true));
-            UNPACK(print_tile(topk_index_cb_index, w, true));
-        }
+
+        // UNPACK(print_tile(topk_input_cb_index, 1, true));
+        // UNPACK(print_tile(topk_index_cb_index, w, true));
     }
 }
 }  // namespace NAMESPACE
