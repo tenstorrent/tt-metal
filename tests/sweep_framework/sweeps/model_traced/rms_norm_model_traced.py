@@ -76,14 +76,29 @@ def run(
     )(input_tensor_shape)
 
     # Create weight tensor for RMS norm
-    torch_weight = torch.randn(weight_tensor_shape, dtype=torch.float32)
+    torch_weight_1d = torch.randn(weight_tensor_shape, dtype=torch.float32)
+
+    # For TILE layout, weight tensor must have last dimension = 32 (TILE_WIDTH)
+    # Reshape 1D weight [N] to 4D [1, 1, N//32, 32] if needed for ttnn conversion
+    # Keep original 1D weight for PyTorch reference computation
+    torch_weight_for_ttnn = torch_weight_1d
+    if input_b_layout == ttnn.TILE_LAYOUT and len(weight_tensor_shape) == 1:
+        weight_size = weight_tensor_shape[0]
+        if weight_size % 32 == 0:
+            # Reshape to 4D with last dim = 32
+            torch_weight_for_ttnn = torch_weight_1d.reshape(1, 1, weight_size // 32, 32)
+        else:
+            # If not divisible by 32, this is an invalid config - skip padding to avoid mismatch
+            # The weight size should always be divisible by 32 for TILE layout
+            raise ValueError(f"Weight size {weight_size} must be divisible by 32 for TILE layout")
 
     # RMS norm computation: x * weight / sqrt(mean(x^2) + eps)
+    # Use original 1D weight for PyTorch computation (will broadcast correctly)
     eps = 1e-5
     torch_input_squared = torch_input_tensor_a**2
     torch_mean_squared = torch.mean(torch_input_squared, dim=-1, keepdim=True)
     torch_rms = torch.sqrt(torch_mean_squared + eps)
-    torch_output_tensor = torch_input_tensor_a * torch_weight / torch_rms
+    torch_output_tensor = torch_input_tensor_a * torch_weight_1d / torch_rms
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -102,7 +117,7 @@ def run(
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
 
     weight_tensor = ttnn.from_torch(
-        torch_weight,
+        torch_weight_for_ttnn,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,

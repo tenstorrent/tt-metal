@@ -1662,6 +1662,8 @@ class MasterConfigLoader:
         """Get parameters for conv2d operation which uses input_specs format"""
         try:
             input_specs_list = []
+            compute_configs_list = []
+            dtypes_list = []
 
             for config in configs:
                 params = self._extract_conv2d_parameters(config)
@@ -1687,16 +1689,22 @@ class MasterConfigLoader:
                         params["has_bias"],
                     ]
                     input_specs_list.append(input_spec)
+                    # Extract compute_config if available
+                    compute_configs_list.append(params.get("compute_config"))
+                    # Extract dtype if available
+                    dtypes_list.append(params.get("dtype", "bfloat16"))
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, and dtype to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
-                paired_configs = list(zip(input_specs_list, [False] * len(input_specs_list)))
+                paired_configs = list(
+                    zip(input_specs_list, [False] * len(input_specs_list), compute_configs_list, dtypes_list)
+                )
                 return {
-                    "input_specs,is_conv1d": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -2410,7 +2418,8 @@ class MasterConfigLoader:
             # arg6: input_height, arg7: input_width
             # arg8: [kernel_h, kernel_w], arg9: [stride_h, stride_w]
             # arg10: [pad_h1, pad_h2, pad_w1, pad_w2], arg11: [dilation_h, dilation_w]
-            # arg12: groups, arg14: bias tensor (optional)
+            # arg12: groups, arg13: dtype, arg14: bias tensor (optional)
+            # arg15: conv_config (unsupported type), arg16: compute_config
 
             params = {}
             for arg in config:
@@ -2458,13 +2467,39 @@ class MasterConfigLoader:
                         params["dilation_w"] = dilation[1]
                 if "arg12" in arg:
                     params["groups"] = int(arg["arg12"]) if isinstance(arg["arg12"], (int, str)) else None
+                if "arg13" in arg:
+                    # Extract dtype (e.g., "DataType::BFLOAT8_B" -> "bfloat8_b")
+                    dtype_str = str(arg["arg13"])
+                    if "BFLOAT8_B" in dtype_str or "bfloat8_b" in dtype_str:
+                        params["dtype"] = "bfloat8_b"
+                    elif "BFLOAT16" in dtype_str or "bfloat16" in dtype_str:
+                        params["dtype"] = "bfloat16"
+                    elif "FLOAT32" in dtype_str or "float32" in dtype_str:
+                        params["dtype"] = "float32"
                 if "arg14" in arg and isinstance(arg["arg14"], dict):
                     # Bias tensor exists
                     params["has_bias"] = True
+                if "arg16" in arg and isinstance(arg["arg16"], dict):
+                    # Extract compute_config (WormholeComputeKernelConfig)
+                    compute_config_dict = arg["arg16"]
+                    if "WormholeComputeKernelConfig" in compute_config_dict:
+                        wormhole_config = compute_config_dict["WormholeComputeKernelConfig"]
+                        params["compute_config"] = {
+                            "math_fidelity": wormhole_config.get("math_fidelity", "LoFi"),
+                            "math_approx_mode": wormhole_config.get("math_approx_mode", 0),
+                            "fp32_dest_acc_en": wormhole_config.get("fp32_dest_acc_en", 1),
+                            "packer_l1_acc": wormhole_config.get("packer_l1_acc", 1),
+                            "dst_full_sync_en": wormhole_config.get("dst_full_sync_en", 0),
+                            "throttle_level": wormhole_config.get("throttle_level", "ThrottleLevel::NO_THROTTLE"),
+                        }
 
             # Set has_bias to False if not found
             if "has_bias" not in params:
                 params["has_bias"] = False
+
+            # Set default dtype if not found
+            if "dtype" not in params:
+                params["dtype"] = "bfloat16"
 
             # Check if we have all required params
             required = [

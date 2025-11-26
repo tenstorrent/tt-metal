@@ -53,6 +53,7 @@ def run(
     input_specs,
     is_conv1d=False,
     storage_type="StorageType::DEVICE",
+    config_tensors_in_dram=True,
     *,
     device,
 ) -> list:
@@ -60,7 +61,7 @@ def run(
     if is_conv1d:
         result = run_conv1d_short_sweep(input_specs, device)
     else:
-        result = run_conv2d_short_sweep(input_specs, device)
+        result = run_conv2d_short_sweep(input_specs, device, config_tensors_in_dram=config_tensors_in_dram)
 
     # Convert short_sweep format [pcc_bool, perf, timestamp, tensor1, tensor2]
     # to model_traced format [pcc_tuple, e2e_perf]
