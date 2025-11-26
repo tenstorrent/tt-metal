@@ -13,7 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_5d_concat_tile(device, layout):
-    torch_input_tensors = [torch.rand(1, 32, 56, 56, 1, dtype=torch.bfloat16) for _ in range(3)]
+    torch_input_tensors = [torch.rand(1, 32, 56, 56, 1, dtype=torch.bfloat16) for _ in range(500)]
     torch_result = torch.cat(torch_input_tensors, dim=-1)
 
     ttnn_input_tensors = [ttnn.from_torch(x, layout=layout, device=device) for x in torch_input_tensors]
@@ -24,7 +24,7 @@ def test_5d_concat_tile(device, layout):
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_5d_concat_rm(device, layout):
-    torch_input_tensors = [torch.rand(1, 32, 56, 56, 1, dtype=torch.bfloat16) for _ in range(3)]
+    torch_input_tensors = [torch.rand(1, 32, 56, 56, 1, dtype=torch.bfloat16) for _ in range(500)]
     torch_result = torch.cat(torch_input_tensors, dim=-1)
 
     ttnn_input_tensors = [ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device) for x in torch_input_tensors]
