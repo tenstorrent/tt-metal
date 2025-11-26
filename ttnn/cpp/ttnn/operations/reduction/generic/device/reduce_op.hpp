@@ -12,6 +12,8 @@
 #include "ttnn/operation.hpp"
 
 #include "common.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <optional>
 
 namespace tt {
 
@@ -23,19 +25,22 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_single_core_hw(
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_h(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_w(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 struct Reduce {
     const ReduceOpMath math_op;
@@ -44,6 +49,7 @@ struct Reduce {
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<CoreRangeSet> sub_core_grids;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
@@ -59,7 +65,8 @@ Tensor reduce(
     float scaler = 1.0f,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace tt_metal
 

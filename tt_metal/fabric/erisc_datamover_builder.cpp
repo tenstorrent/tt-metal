@@ -316,25 +316,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     uint32_t buffer_address = edm_status_address + field_size;
 
-    for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
-        this->receiver_channels_counters_address[i] = buffer_address;
-        buffer_address += receiver_channel_counters_size_bytes;
-    }
-    for (uint32_t i = 0; i < num_sender_channels; i++) {
-        this->sender_channels_counters_address[i] = buffer_address;
-        buffer_address += sender_channel_counters_size_bytes;
-    }
-
-    // Packet header history buffer(s)
-    for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
-        this->receivers_completed_packet_header_cb_address[i] = buffer_address;
-        buffer_address += receiver_completed_packet_header_cb_size_bytes;
-    }
-    for (uint32_t i = 0; i < num_sender_channels; i++) {
-        this->senders_completed_packet_header_cb_address[i] = buffer_address;
-        buffer_address += sender_completed_packet_header_cb_size_bytes;
-    }
-
     // ----------- Sender Channels
     for (uint32_t i = 0; i < num_sender_channels; i++) {
         this->sender_channels_buffer_index_address[i] = buffer_address;
@@ -369,6 +350,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->receiver_channels_downstream_teardown_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
+
+    // ----------- Local Tensix Relay Connection (UDM mode only)
+    // Dedicated connection buffer index for the local tensix relay interface
+    this->tensix_relay_connection_buffer_index_id = buffer_address;
+    buffer_address += field_size;
 
     // Issue: https://github.com/tenstorrent/tt-metal/issues/29249. Move it back to after edm_local_sync_address once
     // the hang is root caused for multiprocess test.
@@ -417,7 +403,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
     // Update sender channel servicing based on fabric tensix configuration
-    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
@@ -438,21 +424,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_fwd_paths -= 1;
     }
 
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-        TT_FATAL(
-            (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
-            "receivers_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
-            i,
-            receivers_completed_packet_header_cb_address[i],
-            eth_word_l1_alignment);
-    }
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        TT_FATAL(
-            (senders_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),
-            "senders_completed_packet_header_cb_address[{}] {} must be aligned to {} bytes",
-            i,
-            senders_completed_packet_header_cb_address[i],
-            eth_word_l1_alignment);
         TT_FATAL(
             (sender_channels_buffer_index_address[i] % eth_word_l1_alignment == 0),
             "sender_channels_buffer_index_address[{}] {} must be aligned to {} bytes",
@@ -971,33 +943,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.notify_worker_of_read_counter_update_src_address,
         0x7a9b3c4d,  // special tag marker to catch incorrect ct args
 
-        // fabric counters
-        FabricEriscDatamoverConfig::enable_fabric_counters,
-        config.receiver_channels_counters_address[0],
-        config.receiver_channels_counters_address[1],
-        config.sender_channels_counters_address[0],
-        config.sender_channels_counters_address[1],
-        config.sender_channels_counters_address[2],
-        config.sender_channels_counters_address[3],
-        config.sender_channels_counters_address[4],
-
-        // fabric pkt header recording
-        FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
-
-        config.receivers_completed_packet_header_cb_address[0],
-        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
-        config.receivers_completed_packet_header_cb_address[1],
-        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[0],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[1],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[2],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[3],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
-        config.senders_completed_packet_header_cb_address[4],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.risc_configs[risc_id].is_sender_channel_serviced(0),
         config.risc_configs[risc_id].is_sender_channel_serviced(1),
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
@@ -1043,6 +988,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     if (skip_src_ch_id_update) {
         ct_args.push_back(remote_vc1_sender_channel);
         ct_args.push_back(remote_worker_sender_channel);
+    }
+
+    // Add UDM mode flag and relay buffer count
+    ct_args.push_back(this->udm_mode ? 1 : 0);
+    if (this->udm_mode) {
+        ct_args.push_back(this->local_tensix_relay_num_buffers);
     }
 
     // special tag
@@ -1173,6 +1124,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     rt_args.reserve(rt_args.size() + args_pt2.size());
     std::ranges::copy(args_pt2, std::back_inserter(rt_args));
+
+    // Pack relay connection args at the end (UDM mode only)
+    receiver_channel_to_downstream_adapter->pack_adaptor_to_relay_rt_args(rt_args);
+
     return rt_args;
 }
 
