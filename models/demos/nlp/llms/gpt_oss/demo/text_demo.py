@@ -23,10 +23,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
+from models.demos.nlp.llms.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
-from models.demos.gpt_oss.tt.common import create_tt_model
+from models.demos.nlp.llms.gpt_oss.tt.common import create_tt_model
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host

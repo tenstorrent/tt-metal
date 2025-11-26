@@ -11,7 +11,7 @@ transformation followed by top-k selection to assign tokens to experts.
 """
 
 import ttnn
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.nlp.llms.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 def topk_router(g, experts_per_token):

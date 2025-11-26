@@ -143,7 +143,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
     """Test full model with accuracy testing using new abstractions"""
 
     # Cache file for reference tokens
-    cache_dir = "models/demos/gpt_oss/tests/unit/"
+    cache_dir = "models/demos/nlp/llms/gpt_oss/tests/unit/"
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
 
@@ -188,7 +188,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
+        from models.demos.nlp.llms.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
@@ -291,7 +291,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
+        from models.demos.nlp.llms.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()

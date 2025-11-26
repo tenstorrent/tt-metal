@@ -29,14 +29,14 @@ run_tg_gpt_oss_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_tg_gpt_oss_tests"
-  pip install -r models/demos/gpt_oss/requirements.txt
+  pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
   # GPT-OSS weights for 20B and 120B
   gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/
   gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/
 
   for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
-    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 900; fail+=$?
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/nlp/llms/gpt_oss/tests/unit --timeout 900; fail+=$?
   done
 
   # Record the end time

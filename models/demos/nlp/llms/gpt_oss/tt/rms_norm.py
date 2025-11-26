@@ -4,8 +4,8 @@
 from torch import nn
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.nlp.llms.gpt_oss.config import MeshConfig, ModeConfig
+from models.demos.nlp.llms.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):

@@ -4,9 +4,9 @@
 import torch
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.demos.gpt_oss.utils.substate import substate
+from models.demos.nlp.llms.gpt_oss.config import MeshConfig, Mode, ModeConfig
+from models.demos.nlp.llms.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.nlp.llms.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
 from ttnn import replicate_tensor_to_mesh_mapper
@@ -147,7 +147,7 @@ class Model:
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
-        from models.demos.gpt_oss.tt.ccl import CCLManager
+        from models.demos.nlp.llms.gpt_oss.tt.ccl import CCLManager
 
         ccl_manager = CCLManager(mesh_device)
 

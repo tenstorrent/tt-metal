@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.demos.gpt_oss.utils.substate import substate
+from models.demos.nlp.llms.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.nlp.llms.gpt_oss.utils.substate import substate
 
 from .attention import Attention
 from .mlp import MLP

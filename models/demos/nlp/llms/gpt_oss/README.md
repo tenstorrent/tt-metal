@@ -16,13 +16,13 @@ Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators
 
 ```bash
 # Bump up transformers version
-pip install -r models/demos/gpt_oss/requirements.txt
+pip install -r models/demos/nlp/llms/gpt_oss/requirements.txt
 
 # Set model path using HF_MODEL environment variable
 export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b"
 
 # Run text generation demo on Galaxy (4×8 mesh)
-cd tt-metal/models/demos/gpt_oss/demo
+cd tt-metal/models/demos/nlp/llms/gpt_oss/demo
 pytest text_demo.py -k "4x8"
 ```
 
@@ -41,12 +41,12 @@ export HF_MODEL="/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b"
 
 ```bash
 # Run all tests
-pytest models/demos/gpt_oss/tests/unit/ -v
+pytest models/demos/nlp/llms/gpt_oss/tests/unit/ -v
 
 # Run specific test files
-pytest models/demos/gpt_oss/tests/unit/test_submodules.py -v  # Utility components
-pytest models/demos/gpt_oss/tests/unit/test_modules.py -v     # Core components
-pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accuracy
+pytest models/demos/nlp/llms/gpt_oss/tests/unit/test_submodules.py -v  # Utility components
+pytest models/demos/nlp/llms/gpt_oss/tests/unit/test_modules.py -v     # Core components
+pytest models/demos/nlp/llms/gpt_oss/tests/unit/test_model.py -v       # Full model accuracy
 ```
 
 ### Test Files Overview
