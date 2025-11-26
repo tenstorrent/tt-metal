@@ -17,7 +17,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES embedding.hpp device/embedding_device_operation.hpp
+        FILES embedding.hpp device/embedding_device_operation.hpp device/embedding_device_operation_types.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
