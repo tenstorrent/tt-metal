@@ -30,6 +30,9 @@ AdamWFused::AdamWFused(ttml::serialization::NamedParameters parameters, const Ad
                     /* requires_grad */ false));
         }
     }
+    if (m_config.amsgrad) {
+        init_max_exp_avg_sq();
+    }
 }
 
 void AdamWFused::zero_grad() {
@@ -61,11 +64,17 @@ void AdamWFused::step() {
         const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::FULL);
         const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
 
+        std::optional<ttnn::Tensor> max_exp_avg_sq;
+        if (m_config.amsgrad) {
+            max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::FULL);
+        }
+
         ttml::metal::adamw_fused(
             param,
             gradients,
             exp_avg,
             exp_avg_sq,
+            max_exp_avg_sq,
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -79,20 +88,33 @@ void AdamWFused::step() {
 
 serialization::StateDict AdamWFused::get_state_dict() const {
     serialization::StateDict dict;
-    dict["exp_avg"] = m_exp_avg;
-    dict["exp_avg_sq"] = m_exp_avg_sq;
     dict["steps"] = m_steps;
     dict["beta1_pow"] = m_beta1_pow;
     dict["beta2_pow"] = m_beta2_pow;
+    dict["exp_avg"] = m_exp_avg;
+    dict["exp_avg_sq"] = m_exp_avg_sq;
+    dict["amsgrad"] = m_config.amsgrad;
+    if (m_config.amsgrad) {
+        dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
+    }
     return dict;
 }
 
 void AdamWFused::set_state_dict(const serialization::StateDict& dict) {
-    m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
-    m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     m_beta1_pow = serialization::get_value_type<float>(dict, "beta1_pow");
     m_beta2_pow = serialization::get_value_type<float>(dict, "beta2_pow");
+    m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
+    m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
+
+    const bool amsgrad =
+        dict.contains("amsgrad") ? serialization::get_value_type<bool>(dict, "amsgrad") : m_config.amsgrad;
+    if (amsgrad && dict.contains("max_exp_avg_sq")) {
+        m_config.amsgrad = true;
+        m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("max_exp_avg_sq"));
+    } else {
+        set_amsgrad(amsgrad);
+    }
 }
 
 size_t AdamWFused::get_steps() const {
@@ -141,8 +163,27 @@ float AdamWFused::get_weight_decay() const {
     return m_config.weight_decay;
 }
 
-void AdamWFused::set_weight_decay(float weight_decay) {
-    m_config.weight_decay = weight_decay;
+bool AdamWFused::get_amsgrad() const {
+    return m_config.amsgrad;
 }
 
+void AdamWFused::set_amsgrad(bool amsgrad) {
+    if (m_config.amsgrad == amsgrad) {
+        return;
+    }
+    m_config.amsgrad = amsgrad;
+    amsgrad ? init_max_exp_avg_sq() : m_max_exp_avg_sq.clear();
+}
+
+void AdamWFused::init_max_exp_avg_sq() {
+    for (const auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad()) {
+            m_max_exp_avg_sq.emplace(
+                name,
+                autograd::create_tensor(
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    /* requires_grad */ false));
+        }
+    }
+}
 }  // namespace ttml::optimizers
