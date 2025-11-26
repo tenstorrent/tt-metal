@@ -66,7 +66,6 @@ void MAIN {
     const bool use_half_tile = true;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
-
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
         // move l2 input
         move_block<false>(cb_out_accumulate_im_2, cb_l2_temp, out_chunk_tiles);

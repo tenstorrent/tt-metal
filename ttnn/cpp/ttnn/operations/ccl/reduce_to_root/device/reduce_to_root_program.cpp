@@ -28,33 +28,48 @@ inline std::vector<MeshCoordinate> find_send_recv(
     bool is_sender_device,
     bool is_root_device,
     bool is_root2_device,
-    const MeshCoordinate& device_coordinate) {
+    const MeshCoordinate& device_coordinate,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord) {
     std::vector<MeshCoordinate> transfer_coords;
     MeshCoordinate send_coord = device_coordinate;
     MeshCoordinate receive_coord = device_coordinate;
     if (is_sender_device) {
         if (is_leftmost) {  // left
-            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            receive_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+            if (forward_coord.has_value() == 0) {
+                TT_FATAL(false, "ReduceToRoot: leftmost sender device must have a forward coordinate defined.");
+            }
+            send_coord = device_coordinate;
+            receive_coord = forward_coord.has_value() ? forward_coord.value() : device_coordinate;
         } else {  // right
-            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
+            if (backward_coord.has_value() == 0) {
+                TT_FATAL(false, "ReduceToRoot: rightmost sender device must have a backward coordinate defined.");
+            }
+            send_coord = device_coordinate;
+            receive_coord = backward_coord.has_value() ? backward_coord.value() : device_coordinate;
         }
     } else if (is_root_device) {
-        receive_coord = device_coordinate;
-        auto sender_coord_1 = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
-        auto sender_coord_2 = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+        if (backward_coord.has_value() == 0 || forward_coord.has_value() == 0) {
+            TT_FATAL(false, "ReduceToRoot: root sender device must have a fwd and backward coordinate defined.");
+        }
+        // switch send and recv when the device acts like a receiver
+        send_coord = device_coordinate;
+        auto sender_coord_1 = backward_coord.has_value() ? backward_coord.value() : device_coordinate;
+        auto sender_coord_2 = forward_coord.has_value() ? forward_coord.value() : device_coordinate;
         if (dir == 0) {
-            send_coord = sender_coord_2;
+            receive_coord = sender_coord_1;
         } else {
-            send_coord = sender_coord_1;
+            receive_coord = sender_coord_2;
         }
     } else if (is_root2_device) {
-        receive_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-        send_coord = MeshCoordinate(device_coordinate.coords()[0] + 1, device_coordinate.coords()[1]);
+        if (backward_coord.has_value() == 0 || forward_coord.has_value() == 0) {
+            TT_FATAL(false, "ReduceToRoot: root2 sender device must have a fwd and backward coordinate defined.");
+        }
+        send_coord = device_coordinate;
+        receive_coord = forward_coord.has_value() ? forward_coord.value() : device_coordinate;
         if (dir) {
-            send_coord = MeshCoordinate(device_coordinate.coords()[0], device_coordinate.coords()[1]);
-            receive_coord = MeshCoordinate(device_coordinate.coords()[0] - 1, device_coordinate.coords()[1]);
+            send_coord = device_coordinate;
+            receive_coord = backward_coord.has_value() ? backward_coord.value() : device_coordinate;
         }
     }
     transfer_coords.push_back(send_coord);
@@ -117,6 +132,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& device_coordinate,
+    std::optional<ttnn::MeshCoordinate>& forward_coord,
+    std::optional<ttnn::MeshCoordinate>& backward_coord,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
@@ -130,6 +147,35 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const auto& output_tensor_s = output_tensors.at(1)[1];
     const auto& output_tensor_m = output_tensors.at(1)[2];
 
+    if (forward_coord.has_value() && backward_coord.has_value()) {
+        printf(
+            "device coord: %u %u, forward coord: %u %u, backward coord: %u %u\n",
+            device_coordinate.coords()[0],
+            device_coordinate.coords()[1],
+            forward_coord.value().coords()[0],
+            forward_coord.value().coords()[1],
+            backward_coord.value().coords()[0],
+            backward_coord.value().coords()[1]);
+    } else if (forward_coord.has_value()) {
+        printf(
+            "device coord: %u %u, forward coord: %u %u, backward coord: none\n",
+            device_coordinate.coords()[0],
+            device_coordinate.coords()[1],
+            forward_coord.value().coords()[0],
+            forward_coord.value().coords()[1]);
+    } else if (backward_coord.has_value()) {
+        printf(
+            "device coord: %u %u, forward coord: none, backward coord: %u %u\n",
+            device_coordinate.coords()[0],
+            device_coordinate.coords()[1],
+            backward_coord.value().coords()[0],
+            backward_coord.value().coords()[1]);
+    } else {
+        printf(
+            "device coord: %u %u, forward coord: none, backward coord: none\n",
+            device_coordinate.coords()[0],
+            device_coordinate.coords()[1]);
+    }
     printf("page size of intermediate tensor l: %zu\n", intermediate_tensor_l.tensor_spec().compute_page_size_bytes());
 
     printf("output tensors len: %zu\n", output_tensors.size());
@@ -171,20 +217,25 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     bool is_root_device = false;
     bool is_root2_device = false;
     bool is_sender_device = false;
+    bool is_leftmost = false;
+    if (is_sender_device && forward_coord.has_value() && forward_coord.value() == root_coord) {
+        is_leftmost = false;
+    }
 
     if (device_coordinate == root_coord) {
         // this is the root device
         is_root_device = true;
-    } else if (
-        device_coordinate.coords()[1] == root_coord.coords()[1] &&
-        (device_coordinate.coords()[0] == root_coord.coords()[0] - 1 ||
-         device_coordinate.coords()[0] == root_coord.coords()[0] + 1) &&
-        device_coordinate.coords()[0] != 0 && device_coordinate.coords()[0] != mesh_shape[0] - 1) {
+    } else if (device_coordinate != root_coord && backward_coord.has_value() && backward_coord.value() == root_coord) {
         // this is the intermediate device
         is_root2_device = true;
-    } else {
+    } else if (backward_coord.has_value() && forward_coord.has_value() == 0) {
         // this is a sender device
         is_sender_device = true;
+        is_leftmost = false;
+    } else if (forward_coord.has_value() && backward_coord.has_value() == 0 && forward_coord.value() == root_coord) {
+        // this is a sender device
+        is_sender_device = true;
+        is_leftmost = true;
     }
 
     auto semaphore_round1 = semaphores[0];
@@ -578,7 +629,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const uint32_t num_workers_per_direction = 1;  // change it to 4 when adding all cores;
+    const uint32_t num_workers_per_direction = 4;  // todo change it to 4 when adding all cores;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};  // to be modified based on device type
@@ -734,10 +785,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     printf("before setting runtime args\n");
     // set runtime args
-    bool is_leftmost = true;
-    if (is_sender_device && device_coordinate.coords()[0] != 0) {
-        is_leftmost = false;
-    }
 
     constexpr auto num_links = 1;  // for now TODO change to 2
 
@@ -751,24 +798,46 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     CoreCoord termination_master = CoreCoord(0, 0);
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        CoreCoord virtual_core = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 1))
-                                               : mesh_device->worker_core_from_logical_core(CoreCoord(1, 1));
-        CoreCoord opposite_core_coord = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 2))
-                                                      : mesh_device->worker_core_from_logical_core(CoreCoord(1, 2));
+        // CoreCoord virtual_core = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 0))
+        //                                        : mesh_device->worker_core_from_logical_core(CoreCoord(1, 0));
+        // CoreCoord opposite_core_coord = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 1))
+        //                                               : mesh_device->worker_core_from_logical_core(CoreCoord(1, 1));
+        CoreCoord virtual_core = CoreCoord(0, 0);
+        CoreCoord opposite_core_coord = CoreCoord(0, 0);
         uint32_t start_ix = link_idx == 0 ? 0 : 2;
         if (link_idx == 1) {
             termination_master = CoreCoord(1, 0);
         }
         for (uint32_t dir = 0; dir < 2; dir++) {
             CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_ix) : CoreCoord(2, start_ix + 1);
+            if (is_sender_device) {
+                mux_logical_core = CoreCoord(2, 0);
+            }
+            printf("mux logical core: %zu %zu \n", mux_logical_core.x, mux_logical_core.y);
             if (mux_connection_valid(dir, is_leftmost, is_sender_device)) {
                 std::vector<uint32_t> mux_rt_args = {};
                 auto transfer_coords = find_send_recv(
-                    dir, is_leftmost, is_sender_device, is_root_device, is_root2_device, device_coordinate);
+                    dir,
+                    is_leftmost,
+                    is_sender_device,
+                    is_root_device,
+                    is_root2_device,
+                    device_coordinate,
+                    forward_coord,
+                    backward_coord);
                 auto send_coord = transfer_coords[0];
                 auto receive_coord = transfer_coords[1];
-                printf("send coord here is: %u %u \n", send_coord.coords()[0], send_coord.coords()[1]);
-                printf("receive coord here is: %u %u \n", receive_coord.coords()[0], receive_coord.coords()[1]);
+                printf(
+                    "for device coord: %u, %u, the mux core is %zu, %zu, the send coord is: %u %u and the receive core "
+                    "is: %u %u\n",
+                    device_coordinate.coords()[0],
+                    device_coordinate.coords()[1],
+                    mux_logical_core.x,
+                    mux_logical_core.y,
+                    send_coord.coords()[0],
+                    send_coord.coords()[1],
+                    receive_coord.coords()[0],
+                    receive_coord.coords()[1]);
                 const auto src_node_id = mesh_device->get_fabric_node_id(send_coord);
                 const auto dst_node_id = mesh_device->get_fabric_node_id(receive_coord);
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
@@ -808,14 +877,14 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y,
-                    is_leftmost ? virtual_core.x : opposite_core_coord.x,
-                    is_leftmost ? virtual_core.y : opposite_core_coord.y};
+                    virtual_core.x,
+                    virtual_core.y,
+                };
                 // if leftmost: device 0:
-                // only backward direction is valid so start_idx + 1
-                // if rightmost: device 3
-                // only forward direction is valid so start_idx
-                CoreCoord mux_virtual_core =
-                    mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + !is_leftmost));
+                // sending forward to root
+                // if not leftmost: device 3:
+                // sending backward to root2
+                CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
 
                 fabric_mux_rt_args(
                     is_leftmost,
@@ -860,10 +929,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     1,  // num_hops,
                     core_noc_x,
                     core_noc_y,
-                    opposite_core_coord.x,
-                    opposite_core_coord.y,
                     virtual_core.x,
                     virtual_core.y,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y,
                 };
                 printf("before adding fabric rt args\n");
 
@@ -872,7 +941,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     0,  // first bwd
                     c == termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                    mux_virtual_core_bwd,
+                    mux_virtual_core_fwd,
                     worker_id,
                     c,
                     mux_kernel_config,
@@ -888,7 +957,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     1,  // then forward
                     c == termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                    mux_virtual_core_fwd,
+                    mux_virtual_core_bwd,
                     worker_id,
                     c,
                     mux_kernel_config,

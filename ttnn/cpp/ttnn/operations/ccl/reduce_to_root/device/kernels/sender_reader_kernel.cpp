@@ -27,23 +27,20 @@ void kernel_main() {
 
     DPRINT << "num tiles l: " << (uint32_t)num_tiles_l << "\n";
     // for tensor l
+    cb_reserve_back(cb_id_in_l, num_tiles_l);
+    uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    DPRINT << "src adr l: " << (uint32_t)src_addr_l << "\n";
     DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
-    DPRINT << "reserving cb id: " << (uint32_t)cb_id_in_l << "\n";
-    for (uint32_t i = 0; i < num_tiles_l; ++i) {
-        cb_reserve_back(cb_id_in_l, onetile);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
-        noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
-        read_addr += onetile * page_bytes;
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in_l, onetile);
-    }
+    noc_async_read(read_addr, l1_write_addr, num_tiles_l * page_bytes);
+    noc_async_read_barrier();
+    DPRINT << "printing l from compute cb l\n";
+    cb_push_back(cb_id_in_l, num_tiles_l);
 
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in_s);
+    l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
+    DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     cb_push_back(cb_id_in_s, onetile);
@@ -52,6 +49,7 @@ void kernel_main() {
     cb_reserve_back(cb_id_in_m, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_m);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
+    DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     cb_push_back(cb_id_in_m, onetile);
