@@ -6,11 +6,104 @@
 
 set -euo pipefail
 
-BATCH_SIZE=30
+BATCH_SIZE=5
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+OWNER="tenstorrent"
+REPO="tt-metal"
+
+declare -A USER_NAME_CACHE
+declare -A ORG_CACHE
+
+get_user_display_name() {
+    local login="$1"
+    if [ -z "$login" ]; then
+        echo ""
+        return
+    fi
+    if [ -n "${USER_NAME_CACHE[$login]:-}" ]; then
+        echo "${USER_NAME_CACHE[$login]}"
+        return
+    fi
+    local name=""
+    name=$(gh api "users/$login" --jq '.name // ""' 2>/dev/null || echo "")
+    USER_NAME_CACHE["$login"]="$name"
+    echo "$name"
+}
+
+is_org_member() {
+    local login="$1"
+    if [ -z "$login" ]; then
+        echo "false"
+        return
+    fi
+    if [ -n "${ORG_CACHE[$login]:-}" ]; then
+        echo "${ORG_CACHE[$login]}"
+        return
+    fi
+    if gh api "orgs/${OWNER}/members/$login" >/dev/null 2>&1; then
+        ORG_CACHE["$login"]="true"
+        echo "true"
+    else
+        ORG_CACHE["$login"]="false"
+        echo "false"
+    fi
+}
+
+build_person_json() {
+    local login="$1"
+    local fallback_name="$2"
+    local display_name="$fallback_name"
+    local org_member="false"
+
+    if [ -n "$login" ]; then
+        local fetched_name
+        fetched_name=$(get_user_display_name "$login")
+        if [ -n "$fetched_name" ]; then
+            display_name="$fetched_name"
+        elif [ -z "$display_name" ]; then
+            display_name="$login"
+        fi
+        org_member=$(is_org_member "$login")
+    else
+        if [ -z "$display_name" ]; then
+            display_name="(unknown)"
+        fi
+    fi
+
+    jq -n \
+        --arg login "$login" \
+        --arg name "$display_name" \
+        --arg org "$org_member" \
+        '{login:$login, name:$name, is_org_member:($org == "true")}'
+}
+
+append_unique_person() {
+    local arr_json="$1"
+    local person_json="$2"
+    jq -n \
+        --argjson arr "${arr_json:-[]}" \
+        --argjson person "$person_json" \
+        'if ($person.login // "") != "" then
+            if any($arr[]?; .login == $person.login) then $arr else $arr + [$person] end
+         else
+            if any($arr[]?; (.login == "" and .name == $person.name)) then $arr else $arr + [$person] end
+         end'
+}
+
+add_person_entry() {
+    local login="$1"
+    local fallback_name="$2"
+    local current_json="$3"
+    local person_json
+    person_json=$(build_person_json "$login" "$fallback_name")
+    if [ -z "$person_json" ]; then
+        person_json='{"login":"","name":"(unknown)","is_org_member":false}'
+    fi
+    append_unique_person "${current_json:-[]}" "$person_json"
+}
 
 if [ $# -lt 3 ]; then
     echo -e "${RED}Error: Missing required arguments${NC}"
@@ -148,8 +241,11 @@ if start_marker in content:
     pr_title=$(echo "$pr_info" | jq -r '.title // ""' 2>/dev/null || echo "")
     pr_url=$(echo "$pr_info" | jq -r '.html_url // ""' 2>/dev/null || echo "")
     pr_description=$(echo "$pr_info" | jq -r '.body // ""' 2>/dev/null || echo "")
-    pr_author=$(echo "$pr_info" | jq -r '.user.login // ""' 2>/dev/null || echo "")
-    commit_author=$(git log -1 --format="%an" "$commit_sha" 2>/dev/null || echo "")
+    pr_author_login=$(echo "$pr_info" | jq -r '.user.login // ""' 2>/dev/null || echo "")
+
+    commit_api=$(gh api "repos/${OWNER}/${REPO}/commits/${commit_sha}" 2>/dev/null || echo "{}")
+    commit_author_login=$(echo "$commit_api" | jq -r '.author.login // ""' 2>/dev/null || echo "")
+    commit_author_name=$(echo "$commit_api" | jq -r '.commit.author.name // ""' 2>/dev/null || echo "")
     co_author_names=$(git log -1 --format="%B" "$commit_sha" 2>/dev/null |
         awk '/^Co-authored-by:/ { sub(/^Co-authored-by:[[:space:]]*/, ""); sub(/<.*>/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' |
         jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null)
@@ -157,7 +253,23 @@ if start_marker in content:
         co_author_names="[]"
     fi
 
-    authors_array=$(jq -n --arg pr_author "$pr_author" --arg commit_author "$commit_author" --argjson co_authors "$co_author_names" '[$pr_author, $commit_author] + $co_authors | map(select(length > 0 and (. | contains("bot") | not) and (. | contains("[bot]") | not))) | unique' 2>/dev/null || echo "[]")
+    authors_json='[]'
+    authors_json=$(add_person_entry "$pr_author_login" "" "$authors_json")
+    authors_json=$(add_person_entry "$commit_author_login" "$commit_author_name" "$authors_json")
+    if [ "$co_author_names" != "[]" ]; then
+        while IFS= read -r co_name; do
+            [ -n "$co_name" ] || continue
+            authors_json=$(add_person_entry "" "$co_name" "$authors_json")
+        done < <(echo "$co_author_names" | jq -r '.[]')
+    fi
+
+    approvers_json='[]'
+    if [ "$reviews_json" != "[]" ] && [ -n "$reviews_json" ]; then
+        while IFS= read -r approver_login; do
+            [ -n "$approver_login" ] || continue
+            approvers_json=$(add_person_entry "$approver_login" "" "$approvers_json")
+        done < <(echo "$reviews_json" | jq -r '.[] | select(.state=="APPROVED") | .user.login | select(length > 0)' | sort -u)
+    fi
 
     entry=$(jq -n \
         --arg commit "$commit_sha" \
@@ -168,9 +280,10 @@ if start_marker in content:
         --arg pr_title "$pr_title" \
         --arg pr_url "$pr_url" \
         --arg pr_description "$pr_description" \
-        --argjson authors "$authors_array" \
+        --argjson authors "$authors_json" \
+        --argjson approvers "${approvers_json:-[]}" \
         --arg overview "$overview" \
-        '{commit: $commit, commit_short: $commit_short, commit_date: $commit_date, commit_subject: $commit_subject, pr_number: $pr_number, pr_title: $pr_title, pr_url: $pr_url, pr_description: $pr_description, authors: $authors, copilot_overview: $overview}' 2>/dev/null || echo "{}")
+        '{commit: $commit, commit_short: $commit_short, commit_date: $commit_date, commit_subject: $commit_subject, pr_number: $pr_number, pr_title: $pr_title, pr_url: $pr_url, pr_description: $pr_description, authors: $authors, approvers: $approvers, copilot_overview: $overview}' 2>/dev/null || echo "{}")
 
     if [ "$entry" != "{}" ]; then
         jq ". += [$entry]" "$OUTPUT_FILE" > "${OUTPUT_FILE}.tmp" && mv "${OUTPUT_FILE}.tmp" "$OUTPUT_FILE" 2>/dev/null || {
