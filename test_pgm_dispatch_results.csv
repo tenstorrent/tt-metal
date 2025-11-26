@@ -1,0 +1,8 @@
+Test Name,GCC Time (ns),LLVM Time (ns),Difference (%),GCC Clock,LLVM Clock
+BM_pgm_dispatch/all_processors_trace/2048/manual_time,26465311.27,26464705.50,-0.00,1350.0,1350.0
+BM_pgm_dispatch/all_processors_trace/256/manual_time,23305673.50,23296715.20,-0.04,1350.0,1350.0
+BM_pgm_dispatch/all_processors_trace/4096/manual_time,29571965.75,29582378.63,+0.04,1350.0,1350.0
+BM_pgm_dispatch/all_processors_trace/512/manual_time,23395548.03,23462409.50,+0.29,1350.0,1350.0
+BM_pgm_dispatch/all_processors_trace/8192/manual_time,35788611.10,35776907.55,-0.03,1350.0,1350.0
+
+AVERAGE,27705421.93,27716623.27,+0.04,,
