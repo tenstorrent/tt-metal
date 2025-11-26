@@ -534,7 +534,10 @@ def train():
         train_losses.append(step_loss)
 
         # tqdm postfix
-        postfix = {"train_loss": f"{float(step_loss):.4f}", "lr": f"{float(lr_now):.6f}"}
+        postfix = {
+            "train_loss": f"{float(step_loss):.4f}",
+            "lr": f"{float(lr_now):.6f}",
+        }
         if last_val_loss is not None:
             postfix["val_loss"] = f"{float(last_val_loss):.4f}"
         bar.set_postfix(postfix, refresh=False)
