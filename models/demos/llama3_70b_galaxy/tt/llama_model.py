@@ -557,13 +557,13 @@ class TtTransformer(LightweightModule):
             self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
             if capture_sampling_trace:
                 return tt_logits
-            tt_toks = self.sampling.sample(
+            tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits[0],
                 tt_out_tok=x,
                 batch_size=self.args.max_batch_size,
                 enable_trace=False,
             )
-            return tt_toks
+            return tt_toks, tt_log_probs
 
         if return_logits or self.sampling is None:
             tt_logits = self.tt_ccl.line_all_gather(

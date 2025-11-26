@@ -12,6 +12,7 @@ import ttnn
 
 logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
+from models.common.utils import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -54,6 +55,7 @@ class TTSampling(LightweightModule):
         k=None,
         p=None,
         temp=None,
+        calculate_log_probs=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -118,6 +120,11 @@ class TTSampling(LightweightModule):
         # Create device offset indices for global indexing
         self._create_indices_tensors()
         self.warmup_done = False
+        self.tt_log_probs = None
+        self.log_probs_calculator = LogProbsCalculator(self.vocab_size, self.mesh_device)
+
+    def set_log_probs_mode(self, calculate_log_probs: bool = False):
+        self.calculate_log_probs = calculate_log_probs
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -184,7 +191,7 @@ class TTSampling(LightweightModule):
             )
             return tt_logits
 
-    def reset_params(self, k, p, temp):
+    def reset_params(self, k, p, temp, calculate_log_probs: bool = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -208,6 +215,9 @@ class TTSampling(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
         ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
         ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+
+        if calculate_log_probs is not None:
+            self.calculate_log_probs.set_log_probs_mode(calculate_log_probs)
 
     def forward(
         self,
@@ -360,7 +370,16 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        return tt_out_tok
+        if self.calculate_log_probs.do_calculate_log_probs:
+            self.log_probs_calculator.compute_global_stats(x)
+            relevant_logits = self.log_probs_calculator.prepare_relevant_logits(x, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(relevant_logits)
+        else:
+            # Return dummy log-probs tensor with same shape as regular log-probs would be
+            # to satisfy the return type and for later post-processing
+            self.tt_log_probs = self.log_probs_calculator.output_tensor
+
+        return tt_out_tok, self.tt_log_probs
 
 
 def clamp(value, min_value, max_value):
@@ -388,11 +407,13 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
+        "log_probs": False,
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
     for name, tensor in zip(
-        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+        ("temp", "p", "k", "log_probs"),
+        (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k, sampling_params.log_probs),
     ):
         current_len = len(tensor)
         if current_len < target_len:

@@ -92,6 +92,19 @@ class LogProbsCalculator:
             preprocess=lambda x: x.to(torch.bfloat16),
             mesh_mapper=mesh_mapper,
         )
+        self.output_tensor = ttnn.as_tensor(
+            torch.ones(1, 1, 1, batch_size),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        self.calculate_log_probs = False
+
+    def set_log_probs_mode(self, calculate_log_probs: bool = False):
+        self.calculate_log_probs = calculate_log_probs
 
     def compute_global_stats(
         self,
@@ -138,10 +151,13 @@ class LogProbsCalculator:
         self.global_max = ttnn.reshape(self.global_max, (1, 1, 1, 32))
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32))
 
-    def prepare_correct_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
+    def prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
         Prepare global idx tensor with correct values on all devices.
         """
+        if self.mesh_device.get_num_devices() == 32:
+            # TODO: Implement method for Llama 3.70b Galaxy with sub_core_grid support for all the ops
+            return None
         size_per_device = logits_tensor.shape[-1]
 
         # convert global_idx_tensor to ttnn.TILE_LAYOUT
@@ -190,6 +206,9 @@ class LogProbsCalculator:
         """
         Calculate log-probs for a given logits tensor.
         """
+        if self.mesh_device.get_num_devices() == 32:
+            # TODO: Currently not implemented for 32 devices due sub_core_grid not supported for all the ops
+            return self.output_tensor
         if self.global_max is None or self.global_exp_sum is None:
             raise ValueError("Global max or global exp sum is not calculated yet. Call compute_global_stats first.")
 
