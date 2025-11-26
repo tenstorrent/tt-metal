@@ -400,6 +400,7 @@ class TtMapDetectionTransformerDecoder:
 
                 reference_points = new_reference_points
 
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
             output = ttnn.permute(output, (1, 0, 2))
             if self.return_intermediate:
                 intermediate.append(output)

@@ -141,9 +141,7 @@ class TtVAD:
             img = ttnn.reshape(img, (1, 1, N * H * W, C))
 
             img_feats = self.img_backbone(img, batch_size=batch_size)
-
-            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer after backbone
-
+            ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())
         else:
@@ -222,9 +220,7 @@ class TtVAD:
             gt_attr_labels=gt_attr_labels,
             **kwargs,
         )
-
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer after simple_test
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         # During inference, we save the BEV features and ego motion of each timestamp.
         self.prev_frame_info["prev_pos"] = tmp_pos
         self.prev_frame_info["prev_angle"] = tmp_angle
@@ -290,7 +286,7 @@ class TtVAD:
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer before head
 
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
         outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
         outs["all_bbox_preds"] = ttnn.to_torch(outs["all_bbox_preds"]).float()

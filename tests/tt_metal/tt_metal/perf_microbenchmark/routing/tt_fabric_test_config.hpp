@@ -96,11 +96,6 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Torus", Topology::Torus},
 });
 
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"LowLatency", RoutingType::LowLatency},
-    {"Dynamic", RoutingType::Dynamic},
-});
-
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
     {"Default", FabricTensixConfig::DISABLED},
     {"Mux", FabricTensixConfig::MUX},
@@ -409,10 +404,8 @@ public:
 
         return built_tests;
     }
-    // Helper function to check if a test should be skipped based on:
-    // 1. topology and device count
-    // 2. architecture or cluster type
-    bool should_skip_test(const ParsedTestConfig& test_config) const {
+    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const {
         // Skip if the test declares platforms to skip and this platform matches
         if (test_config.skip.has_value()) {
             // Determine current platform identifiers
@@ -426,6 +419,11 @@ public:
                 }
             }
         }
+        return false;
+    }
+
+    // Helper function to check if a test should be skipped based on topology incompatibilities.
+    bool should_skip_test_on_topology(const ParsedTestConfig& test_config) const {
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
@@ -1486,10 +1484,6 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
-    static std::string to_string(RoutingType rtype) {
-        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
-    }
-
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
@@ -1662,10 +1656,6 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "topology";
         out << YAML::Value << to_string(config.topology);
-        if (config.routing_type.has_value()) {
-            out << YAML::Key << "routing_type";
-            out << YAML::Value << to_string(config.routing_type.value());
-        }
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());

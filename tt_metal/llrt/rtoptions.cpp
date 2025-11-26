@@ -82,7 +82,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
-    TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC,    // Enable 2-ERISC mode with fabric
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
     TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
@@ -155,6 +155,10 @@ enum class EnvVarID {
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
 
+    // ========================================
+    // DEVICE MANAGER
+    // ========================================
+    TT_METAL_NUMA_BASED_AFFINITY,
 };
 
 // Environment variable name for TT-Metal root directory
@@ -232,7 +236,6 @@ RunTimeOptions::RunTimeOptions() :
 
     InitializeFromEnvVars();
 
-    // Disable 2-erisc mode for non-Silicon devices (simulator/mock)
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
         this->enable_2_erisc_mode = false;
@@ -485,6 +488,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DISABLE_FABRIC_TWO_ERISC
+        // Presence-based override to force-disable fabric 2-ERISC mode, even if defaults would enable
+        // Default: false (2-ERISC mode enabled)
+        // Usage: export TT_METAL_DISABLE_FABRIC_TWO_ERISC=1
+        case EnvVarID::TT_METAL_DISABLE_FABRIC_TWO_ERISC:
+            log_info(tt::LogMetal, "Disabling two-erisc fabric mode with TT_METAL_DISABLE_FABRIC_TWO_ERISC");
+            this->disable_fabric_2_erisc_mode = true;
+            break;
+
         // TT_METAL_DISABLE_MULTI_AERISC
         // Disable multi-ERISC mode (2-ERISC mode is enabled by default on Blackhole).
         // Use this to fallback to single ERISC mode.
@@ -515,12 +527,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (normal initialization)
         // Usage: export TT_METAL_FORCE_REINIT=1
         case EnvVarID::TT_METAL_FORCE_REINIT: this->force_context_reinit = true; break;
-
-        // TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC
-        // Enable two ERISC mode with fabric on Blackhole architecture.
-        // Default: false (single ERISC mode)
-        // Usage: export TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC=1
-        case EnvVarID::TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC: this->enable_2_erisc_mode_with_fabric = true; break;
 
         // TT_METAL_LOG_KERNELS_COMPILE_COMMANDS
         // Log kernel compilation commands for debugging.
@@ -1018,6 +1024,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
+
+        // ========================================
+        // DEVICE MANAGER
+        // ========================================
+        // TT_METAL_NUMA_BASED_AFFINITY
+        // Specifies thread binding in DeviceManager
+        // Default: disabled
+        // Usage: export TT_METAL_NUMA_BASED_AFFINITY=1
+        case EnvVarID::TT_METAL_NUMA_BASED_AFFINITY: {
+            this->numa_based_affinity = is_env_enabled(value);
+            break;
+        }
     }
 }
 

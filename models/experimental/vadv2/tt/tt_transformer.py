@@ -286,9 +286,7 @@ class TtVADPerceptionTransformer:
             can_bus=can_bus,
             **kwargs,
         )  # bev_embed shape: bs, bev_h*bev_w, embed_dims
-
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer after BEV encoding
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         bs = mlvl_feats[0].shape[0]
         object_query_embed = ttnn.to_layout(object_query_embed, layout=ttnn.ROW_MAJOR_LAYOUT)
         query_pos, query = ttnn.split(object_query_embed, self.embed_dims, dim=1)
@@ -322,9 +320,7 @@ class TtVADPerceptionTransformer:
         map_query = ttnn.permute(map_query, (1, 0, 2))
         map_query_pos = ttnn.permute(map_query_pos, (1, 0, 2))
         bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
-
-        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer before decoders
-
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         if self.decoder is not None:
             spatial_shapes = torch.tensor([[bev_h, bev_w]], device="cpu")
             spatial_shapes = ttnn.from_torch(
