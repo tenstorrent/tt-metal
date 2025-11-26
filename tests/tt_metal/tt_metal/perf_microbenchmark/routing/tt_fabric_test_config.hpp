@@ -30,6 +30,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -455,7 +456,7 @@ private:
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
         resolved_test.global_sync_configs = parsed_test.global_sync_configs;
-        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.performance_test_mode = parsed_test.performance_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
@@ -657,8 +658,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -683,8 +684,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -1573,9 +1574,12 @@ private:
             out << YAML::Value << config.seed;
         }
 
-        if (config.benchmark_mode) {
+        if (config.performance_test_mode == PerformanceTestMode::BANDWIDTH) {
             out << YAML::Key << "benchmark_mode";
-            out << YAML::Value << config.benchmark_mode;
+            out << YAML::Value << true;
+        } else if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
+            out << YAML::Key << "latency_test_mode";
+            out << YAML::Value << true;
         }
 
         if (config.global_sync) {
