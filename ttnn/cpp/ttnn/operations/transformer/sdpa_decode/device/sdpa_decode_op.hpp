@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+#if 0
 #pragma once
 
 #include <optional>
@@ -45,3 +45,4 @@ struct ScaledDotProductAttentionDecode {
 };
 
 }  // namespace ttnn::operations::transformer
+#endif
