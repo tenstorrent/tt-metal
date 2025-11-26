@@ -11,8 +11,24 @@
 #include "compute_kernel_api/craqmm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include <tools/profiler/kernel_profiler.hpp>
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
+
+template <bool clear_a, bool clear_b>
+inline void _perf_math_loop_clear_valid(uint32_t iterations) {
+    while (iterations-- > 0) {
+        constexpr uint32_t cond_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
+        constexpr uint32_t cond_valid_b = clear_b ? ckernel::p_stall::SRCB_VLD : 0;
+#ifdef ARCH_QUASAR
+        TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, cond_valid_a, cond_valid_b, 0);
+        TTI_CLEARDVALID((clear_b << 1) | clear_a, 0, 0, 0, 0, 0);
+#else
+        TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, cond_valid_a | cond_valid_b);
+        TTI_CLEARDVALID((clear_b << 1) | clear_a, 0);
+#endif
+    }
+}
 
 void MAIN {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);              // inner block size in tiles
@@ -70,7 +86,49 @@ void MAIN {
     }
 #else
     {
-        DeviceZoneScopedN("craqmm_block");
+        // DeviceZoneScopedN("craqmm_block");
+        // volatile std::uint32_t* base_address = (std::uint32_t*)MEM_LLK_DEBUG_BASE;
+        // tensix_sync();
+        // UNPACK((base_address[1] = 1));
+        // MATH((base_address[2] = 2));
+        // PACK((base_address[3] = 3));
+        // while (base_address[1] != 1) {
+        //     asm("nop");
+        // }
+        // while (base_address[2] != 2) {
+        //     asm("nop");
+        // }
+        // while (base_address[3] != 3) {
+        //     asm("nop");
+        // }
+        // UNPACK((base_address[5] = 5));
+        // MATH((base_address[6] = 6));
+        // PACK((base_address[7] = 7));
+        // while (base_address[5] != 5) {
+        //     asm("nop");
+        // }
+        // while (base_address[6] != 6) {
+        //     asm("nop");
+        // }
+        // while (base_address[7] != 7) {
+        //     asm("nop");
+        // }
+        // UNPACK((base_address[1] = 0));
+        // MATH((base_address[2] = 0));
+        // PACK((base_address[3] = 0));
+        // while (base_address[1] != 0) {
+        //     asm("nop");
+        // }
+        // while (base_address[2] != 0) {
+        //     asm("nop");
+        // }
+        // while (base_address[3] != 0) {
+        //     asm("nop");
+        // }
+        // UNPACK((base_address[5] = 0));
+        // MATH((base_address[6] = 0));
+        // PACK((base_address[7] = 0));
+        // uint64_t start = ckernel::read_wall_clock();
         // UNPACK: Single call with MOP looping over kt_dim (in0_block_w) internally
         // The MOP replay buffer handles unpacking both SrcA and SrcB in a tight hardware loop
         craqmm_block_unpack(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
@@ -80,6 +138,11 @@ void MAIN {
             craqmm_block_math(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, in0_block_w);
             // in0_index and in1_index are not used by compute; so not actually needed
         }
+        // MATH((_perf_math_loop_clear_valid<true, true>(in0_block_w)));
+        // tensix_sync();
+        // uint64_t end = ckernel::read_wall_clock();
+        // uint64_t kernel_runtime = (end - start);
+        // DPRINT << "craqmm_block kernel_runtime: " << kernel_runtime << ENDL();
     }
 #endif
 
