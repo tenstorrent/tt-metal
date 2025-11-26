@@ -22,6 +22,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::interleaved_to_sharded {
 
+// Hardcoded for non-partial op
+constexpr uint32_t num_slices = 1;
+constexpr uint32_t slice_index = 0;
+
 InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -29,11 +33,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
     // Keep explicit bool init to match legacy behavior which forced it true
-    bool keep_l1_aligned = true;
-
-    // Hardcoded for non-partial op
-    uint32_t num_slices = 1;
-    uint32_t slice_index = 0;
+    bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
 
     tt::tt_metal::Program program{};
 
@@ -387,9 +387,6 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    // Hardcoded for non-partial op
-    uint32_t num_slices = 1;
-    uint32_t slice_index = 0;
     bool partial_op = num_slices > 1;
     uint32_t starting_idx_h = 0;
     if (partial_op) {
