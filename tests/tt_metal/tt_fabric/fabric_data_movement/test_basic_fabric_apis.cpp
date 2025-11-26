@@ -611,6 +611,63 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocInlineWriteWithState) {
         true);
 }
 
+// Nightly Mux Mode Tests - test mux extension for 1D
+TEST_F(NightlyFabric1DTensixFixture, TestLinearFabricMulticastNocMux) {
+    std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>> configs = {
+        std::make_tuple(RoutingDirection::E, 1, 2),
+        std::make_tuple(RoutingDirection::E, 1, 3),
+        std::make_tuple(RoutingDirection::W, 1, 2),
+        std::make_tuple(RoutingDirection::W, 1, 3),
+        std::make_tuple(RoutingDirection::N, 1, 1),
+        std::make_tuple(RoutingDirection::S, 1, 1)};
+    for (const auto& config : configs) {
+        auto [dir, start, range] = config;
+        log_info(tt::LogTest, "Testing Multicast Mux 1D: Dir={}, Start={}, Range={}", dir, start, range);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_WRITE");
+        FabricMulticastCommon(this, NOC_UNICAST_WRITE, {config});
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_INLINE_WRITE");
+        FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, {config});
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_ATOMIC_INC");
+        FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {config});
+    }
+}
+// Nightly Mux Mode Tests - test mux extension for 2D
+TEST_F(NightlyFabric2DTensixFixture, TestMeshFabricMulticastNocMux) {
+    std::vector<std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>> all_multicast_configs = {
+        // North + East + West combination
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::W, 0, 1)},
+        },
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::W, 0, 2)},
+        },
+        // South + East + West combination
+        {
+            {std::make_tuple(RoutingDirection::S, 0, 1), std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::E, 0, 2)},
+            {std::make_tuple(RoutingDirection::W, 0, 1)},
+        },
+        {
+            {std::make_tuple(RoutingDirection::S, 0, 1), std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::E, 0, 1)},
+            {std::make_tuple(RoutingDirection::W, 0, 2)},
+        },
+    };
+    for (const auto& multicast_configs : all_multicast_configs) {
+        log_info(tt::LogTest, "Testing Mesh Multicast Mux 2D - Config {}", multicast_configs);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_WRITE");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_WRITE, multicast_configs, false);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_INLINE_WRITE");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, multicast_configs, false);
+        log_info(tt::LogTest, "  Type: NOC_UNICAST_ATOMIC_INC");
+        Fabric2DMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, multicast_configs, false);
+    }
+}
+
 // UDM Mode Tests - test udm api changes for 2D
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));

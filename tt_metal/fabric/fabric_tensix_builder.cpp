@@ -231,8 +231,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 }
 
 // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
-std::map<ChannelTypes, uint32_t> get_num_mux_channels(
-    const std::vector<tt_metal::IDevice*>& all_active_devices, size_t min_eth_channels) {
+std::map<ChannelTypes, uint32_t> get_num_mux_channels() {
     std::map<ChannelTypes, uint32_t> channel_counts;
 
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
@@ -305,7 +304,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Determine num_channels_for_mux and build channel type maps based on mode
     // The helper function handles both UDM and Legacy modes internally
-    mux_channel_counts_ = get_num_mux_channels(all_active_devices, min_eth_channels_);
+    mux_channel_counts_ = get_num_mux_channels();
 
     // Calculate total number of mux channels
     num_channels_for_mux_ = 0;
