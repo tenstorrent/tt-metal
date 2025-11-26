@@ -8,6 +8,7 @@ import ttnn
 import torch
 import inspect
 from typing import List, Optional, Union
+import time
 
 from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
@@ -250,10 +251,12 @@ def batch_encode_prompt_on_device(
         prompt_embeds_list = []
         prompts = [prompt, prompt_2]
 
+        logger.info(f"prompts for encoding = {prompts}")
         for ind, (prompt, tokenizer, text_encoder, torch_encoder) in enumerate(
             zip(prompts, tokenizers, text_encoders, torch_encoders)
         ):
             with_projection = isinstance(torch_encoder, CLIPTextModelWithProjection)
+            # start_time = time.time()
             text_inputs = tokenizer(
                 prompt,
                 padding="max_length",
@@ -261,7 +264,8 @@ def batch_encode_prompt_on_device(
                 truncation=True,
                 return_tensors="pt",
             )
-
+            # end_time = time.time()
+            # logger.info(f"Tokenization completed in {end_time - start_time} seconds.")
             text_input_ids = text_inputs.input_ids
             untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
@@ -282,8 +286,11 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
+            start_time = time.time()
             tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=with_projection)
-
+            ttnn.synchronize_device(ttnn_device)
+            end_time = time.time()
+            logger.info(f"Text encoder index: {ind} completed in {end_time - start_time} seconds.")
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
@@ -350,6 +357,8 @@ def batch_encode_prompt_on_device(
             uncond_tokens = [negative_prompt, negative_prompt_2]
 
         negative_prompt_embeds_list = []
+        ttnn.synchronize_device(ttnn_device)
+        logger.info(f"Starting negative prompts encoding... for prompts = {uncond_tokens}")
         for ind, (negative_prompt, tokenizer, text_encoder, torch_encoder) in enumerate(
             zip(uncond_tokens, tokenizers, text_encoders, torch_encoders)
         ):
@@ -371,9 +380,15 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
+
+            start_time = time.time()
+            ttnn.synchronize_device(ttnn_device)
+
             tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
                 tt_tokens, ttnn_device, with_projection=with_projection
             )
+            end_time = time.time()
+            logger.info(f"Negative text encoder index: {ind} completed in {end_time - start_time} seconds.")
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from diffusers import StableDiffusionXLPipeline
 from loguru import logger
 import ttnn
+import time
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
@@ -89,6 +90,7 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
@@ -376,6 +378,9 @@ class TtSDXLPipeline(LightweightModule):
                     if isinstance(negative_prompt_2, list)
                     else negative_prompt_2
                 )
+                ttnn.synchronize_device(self.ttnn_device)
+                start_time = time.time()
+                logger.info(f"Batch encode prompt on device started...")
                 batch_embeds = batch_encode_prompt_on_device(
                     self.torch_pipeline,
                     self.tt_text_encoder,
@@ -396,6 +401,9 @@ class TtSDXLPipeline(LightweightModule):
                     clip_skip=None,
                     use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 )
+                ttnn.synchronize_device(self.ttnn_device)
+                end_time = time.time()
+                logger.info(f"Batch encode prompt on device completed in {end_time - start_time} seconds.")
                 # batch_encode_prompt_on_device returns a single tuple of 4 tensors,
                 # but we need individual tuples for each prompt
                 (
