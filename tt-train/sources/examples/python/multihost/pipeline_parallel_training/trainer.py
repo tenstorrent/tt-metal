@@ -165,7 +165,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 
         # Synchronize gradients across data parallel dimension (if enabled)
         if use_ddp:
-            ttml.core.distributed.synchronize_parameters(model.parameters())
+            ttml.core.distributed.synchronize_gradients(model.parameters())
 
         # Update model parameters
         optim.step()

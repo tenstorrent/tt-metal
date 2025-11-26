@@ -124,7 +124,7 @@ def train(
 
         # Synchronize gradients for DDP
         if use_ddp:
-            ttml.core.distributed.synchronize_parameters(model.parameters())
+            ttml.core.distributed.synchronize_gradients(model.parameters())
 
         optim.step()
 
