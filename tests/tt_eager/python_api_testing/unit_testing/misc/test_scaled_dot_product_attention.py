@@ -95,7 +95,7 @@ def run_test_sdpa_tt(
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
+        compute_with_storage_grid_size=(8, 8),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -170,7 +170,7 @@ def run_sdpa_noncausal(
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
+        compute_with_storage_grid_size=(8, 8),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -240,12 +240,6 @@ def run_sdpa_noncausal(
 q_chunks = [32, 64, 128, 256, 512]
 k_chunks = [32, 64, 128, 256, 512, 1024]
 
-# q_chunks = [128, 256]
-# k_chunks = [128, 256]
-
-# q_chunks = [128]
-# k_chunks = [128]
-
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram_interleaved"])
@@ -257,6 +251,7 @@ k_chunks = [32, 64, 128, 256, 512, 1024]
         # [1, 1, 1, 8192, 128],  # Llama2-70B
         [1, 10, 10, 2560, 128],  # Wan on 32 chips pad version 1
         # [1, 10, 10, 2432, 128],  # Wan on 32 chips pad version 2
+        # [1, 10, 10, 9472, 128],  # Wan on 8 chips
     ),
 )
 def test_sdpa_run_benchmark(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, reset_seeds):
@@ -349,6 +344,32 @@ def test_create_perf_table():
         measured_ms = dur / 1e6
         measured_ms_str = f"{measured_ms:.3f}"
         print(f"| {q} | {k} | {measured_ms_str} |")
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
+@pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 3, 3, 45056, 128],),
+)
+def test_sdpa_perf_multi_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    rmse_threshold = 0.007982
+    ttnn.device.DisablePersistentKernelCache()
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        use_mask=False,
+        rmse_threshold=rmse_threshold,
+    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
