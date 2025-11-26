@@ -19,17 +19,14 @@ import numpy
 @pytest.fixture(scope="class")
 def run_test(request):
     assert "command" in request.param, "Bad test setup, command not found in test setup dict"
-    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
-    kwargs = request.param.copy()
-    del kwargs["command"]
-    del kwargs["name"]
-    run_device_profiler(request.param["command"], request.param["name"], **kwargs)
+    assert "output_logs_subdir" in request.param, "Bad test setup, output_logs_subdir not found in test setup dict"
+    run_device_profiler(**request.param.copy())
     return request.param
 
 
 @pytest.fixture(scope="class")
 def do_postproc(request, run_test):
-    columns = post_process_ops_log(run_test["name"])
+    columns = post_process_ops_log(run_test["output_logs_subdir"])
     return columns, run_test
 
 
@@ -41,8 +38,8 @@ def run_test_do_post_proc(request, do_postproc):
 @pytest.fixture(scope="class")
 def run_test_do_cpp_post_proc(request):
     assert "command" in request.param, "Bad test setup, command not found in test setup dict"
-    assert "name" in request.param, "Bad test setup, name not found in test setup dict"
-    run_device_profiler(request.param["command"], request.param["name"], cpp_post_process=True)
+    assert "output_logs_subdir" in request.param, "Bad test setup, output_logs_subdir not found in test setup dict"
+    run_device_profiler(request.param["command"], request.param["output_logs_subdir"], cpp_post_process=True)
     return request
 
 
@@ -76,13 +73,13 @@ def get_first_op_columns(columns):
 
 
 matmul_test = {
-    "name": "Matmul",
+    "output_logs_subdir": "Matmul",
     "command": "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]",
 }
 
 
 @skip_for_blackhole()
-@pytest.mark.parametrize("run_test", [pytest.param(matmul_test, id=matmul_test["name"])], indirect=True)
+@pytest.mark.parametrize("run_test", [pytest.param(matmul_test, id=matmul_test["output_logs_subdir"])], indirect=True)
 class TestSingleOp:
     def test_core_count(self, run_test_do_post_proc):
         res, request = run_test_do_post_proc
@@ -104,13 +101,15 @@ class TestSingleOp:
 
 
 matmul_test_tensor_io = {
-    "name": "Matmul_tensor_io",
+    "output_logs_subdir": "Matmul_tensor_io",
     "command": 'pytest "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_padding[program_config=MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=1,fused_activation=std::nullopt)-input_a_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_b_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=2,y=0)]},shape={96, 32},orientation=ShardOrientation::ROW_MAJOR),nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-output_memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)-input_a_shape=(32, 96)-input_b_shape=(96, 32)-input_a_reshape=(1, 65)-input_b_reshape=(65, 16)-input_a_value=4.0-input_b_value=2.0]"',
 }
 
 
 @skip_for_blackhole()
-@pytest.mark.parametrize("run_test", [pytest.param(matmul_test_tensor_io, id=matmul_test["name"])], indirect=True)
+@pytest.mark.parametrize(
+    "run_test", [pytest.param(matmul_test_tensor_io, id=matmul_test["output_logs_subdir"])], indirect=True
+)
 class TestTensorIO:
     def test_tensor_io(self, run_test_do_post_proc):
         res, request = run_test_do_post_proc
@@ -133,26 +132,29 @@ class TestTensorIO:
 
 
 cpp_post_proc_test = {
-    "name": "Ops",
+    "output_logs_subdir": "Ops",
     "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops"',
 }
 
 
 @pytest.mark.parametrize(
-    "run_test_do_cpp_post_proc", [pytest.param(cpp_post_proc_test, id=cpp_post_proc_test["name"])], indirect=True
+    "run_test_do_cpp_post_proc",
+    [pytest.param(cpp_post_proc_test, id=cpp_post_proc_test["output_logs_subdir"])],
+    indirect=True,
 )
 class TestCppPostProc:
     def test_cpp_post_proc(self, run_test_do_cpp_post_proc):
         request = run_test_do_cpp_post_proc
-        python_ops_perf_report = get_latest_ops_log_filename(request.param["name"])
+        python_ops_perf_report = get_latest_ops_log_filename(request.param["output_logs_subdir"])
         cpp_ops_perf_report = (
-            generate_logs_folder(get_profiler_folder(request.param["name"])) / PROFILER_CPP_DEVICE_PERF_REPORT
+            generate_logs_folder(get_profiler_folder(request.param["output_logs_subdir"]))
+            / PROFILER_CPP_DEVICE_PERF_REPORT
         )
         compare_ops_logs(python_ops_perf_report=python_ops_perf_report, cpp_ops_perf_report=cpp_ops_perf_report)
 
 
 matmul_test_perf_counters = {
-    "name": "Matmul_perf_counters",
+    "output_logs_subdir": "Matmul_perf_counters",
     "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
     "capture_perf_counters_groups": ["fpu"],
 }
@@ -160,7 +162,9 @@ matmul_test_perf_counters = {
 
 @skip_for_blackhole()
 @pytest.mark.parametrize(
-    "run_test", [pytest.param(matmul_test_perf_counters, id=matmul_test_perf_counters["name"])], indirect=True
+    "run_test",
+    [pytest.param(matmul_test_perf_counters, id=matmul_test_perf_counters["output_logs_subdir"])],
+    indirect=True,
 )
 class TestPerfCountersSingleOp:
     def test_performance_counter_columns(self, run_test_do_post_proc):
