@@ -22,7 +22,8 @@ inline Tensor unary_impl(
     const Tensor& input_tensor,
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
     DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST)
@@ -46,7 +47,8 @@ inline Tensor unary_impl(
         fp32_dest_acc_en,
         preserve_fp32_precision,
         bfp8_pack_precise,
-        optional_output_tensor);
+        optional_output_tensor,
+        sub_core_grids);
 }
 
 }  // namespace detail
@@ -126,12 +128,14 @@ Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
     const Tensor& input_tensor,
     const bool parameter,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::unary_impl(
         input_tensor,
         {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
         memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        sub_core_grids);
 }
 
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
