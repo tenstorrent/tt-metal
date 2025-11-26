@@ -27,7 +27,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.model_config import CheckpointType
 
 
 @dataclass(frozen=True)
@@ -749,9 +748,7 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
-            not self.model_args[0].is_llama_vision()
-        ):
+        if not self.model_args[0].is_llama_vision():
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -968,9 +965,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
-            not self.model_args[0].is_llama_vision()
-        ):
+        if not self.model_args[0].is_llama_vision():
             return self.decode_forward_text(
                 tokens,
                 start_pos,

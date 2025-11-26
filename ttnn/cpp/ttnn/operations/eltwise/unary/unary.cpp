@@ -425,6 +425,22 @@ Tensor Clamp::invoke(
         optional_output_tensor);
 }
 
+Tensor Rdiv::invoke(
+    const Tensor& input_tensor,
+    float value,
+    const std::optional<std::string>& round_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    TT_FATAL(
+        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+        "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+    UnaryOpType op_type = UnaryOpType::RDIV;
+    // Convert round_mode to numeric value: 0 = none, 1 = trunc, 2 = floor
+    uint32_t round_mode_value = !round_mode ? 0 : (*round_mode == "trunc" ? 1 : 2);
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, {value, round_mode_value}}}, memory_config, optional_output_tensor);
+}
+
 template <typename T>
 Tensor Rsub::invoke(
     const Tensor& input_tensor,

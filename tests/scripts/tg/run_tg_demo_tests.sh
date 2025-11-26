@@ -178,7 +178,6 @@ run_tg_mochi_demo_tests() {
   fail=0
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
@@ -197,7 +196,6 @@ run_tg_wan22_demo_tests() {
   fail=0
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0"
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
