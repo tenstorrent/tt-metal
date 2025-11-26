@@ -363,15 +363,33 @@ jobs:
           workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
           workflow_configs["perf-device-models.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$PERF_DEVICE_MODELS_RUN_ID:perf-device-models-result"
           exit_code=0
+
+          echo "📊 Starting parallel monitoring of all triggered workflows..."
+          # Start monitoring all workflows in parallel
+          declare -a pids=()
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
 
             if [ "$enabled" = "true" ]; then
-              if ! monitor_workflow "$run_id" "$workflow_file" "$output_var"; then
-                exit_code=1
-              fi
+              # Run monitor_workflow in background
+              monitor_workflow "$run_id" "$workflow_file" "$output_var" &
+              pids+=($!)
             fi
           done
+
+          # Wait for all background processes to complete and collect exit codes
+          echo "⏳ Waiting for all workflows to complete..."
+          exit_code=0
+          for pid in "${pids[@]}"; do
+            if ! wait "$pid"; then
+              exit_code=1
+            fi
+          done
+          if [ $exit_code -eq 0 ]; then
+            echo "✅ All workflows completed successfully"
+          else
+            echo "❌ One or more workflows failed"
+          fi
           exit $exit_code
       - name: Terminate spawned workflows on cancellation
         if: cancelled()
