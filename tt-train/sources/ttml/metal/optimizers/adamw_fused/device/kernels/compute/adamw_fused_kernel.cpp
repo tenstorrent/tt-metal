@@ -139,7 +139,8 @@ void MAIN {
 #if AMSGRAD
         // TODO: I think this can be merged, check
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
-        copy_tile_init();
+        copy_tile_init(cb_max_exp_avg_sq_in_idx);
+        reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
         }
@@ -167,8 +168,9 @@ void MAIN {
         cb_push_back(cb_max_exp_avg_sq_idx, block_size);
 
         cb_wait_front(cb_max_exp_avg_sq_idx, block_size);
+        copy_tile_to_dst_init_short(cb_max_exp_avg_sq_idx);
+        reconfig_data_format(cb_max_exp_avg_sq_idx, cb_max_exp_avg_sq_idx);
         tile_regs_acquire();
-        copy_tile_init();
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_max_exp_avg_sq_idx, cb_tile_idx, block_idx);
         }
