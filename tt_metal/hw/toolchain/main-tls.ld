@@ -190,7 +190,7 @@ SECTIONS {
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-  } IF_TLS(:data)IF_NOT_TLS(:tdata)
+  } :data
   .empty.init_array.fini_array
   : LOAD_AFTER(.empty.ctors.dtors)
   {
