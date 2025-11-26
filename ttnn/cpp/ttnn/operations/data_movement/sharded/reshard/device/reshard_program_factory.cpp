@@ -932,7 +932,6 @@ void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
         cached_program.program, cached_program.shared_variables.cb_0, *local_tensor.buffer());
 }
 
-// ReshardGenericFactory implementation
 ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     const reshard::operation_attributes_t& operation_attributes,
     const reshard::tensor_args_t& tensor_args,

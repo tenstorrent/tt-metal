@@ -33,7 +33,7 @@ struct NdReshardCopyPagesFactory {
         reshard::tensor_return_value_t& tensor_return_value);
 };
 
-// Factory for L1<->DRAM or L1->L1 (different page sizes) nd reshard - Reader variant
+// Factory for L1<->DRAM or L1->L1 nd reshard (read into local pages in L1)
 template <bool is_reader>
 struct NdReshardCopyLocalShardFactory {
     struct NdReshardCopyLocalShardSharedVariables {

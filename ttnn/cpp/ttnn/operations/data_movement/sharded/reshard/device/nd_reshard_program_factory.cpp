@@ -11,7 +11,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-// NdReshardCopyPagesFactory implementation
 NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
     const reshard::operation_attributes_t& operation_attributes,
     const reshard::tensor_args_t& tensor_args,
@@ -73,17 +72,14 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
             .compile_args = compile_time_args_writer,
         });
 
-    // Set common and unique runtime arguments
     SetCommonRuntimeArgs(program, reader_kernel_id, {input.buffer()->address()});
     SetCommonRuntimeArgs(program, writer_kernel_id, {output.buffer()->address()});
 
-    // Initialize runtime args and call override to set them properly
     for (const auto& core : cores) {
         SetRuntimeArgs(program, reader_kernel_id, core, {0, 0});
         SetRuntimeArgs(program, writer_kernel_id, core, {0, 0});
     }
 
-    // Create cached program with shared variables
     auto cached_program = cached_program_t{
         std::move(program),
         {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .grid = grid, .cores = cores}};
@@ -134,7 +130,6 @@ void NdReshardCopyPagesFactory::override_runtime_arguments(
     }
 }
 
-// Reader factory - wraps the helper with is_reader=true
 template <bool is_reader>
 NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalShardFactory<is_reader>::create(
     const reshard::operation_attributes_t& operation_attributes,
@@ -238,13 +233,12 @@ NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalSh
     SetCommonRuntimeArgs(program, brisc_kernel_id, common_runtime_args);
     SetCommonRuntimeArgs(program, ncrisc_kernel_id, common_runtime_args);
 
-    // Set unique runtime arguments to 0
+    // Set unique runtime arguments to 0, and call
     for (const auto& core : cores_vec) {
         SetRuntimeArgs(program, brisc_kernel_id, core, {0});
         SetRuntimeArgs(program, ncrisc_kernel_id, core, {0});
     }
 
-    // Create cached program with shared variables
     auto cached_program = NdReshardCopyLocalShardFactory::cached_program_t{
         std::move(program),
         {.brisc_kernel_id = brisc_kernel_id, .ncrisc_kernel_id = ncrisc_kernel_id, .grid = grid, .cores = cores_vec}};

@@ -61,7 +61,6 @@ struct ReshardSameHeightFactory {
         reshard::tensor_return_value_t& tensor_return_value);
 };
 
-// Factory for generic resharding (all other cases)
 struct ReshardGenericFactory {
     struct ReshardGenericSharedVariables {
         tt::tt_metal::KernelHandle kernel_id_0{};

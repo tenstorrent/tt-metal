@@ -54,17 +54,13 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
 ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-
-    // Determine output memory config and create a temporary output to check specs
     const auto& out_mem_config = tensor_args.preallocated_output.has_value()
                                      ? tensor_args.preallocated_output->memory_config()
                                      : args.output_mem_config;
 
-    // Check if we should use legacy reshard or nd reshard
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
             out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            // Use reader if output is L1, writer if output is DRAM
             if (out_mem_config.buffer_type() == BufferType::L1) {
                 return program::ReshardSameWidthFactory</*is_reader*/ true>{};
             } else {
@@ -93,7 +89,6 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
                 return program::ReshardSameHeightFactory</*is_reader*/ false>{};
             }
         } else {
-            // All other cases: use generic factory
             return program::ReshardGenericFactory{};
         }
     } else {
