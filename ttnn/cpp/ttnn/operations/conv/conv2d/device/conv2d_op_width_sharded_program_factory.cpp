@@ -14,7 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-#include "conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 
 namespace ttnn::operations::conv::conv2d::program {
 

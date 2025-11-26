@@ -10,9 +10,9 @@
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "conv2d_device_operation_types.hpp"
-#include "conv2d_op_sharded_program_factory.hpp"
-#include "conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 
 #include <string>
 #include <utility>
@@ -46,7 +46,7 @@ struct Conv2dDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& a,
         const Tensor& b,
-        std::optional<const Tensor> bias,
+        const std::optional<const Tensor>& bias,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
         uint32_t groups,

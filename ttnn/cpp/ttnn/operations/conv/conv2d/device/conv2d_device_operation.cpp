@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "conv2d_device_operation.hpp"
-#include "conv2d_op_sharded_program_factory.hpp"
-#include "conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 
 #include "tt-metalium/buffer_types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -20,7 +20,6 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 
-#include <tt-metalium/work_split.hpp>
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -212,7 +211,7 @@ Conv2dDeviceOperation::create_op_performance_model(
 std::tuple<operation_attributes_t, tensor_args_t> Conv2dDeviceOperation::invoke(
     const Tensor& a,
     const Tensor& b,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,

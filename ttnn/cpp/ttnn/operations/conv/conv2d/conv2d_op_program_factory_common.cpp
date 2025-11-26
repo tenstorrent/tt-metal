@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "conv2d_op_program_factory_common.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -16,6 +16,7 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::conv {
 namespace conv2d {
 
