@@ -900,12 +900,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        // Set act_block_h_override to min value to be conservative with L1 memory usage;
-        // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
-        // and the bigger the act block height the better the reuse since we apply optimization within single act block
-        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
-            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-        }
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -953,13 +947,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             compute_grid_size);
 
-        if (conv_config.act_block_w_div == 1 && conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t width_sharded_num_cores = input_parallel_config.grid.num_cores();
-            // Set act_block_w_div to max value to
-            // be conservative with L1 memory usage.
-            // act_block_w_div == 1 is currently the default value.
-            conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * tt::constants::TILE_WIDTH);
-        }
         SlidingWindowConfig sliding_window_config{
             .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
         conv_op_l1_usage l1_usage = calculate_L1_usage(
