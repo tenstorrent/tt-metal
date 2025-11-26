@@ -207,14 +207,8 @@ void MAIN {
                      *
                      */
                     if (n_block_iter < N_blocks_per_core - 1) {
-#ifdef FUSE_AG
-                        if (n_block_iter > 0) {
-#endif
-                            // going to stride on N, so reuse in0
-                            reuse_in0_block = true;
-#ifdef FUSE_AG
-                        }
-#endif
+                        // going to stride on N, so reuse in0
+                        reuse_in0_block = true;
                     }
 #ifndef FUSE_AG
                     else {
