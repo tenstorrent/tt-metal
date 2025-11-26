@@ -72,10 +72,26 @@ void kernel_main() {
     MinimalMatmulOpReceiver fused_op_receiver;
     uint32_t num_devices = get_arg_val<uint32_t>(argidx);
     uint32_t num_k_blocks = get_arg_val<uint32_t>(argidx + 1);
+    uint32_t input_tensor_Wt = get_arg_val<uint32_t>(argidx + 3);
+    uint32_t k_block_tiles = get_arg_val<uint32_t>(argidx + 4);
     uint32_t k_block_device_expected[num_k_blocks]{};
     uint32_t k_block_device_received[num_k_blocks]{};
     uint32_t device_k_block_counts[num_devices]{};
     uint32_t device_k_block_start_ids[num_devices]{};
+    uint32_t total_chunks = 0;
+    if (is_injector_core) {
+        total_chunks = compute_device_chunk_stats(
+            input_tensor_Wt,
+            num_k_blocks,
+            k_block_tiles,
+            num_devices,
+            k_block_device_received,
+            k_block_device_expected,
+            device_k_block_counts,
+            device_k_block_start_ids);
+    }
+    std::pair<int32_t, uint32_t> chunk_to_k_block_map[total_chunks]{};
+    uint32_t forward_map[num_k_blocks]{};
     if constexpr (is_injector_core) {
         fused_op_receiver = MinimalMatmulOpReceiver(
             true,
@@ -83,7 +99,9 @@ void kernel_main() {
             k_block_device_expected,
             k_block_device_received,
             device_k_block_counts,
-            device_k_block_start_ids);
+            device_k_block_start_ids,
+            chunk_to_k_block_map,
+            forward_map);
     }
 #endif
 
@@ -166,8 +184,9 @@ void kernel_main() {
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
-                    if (is_injector_core && n_block_iter == 0) {
-                        k_block = fused_op_receiver.compute_actual_k_block_iter();
+                    if (is_injector_core) {
+                        k_block =
+                            fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
@@ -226,13 +245,7 @@ void kernel_main() {
 
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
-#ifdef FUSE_AG
-            if (n_block_iter > 0) {
-#endif
-                reuse_block = true;
-#ifdef FUSE_AG
-            }
-#endif
+            reuse_block = true;
 
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
