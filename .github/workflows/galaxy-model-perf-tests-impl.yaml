@@ -36,19 +36,6 @@ jobs:
         run: |
           # Create matrix in two parts: disabled and active models
           DISABLED_MODELS=$(jq -n '[
-          ]' --compact-output)
-
-          ACTIVE_MODELS=$(jq -n '[
-            {
-              "name": "Galaxy Llama 70B model perf tests",
-              "model-type": "Llama-70B",
-              "model-name": "llama70b",
-              "arch": "wormhole_b0",
-              "save-perf-data": true,
-              "timeout": 60,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode \"\"",
-              "owner_id": "U053W15B6JF"
-            },
             {
               "name": "Llama Galaxy Perf Unit Tests",
               "model-name": "llama_unit_tests",
