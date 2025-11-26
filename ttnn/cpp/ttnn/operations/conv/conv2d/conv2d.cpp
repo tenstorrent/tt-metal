@@ -24,6 +24,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -314,7 +315,14 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // Matmul expects inputs to be in Tile Layout
+        std::cout << "input tensor layout before tilize: " << input_tensor_post_tm.logical_shape() << std::endl;
+        // Track original height before tilization for potential slicing after matmul
+        uint32_t original_height = input_tensor_post_tm.logical_shape()[-2];
         tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
+        std::cout << "input tensor layout after tilize: " << input_tensor_post_tm.logical_shape() << std::endl;
+        // Check if tilization added padding
+        uint32_t padded_height = input_tensor_post_tm.logical_shape()[-2];
+        bool needs_output_slicing = (padded_height != original_height);
 
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
@@ -332,6 +340,7 @@ Result conv2d_L1(
             mm_output_memory_config = conv_out_memory_config;
         }
 
+        std::cout << "inpute_tensor shape : " << input_tensor_post_tm.logical_shape() << std::endl;
         ttnn::Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
             weight_tensor_on_device,
@@ -348,10 +357,51 @@ Result conv2d_L1(
         if (should_deallocate_act) {
             input_tensor_post_tm.deallocate(/*force*/ true);
         }
+
+        // Slice output to remove padding if tilization added it
+        if (needs_output_slicing) {
+            std::cout << "Slicing matmul output from " << matmul_output.logical_shape()[-2] << " to " << original_height
+                      << std::endl;
+
+            // Convert to row major layout first to make slicing easier and avoid tile alignment issues
+            matmul_output = ttnn::to_layout(matmul_output, Layout::ROW_MAJOR);
+
+            ttnn::SmallVector<uint32_t> start_index;
+            ttnn::SmallVector<uint32_t> end_index;
+            ttnn::SmallVector<uint32_t> step;
+
+            for (int i = 0; i < 4; i++) {
+                start_index.push_back(0);
+                step.push_back(1);
+                if (i == 2) {  // height dimension
+                    end_index.push_back(original_height);
+                } else {
+                    end_index.push_back(static_cast<uint32_t>(matmul_output.logical_shape()[i]));
+                }
+            }
+
+            // Create proper sharded memory config for slice operation
+            auto shard_spec = matmul_output.shard_spec().value();
+            auto current_shape = matmul_output.logical_shape();
+            ttnn::Shape target_shape({current_shape[0], current_shape[1], original_height, current_shape[3]});
+
+            // Calculate new shard height for the sliced tensor
+            uint32_t target_tensor_height = target_shape[0] * target_shape[1] * target_shape[2];
+            uint32_t shard_height = tt::div_up(target_tensor_height, shard_spec.grid.num_cores());
+
+            auto slice_memory_config = matmul_output.memory_config().with_shard_spec(
+                tt::tt_metal::ShardSpec{shard_spec.grid, {shard_height, shard_spec.shape[1]}, shard_spec.orientation});
+
+            matmul_output = ttnn::slice(matmul_output, start_index, end_index, step, slice_memory_config);
+        }
+
+        std::cout << "matmul memory config : " << matmul_output.memory_config() << std::endl;
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+            std::cout << "memory_config = " << memory_config.value() << std::endl;
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
+        std::cout << "matmul_output shape : " << matmul_output.logical_shape() << std::endl;
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }

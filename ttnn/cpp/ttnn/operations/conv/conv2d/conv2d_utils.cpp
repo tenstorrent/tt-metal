@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -637,6 +638,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         }
     }
 
+    std::cout << "shard_layout: " << (uint32_t)shard_layout << ", needs_shard_or_reshard: " << needs_shard_or_reshard
+              << std::endl;
     auto block_shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
     ParallelConfig parallel_config = input_tensor_parallel_config;
@@ -721,6 +724,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
         .shard_orientation = input_tensor_sharded_memory_config.shard_spec().value().orientation};
 
+    std::cout << "Determined input parallel config: shard_scheme="
+              << static_cast<uint32_t>(parallel_config.shard_scheme)
+              << ", shard_orientation=" << static_cast<uint32_t>(parallel_config.shard_orientation) << std::endl;
+
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, is_mm_conv);
 
@@ -731,6 +738,9 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
     const ttnn::Shape& input_shape = flattened_input_shape;
 
+    std::cout << "Input tensor shape: " << input_shape << ", padded shape: " << input_tensor.padded_shape()
+              << std::endl;
+    std::cout << "input tesnor on device: " << input_tensor_on_device << std::endl;
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
@@ -793,6 +803,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
         }
     }
+    std::cout << "Final input tensor shape: " << input_tensor.logical_shape()
+              << ", padded shape: " << input_tensor.padded_shape() << std::endl;
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
@@ -1601,6 +1613,7 @@ Tensor fold_input_tensor_if_required(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         auto folded_input_tensor = fold_tensor(
             input_tensor, device, stride, kernel_size, padding_n4, batch_size, input_height, input_width, in_channels);
+        conv_config.shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
         if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
             auto tensor_to_deallocate = input_tensor;
             tensor_to_deallocate.deallocate(true);
@@ -1618,6 +1631,33 @@ Tensor fold_input_tensor_if_required(
     } else {
         return input_tensor;
     }
+}
+
+Tensor dram_to_l1_sharded(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
+    ttnn::Shape input_shape = input.logical_shape();
+    // uint32_t input_width = input_shape[2];
+    // uint32_t pixels_per_compute_row = stride_h * input_width;
+    const CoreCoord& compute_grid_size = input.device()->compute_with_storage_grid_size();
+    uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_shard_alignment_bytes =
+        (tt::tt_metal::hal::get_l1_alignment() -
+         ((input_shape[3] * tt::datum_size(data_format)) % tt::tt_metal::hal::get_l1_alignment())) %
+        tt::tt_metal::hal::get_l1_alignment();
+    TensorMemoryLayout shard_scheme = TensorMemoryLayout::HEIGHT_SHARDED;
+    uint32_t shard_width = input_shape[3] + input_shard_alignment_bytes / tt::datum_size(data_format);
+    uint32_t shard_height = tt::div_up(input_shape[0] * input_shape[1] * input_shape[2], max_cores);
+    auto grid = tt::tt_metal::num_cores_to_corerangeset(max_cores, compute_grid_size, true);
+    auto shard_spec = tt::tt_metal::ShardSpec{grid, {shard_height, shard_width}, ShardOrientation::ROW_MAJOR};
+    auto memory_config = MemoryConfig(shard_scheme, BufferType::L1, shard_spec);
+    Tensor sharded_input = ttnn::to_memory_config(input, memory_config);
+    log_debug(
+        tt::LogOp,
+        "DRAM to L1 sharded: input shape {}, shard shape {}, memory config {}",
+        input_shape,
+        shard_spec,
+        memory_config);
+    return sharded_input;
 }
 
 ttnn::Tensor fold_tensor(
@@ -1651,6 +1691,10 @@ ttnn::Tensor fold_tensor(
         tensor_on_device = ttnn::reshape(tensor_on_device, unflattened_shape, unflattened_shape);
     }
 
+    if (tensor_on_device.memory_config().is_dram()) {
+        tensor_on_device = dram_to_l1_sharded(tensor_on_device, stride[0], stride[1]);
+    }
+    std::cout << "Tensor layout = " << tensor_on_device.layout() << std::endl;
     // Core folding operation
     tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
 

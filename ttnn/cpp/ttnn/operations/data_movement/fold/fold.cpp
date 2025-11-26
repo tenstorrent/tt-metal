@@ -380,6 +380,11 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         new_shard_spec.grid = new_core_range;
 
         auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        log_debug(
+            tt::LogOp,
+            "Resharding tensor from shard height {} to {} for fold operation",
+            current_shard_height,
+            optimal_shard_height);
         // need to reshard
         return ttnn::reshard(input, new_mem_config, std::nullopt);
     }
