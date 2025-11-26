@@ -39,9 +39,10 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
         "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
+
+target_include_directories(test_link_retraining SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
 
 target_link_libraries(
     test_link_retraining
