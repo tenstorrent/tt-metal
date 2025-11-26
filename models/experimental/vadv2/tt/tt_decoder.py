@@ -108,9 +108,11 @@ class TtDetectionTransformerDecoder:
                     else:
                         layer = layers[i]
 
-                    tmp = ttnn.linear(tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-                    if i < 2:
-                        tmp = ttnn.relu(tmp)
+                    # Fuse ReLU activation with linear for first two layers
+                    activation = "relu" if i < 2 else None
+                    tmp = ttnn.linear(
+                        tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation=activation
+                    )
                 assert reference_points.shape[-1] == 3
 
                 new_reference_points = ttnn.zeros_like(reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -231,9 +233,11 @@ class TtMapDetectionTransformerDecoder:
                     else:
                         layer = layers[i]
 
-                    tmp = ttnn.linear(tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-                    if i < 2:  # Apply ReLU after the first two layers
-                        tmp = ttnn.relu(tmp)
+                    # Fuse ReLU activation with linear for first two layers
+                    activation = "relu" if i < 2 else None
+                    tmp = ttnn.linear(
+                        tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation=activation
+                    )
 
                 assert reference_points.shape[-1] == 2
 

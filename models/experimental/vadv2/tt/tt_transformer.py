@@ -175,12 +175,10 @@ class TtVADPerceptionTransformer:
         try:
             if hasattr(self.params, "can_bus_mlp"):
                 mlp_params = self.params.can_bus_mlp
-                # Access layer 0 parameters
-                can_bus = ttnn.linear(can_bus, mlp_params["0"].weight, bias=mlp_params["0"].bias)
-                can_bus = ttnn.relu(can_bus)
-                # Access layer 1 parameters
-                can_bus = ttnn.linear(can_bus, mlp_params["1"].weight, bias=mlp_params["1"].bias)
-                can_bus = ttnn.relu(can_bus)
+                # Access layer 0 parameters with fused ReLU
+                can_bus = ttnn.linear(can_bus, mlp_params["0"].weight, bias=mlp_params["0"].bias, activation="relu")
+                # Access layer 1 parameters with fused ReLU
+                can_bus = ttnn.linear(can_bus, mlp_params["1"].weight, bias=mlp_params["1"].bias, activation="relu")
                 if self.can_bus_norm and hasattr(mlp_params, "norm"):
                     can_bus = ttnn.layer_norm(
                         can_bus,
