@@ -118,7 +118,7 @@
 | [YOLOv9c (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)                          | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 153     | 480        |             |
 | [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/wormhole)                      | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 365     | 600        |             |
 | [UFLD - v2 (320x800) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/wormhole)               | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 637     | 1200       |             |
-| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/ufld_v2)                     | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 551   | 1200        |             |
+| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/blackhole)                     | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 551   | 1200        |             |
 
 ## NLPs
 

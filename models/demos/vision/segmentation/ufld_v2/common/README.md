@@ -18,4 +18,4 @@ Find ufld_v2 instructions for the following devices:
 
 - Wormhole (n150, n300): [models/demos/vision/segmentation/ufld_v2/wormhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/wormhole)
 
-- Blackhole (p150): [models/demos/blackhole/ufld_v2](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/ufld_v2)
+- Blackhole (p150): [models/demos/vision/segmentation/ufld_v2/blackhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/blackhole)
