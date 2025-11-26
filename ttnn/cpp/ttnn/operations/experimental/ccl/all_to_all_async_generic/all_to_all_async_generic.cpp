@@ -3,10 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_async_generic.hpp"
-#include <utility>
-#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_op.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -20,7 +17,7 @@ ttnn::Tensor ExecuteAllToAllAsyncGeneric::invoke(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    return ttnn::operations::experimental::ccl::all_to_all_async_generic(
+    return ttnn::prim::all_to_all_async_generic(
         input_tensor,
         persistent_output_buffer,
         in_dim,
