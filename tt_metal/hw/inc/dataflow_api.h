@@ -2359,7 +2359,7 @@ struct noc_traits_t {
  *
  * @tparam ReleaseFunc The function to call when this instance goes out of scope.
  */
-template <typename ReleaseFunc = void (*)()>
+template <typename ReleaseFunc>
 class Lock {
 public:
     inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
