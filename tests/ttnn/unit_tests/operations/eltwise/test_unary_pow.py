@@ -4,47 +4,39 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
-@pytest.mark.parametrize("exponent", [2.0, -2.0])
-def test_pow(exponent):
-    """Test ttnn.pow operation with various exponents"""
+@pytest.mark.parametrize("exponent", [2.0, -2.0, 3.56, -3.56, 0.5, -0.5])
+def test_pow(exponent, device):
     torch.manual_seed(42)
-
-    # Use values > 0.1 to avoid issues with negative exponents
     torch_base = torch.rand([4, 4], dtype=torch.bfloat16)
     torch_output = torch.pow(torch_base, exponent)
+    ttnn_base = ttnn.from_torch(torch_base, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with ttnn.manage_device(device_id=0) as device:
-        ttnn_base = ttnn.from_torch(torch_base, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.pow(ttnn_base, exponent)
+    ttnn_output = ttnn.to_torch(ttnn_output)
 
-        print(f"Test Results for Exponent: {exponent}")
-        ttnn_output = ttnn.pow(ttnn_base, exponent)
-        ttnn_output = ttnn.to_torch(ttnn_output)
+    # # Print results in tabular format
+    # print(f"\n{'='*70}")
+    # print(f"Test Results for Exponent: {exponent}")
+    # print(f"{'='*70}")
+    # print(f"{'Base':<15} {'Torch Output':<15} {'TTNN Output':<15} {'Diff':<15}")
+    # print(f"{'-'*70}")
 
-        # Print results in tabular format
-        print(f"\n{'='*70}")
-        print(f"{'='*70}")
-        print(f"{'Base':<15} {'Torch Output':<15} {'TTNN Output':<15} {'Diff':<15}")
-        print(f"{'-'*70}")
+    # for i in range(torch_base.shape[0]):
+    #     for j in range(torch_base.shape[1]):
+    #         base_val = torch_base[i, j].item()
+    #         torch_val = torch_output[i, j].item()
+    #         ttnn_val = ttnn_output[i, j].item()
+    #         diff = abs(torch_val - ttnn_val)
+    #         print(f"{base_val:<15.6f} {torch_val:<15.6f} {ttnn_val:<15.6f} {diff:<15.6f}")
 
-        for i in range(torch_base.shape[0]):
-            for j in range(torch_base.shape[1]):
-                base_val = torch_base[i, j].item()
-                torch_val = torch_output[i, j].item()
-                ttnn_val = ttnn_output[i, j].item()
-                diff = abs(torch_val - ttnn_val)
-                print(f"{base_val:<15.6f} {torch_val:<15.6f} {ttnn_val:<15.6f} {diff:<15.6f}")
+    # print(f"{'='*70}\n")
 
-        print(f"{'='*70}\n")
-
-        # Compare outputs with appropriate tolerance
-        assert torch.allclose(
-            torch_output, ttnn_output, rtol=1e-2, atol=1e-2
-        ), f"Output mismatch for exponent {exponent}"
+    assert assert_with_ulp(torch_output, ttnn_output, 2 if exponent == 3.56 else 1)
 
 
 @pytest.mark.parametrize("exponent", [3.56, -3.56])
 def test_pow_arange_masking(exponent, device):
-    # Generate all possible bit pattersn for bf16
+    # Generate all possible bit pattern for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
 
