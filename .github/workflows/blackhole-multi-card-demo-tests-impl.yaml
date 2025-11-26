@@ -93,7 +93,7 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
-          wget -r -nH -x --cut-dirs=6 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
