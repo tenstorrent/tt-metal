@@ -119,6 +119,9 @@ tests:
   30:
     name: "One from All Directed Ideal"
 
+  40:
+    name: "DRAM Packet Sizes 2.0"
+
   50:
     name: "One to One Directed Ideal"
 
