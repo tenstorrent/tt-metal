@@ -11,20 +11,6 @@
 
 using namespace tt::tt_metal;
 
-// namespace {
-
-// inline uint32_t get_chunk_size(uint32_t s) {
-//     uint32_t i = 1;
-//     for (; i < s; i++) {
-//         if (s % (1U << (i + 1)) != 0) {
-//             break;
-//         }
-//     }
-//     return std::min(512U, 1U << i);
-// }
-
-// }  // namespace
-
 namespace ttnn::operations::transformer::sdpa_decode {
 
 SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
@@ -422,54 +408,6 @@ std::tuple<operation_attributes_t, tensor_args_t> SdpaDecodeDeviceOperation::inv
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v) {
-    // const bool paged_attention = page_table_tensor.has_value();
-    // const bool use_mla = head_dim_v.has_value();
-
-    // uint32_t k_chunk_size = 0;
-    // if (!paged_attention) {
-    //     const uint32_t s = input_tensor_k.logical_shape()[-2];
-    //     k_chunk_size = get_chunk_size(s);
-    //     if (program_config.has_value() && program_config->k_chunk_size > 0) {
-    //         k_chunk_size = program_config->k_chunk_size;
-    //         TT_FATAL(
-    //             (k_chunk_size & (k_chunk_size - 1)) == 0,
-    //             "User provided k_chunk_size must be power of 2, got: {}",
-    //             k_chunk_size);
-    //         TT_FATAL(
-    //             k_chunk_size % 32 == 0,
-    //             "User provided k_chunk_size must be multiple of 32, got: {}",
-    //             k_chunk_size);
-    //     } else {
-    //         TT_FATAL(
-    //             k_chunk_size % 32 == 0,
-    //             "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}",
-    //             k_chunk_size);
-    //     }
-    // } else {
-    //     k_chunk_size = 0;
-    //     if (program_config.has_value() && program_config->k_chunk_size > 0) {
-    //         k_chunk_size = program_config->k_chunk_size;
-    //         TT_FATAL(
-    //             (k_chunk_size & (k_chunk_size - 1)) == 0,
-    //             "User provided k_chunk_size must be power of 2, got: {}",
-    //             k_chunk_size);
-    //         TT_FATAL(
-    //             k_chunk_size % 32 == 0,
-    //             "User provided k_chunk_size must be multiple of 32, got: {}",
-    //             k_chunk_size);
-    //     }
-    // }
-
-    // auto kernel_config_val = init_device_compute_kernel_config(
-    //     input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
-
-    // if (!scale.has_value()) {
-    //     scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
-    // }
-    // if (!sliding_window_size.has_value()) {
-    //     sliding_window_size = 0;
-    // }
-
     operation_attributes_t attrs{
         .is_causal = is_causal,
         .paged_attention = paged_attention,

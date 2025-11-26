@@ -8,7 +8,6 @@
 #include <string>
 
 #include <tt-metalium/buffer.hpp>
-// #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -1020,37 +1019,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         }
     }
 
-    // auto override_runtime_arguments_callback =
-    //     [num_active_cores,
-    //      core_group,
-    //      reader_kernels_id,
-    //      writer_kernels_id,
-    //      compute_kernels_id,
-    //      num_cores_per_batch,
-    //      num_cores_per_head,
-    //      num_output_cores,
-    //      cb_in8_id,
-    //      cb_in9_id,
-    //      is_output_sharded,
-    //      cb_out4_id,
-    //      B,
-    //      q_heads_parallel_factor,
-    //      use_cur_pos_tensor,
-    //      use_attention_mask,
-    //      use_attention_sink,
-    //      is_paged_attention,
-    //      is_causal,
-    //      use_mla,
-    //      cur_pos_ids](
-    //         const void* /*operation*/,
-    //         Program& program,
-    //         const std::vector<Tensor>& input_tensors,
-    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //         const std::vector<Tensor>& output_tensors) {
-
-    //     };
-    // return {.program = std::move(program), .override_runtime_arguments_callback =
-    // override_runtime_arguments_callback};
     return cached_program_t{
         std::move(program),
         {.num_active_cores = num_active_cores,

@@ -90,22 +90,6 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         std::nullopt,
         std::nullopt,
         std::nullopt);
-
-    // return operation::run(
-    //            ScaledDotProductAttentionDecode{
-    //                .is_causal = is_causal,
-    //                .cur_pos = cur_pos,
-    //                .scale = scale,
-    //                .sliding_window_size = sliding_window_size,
-    //                .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-    //                .program_config = program_config,
-    //                .compute_kernel_config = kernel_config_val,
-    //                .k_chunk_size = k_chunk_size,
-    //                .paged_attention = false},
-    //            {input_tensor_q, input_tensor_k, input_tensor_v},
-    //            {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-    //            {})
-    //     .at(0);
 }
 
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
@@ -164,22 +148,6 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
         std::nullopt,
         std::nullopt,
         std::nullopt);
-
-    // return operation::run(
-    //            ScaledDotProductAttentionDecode{
-    //                .is_causal = is_causal,
-    //                .cur_pos = std::vector<uint32_t>(),
-    //                .scale = scale,
-    //                .sliding_window_size = sliding_window_size,
-    //                .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-    //                .program_config = program_config,
-    //                .compute_kernel_config = kernel_config_val,
-    //                .k_chunk_size = k_chunk_size,
-    //                .paged_attention = true},
-    //            {input_tensor_q, input_tensor_k, input_tensor_v},
-    //            {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-    //            {})
-    //     .at(0);
 }
 
 ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
@@ -241,23 +209,6 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
         std::nullopt,
         true,
         head_dim_v);
-    // return operation::run(
-    //            ScaledDotProductAttentionDecode{
-    //                .is_causal = is_causal,
-    //                .cur_pos = cur_pos,
-    //                .scale = scale,
-    //                .sliding_window_size = sliding_window_size,
-    //                .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-    //                .program_config = program_config,
-    //                .compute_kernel_config = kernel_config_val,
-    //                .k_chunk_size = k_chunk_size,
-    //                .paged_attention = false,
-    //                .use_mla = true,
-    //                .head_dim_v = head_dim_v},
-    //            {input_tensor_q, input_tensor_k},
-    //            {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-    //            {})
-    //     .at(0);
 }
 
 ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
@@ -316,24 +267,6 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
         std::nullopt,
         true,
         head_dim_v);
-
-    // return operation::run(
-    //            ScaledDotProductAttentionDecode{
-    //                .is_causal = is_causal,
-    //                .cur_pos = std::vector<uint32_t>(),
-    //                .scale = scale,
-    //                .sliding_window_size = sliding_window_size,
-    //                .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-    //                .program_config = program_config,
-    //                .compute_kernel_config = kernel_config_val,
-    //                .k_chunk_size = k_chunk_size,
-    //                .paged_attention = true,
-    //                .use_mla = true,
-    //                .head_dim_v = head_dim_v},
-    //            {input_tensor_q, input_tensor_k},
-    //            {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-    //            {})
-    //     .at(0);
 }
 
 }  // namespace ttnn::operations::transformer
