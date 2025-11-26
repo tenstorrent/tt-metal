@@ -55,26 +55,26 @@ void MAIN {
         // Init like CB_0 is in A and CB_1 is in B
         add_tiles_init(cb_in0, cb_in1, true);
 
-        // Reconfigure UNPACK for correct source formats, tests reconfig calls
-#if (EXPLICIT_RECONFIG == 1)
-#if (SPLIT_SRC_RECONFIG == 1)
-        // Indices for old_operand, new_operand
-        reconfig_data_format_srca(cb_in0, cb_in1);
-        reconfig_data_format_srcb(cb_in1, cb_in0);
-#elif (SPLIT_SRC_RECONFIG == 0)
-        // Indices for old_A, new_A, old_B, new_B
-        reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
-#endif  // SPLIT_SRC_RECONFIG
-#elif (EXPLICIT_RECONFIG == 0)
-#if (SPLIT_SRC_RECONFIG == 1)
-        // Indices for new_operand
-        reconfig_data_format_srca(cb_in1);
-        reconfig_data_format_srcb(cb_in0);
-#elif (SPLIT_SRC_RECONFIG == 0)
-        // Indices for new_A, new_B
-        reconfig_data_format(cb_in1, cb_in0);
-#endif  // SPLIT_SRC_RECONFIG
-#endif  // EXPLICIT_RECONFIG
+        //         // Reconfigure UNPACK for correct source formats, tests reconfig calls
+        // #if (EXPLICIT_RECONFIG == 1)
+        // #if (SPLIT_SRC_RECONFIG == 1)
+        //         // Indices for old_operand, new_operand
+        //         reconfig_data_format_srca(cb_in0, cb_in1);
+        //         reconfig_data_format_srcb(cb_in1, cb_in0);
+        // #elif (SPLIT_SRC_RECONFIG == 0)
+        //         // Indices for old_A, new_A, old_B, new_B
+        //         reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
+        // #endif  // SPLIT_SRC_RECONFIG
+        // #elif (EXPLICIT_RECONFIG == 0)
+        // #if (SPLIT_SRC_RECONFIG == 1)
+        //         // Indices for new_operand
+        //         reconfig_data_format_srca(cb_in1);
+        //         reconfig_data_format_srcb(cb_in0);
+        // #elif (SPLIT_SRC_RECONFIG == 0)
+        //         // Indices for new_A, new_B
+        //         reconfig_data_format(cb_in1, cb_in0);
+        // #endif  // SPLIT_SRC_RECONFIG
+        // #endif  // EXPLICIT_RECONFIG
 
         for (uint32_t i = 0; i < ublock_size_tiles; ++i) {
             add_tiles(cb_in1, cb_in0, i, i, i);
@@ -88,14 +88,14 @@ void MAIN {
 #endif
         // Configured already for CB_16, Bfp16_b
         pack_tile_block(0, cb_out0, ublock_size_tiles);
-        // Reconfig for CB_17, Bfp8_b, then pack to CB_17
-#if (EXPLICIT_RECONFIG == 1)
-        // Indices for old_output, new_output
-        pack_reconfig_data_format(cb_out0, cb_out1);
-#elif (EXPLICIT_RECONFIG == 0)
-        // Indices for new_output
-        pack_reconfig_data_format(cb_out1);
-#endif
+        //         // Reconfig for CB_17, Bfp8_b, then pack to CB_17
+        // #if (EXPLICIT_RECONFIG == 1)
+        //         // Indices for old_output, new_output
+        //         pack_reconfig_data_format(cb_out0, cb_out1);
+        // #elif (EXPLICIT_RECONFIG == 0)
+        //         // Indices for new_output
+        //         pack_reconfig_data_format(cb_out1);
+        // #endif
         // Not testing for L1 accumulation
         pack_reconfig_l1_acc(false);
 

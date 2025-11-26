@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
 #endif
@@ -88,6 +89,7 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true,
  */
 // clang-format on
 ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    state_configure<Operation::BINARY, false>(icb0, icb1);
     binary_tiles_init<true, ELWADD>(icb0, icb1, acc_to_dest);
 }
 
@@ -158,6 +160,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  */
 // clang-format on
 ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    state_configure<Operation::BINARY, false>(icb0, icb1);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true)));
