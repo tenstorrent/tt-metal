@@ -17,4 +17,4 @@ Find the model instructions for each device below:
 [models/demos/wormhole/vgg_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vgg_unet)
 
 ### Blackhole P150
-[models/demos/blackhole/vgg_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vgg_unet)
+[models/demos/vision/segmentation/vgg_unet/blackhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/vgg_unet/blackhole)

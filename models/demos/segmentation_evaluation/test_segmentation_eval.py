@@ -71,7 +71,7 @@ def evaluation(
 ):
     if model_name == "vgg_unet":
         if is_blackhole():
-            from models.demos.blackhole.vgg_unet.demo.demo_utils import prediction, preprocess
+            from models.demos.vision.segmentation.vgg_unet.blackhole.demo.demo_utils import prediction, preprocess
 
             output_path = "models/demos/blackhole/"
         elif is_wormhole_b0():

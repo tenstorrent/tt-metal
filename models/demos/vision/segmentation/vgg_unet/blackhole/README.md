@@ -13,7 +13,7 @@ The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an 
 ## How to Run
 ### Inference pipeline with random weights and random tensor:
 ```sh
-pytest models/demos/blackhole/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
+pytest models/demos/vision/segmentation/vgg_unet/blackhole/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
 ### Performant Model with Trace+2CQ
@@ -21,26 +21,26 @@ pytest models/demos/blackhole/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet
 
 - end-2-end perf with Trace+2CQs is 320 FPS (**On P150**)
 ```sh
-pytest models/demos/blackhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
+pytest models/demos/vision/segmentation/vgg_unet/blackhole/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
 ```
 
 #### Multi Device (DP=2):
 - end-2-end perf with Trace+2CQs:
 ```sh
-pytest models/demos/blackhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
+pytest models/demos/vision/segmentation/vgg_unet/blackhole/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
 ```
 
 ### Performant Demo with Trace+2CQ
 #### Single Device (BS=1):
 Use the following command to run performant model demo (supports single and multiple images):
 ```sh
-pytest models/demos/blackhole/vgg_unet/demo/demo.py::test_demo
+pytest models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo
 ```
 
 #### Multi Device (DP=2):
 Use the following command to run performant model demo:
 ```sh
-pytest models/demos/blackhole/vgg_unet/demo/demo.py::test_demo_dp
+pytest models/demos/vision/segmentation/vgg_unet/blackhole/demo/demo.py::test_demo_dp
 ```
 
 ### Performant Data evaluation with Trace+2CQ:
