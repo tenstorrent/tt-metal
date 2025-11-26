@@ -163,5 +163,5 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
         )
 
     # Fail test based on PCC results
-    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
-    logger.info("All PCC tests passed!")
+    assert all(all_passed), f"PDL outputs did not pass the PCC and tolerance check {all_passed=}"
+    logger.info("All PCC and tolerance tests passed!")

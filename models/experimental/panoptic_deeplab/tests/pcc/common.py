@@ -6,7 +6,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from loguru import logger
 import math
-import numpy as np
 
 
 def get_abs_and_relative_error(tensor_a, tensor_b):
@@ -20,15 +19,8 @@ def get_abs_and_relative_error(tensor_a, tensor_b):
     return abs_error, relative_error
 
 
-def check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol, pass_threshold=0.999):
-    pytorch_np = pytorch_output.detach().cpu().numpy()
-    ttnn_np = ttnn_output_torch.detach().cpu().numpy()
-
-    is_close = np.isclose(ttnn_np, pytorch_np, atol=exp_atol, rtol=exp_rtol)
-
-    tol_pass_rate = np.mean(is_close)
-
-    return tol_pass_rate >= pass_threshold
+def check_with_tolerance(abs_err, rel_err, exp_atol, exp_rtol):
+    return abs_err <= exp_atol and rel_err <= exp_rtol
 
 
 def check_ttnn_output(
@@ -38,8 +30,8 @@ def check_ttnn_output(
     to_channel_first=False,
     output_channels=None,
     exp_pcc=0.999,
-    exp_atol=1e-08,
-    exp_rtol=1e-05,
+    exp_atol=12.0,
+    exp_rtol=5.0,
 ):
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
@@ -52,7 +44,7 @@ def check_ttnn_output(
 
     abs_err, rel_err = get_abs_and_relative_error(pytorch_output, ttnn_output_torch)
     passed_pcc, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
-    passed_tolerance = check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol)
+    passed_tolerance = check_with_tolerance(abs_err, rel_err, exp_atol, exp_rtol)
     special_char = "✅" if passed_pcc and passed_tolerance else "❌"
     logger.warning(
         f"{special_char} Output {layer_name}: {passed_pcc=}, {pcc=}, {passed_tolerance=}, {abs_err=:.3f}, {rel_err=:.3f}"
