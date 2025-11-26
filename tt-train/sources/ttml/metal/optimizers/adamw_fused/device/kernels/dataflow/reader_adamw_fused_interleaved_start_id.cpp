@@ -37,6 +37,7 @@ void kernel_main() {
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t exp_avg_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t exp_avg_sq_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t max_exp_avg_sq_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -49,11 +50,13 @@ void kernel_main() {
     constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
     constexpr auto exp_avg_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
+    constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
 
     const auto param_addr_gen = TensorAccessor(param_args, param_addr, tile_size_bytes);
     const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, tile_size_bytes);
     const auto exp_avg_addr_gen = TensorAccessor(exp_avg_args, exp_avg_addr, tile_size_bytes);
     const auto exp_avg_sq_addr_gen = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr, tile_size_bytes);
+    const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr, tile_size_bytes);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
@@ -64,10 +67,17 @@ void kernel_main() {
         read_tiles(cb_grad_idx, grad_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
         read_tiles(cb_exp_avg_idx, exp_avg_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
         read_tiles(cb_exp_avg_sq_idx, exp_avg_sq_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+#if AMSGRAD
+        read_tiles(
+            cb_max_exp_avg_sq_idx, max_exp_avg_sq_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+#endif
         noc_async_read_barrier();
         cb_push_back(cb_param_idx, block_size);
         cb_push_back(cb_grad_idx, block_size);
         cb_push_back(cb_exp_avg_idx, block_size);
         cb_push_back(cb_exp_avg_sq_idx, block_size);
+#if AMSGRAD
+        cb_push_back(cb_max_exp_avg_sq_idx, block_size);
+#endif
     }
 }
