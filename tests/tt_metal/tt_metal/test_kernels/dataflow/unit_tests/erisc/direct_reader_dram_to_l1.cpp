@@ -23,6 +23,7 @@ void kernel_main() {
         experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
         local_buffer,
         dram_buffer_size,
-        {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr_base});
+        {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr_base},
+        {});
     noc.async_read_barrier();
 }
