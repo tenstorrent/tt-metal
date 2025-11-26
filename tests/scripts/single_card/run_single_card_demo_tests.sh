@@ -149,7 +149,7 @@ run_bert_tiny_func() {
 
   pytest models/demos/grayskull/bert_tiny/demo/demo.py || fail=1
 
-  pytest models/demos/wormhole/bert_tiny/demo/demo.py || fail=1
+  pytest models/demos/nlp/encoder/bert_tiny/demo/demo.py || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -192,7 +192,7 @@ run_distilbert_func() {
 
   pytest models/demos/grayskull/distilbert/demo/demo.py || fail=1
 
-  pytest models/demos/wormhole/distilbert/demo/demo.py || fail=1
+  pytest models/demos/nlp/encoder/distilbert/demo/demo.py || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1

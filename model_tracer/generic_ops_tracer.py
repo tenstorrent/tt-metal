@@ -13,7 +13,7 @@ Usage:
     python generic_ops_tracer.py <test_path> [--output-dir <dir>] [--store]
 
 Examples:
-    python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
+    python generic_ops_tracer.py models/demos/nlp/encoder/distilbert/demo/demo.py::test_demo
     python generic_ops_tracer.py models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample
     python generic_ops_tracer.py /path/to/test.py::test_function --store
     python generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
@@ -832,7 +832,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
+    python model_tracer/generic_ops_tracer.py models/demos/nlp/encoder/distilbert/demo/demo.py::test_demo
     python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
     python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
         """,
