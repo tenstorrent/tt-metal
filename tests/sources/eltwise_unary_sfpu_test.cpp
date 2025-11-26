@@ -78,7 +78,7 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
             ckernel::sfpu::_calculate_log_<APPROX_MODE, false, iterations>(iterations, 0);
             break;
         case SfpuType::reciprocal:
-            ckernel::sfpu::_init_reciprocal_<APPROX_MODE>();
+            ckernel::sfpu::_init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en>();
             ckernel::sfpu::_calculate_reciprocal_<APPROX_MODE, iterations, is_fp32_dest_acc_en>(iterations);
             break;
         case SfpuType::rsqrt:

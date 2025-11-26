@@ -94,7 +94,7 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format = 0)
             }
             break;
         case SfpuType::reciprocal:
-            _init_reciprocal_<APPROX_MODE>();
+            _init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en>();
             _calculate_reciprocal_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
             break;
         case SfpuType::rsqrt:
