@@ -20,6 +20,7 @@
 #include <umd/device/chip_helpers/sysmem_manager.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::experimental {
 
