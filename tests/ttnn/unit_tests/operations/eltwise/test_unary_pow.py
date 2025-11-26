@@ -34,19 +34,23 @@ def test_pow(exponent, device):
     assert assert_with_ulp(torch_output, ttnn_output, 2 if exponent == 3.56 else 1)
 
 
-@pytest.mark.parametrize("exponent", [3.56, -3.56])
+@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 0.65, -1.0, -2.0, -0.65, 3.56, -3.56])
 def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    fp32 = torch.arange(0, 2**16, dtype=torch.int32).to(torch.float32)
+    nan_mask = torch.isnan(fp32)
+    neg_zero_mask = (fp32 == 0.0) & torch.signbit(fp32)
+    pos_inf_mask = fp32 == float("inf")
+    neg_inf_mask = fp32 == float("-inf")
 
-    # Mask NaN
-    mask = torch.isnan(input_tensor) | ((input_tensor == 0) & torch.signbit(input_tensor))
-    input_tensor[mask] = 1.0
-    # for -0.0, we get inf but expected is nan
+    mask = nan_mask | neg_zero_mask | pos_inf_mask | neg_inf_mask
+    fp32[mask] = 1.0
+    clean_bf16 = fp32.to(torch.bfloat16)
+    clean_bits = clean_bf16.view(torch.uint16)
+    tt_input = clean_bits.view(torch.bfloat16)
 
     tt_in = ttnn.from_torch(
-        input_tensor,
+        tt_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -54,65 +58,9 @@ def test_pow_arange_masking(exponent, device):
     )
 
     golden_function = ttnn.get_golden_function(ttnn.pow)
-    golden = golden_function(input_tensor, exponent, device=device)
+    golden = golden_function(tt_input, exponent, device=device)
 
     tt_result = ttnn.pow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
 
-    # Debug: Find problematic values
-    print(f"\n{'='*80}")
-    print(f"Exponent: {exponent}")
-    print(f"{'='*80}")
-
-    # Check for non-finite mismatches
-    golden_nan = torch.isnan(golden)
-    golden_inf = torch.isinf(golden)
-    result_nan = torch.isnan(result)
-    result_inf = torch.isinf(result)
-
-    # Find positions where finite/non-finite status differs
-    finite_mismatch = (golden_nan != result_nan) | (golden_inf != result_inf)
-
-    if finite_mismatch.any():
-        print(f"\nFound {finite_mismatch.sum()} finite/non-finite mismatches!")
-        print(f"\nFirst 20 problematic values:")
-        print(f"{'Input':<20} {'Golden':<20} {'Result':<20} {'Issue':<30}")
-        print(f"{'-'*90}")
-
-        count = 0
-        for idx in torch.where(finite_mismatch)[0][:20]:
-            inp = input_tensor[idx].item()
-            gld = golden[idx].item()
-            res = result[idx].item()
-
-            issue = ""
-            if torch.isnan(golden[idx]) and not torch.isnan(result[idx]):
-                issue = "Golden=NaN, Result=finite"
-            elif not torch.isnan(golden[idx]) and torch.isnan(result[idx]):
-                issue = "Golden=finite, Result=NaN"
-            elif torch.isinf(golden[idx]) and not torch.isinf(result[idx]):
-                issue = "Golden=Inf, Result=finite"
-            elif not torch.isinf(golden[idx]) and torch.isinf(result[idx]):
-                issue = "Golden=finite, Result=Inf"
-
-            print(f"{inp:<20.6f} {gld:<20} {res:<20} {issue:<30}")
-            count += 1
-
-    # Also check for unexpected NaN/Inf in result
-    unexpected_nonfinite = (~golden_nan & ~golden_inf) & (result_nan | result_inf)
-    if unexpected_nonfinite.any():
-        print(f"\n\nFound {unexpected_nonfinite.sum()} unexpected non-finite values in result!")
-        print(f"\nFirst 20 unexpected non-finite values:")
-        print(f"{'Input':<20} {'Input(hex)':<15} {'Golden':<20} {'Result':<20}")
-        print(f"{'-'*80}")
-
-        for idx in torch.where(unexpected_nonfinite)[0][:20]:
-            inp = input_tensor[idx].item()
-            inp_hex = hex(all_bitpatterns[idx].item())
-            gld = golden[idx].item()
-            res = result[idx].item()
-            print(f"{inp:<20.6f} {inp_hex:<15} {gld:<20.6f} {res:<20}")
-
-    print(f"{'='*80}\n")
-
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
