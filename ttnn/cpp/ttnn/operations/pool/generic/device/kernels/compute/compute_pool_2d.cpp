@@ -174,6 +174,7 @@ void MAIN {
             if (in_nblocks_c > 1) {
                 num_pages_to_8 = 1;
             }
+            num_pages_to_8 = 1;
             const uint32_t effective_tiles = (window_size_hw * tiles_to_reduce * 32 + 1023) / 1024;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
@@ -346,6 +347,7 @@ void MAIN {
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                        // PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
 
                         // Workaround until #27504 is not closed
                         // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format

@@ -129,7 +129,13 @@ ParallelConfig determine_parallel_config(
     bool enable_channels_padding,
     bool is_shard_height_tile_multiple,
     bool is_shard_width_tile_multiple,
-    uint32_t act_block_h_override) {
+    uint32_t act_block_h_override,
+    uint32_t groups) {
+    // Only override input_channels_alignment for depthwise convolution
+    bool is_depthwise_conv = (groups == input_channels) && (groups == output_channels);
+    if (is_depthwise_conv) {
+        input_channels_alignment = 32;
+    }
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.
     uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
@@ -167,6 +173,7 @@ ParallelConfig determine_parallel_config(
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
         grid = CoreRangeSet({core_range});
+        log_info(tt::LogOp, "Determined parallel config: {} {}", num_cores_nhw, num_cores_c);
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t input_channels_ntiles = tt::div_up(input_channels, effective_tile_width);
         uint32_t num_cores_c = enable_channels_padding
@@ -520,7 +527,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     uint32_t input_channels_alignment;
     if (is_depthwise_conv) {
         // Pool2d-like alignment: use flexible alignment based on tensor layout
-        input_channels_alignment = (input_tensor_layout == TILE_LAYOUT) ? tt::constants::TILE_WIDTH : 8U;
+        input_channels_alignment = tt::constants::TILE_WIDTH;
     } else {
         // Standard conv alignment
         input_channels_alignment = get_input_channels_alignment(
@@ -540,10 +547,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
             input_channels_alignment,
             compute_grid_size,
             block_shard_orientation,
-            !is_mm_conv || is_depthwise_conv,
+            !is_mm_conv,
             true,
             true,
-            act_block_h_override.value_or(0));
+            act_block_h_override.value_or(0),
+            groups);
     }
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -680,7 +688,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             false,
             true,
             true,
-            conv_config.act_block_h_override);
+            conv_config.act_block_h_override,
+            groups);
 
         if (conv_config.override_sharding_config) {
             TT_FATAL(conv_config.core_grid.has_value(), "Core grid must be provided when overriding sharding config");
@@ -960,7 +969,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             false,
             true,
             true,
-            conv_config.act_block_h_override);
+            conv_config.act_block_h_override,
+            groups);
 
         const ParallelConfig output_parallel_config = determine_output_parallel_config(
             input_parallel_config,

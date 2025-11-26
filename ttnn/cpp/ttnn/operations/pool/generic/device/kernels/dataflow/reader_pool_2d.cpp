@@ -459,21 +459,21 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    // if constexpr (is_avg_pool || need_to_initialize_in_cb) {
-    //     if constexpr (reader_id == 0) {
-    //         fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-    //         cb_push_back(clear_value_cb_id, 1);
-    //     }
-    //     if constexpr (reader_id == 1) {
-    //         cb_wait_front(clear_value_cb_id, 1);
-    //     }
-    //     // for average pool clear out tiles runs in loop, no need to initialize here
-    //     // TODO do we really need to init the in CB for return indices?
-    //     // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
-    //     if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
-    //         clear_out_tiles<in_cb_id, clear_value_cb_id>();
-    //     }
-    // }
+    if constexpr (true) {
+        if constexpr (reader_id == 0) {
+            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            cb_push_back(clear_value_cb_id, 1);
+        }
+        if constexpr (reader_id == 1) {
+            cb_wait_front(clear_value_cb_id, 1);
+        }
+        // for average pool clear out tiles runs in loop, no need to initialize here
+        // TODO do we really need to init the in CB for return indices?
+        // - yes until LLK is updated for arbitrary kernel sizes, for now we rely on init
+        if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
+            clear_out_tiles<in_cb_id, clear_value_cb_id>();
+        }
+    }
 
     if constexpr (reader_id == 0 && return_indices) {
         initialize_return_indices_data<

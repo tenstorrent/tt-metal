@@ -290,6 +290,7 @@ Result conv2d_L1(
 
         log_info(tt::LogOp, "paralelization config after halo: {}", opt_conv_op_parallel_config);
 
+        log_info(tt::LogOp, "Pre conv input memory config: {}", input_tensor_post_tm.memory_config());
         // call conv micro op
         auto conv_output = conv2d(
             input_tensor_post_tm,
@@ -312,6 +313,8 @@ Result conv2d_L1(
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
             conv_config.force_split_reader);
+
+        log_info(tt::LogOp, "Post conv input memory config: {}", conv_output.memory_config());
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

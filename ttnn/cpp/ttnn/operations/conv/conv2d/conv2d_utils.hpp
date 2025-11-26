@@ -74,7 +74,8 @@ sliding_window::ParallelConfig determine_parallel_config(
     bool enable_channels_padding,
     bool is_shard_height_tile_multiple = true,
     bool is_shard_width_tile_multiple = true,
-    uint32_t act_block_h_override = 0);
+    uint32_t act_block_h_override = 0,
+    uint32_t groups = 1);
 
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,

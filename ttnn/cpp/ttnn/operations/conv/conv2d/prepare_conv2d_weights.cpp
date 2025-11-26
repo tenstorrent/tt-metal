@@ -1037,7 +1037,8 @@ static Conv2dBlockConfig get_opt_block_config(
             !mm_conv,
             true,
             true,
-            conv_config.act_block_h_override);
+            conv_config.act_block_h_override,
+            groups);
     }
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
@@ -1281,7 +1282,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             !mm_conv,
             true,
             true,
-            conv_config.act_block_h_override);
+            conv_config.act_block_h_override,
+            groups);
 
         auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
             conv_config.shard_layout.value(),
