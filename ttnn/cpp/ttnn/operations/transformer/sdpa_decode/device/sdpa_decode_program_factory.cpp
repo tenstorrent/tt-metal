@@ -1057,7 +1057,6 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const auto& compute_kernels_id = shared_variables.compute_kernels_id;
     const auto& num_cores_per_batch = shared_variables.num_cores_per_batch;
     const auto& num_cores_per_head = shared_variables.num_cores_per_head;
-    // const auto& num_output_cores = shared_variables.num_output_cores;
     const auto& cb_in8_id = shared_variables.cb_in8_id;
     const auto& cb_in9_id = shared_variables.cb_in9_id;
     const auto& is_output_sharded = shared_variables.is_output_sharded;
