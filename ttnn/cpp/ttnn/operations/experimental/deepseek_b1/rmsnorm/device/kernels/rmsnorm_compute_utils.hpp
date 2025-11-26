@@ -53,25 +53,34 @@ void compute_rmsnorm() {
     // TODO: #32998: Avoid having to spill 1/RMS to interm cb
     {
         // Add epsilon
+        DPRINT << "here1" << ENDL();
         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb);
+        DPRINT << "here1.a" << ENDL();
         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(scalars_cb, epsilon_index, 0);
+        DPRINT << "here1.b" << ENDL();
         // Calculate the 1/RMS
         // TODO: #32998: Use index num_tiles + 1 once bcast reuse is supported
         rsqrt_tile<false, true>(0);
+        DPRINT << "here1.c" << ENDL();
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, interm_cb);
         tile_regs_release();
         reduce_uninit();
+        DPRINT << "here1.d" << ENDL();
         cb_pop_front(interm_cb, num_tiles);
         cb_push_back(interm_cb, 1);  // 1/RMS tile should now be index 0
     }
     {
+        DPRINT << "here2" << ENDL();
         // Multiply input by 1/RMS
         cb_wait_front(interm_cb, 1);
         cb_reserve_back(output_cb, num_tiles);
+        DPRINT << "here2.a" << ENDL();
         mul_tiles_bcast_scalar_init_short(input_cb, interm_cb);
+        DPRINT << "here2.b" << ENDL();
         tile_regs_acquire();
+        DPRINT << "here2.c" << ENDL();
         for (uint32_t i = 0; i < num_tiles; i++) {
             // TODO: #32998: Once we have bcast reuse, we will use input_cb index i, reuse dst index num_tiles + 1,
             // output dst index i
@@ -82,6 +91,7 @@ void compute_rmsnorm() {
         }
     }
     {
+        DPRINT << "here3" << ENDL();
         // Multiply by the weight
         binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(weight_cb);
         for (uint32_t i = 0; i < num_tiles; i++) {
@@ -94,6 +104,7 @@ void compute_rmsnorm() {
         cb_pop_front(interm_cb, 1);
         cb_push_back(output_cb, num_tiles);
     }
+    DPRINT << "Done" << ENDL();
 }
 
 #define DEFINE_RMSNORM_COMPUTE_VARS(prefix)                                                                  \

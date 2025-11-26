@@ -56,7 +56,7 @@ void RmsnormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(num_sticks % (tt::constants::TILE_HEIGHT / 2) == 0, "Input must be packable into tiles");
     }
     // TODO: This disables tile tiles. Figure out why tiny tiles hang and remove this check.
-    TT_FATAL(num_sticks % tt::constants::TILE_HEIGHT == 0, "Input must be packable into tiles");
+    // TT_FATAL(num_sticks % tt::constants::TILE_HEIGHT == 0, "Input must be packable into tiles");
 
     TT_FATAL(
         operation_attributes.numel > 0 && operation_attributes.numel <= input_tensor.logical_volume(),

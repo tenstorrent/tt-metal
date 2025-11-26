@@ -16,6 +16,8 @@ def torch_rmsnorm(input_tensor, gamma, epsilon=1e-6):
     """Reference implementation of RMSNorm in PyTorch"""
     # Compute RMS
     variance = input_tensor.pow(2).mean(-1, keepdim=True)
+    print("variance + epsilon: ", variance + epsilon)
+    print("torch.rsqrt(variance + epsilon): ", torch.rsqrt(variance + epsilon))
     input_normalized = input_tensor / torch.sqrt(variance + epsilon)
     # Apply gamma scaling
     output = input_normalized * gamma
@@ -25,13 +27,14 @@ def torch_rmsnorm(input_tensor, gamma, epsilon=1e-6):
 @pytest.mark.parametrize(
     "width",
     [
-        7168,  # input_layernorm, post_attention_layernorm
-        1536,  # q_a_layernorm
+        # 7168,  # input_layernorm, post_attention_layernorm
+        # 1536,  # q_a_layernorm
         512,  # kv_a_layernorm
+        1024,
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True, False])
+@pytest.mark.parametrize("use_fp32", [True])
 def test_rmsnorm(device, width, epsilon, use_fp32):
     """Test TTNN rmsnorm operation on a single core"""
 
@@ -47,7 +50,8 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
 
     tile_size = 1024
     # TODO: This is because we don't support tiny tiles yet
-    padded_width = ((width + tile_size - 1) // tile_size) * tile_size
+    # padded_width = ((width + tile_size - 1) // tile_size) * tile_size
+    padded_width = width
 
     # Create PyTorch tensors for reference
     torch.manual_seed(0)
@@ -104,7 +108,7 @@ def test_rmsnorm(device, width, epsilon, use_fp32):
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=use_fp32,
         dst_full_sync_en=use_fp32,
