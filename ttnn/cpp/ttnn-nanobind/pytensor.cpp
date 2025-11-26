@@ -126,7 +126,7 @@ Tensor create_typed_tt_tensor_from_py_data(
 
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
 
-    TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
+    TT_FATAL(not py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
     TT_FATAL(
         py_ndarray.size() == py_data_shape.volume(),
         "create_typed_tt_tensor_from_py_data: array size ({}) shape volume ({}) mismatch!",
@@ -209,7 +209,15 @@ struct PreprocessedPyTensor {
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
 
-    TT_FATAL(data_type != DataType::INVALID, "parse_py_tensor: DataType::INVALID!");
+    TT_FATAL(
+        data_type == DataType::INVALID,
+        "parse_py_tensor: DataType::INVALID!.\n\t"
+        "dtype.code: {}, dtype.bits: {}\n\t"
+        "optional_data_type::has_value: {}, value: {}",
+        py_tensor.dtype().code,
+        py_tensor.dtype().bits,
+        optional_data_type.has_value(),
+        optional_data_type.value_or(DataType::INVALID));
 
     // try brute force...
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
