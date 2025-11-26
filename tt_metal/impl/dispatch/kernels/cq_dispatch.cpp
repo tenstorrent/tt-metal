@@ -119,6 +119,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
+constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks

@@ -7,7 +7,7 @@
 #include <array>
 #include <vector>
 
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
 namespace tt::tt_fabric {
