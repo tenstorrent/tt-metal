@@ -31,6 +31,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor,
             dim,
@@ -79,6 +80,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
@@ -127,6 +129,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         input_tensors.at(0), memory_config.value_or(input_tensors.at(0).memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensors, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
@@ -173,6 +176,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
@@ -215,6 +219,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor,
             dim,
@@ -263,6 +268,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         log_debug(tt::LogOp, "Using minimal_all_gather_async");
@@ -308,6 +314,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
+        TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
