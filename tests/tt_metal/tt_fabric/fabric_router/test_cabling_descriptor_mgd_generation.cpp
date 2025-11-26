@@ -14,7 +14,7 @@
 #include <string_view>
 
 #include <google/protobuf/text_format.h>
-#include <tt-metalium/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/cleanup.hpp>
 #include "generate_mgd.hpp"
 
