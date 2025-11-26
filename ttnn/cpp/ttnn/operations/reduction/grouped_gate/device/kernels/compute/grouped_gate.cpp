@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
-// #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
+#include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
 
 #include "debug/dprint_tensix.h"
 
@@ -36,6 +37,62 @@ void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = true) {
     }
     DPRINT << "++++++" << ENDL();
 }
+
+namespace blocks {
+void process_and_sort_tiles(
+    uint32_t input_cb_index,
+    uint32_t index_cb_index,
+    uint32_t input_transposed_cb_index,
+    uint32_t index_transposed_cb_index,
+    uint32_t Wt,
+    bool switch_dir,
+    bool& ascending,
+    int end_phase) {
+    cb_reserve_back(input_transposed_cb_index, Wt);
+    cb_reserve_back(index_transposed_cb_index, Wt);
+
+    // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
+    for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        acquire_dst();
+        // local sort into k groups
+        cb_wait_front(input_cb_index, 2);
+        cb_wait_front(index_cb_index, 2);
+
+        reconfig_data_format_srca(input_cb_index);
+        transpose_wh_init_short(input_cb_index);
+        transpose_wh_tile(input_cb_index, 0, 0);
+        transpose_wh_tile(input_cb_index, 1, 1);
+        // dprint_tensix_dest_reg(1); // good here
+
+        reconfig_data_format_srca(index_cb_index);
+        transpose_wh_init_short(index_cb_index);
+        transpose_wh_tile(index_cb_index, 0, 2);
+        transpose_wh_tile(index_cb_index, 1, 3);
+        // dprint_tensix_dest_reg(1); // bad here – other transpose is corrupting dest reg 1 somehow?
+
+        // llk_topk_sort -> inplace
+        ckernel::topk_local_sort(0, (int)ascending, end_phase);
+
+        // pack value tiles into cb_intermed0
+        pack_reconfig_data_format(input_transposed_cb_index);
+        pack_tile<true>(0, input_transposed_cb_index, wt);
+        pack_tile<true>(1, input_transposed_cb_index, wt + 1);
+
+        // pack index tiles into cb_intermed1
+        pack_reconfig_data_format(index_transposed_cb_index);
+        pack_tile<true>(2, index_transposed_cb_index, wt);
+        pack_tile<true>(3, index_transposed_cb_index, wt + 1);
+
+        cb_pop_front(input_cb_index, 2);
+        cb_pop_front(index_cb_index, 2);
+        release_dst();
+        ascending = switch_dir ? !ascending : ascending;
+    }
+
+    cb_push_back(input_transposed_cb_index, Wt);
+    cb_push_back(index_transposed_cb_index, Wt);
+}
+}  // namespace blocks
 
 void MAIN {
     // Dummy compute kernel
@@ -109,19 +166,28 @@ void MAIN {
         bool switch_dir = false;
         cb_wait_front(add_bias_cb_index, width_tiles);
         cb_wait_front(topk_index_creation_cb_index, width_tiles);
+
+        // for (uint32_t w = 0; w < width_tiles; w++) {
+        //     UNPACK(print_tile(add_bias_cb_index, w, true));
+        //     UNPACK(print_tile(topk_index_creation_cb_index, w, true));
+        // }
+
+        topk_tile_init();
+        blocks::process_and_sort_tiles(
+            add_bias_cb_index,
+            topk_index_creation_cb_index,
+            topk_input_cb_index,
+            topk_index_cb_index,
+            width_tiles,
+            switch_dir,
+            ascending,
+            end_phase);
+
+        cb_wait_front(topk_input_cb_index, width_tiles);
+        cb_wait_front(topk_index_cb_index, width_tiles);
         for (uint32_t w = 0; w < width_tiles; w++) {
-            UNPACK(print_tile(add_bias_cb_index, w, true));
-            UNPACK(print_tile(topk_index_creation_cb_index, w, true));
+            UNPACK(print_tile(topk_input_cb_index, w, true));
         }
-
-        // process_and_sort_tiles(add_bias_cb_index, topk_index_creation_cb_index, topk_input_cb_index,
-        // topk_index_cb_index, width_tiles, switch_dir, ascending, end_phase);
-
-        // cb_wait_front(topk_input_cb_index, width_tiles);
-        // cb_wait_front(topk_index_cb_index, width_tiles);
-        // // for (uint32_t w = 0; w < width_tiles; w++) {
-        // //     UNPACK(print_tile(topk_index_cb_index, w, true));
-        // // }
     }
 }
 }  // namespace NAMESPACE
