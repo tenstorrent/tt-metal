@@ -121,7 +121,7 @@ def extract_device_info(logPath):
         line = f.readline()
 
     if "Chip clock is at " in line:
-        return "grayskull", 1200
+        return "grayskull", 1200, None
     elif "ARCH" in line:
         info = line.split(",")
         arch = info[0].split(":")[-1].strip(" \n")

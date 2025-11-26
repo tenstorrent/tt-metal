@@ -16,8 +16,7 @@ from datetime import datetime
 import copy
 from collections import deque
 import pandas as pd
-from math import nan
-import ast
+from math import nan, isnan
 
 import click
 from loguru import logger
@@ -327,7 +326,8 @@ def extract_perf_counters(events):
         if perf_counter_events:
             return pd.DataFrame(perf_counter_events)
     except (KeyError, TypeError, AttributeError):
-        return None
+        pass
+    return None
 
 
 # Append device data to device ops and return the list of mapped device op ref list
@@ -462,14 +462,10 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
             traceOps = {}
 
-            for device in devicesOps:
-                events = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]
-                perf_counter_df = extract_perf_counters(events["perf_counter_data"])
-
-                # Check if perf counters data is available
-                if perf_counter_df is None or perf_counter_df.empty:
-                    continue
-
+            # Check if perf counters data is available
+            events = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]
+            perf_counter_df = extract_perf_counters(events["perf_counter_data"])
+            if perf_counter_df is not None and not perf_counter_df.empty:
                 total_compute_cores = deviceData["deviceInfo"]["max_compute_cores"]
 
                 # For each counter type, divide counter value by ref cnt to get util metrics per core
@@ -1021,7 +1017,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["SFPU Util Median (%)"] = opData.get("SFPU Util Median (%)")
                 if "SFPU Util Max (%)" in opData:
                     rowDict["SFPU Util Max (%)"] = opData.get("SFPU Util Max (%)")
-                if "avg_sfpu_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                if "avg_sfpu_count" in opData and not isnan(kernel_duration):
                     rowDict["Avg SFPU util on full grid (%)"] = opData.get("avg_sfpu_count") / kernel_duration * 100
 
                 if "FPU Util Min (%)" in opData:
@@ -1030,7 +1026,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["FPU Util Median (%)"] = opData.get("FPU Util Median (%)")
                 if "FPU Util Max (%)" in opData:
                     rowDict["FPU Util Max (%)"] = opData.get("FPU Util Max (%)")
-                if "avg_fpu_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                if "avg_fpu_count" in opData and not isnan(kernel_duration):
                     rowDict["Avg FPU util on full grid (%)"] = opData.get("avg_fpu_count") / kernel_duration * 100
 
                 if "MATH Util Min (%)" in opData:
@@ -1039,7 +1035,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     rowDict["MATH Util Median (%)"] = opData.get("MATH Util Median (%)")
                 if "MATH Util Max (%)" in opData:
                     rowDict["MATH Util Max (%)"] = opData.get("MATH Util Max (%)")
-                if "avg_math_count" in opData and "DEVICE KERNEL DURATION [ns]" in rowDict:
+                if "avg_math_count" in opData and not isnan(kernel_duration):
                     rowDict["Avg Math util on full grid (%)"] = opData.get("avg_math_count") / kernel_duration * 100
 
             rowDicts.append(rowDict)

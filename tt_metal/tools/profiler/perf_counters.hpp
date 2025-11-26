@@ -7,12 +7,6 @@
 constexpr uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
 enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1, INSTRN };
-const PerfCounterGroup counter_groups[] = {
-    PerfCounterGroup::FPU,
-    PerfCounterGroup::PACK,
-    PerfCounterGroup::UNPACK,
-    PerfCounterGroup::L1,
-    PerfCounterGroup::INSTRN};
 enum PerfCounterType : uint8_t {
     UNDEF = 0,
     // FPU Group
@@ -20,11 +14,6 @@ enum PerfCounterType : uint8_t {
     FPU_COUNTER,
     MATH_COUNTER
 };
-
-constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 5;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
-    {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
-constexpr size_t NUM_FPU_COUNTERS = 3;
 
 union PerfCounter {
     struct {
@@ -46,6 +35,17 @@ union PerfCounter {
 #include "debug/assert.h"
 
 namespace kernel_profiler {
+
+const PerfCounterGroup counter_groups[] = {
+    PerfCounterGroup::FPU,
+    PerfCounterGroup::PACK,
+    PerfCounterGroup::UNPACK,
+    PerfCounterGroup::L1,
+    PerfCounterGroup::INSTRN};
+constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 5;
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
+    {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
+constexpr size_t NUM_FPU_COUNTERS = 3;
 
 // bit masks for the different counter groups
 #define PROFILE_PERF_COUNTERS_FPU (1 << 0)
@@ -192,7 +192,7 @@ void stop_perf_counter() {
                 // Wait for registers to update
                 while (cntl_reg[1] != (counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE));
                 // Extra wait
-                for (int i = 0; i < 50; i++) {
+                for (int wait_count = 0; wait_count < 50; wait_count++) {
                     asm("nop");
                 }
                 PerfCounter counter(read_reg[1], read_reg[0], counters[i].first);
