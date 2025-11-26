@@ -48,6 +48,13 @@ public:
         MetalContext::instance().dprint_server()->await();
     }
 
+    // Destructor ensures file descriptor is closed even if SetUp() throws
+    ~DPrintMeshFixture() {
+        if (memfd_ >= 0) {
+            close(memfd_);
+        }
+    }
+
 protected:
     int memfd_ = -1;  // File descriptor for memory-backed file
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
