@@ -1,0 +1,168 @@
+diff --git a/tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py b/tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
+index d8c16794e8..c2b44c9207 100644
+--- a/tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
++++ b/tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
+@@ -6,6 +6,9 @@ import torch
+ import pytest
+ import ttnn
+
++import numpy as np
++import matplotlib.pyplot as plt
++
+ from tests.ttnn.utils_for_testing import assert_with_ulp
+
+
+@@ -841,6 +844,153 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
+         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+
+
++def graph_int32_div_metrics(torch_output_tensor, output_tensor,
++                            torch_input_tensor_a, torch_input_tensor_b,
++                            round_mode):
++
++    golden = torch_output_tensor.cpu().numpy()
++    kernel = output_tensor.cpu().numpy()
++    A = torch_input_tensor_a.cpu().numpy()
++    B = torch_input_tensor_b.cpu().numpy()
++
++    # ---------------------------
++    # Compute Metrics
++    # ---------------------------
++    abs_error = np.abs(kernel - golden)
++    signed_error = golden - kernel
++    error_mask = (signed_error != 0)
++    error_rate = error_mask.mean() * 100
++
++    # ---------------------------
++    # 1. Absolute Error Plot
++    # ---------------------------
++    plt.figure(figsize=(10, 4))
++    plt.plot(A, abs_error, marker=".", linestyle="none", alpha=0.7)
++    plt.title(f"Absolute Error (A = -100..100, B={np.unique(B)}, round_mode={round_mode})")
++    plt.xlabel("A (numerator)")
++    plt.ylabel("|golden - kernel|")
++    plt.grid(True)
++    plt.tight_layout()
++    plt.show()
++
++    # ---------------------------
++    # 2. Signed Error Plot
++    # ---------------------------
++    plt.figure(figsize=(10, 4))
++    plt.plot(A, signed_error, marker=".", linestyle="none", alpha=0.7)
++    plt.title(f"Signed Error (golden - kernel)")
++    plt.xlabel("A (numerator)")
++    plt.ylabel("golden - kernel")
++    plt.axhline(0, color="black", linewidth=1)
++    plt.grid(True)
++    plt.tight_layout()
++    plt.show()
++
++    # ---------------------------
++    # 3. Error Rate (Single Value)
++    # ---------------------------
++    print(f"\nError rate: {error_rate:.4f}%")
++
++    plt.figure(figsize=(4, 4))
++    plt.bar(["error_rate"], [error_rate])
++    plt.ylabel("% incorrect results")
++    plt.title("Error Rate (%)")
++    plt.tight_layout()
++    plt.show()
++
++    # ---------------------------
++    # 4. Error Distribution Histogram
++    # ---------------------------
++    plt.figure(figsize=(8, 4))
++    plt.hist(signed_error, bins=range(-5, 6))
++    plt.title("Error Distribution Histogram")
++    plt.xlabel("Signed error (golden - kernel)")
++    plt.ylabel("Count")
++    plt.xticks(range(-5, 6))
++    plt.grid(True)
++    plt.tight_layout()
++    plt.show()
++
++    # ---------------------------
++    # 5. 2D Heatmap of Errors
++    #     X-axis: numerator A
++    #     Y-axis: denominator B (unique)
++    # ---------------------------
++
++    unique_B = np.unique(B)
++    heatmap = np.zeros((len(unique_B), len(A)))
++
++    for i, b in enumerate(unique_B):
++        mask = (B == b)
++        heatmap[i, :] = (golden - kernel)[mask]
++
++    plt.figure(figsize=(12, 6))
++    plt.imshow(heatmap, aspect="auto", cmap="coolwarm", vmin=-2, vmax=2)
++    plt.colorbar(label="golden - kernel")
++    plt.xlabel("A (numerator: -100 → 100)")
++    plt.ylabel("B (denominator values)")
++    plt.yticks(np.arange(len(unique_B)), unique_B)
++    plt.title("Signed Error Heatmap (A × B)")
++    plt.tight_layout()
++    plt.show()
++
++
++@pytest.mark.parametrize("round_mode", ["trunc", "floor"])
++@pytest.mark.parametrize("b_value", list(range(1, 21)))
++def test_div_trunc_floor_range(round_mode, b_value, device):
++    # Input A: range from -100 to 100 (inclusive)
++    torch_input_tensor_a = torch.arange(-100, 101, dtype=torch.int32)
++
++    input_tensor_a = ttnn.from_torch(
++        torch_input_tensor_a,
++        dtype=ttnn.int32,
++        device=device,
++        layout=ttnn.TILE_LAYOUT,
++        memory_config=ttnn.DRAM_MEMORY_CONFIG,
++    )
++
++    # Input B: full tensor of size matching A, filled with b_value
++    torch_input_tensor_b = torch.full_like(torch_input_tensor_a, fill_value=b_value, dtype=torch.int32)
++
++    input_tensor_b = ttnn.from_torch(
++        torch_input_tensor_b,
++        dtype=ttnn.int32,
++        device=device,
++        layout=ttnn.TILE_LAYOUT,
++        memory_config=ttnn.DRAM_MEMORY_CONFIG,
++    )
++
++    # Golden reference
++    golden_function = ttnn.get_golden_function(ttnn.div)
++    torch_output_tensor = golden_function(
++        torch_input_tensor_a,
++        torch_input_tensor_b,
++        round_mode=round_mode,
++        device=device,
++    )
++
++    # Use legacy path for testing round_mode
++    output_tensor = ttnn.div(
++        input_tensor_a,
++        input_tensor_b,
++        round_mode=round_mode,
++        use_legacy=True,
++    )
++    output_tensor = ttnn.to_torch(output_tensor)
++
++    # Allow 1 ulp difference for trunc / floor; strict compare for default
++    if round_mode is not None:
++        assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
++    else:
++        assert torch.allclose(
++            torch_output_tensor,
++            output_tensor,
++            atol=1e-10,
++            rtol=1e-6,
++            equal_nan=False,
++        )
++
++
+ @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+ def test_div_edge_cases(round_mode, device):
+     pairs = [

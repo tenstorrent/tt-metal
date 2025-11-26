@@ -22,10 +22,30 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::vFloat float_in1 = sfpi::int32_to_float(in1, 0);
         sfpi::vFloat result = float_in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(float_in1), float_in1);
 
-        // If the result is expected to be integer, this function can be used.
-        // vInt int_result = sfpu::_float_to_int32_(result);
+        // Try trunc and floor results
+        sfpi::vFloat trunc_result = _trunc_body_<APPROXIMATION_MODE, true>(result);
+        sfpi::vFloat floor_result = _floor_body_<APPROXIMATION_MODE, true>(result);
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        // sfpi::vInt int_result = sfpu::_float_to_int32_(trunc_result);
+
+        // Add check
+        sfpi::vFloat prod = result * float_in1;
+        sfpi::vInt int_prod = sfpu::_float_to_int32_(prod);
+        // A is positive, B is positive --> add 1 to result
+        // A is negative, B is negative --> add 1 to result
+        // A is positive, B is negative --> sub 1 to result
+        // A is negative, B is positive --> sub 1 to result
+
+        // Compare with original numerator (float_in0)
+        // sfpi::vMask mask_round_up   = GT(prod, float_in0);      // result*B > A
+        // sfpi::vMask mask_round_down = LE(ADD(prod, 1.0f), float_in0); // (result+1)*B <= A
+
+        // Apply corrections
+        // int_result = WHERE(mask_round_up, sfpi::sub(int_result, sfpi::int_set1(1)), int_result);
+        // int_result = WHERE(mask_round_down, sfpi::add(int_result, sfpi::int_set1(1)), int_result);
+
+        sfpi::vInt int_result = sfpu::_float_to_int32_(result);
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = int_prod;
         sfpi::dst_reg++;
     }
 }
