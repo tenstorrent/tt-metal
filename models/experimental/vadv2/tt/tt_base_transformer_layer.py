@@ -3,6 +3,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+
+def get_layernorm_program_config(device, embed_dims=256):
+    """Get LayerNorm sharded program config optimized for VAD-v2"""
+    # Use 8x8 core grid for VAD-v2
+    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
+    # VAD-v2 embed_dims = 256, so in tiles: 256/32 = 8
+    embed_dim_tiles = embed_dims // 32  # 8 tiles
+
+    # For layer norm sharding, use reasonable block dimensions
+    # These are conservative values for VAD-v2
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+        subblock_w=embed_dim_tiles,  # 8 tiles (full embed dim)
+        block_h=4,  # Conservative block height
+        block_w=embed_dim_tiles,  # 8 tiles (full embed dim)
+        inplace=False,
+    )
+
+
 import copy
 import warnings
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
@@ -99,6 +120,9 @@ class TtBaseTransformerLayer:
 
         self.embed_dims = self.attentions[0].embed_dims
 
+        # STEP 5: Add LayerNorm sharded program config for optimized layer normalization
+        self.layernorm_program_config = get_layernorm_program_config(self.device, self.embed_dims)
+
         num_attn = operation_order.count("self_attn") + operation_order.count("cross_attn")
         if isinstance(attn_cfgs, dict):
             attn_cfgs = [copy.deepcopy(attn_cfgs) for _ in range(num_attn)]
@@ -176,10 +200,12 @@ class TtBaseTransformerLayer:
             elif layer == "norm":
                 prev_query = query
 
+                # STEP 5: Use LayerNorm sharded program config for optimized layer normalization
                 query = ttnn.layer_norm(
                     query,
                     weight=self.params.norms[f"norm{norm_index}"].weight,
                     bias=self.params.norms[f"norm{norm_index}"].bias,
+                    program_config=self.layernorm_program_config,
                 )
                 norm_index += 1
 

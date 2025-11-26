@@ -146,6 +146,7 @@ class TtMultiheadAttention:
 
         def switch_to_dram():
             nonlocal attn_mem_cfg, attn_compute_cfg
+            # STEP 4: Fall back to DRAM memory if L1 block sharding fails
             attn_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
             attn_compute_cfg = None
 

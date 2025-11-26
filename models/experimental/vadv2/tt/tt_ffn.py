@@ -51,7 +51,6 @@ class TtFFN:
             identity = x
 
         # STEP 2: Fuse GeLU activation with first linear operation
-        # Linear operations work best with default configs for simple 2D operations
         x = ttnn.linear(x, self.linear1_weight, bias=self.linear1_bias, activation="gelu")
 
         # Second linear operation
