@@ -18,7 +18,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_single_core(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -161,7 +162,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_multi_core_block(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -439,7 +441,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_multi_core_interleaved(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -484,7 +487,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
                  full_cores_per_col] =
                     ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
-                return tilize_multi_core_block(a, output);
+                return tilize_multi_core_block(a, output, sub_core_grids);
             }
         }
     }
@@ -634,7 +637,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, Tensor& output) {
+operation::ProgramWithCallbacks tilize_multi_core_sharded(
+    const Tensor& input, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());

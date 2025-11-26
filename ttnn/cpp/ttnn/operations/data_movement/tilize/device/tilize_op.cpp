@@ -110,16 +110,16 @@ operation::ProgramWithCallbacks Tilize::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor);
+        return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor, this->sub_core_grids);
     }
     if (!this->enough_space_height) {
-        return detail::tilize_multi_core_block(input_tensor_a, output_tensor);
+        return detail::tilize_multi_core_block(input_tensor_a, output_tensor, this->sub_core_grids);
     }
     if (!this->use_multicore) {
-        return detail::tilize_single_core(input_tensor_a, output_tensor);
+        return detail::tilize_single_core(input_tensor_a, output_tensor, this->sub_core_grids);
     }
 
-    return detail::tilize_multi_core_interleaved(input_tensor_a, output_tensor);
+    return detail::tilize_multi_core_interleaved(input_tensor_a, output_tensor, this->sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement
