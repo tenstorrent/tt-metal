@@ -1207,22 +1207,21 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         }
     }
 
-    // Extract shared variables from what was previously captured in the lambda
-    RMSAllGatherSharedVariables shared_vars;
-    shared_vars.writer_kernel_ids = std::move(writer_kernel_ids);
-    shared_vars.writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id;
-    shared_vars.writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id;
-    shared_vars.num_none_all_to_all_workers = num_none_all_to_all_workers;
-    shared_vars.pre_cb_in0 = pre_cb_in0;
-    shared_vars.cb_in1 = cb_in1;
-    shared_vars.cb_add_out = cb_add_out;
-    shared_vars.cb_in0 = cb_in0;
-    shared_vars.cb_stats = cb_stats;
-    shared_vars.cb_output = cb_output;
-    shared_vars.cb_output_reshard = cb_output_reshard;
-    shared_vars.cores = cores;
-
-    return cached_program_t(std::move(program), std::move(shared_vars));
+    return cached_program_t(
+        std::move(program),
+        RMSAllGatherSharedVariables{
+            .writer_kernel_ids = std::move(writer_kernel_ids),
+            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
+            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
+            .num_none_all_to_all_workers = num_none_all_to_all_workers,
+            .pre_cb_in0 = pre_cb_in0,
+            .cb_in1 = cb_in1,
+            .cb_add_out = cb_add_out,
+            .cb_in0 = cb_in0,
+            .cb_stats = cb_stats,
+            .cb_output = cb_output,
+            .cb_output_reshard = cb_output_reshard,
+            .cores = cores});
 }
 
 RMSAllGatherMeshWorkloadFactory::cached_mesh_workload_t RMSAllGatherMeshWorkloadFactory::create_mesh_workload(

@@ -175,6 +175,14 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    if (args.inplace) {
+        return input_tensor.tensor_spec();
+    }
+
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output->tensor_spec();
+    }
+
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
 
@@ -182,9 +190,6 @@ spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
     auto input_shard_spec = input_tensor.shard_spec().value();
     if (output_shard_spec != input_shard_spec) {
         output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
-    }
-    if (args.inplace) {
-        return input_tensor.tensor_spec();
     }
 
     auto mem_config = args.output_mem_config;
@@ -205,7 +210,7 @@ spec_return_value_t RMSAllGatherDeviceOperation::compute_output_specs(
 tensor_return_value_t RMSAllGatherDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return *tensor_args.preallocated_output;
+        return tensor_args.preallocated_output.value();
     }
 
     if (args.inplace) {
