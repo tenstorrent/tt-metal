@@ -13,6 +13,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 // #include "api/debug/dprint.h"
 
@@ -592,17 +593,9 @@ void MAIN {
                     }
                     pack_untilize_uninit(matmul_partials_cb);
                 } else {
-                    untilize_init(matmul_partials_cb);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                        for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
-                            cb_wait_front(matmul_partials_cb, out_block_w);
-                            cb_reserve_back(out_cb_id, out_block_w);
-                            untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
-                            cb_push_back(out_cb_id, out_block_w);
-                            cb_pop_front(matmul_partials_cb, out_block_w);
-                        }
-                    }
-                    untilize_uninit(matmul_partials_cb);
+                    // Flatten nested loops into single iteration count: in0_num_subblocks * out_subblock_h
+                    compute_kernel_lib::untilize<out_block_w>(
+                        matmul_partials_cb, out_cb_id, in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
