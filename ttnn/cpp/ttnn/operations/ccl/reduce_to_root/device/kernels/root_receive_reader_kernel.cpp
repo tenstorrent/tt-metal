@@ -48,10 +48,10 @@ inline void read_from_local(
     cb_reserve_back(cb_id_in_l, input_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
+    DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
     noc_async_read_barrier();
     DPRINT << "printing l from compute cb l\n";
-    print_full_tile(cb_id_in_l, 0, false);
     cb_push_back(cb_id_in_l, input_num_tiles);
 
     DPRINT << "finished reading l tensor\n";
@@ -59,10 +59,10 @@ inline void read_from_local(
     cb_reserve_back(cb_id_in_s, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
+    DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     DPRINT << "printing s from compute cb s\n";
-    print_full_tile(cb_id_in_s, 0, false);
     cb_push_back(cb_id_in_s, onetile);
 
     DPRINT << "finished reading s tensor\n";
@@ -70,10 +70,10 @@ inline void read_from_local(
     cb_reserve_back(cb_id_in_m, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_m);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
+    DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
     DPRINT << "printing M from compute cb m\n";
-    print_full_tile(cb_id_in_m, 0, false);
     cb_push_back(cb_id_in_m, onetile);
     DPRINT << "finished reading m tensor\n";
 }
@@ -98,6 +98,13 @@ void kernel_main() {
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(fabric_ct_idx + 2);
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
+
+    DPRINT << "the ct args for fabric mux are: \n";
+    DPRINT << "num buffers per channel: " << (uint32_t)fabric_mux_num_buffers_per_channel << "\n";
+    DPRINT << "channel buffer size bytes: " << (uint32_t)fabric_mux_channel_buffer_size_bytes << "\n";
+    DPRINT << "status address: " << (uint32_t)fabric_mux_status_address << "\n";
+    DPRINT << "termination signal address: " << (uint32_t)fabric_mux_termination_signal_address << "\n";
+    DPRINT << "num mux clients: " << (uint32_t)num_mux_clients << "\n";
 
     const uint32_t fabric_idx_2 = get_arg_val<uint32_t>(0);
     const uint32_t src_addr_l = get_arg_val<uint32_t>(1);
@@ -151,6 +158,28 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
+
+    DPRINT << "fabric mux rt args are: \n";
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << ", y: " << (uint32_t)fabric_mux_y
+           << ", channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+    DPRINT << "fabric_mux_channel_base_address: " << (uint32_t)fabric_mux_channel_base_address << "\n";
+    DPRINT << "fabric_mux_connection_info_address: " << (uint32_t)fabric_mux_connection_info_address << "\n";
+    DPRINT << "fabric_mux_connection_handshake_address: " << (uint32_t)fabric_mux_connection_handshake_address << "\n";
+    DPRINT << "fabric_mux_flow_control_address: " << (uint32_t)fabric_mux_flow_control_address << "\n";
+    DPRINT << "fabric_mux_buffer_index_address: " << (uint32_t)fabric_mux_buffer_index_address << "\n";
+    DPRINT << "termination master noc x: " << (uint32_t)termination_master_noc_x
+           << ", y: " << (uint32_t)termination_master_noc_y << "\n";
+    DPRINT << "termination sync address: " << (uint32_t)termination_sync_address << "\n";
+    DPRINT << "local fabric mux status address: " << (uint32_t)local_fabric_mux_status_address << "\n";
+    DPRINT << "local flow control address: " << (uint32_t)local_flow_control_address << "\n";
+    DPRINT << "local teardown address: " << (uint32_t)local_teardown_address << "\n";
+    DPRINT << "local buffer index address: " << (uint32_t)local_buffer_index_address << "\n";
+    DPRINT << "END OF fabric mux rt args\n";
+
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << ", y: " << (uint32_t)fabric_mux_y
+           << ", channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -179,13 +208,15 @@ void kernel_main() {
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
+    const uint64_t sender_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
+    DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sender_sem_noc_addr << "\n";
 
     // const uint64_t sender_sem_noc_addr = safe_get_noc_addr(out_ready_sem_x, out_ready_sem_y, sender_semaphore_addr,
     // 0);
     DPRINT << "before sending semaphore inc\n";
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
+
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
     DPRINT << "sender_sem noc addr: " << (uint32_t)sender_sem_noc_addr << "\n";
     DPRINT << "sender semaphore address: " << (uint32_t)sender_semaphore_addr << "\n";
@@ -195,7 +226,7 @@ void kernel_main() {
 
     DPRINT << "after sending semaphore increment\n";
     cb_reserve_back(packet_cb_id, 1);
-    uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     // read local data from own device and push to compute cbs
     read_from_local(
@@ -234,12 +265,12 @@ void kernel_main() {
     // read the single packet
     // uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    DPRINT << "reading packet from address: " << (uint32_t)packet_noc_addr << "\n";
+    DPRINT << "reading size: " << (uint32_t)new_packet_size_bytes << "\n";
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    DPRINT << "print data from cb receiver l\n";
-    print_full_tile(receiver_cb_id_l, 0, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     // now receiving s and m
@@ -249,8 +280,6 @@ void kernel_main() {
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    DPRINT << "print data from cb receiver s\n";
-    print_full_tile(receiver_cb_id_s, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
@@ -315,7 +344,7 @@ void kernel_main() {
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(sender_semaphore_addr2);
+    const uint64_t sender_sem_noc_addr_2 = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr2);
     auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
     sem_header_ptr_2->to_noc_unicast_atomic_inc(

@@ -48,24 +48,30 @@ inline void read_from_local(
     cb_reserve_back(cb_id_in_l, input_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
+    DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
     noc_async_read_barrier();
+    DPRINT << "printing l from compute cb l\n";
     cb_push_back(cb_id_in_l, input_num_tiles);
 
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
+    DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
+    DPRINT << "printing s from compute cb s\n";
     cb_push_back(cb_id_in_s, onetile);
 
     // for tensor m
     cb_reserve_back(cb_id_in_m, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_m);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
+    DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
+    DPRINT << "printing m from compute cb m\n";
     cb_push_back(cb_id_in_m, onetile);
 }
 
@@ -134,6 +140,10 @@ void kernel_main() {
 
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << ", y: " << (uint32_t)fabric_mux_y
+           << ", channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+
+    DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
@@ -164,7 +174,8 @@ void kernel_main() {
 
     DPRINT << "before sending semaphore inc\n";
 
-    const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
+    const uint64_t sender_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
+    DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sender_sem_noc_addr << "\n";
     // const uint64_t sender_sem_noc_addr = safe_get_noc_addr(out_ready_sem_x, out_ready_sem_y, sender_semaphore_addr,
     // 0);
 
@@ -180,7 +191,7 @@ void kernel_main() {
     DPRINT << "the packet cb id: " << (uint32_t)packet_cb_id << "\n";
     cb_reserve_back(packet_cb_id, 1);
     DPRINT << "reserving back packet cb\n";
-    const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
+    const uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
     DPRINT << "before reading from local\n";
     // read local data from own device and push to compute cbs
@@ -201,7 +212,8 @@ void kernel_main() {
     // device 3 is sending data to device 2
     uint32_t chunk_size = input_num_tiles;  // 8; HERE
 
-    // receive l, s and m data from sender
+    // here fix semaphore here as well
+    //  receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, num_mux_clients);
 
@@ -221,9 +233,14 @@ void kernel_main() {
 
     // const uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
     const uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
+    DPRINT << "reading packet from address: " << (uint32_t)packet_noc_addr << "\n";
+    DPRINT << "reading size: " << (uint32_t)new_packet_size_bytes << "\n";
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
+
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    DPRINT << "print data from receiver l cb\n";
+    print_full_tile(receiver_cb_id_l, 0, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     // now receiving s and m
@@ -246,6 +263,7 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
 
+    DPRINT << "printing the packet data we have received first time\n";
     cb_push_back(packet_cb_id, 1);
 
     DPRINT << "after memmove of s and m\n";

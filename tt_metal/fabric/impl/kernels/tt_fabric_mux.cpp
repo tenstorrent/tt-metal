@@ -108,6 +108,7 @@ void forward_data(
     uint8_t channel_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
+        DPRINT << "channel id: " << (uint32_t)channel_id << " has unsent payload\n";
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
@@ -127,6 +128,7 @@ void forward_data(
         if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
+        DPRINT << "end of forwarding data for channel id: " << (uint32_t)channel_id << "\n";
     }
 
     tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
@@ -275,4 +277,5 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
+    DPRINT << "fabric mux terminated normally\n";
 }
