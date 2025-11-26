@@ -6,6 +6,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc
 from loguru import logger
 import math
+import numpy as np
 
 
 def get_abs_and_relative_error(tensor_a, tensor_b):
@@ -19,8 +20,28 @@ def get_abs_and_relative_error(tensor_a, tensor_b):
     return abs_error, relative_error
 
 
+def check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol, pass_threshold=0.999):
+    pytorch_np = pytorch_output.detach().cpu().numpy()
+    ttnn_np = ttnn_output_torch.detach().cpu().numpy()
+
+    is_close = np.isclose(ttnn_np, pytorch_np, atol=exp_atol, rtol=exp_rtol)
+
+    tol_pass_rate = np.mean(is_close)
+
+    passed = tol_pass_rate >= pass_threshold
+
+    return passed
+
+
 def check_ttnn_output(
-    layer_name, pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.999
+    layer_name,
+    pytorch_output,
+    ttnn_output,
+    to_channel_first=False,
+    output_channels=None,
+    exp_pcc=0.999,
+    exp_atol=1e-08,
+    exp_rtol=1e-05,
 ):
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
@@ -32,12 +53,18 @@ def check_ttnn_output(
         ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
 
     abs_err, rel_err = get_abs_and_relative_error(pytorch_output, ttnn_output_torch)
-    passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
-    special_char = "✅" if passed else "❌"
-    logger.warning(f"{special_char} Output {layer_name}: {passed=}, {pcc=}, {abs_err=:.3f}, {rel_err=:.3f}")
-    if passed and float(pcc) - exp_pcc > 0.001:
+    passed_pcc, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
+    special_char = "✅" if passed_pcc else "❌"
+    logger.warning(f"{special_char} Output {layer_name} didn't pass PCC check: {passed_pcc=}, {pcc=}")
+    if passed_pcc and float(pcc) - exp_pcc > 0.001:
         logger.warning(
             f"⚠️  Output {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
         )
 
-    return passed
+    passed_tolerance = check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol)
+    special_char = "✅" if passed_tolerance else "❌"
+    logger.warning(
+        f"{special_char} Output {layer_name} didn't pass tolerance check: {passed_tolerance=}, {abs_err=:.3f}, {rel_err=:.3f}"
+    )
+
+    return passed_pcc and passed_tolerance
