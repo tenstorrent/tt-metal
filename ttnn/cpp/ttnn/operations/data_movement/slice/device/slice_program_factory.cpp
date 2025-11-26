@@ -188,10 +188,6 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     return std::make_tuple(cb_page_size, num_read_per_barrier, misalignment);
 }
 
-// Old slice_rm_multi_core, slice_rm_multi_core_sharded, slice_tile_multi_core, and
-// slice_tile_multi_core_tensor_args functions removed - functionality moved to program factories
-// If you're seeing a linker error for these functions, update the call site to use the new TMP pattern
-
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
     if (values.empty()) {
@@ -676,9 +672,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
 
 }  // namespace detail
 
-// TMP Program Factory Implementations
-
-// SliceRmProgramFactory implementation
 program::SliceRmProgramFactory::cached_program_t program::SliceRmProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;

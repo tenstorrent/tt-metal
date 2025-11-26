@@ -11,7 +11,6 @@ namespace ttnn::operations::data_movement::program {
 
 using namespace slice;
 
-// Row-major interleaved program factory
 struct SliceRmProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -35,7 +34,6 @@ struct SliceRmProgramFactory {
         tensor_return_value_t& output);
 };
 
-// Row-major sharded program factory
 struct SliceRmShardedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::CBHandle cb_src0;
@@ -56,7 +54,6 @@ struct SliceRmShardedProgramFactory {
         tensor_return_value_t& output);
 };
 
-// Row-major stride program factory
 struct SliceRmStrideProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
@@ -78,7 +75,6 @@ struct SliceRmStrideProgramFactory {
         tensor_return_value_t& output);
 };
 
-// Tile layout program factory
 struct SliceTileProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id;
@@ -102,7 +98,6 @@ struct SliceTileProgramFactory {
         tensor_return_value_t& output);
 };
 
-// Tile layout with tensor args program factory
 struct SliceTileTensorArgsProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id;
