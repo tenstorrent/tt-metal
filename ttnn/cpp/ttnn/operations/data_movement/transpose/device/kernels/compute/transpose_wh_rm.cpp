@@ -10,6 +10,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
@@ -30,14 +31,8 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         tile_idx = tile_idx - HtWt + 1;
         cb_push_back(cb_untilize, Ht);
 
-        // tilize
-        untilize_init(cb_untilize);
-        cb_wait_front(cb_untilize, Ht);
-        cb_reserve_back(cb_out, Ht);
-        untilize_block(cb_untilize, Ht, cb_out);
-        cb_push_back(cb_out, Ht);
-        cb_pop_front(cb_untilize, Ht);
-        untilize_uninit(cb_untilize);
+        // untilize
+        compute_kernel_lib::untilize<Ht>(cb_untilize, cb_out, 1);
     }
 }
 
