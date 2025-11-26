@@ -19,6 +19,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/debug/dprint_server.hpp>
 
 using namespace tt::tt_metal;
 

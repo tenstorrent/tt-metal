@@ -699,6 +699,7 @@ def test_grid_sample_sharded_batched(
 
 
 @pytest.mark.parametrize("use_precomputed_grid", [True])
+@pytest.mark.parametrize("io_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor, num_slices",
@@ -722,11 +723,29 @@ def test_grid_sample_oft(
     grid_batching_factor,
     num_slices,
     use_precomputed_grid,
+    io_dtype,
     grid_dtype,
     core_grid,
 ):
+    # Skip specific OOM test case
+    if (
+        input_shape == (1, 256, 24, 80)
+        and grid_shape == (1, 25344, 7, 2)
+        and io_dtype == ttnn.float32
+        and grid_dtype == ttnn.bfloat16
+        and use_precomputed_grid == True
+    ):
+        pytest.skip("Skipping OOM test case")
+
     if use_precomputed_grid and grid_dtype == ttnn.float32:
         pytest.skip("Precomputed grid only supports bfloat16")
+
+    if io_dtype == ttnn.float32:
+        torch_io_dtype = torch.float32
+    elif io_dtype == ttnn.bfloat16:
+        torch_io_dtype = torch.bfloat16
+    else:
+        pytest.skip("Unsupported input dtype")
 
     torch.manual_seed(0)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -740,7 +759,7 @@ def test_grid_sample_oft(
     input_shape_nhwc = [batch_size, height, width, channels]
 
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch_io_dtype)
 
     # Create torch grid and split into slices
     torch_grid = torch.randn(grid_shape, dtype=torch.float32) * 2 - 1
@@ -748,7 +767,11 @@ def test_grid_sample_oft(
 
     # Prepare TTNN input and grid slices
     ttnn_input = ttnn.from_torch(
-        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input_nhwc,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=io_dtype,
     )
     ttnn_grid_device = prepare_ttnn_grid(
         torch_grid,
@@ -770,7 +793,7 @@ def test_grid_sample_oft(
         torch_output_nchw = F.grid_sample(
             torch_input_nchw, torch_grid_slices[slice_idx], mode="nearest", padding_mode="zeros", align_corners=True
         )
-        torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+        torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch_io_dtype)
 
         ttnn_grid_device = ttnn_grid_device_slices[slice_idx]
         ttnn_grid_device = ttnn.to_memory_config(ttnn_grid_device, ttnn.DRAM_MEMORY_CONFIG)

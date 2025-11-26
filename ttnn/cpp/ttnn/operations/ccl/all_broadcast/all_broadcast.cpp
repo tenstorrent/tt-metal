@@ -6,7 +6,7 @@
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <deque>
 
 namespace ttnn::operations::ccl {

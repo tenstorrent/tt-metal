@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <gtest/gtest.h>
-#include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/mesh_graph_descriptor.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <memory>
 #include <unordered_set>
