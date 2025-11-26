@@ -363,12 +363,7 @@ tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
     bool has_attn_mask = tensor_args.attn_mask.has_value();
-    std::vector<Tensor> input_tensors;
-    input_tensors.emplace_back(tensor_args.q);
-    input_tensors.emplace_back(tensor_args.k);
-    if (tensor_args.v.has_value()) {
-        input_tensors.emplace_back(tensor_args.v.value());
-    }
+
     return operation::hash_operation<SdpaDecodeDeviceOperation>(
         operation_attributes.scale,
         operation_attributes.output_mem_config,
@@ -382,7 +377,9 @@ tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
         operation_attributes.sliding_window_size,
         has_attn_mask,
         has_cur_pos,
-        input_tensors,
+        tensor_args.q,
+        tensor_args.k,
+        tensor_args.v,
         // Hash on page_table_tensor to properly size page table CB
         tensor_args.page_table_tensor,
         tensor_args.attention_sink);
