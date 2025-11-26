@@ -310,6 +310,15 @@ async function fetchNewWorkflowRuns(octokit, context, days, cachedRunIds, workfl
     core.info(`[FETCH] Total new runs fetched: ${newRuns.length} (from ${workflowIds.length} workflows)`);
   }
 
+  // Filter out manually triggered runs (workflow_dispatch)
+  const beforeFilter = newRuns.length;
+  newRuns = newRuns.filter(run => run.event !== 'workflow_dispatch');
+  const filteredCount = beforeFilter - newRuns.length;
+  if (filteredCount > 0) {
+    core.info(`[FETCH] Filtered out ${filteredCount} manually triggered runs (workflow_dispatch)`);
+  }
+  core.info(`[FETCH] Final count after filtering: ${newRuns.length} runs`);
+
   return newRuns;
 }
 
