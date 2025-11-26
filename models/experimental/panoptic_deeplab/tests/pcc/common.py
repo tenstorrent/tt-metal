@@ -28,9 +28,7 @@ def check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol, 
 
     tol_pass_rate = np.mean(is_close)
 
-    passed = tol_pass_rate >= pass_threshold
-
-    return passed
+    return tol_pass_rate >= pass_threshold
 
 
 def check_ttnn_output(
@@ -54,17 +52,14 @@ def check_ttnn_output(
 
     abs_err, rel_err = get_abs_and_relative_error(pytorch_output, ttnn_output_torch)
     passed_pcc, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
-    special_char = "✅" if passed_pcc else "❌"
-    logger.warning(f"{special_char} Output {layer_name} didn't pass PCC check: {passed_pcc=}, {pcc=}")
+    passed_tolerance = check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol)
+    special_char = "✅" if passed_pcc and passed_tolerance else "❌"
+    logger.warning(
+        f"{special_char} Output {layer_name}: {passed_pcc=}, {pcc=}, {passed_tolerance=}, {abs_err=:.3f}, {rel_err=:.3f}"
+    )
     if passed_pcc and float(pcc) - exp_pcc > 0.001:
         logger.warning(
             f"⚠️  Output {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
         )
-
-    passed_tolerance = check_with_tolerance(pytorch_output, ttnn_output_torch, exp_atol, exp_rtol)
-    special_char = "✅" if passed_tolerance else "❌"
-    logger.warning(
-        f"{special_char} Output {layer_name} didn't pass tolerance check: {passed_tolerance=}, {abs_err=:.3f}, {rel_err=:.3f}"
-    )
 
     return passed_pcc and passed_tolerance
