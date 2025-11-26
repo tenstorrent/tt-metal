@@ -169,13 +169,12 @@ def is_collective_op(op_code):
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
-    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
+    step_name = f"tg-llama-prefill-device-6u-perf-{seqlen}"
     batch_size = 1
-    subdir = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
+    subdir = f"tg-llama-prefill-device-6u-perf-{seqlen}"
     num_iterations = 1
     num_layers = 1
 
@@ -463,11 +462,11 @@ def test_llama_TG_perf_device(
     ttft_estimate_80l = ttft_estimate_80l / 1000000
     print(f"80L TTFT time estimate: {ttft_estimate_80l}")
 
-    benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_{galaxy_type}", ttft_estimate_80l)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_6u", ttft_estimate_80l)
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_prefill_{galaxy_type}_{seqlen}",
+        run_type=f"tg_llama_demo_prefill_6u_{seqlen}",
         ml_model_name="llama70b-tg",
     )
 
