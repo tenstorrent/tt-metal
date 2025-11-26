@@ -332,10 +332,10 @@ def test_log_probs_calculation2(shape, mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # prepare correct logits
-    correct_logits_tensor = log_probs_calculator.prepare_correct_logits(logits_tensor, ttnn_indices_tensor)
+    # prepare relevant logits
+    relevant_logits_tensor = log_probs_calculator.prepare_relevant_logits(logits_tensor, ttnn_indices_tensor)
 
-    tt_log_probs = log_probs_calculator.calculate_log_probs(correct_logits_tensor)
+    tt_log_probs = log_probs_calculator.calculate_log_probs(relevant_logits_tensor)
 
     log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     # slice from (1,1,32,256) -> (1,1,1,32)

@@ -145,8 +145,8 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, *, k, p, temp):
-        self.tt_sampling.reset_params(k=k, p=p, temp=temp)
+    def reset_sampling_params(self, *, k, p, temp, calculate_log_probs=None):
+        self.tt_sampling.reset_params(k=k, p=p, temp=temp, calculate_log_probs=calculate_log_probs)
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
@@ -184,13 +184,13 @@ class SamplingGenerator:
     ):
         if penalties_on:
             self.tt_penalties.apply(logits, batch_size)
-        tt_tokens = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
         target_tokens = tt_out_tok or tt_tokens
         if penalties_on and update_state and target_tokens is not None:
             self._update_penalties_from_tokens(target_tokens, batch_size)
         if num_outputs != 1:
             raise NotImplementedError("num_outputs > 1 not yet supported on device")
-        return tt_tokens
+        return tt_tokens, tt_log_probs
 
     def capture_trace(
         self,
