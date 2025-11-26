@@ -11,7 +11,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -21,7 +20,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
+uint32_t get_packed_value(const Tensor tensor, const tt::tt_metal::PadValue pad_value) {
     return std::visit(
         [&tensor](auto&& pad_value) {
             using T = std::decay_t<decltype(pad_value)>;
@@ -61,7 +60,7 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
+    const Tensor& a, Tensor& output, const tt::tt_metal::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
@@ -242,7 +241,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interleaved(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
+    const Tensor& a, Tensor& output, const tt::tt_metal::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -522,7 +521,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
+    const Tensor& a, Tensor& output, const tt::tt_metal::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -726,7 +725,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
 // This purely supports input width shard -> output width shard for now
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
+    const Tensor& a, Tensor& output, const tt::tt_metal::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();

@@ -148,9 +148,7 @@ AttnMatmulDeviceOperation::invoke(
     std::optional<const uint32_t> num_tokens,
     std::optional<const bool> transpose_hw,
     std::optional<Tensor> optional_output_tensor) {
-    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
-                    ? input_tensor_a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_a.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
 
     operation_attributes_t attributes{

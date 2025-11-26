@@ -23,9 +23,7 @@ ttnn::Tensor FillRMOperation::invoke(
     float val_lo,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {})
-        .at(0);
+    return operation::run(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {}).at(0);
 }
 
 ttnn::Tensor FillOnesRMOperation::invoke(
@@ -38,9 +36,7 @@ ttnn::Tensor FillOnesRMOperation::invoke(
     const ttnn::Tensor& any,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(
-               FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {})
-        .at(0);
+    return operation::run(FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {}).at(0);
 }
 
 }  // namespace ttnn::operations::data_movement

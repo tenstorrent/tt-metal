@@ -5,7 +5,7 @@
 #include "device/attn_matmul_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "attn_matmul.hpp"
-
+#include "ttnn/device.hpp"
 #include <utility>
 
 namespace ttnn::operations::experimental::matmul {
