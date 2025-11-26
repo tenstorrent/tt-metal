@@ -8,7 +8,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from safetensors import safe_open
+from transformers import AutoModelForVision2Seq
 from transformers.models.mllama.image_processing_mllama import (
     convert_aspect_ratios_to_ids,
     get_all_supported_aspect_ratios,
@@ -24,15 +24,13 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 def load_partial_weights(weights_path, embedding_layer_prefix):
     partial_state_dict = {}
-    safetensor_files = [f for f in os.listdir(weights_path) if f.endswith(".safetensors")]
-    for fname in safetensor_files:
-        with safe_open(os.path.join(weights_path, fname), framework="pt", device="cpu") as f:
-            keys = f.keys()
-            for key in keys:
-                if embedding_layer_prefix in key:
-                    print(f"✅ Found in {fname}: {key}")
-                    key_name = "embedding.weight" if "weight" in key else "gate"
-                    partial_state_dict.update({key_name: f.get_tensor(key)})
+    model = AutoModelForVision2Seq.from_pretrained(weights_path, torch_dtype="auto")  # , local_files_only=True
+    weights = model.state_dict()
+    keys = weights.keys()
+    for key in keys:
+        if embedding_layer_prefix in key:
+            key_name = "embedding.weight" if "weight" in key else "gate"
+            partial_state_dict.update({key_name: weights[key]})
     return partial_state_dict
 
 
@@ -129,7 +127,7 @@ def test_tile_position_emb_inference(
             self.is_gated = is_gated
 
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(os.getenv("TT_CACHE_PATH"), embedding_layer_prefix)
+    partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), embedding_layer_prefix)
     reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
