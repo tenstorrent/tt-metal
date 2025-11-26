@@ -11,6 +11,7 @@ constexpr auto cb_param_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
+constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 
@@ -69,7 +70,12 @@ void kernel_main() {
         read_tiles(cb_exp_avg_sq_idx, exp_avg_sq_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
 #if AMSGRAD
         read_tiles(
-            cb_max_exp_avg_sq_idx, max_exp_avg_sq_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+            cb_max_exp_avg_sq_in_idx,
+            max_exp_avg_sq_addr_gen,
+            tile_idx,
+            block_size,
+            current_block_size,
+            tile_size_bytes);
 #endif
         noc_async_read_barrier();
         cb_push_back(cb_param_idx, block_size);
@@ -77,7 +83,7 @@ void kernel_main() {
         cb_push_back(cb_exp_avg_idx, block_size);
         cb_push_back(cb_exp_avg_sq_idx, block_size);
 #if AMSGRAD
-        cb_push_back(cb_max_exp_avg_sq_idx, block_size);
+        cb_push_back(cb_max_exp_avg_sq_in_idx, block_size);
 #endif
     }
 }
