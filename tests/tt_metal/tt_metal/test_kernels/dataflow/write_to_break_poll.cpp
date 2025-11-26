@@ -4,21 +4,17 @@
 
 #include <cstdint>
 #include "debug/dprint.h"
+#include "hw/inc/dataflow_api.h"
 
 void kernel_main() {
     set_l1_data_cache<true>();
     uint32_t poll_addr = get_arg_val<uint32_t>(0);
     uint32_t value_to_write = get_arg_val<uint32_t>(1);
-    auto sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(2)));
 
-    volatile tt_l1_ptr uint32_t* poll_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
+    experimental::Semaphore sem(get_arg_val<uint32_t>(2));
+    experimental::CoreLocalMem<uint32_t> poll_value(poll_addr);
 
-    // don't call noc_semaphore_wait here because this kernel is run with `poll_l1.cpp` and it is meant to test the l1
-    // cache invalidation from pov of the polling kernel
-    while (*sem_addr != 1) {
-        invalidate_l1_cache();
-    }
-
-    poll_addr_ptr[0] = value_to_write;
+    sem.wait(1);
+    poll_value[0] = value_to_write;
     set_l1_data_cache<false>();
 }
