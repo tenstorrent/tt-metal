@@ -6,25 +6,52 @@ import ttnn
 
 
 class TtFFN:
-    def __init__(self, params, device):
+    def __init__(self, params, device, embed_dims=256, feedforward_dims=512):
         self.device = device
+        self.embed_dims = embed_dims
+        self.feedforward_dims = feedforward_dims
+
+        # Store weights
         self.linear1_weight = params.linear1.weight
         self.linear2_weight = params.linear2.weight
         self.linear1_bias = params.linear1.bias
         self.linear2_bias = params.linear2.bias
 
+        # Note: VAD-v2 has very large sequence length (10,000 elements)
+        # Using simplified optimization without aggressive program configs
+        # to avoid L1 memory overflow
+
     def __call__(self, x, identity=None):
         if identity is None:
             identity = x
 
-        # First linear + ReLU
-        x = ttnn.linear(x, self.linear1_weight, bias=self.linear1_bias)
-        x = ttnn.relu(x)
+        # Ensure input is in TILE_LAYOUT
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        # Second linear
-        x = ttnn.linear(x, self.linear2_weight, bias=self.linear2_bias)
+        # First linear: 256 -> 512
+        x = ttnn.linear(
+            x,
+            self.linear1_weight,
+            bias=self.linear1_bias,
+            dtype=ttnn.bfloat16,
+            activation="relu",  # Fused ReLU activation!
+        )
+
+        # Second linear: 512 -> 256
+        x = ttnn.linear(
+            x,
+            self.linear2_weight,
+            bias=self.linear2_bias,
+            dtype=ttnn.bfloat16,
+        )
 
         # Residual connection
-        x = ttnn.add(x, identity)
+        x = ttnn.add(
+            x,
+            identity,
+            dtype=ttnn.bfloat16,
+        )
+
         ttnn.deallocate(identity)
         return x

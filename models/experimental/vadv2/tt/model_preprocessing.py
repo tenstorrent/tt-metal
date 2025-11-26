@@ -361,24 +361,31 @@ def custom_preprocessor(model, name):
                 }
 
                 # CAN Bus MLP
-                parameters["head"]["transformer"]["can_bus_mlp"] = {
-                    "0": {
-                        "weight": preprocess_linear_weight(head.transformer.can_bus_mlp[0].weight, dtype=ttnn.bfloat16),
-                        "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[0].bias, dtype=ttnn.bfloat16),
-                    },
-                    "1": {
-                        "weight": preprocess_linear_weight(head.transformer.can_bus_mlp[2].weight, dtype=ttnn.bfloat16),
-                        "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[2].bias, dtype=ttnn.bfloat16),
-                    },
-                    "norm": {
-                        "weight": preprocess_layernorm_parameter(
-                            head.transformer.can_bus_mlp.norm.weight, dtype=ttnn.bfloat16
-                        ),
-                        "bias": preprocess_layernorm_parameter(
-                            head.transformer.can_bus_mlp.norm.bias, dtype=ttnn.bfloat16
-                        ),
-                    },
-                }
+                if hasattr(head.transformer, "can_bus_mlp"):
+                    parameters["head"]["transformer"]["can_bus_mlp"] = {
+                        "0": {
+                            "weight": preprocess_linear_weight(
+                                head.transformer.can_bus_mlp[0].weight, dtype=ttnn.bfloat16
+                            ),
+                            "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[0].bias, dtype=ttnn.bfloat16),
+                        },
+                        "1": {
+                            "weight": preprocess_linear_weight(
+                                head.transformer.can_bus_mlp[2].weight, dtype=ttnn.bfloat16
+                            ),
+                            "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[2].bias, dtype=ttnn.bfloat16),
+                        },
+                    }
+                    # Add norm only if it exists
+                    if hasattr(head.transformer.can_bus_mlp, "norm"):
+                        parameters["head"]["transformer"]["can_bus_mlp"]["norm"] = {
+                            "weight": preprocess_layernorm_parameter(
+                                head.transformer.can_bus_mlp.norm.weight, dtype=ttnn.bfloat16
+                            ),
+                            "bias": preprocess_layernorm_parameter(
+                                head.transformer.can_bus_mlp.norm.bias, dtype=ttnn.bfloat16
+                            ),
+                        }
 
                 parameters["head"]["transformer"]["level_embeds"] = ttnn.from_torch(
                     head.transformer.level_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
