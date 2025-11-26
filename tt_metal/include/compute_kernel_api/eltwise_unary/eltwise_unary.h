@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #endif
@@ -26,6 +27,8 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    set_g_srca(icb);
+    set_g_pack(ocb);
 }
 
 // clang-format off
