@@ -75,9 +75,9 @@
 // Per-kernel limits set to maximum available L1
 // These are enforced by the ELF loader in tt_elffile.cpp
 // The real constraint is the kernel_config_buffer aggregate limit, configurable via
-// TT_METAL_KERNEL_CONFIG_BUFFER_SIZE environment variable in bh_hal_tensix.cpp.
-// 1504 KB = 1536 KB (L1 total) - 32 KB (MEM_MAP_END system reserved)
-#define MEM_MAX_KERNEL_SIZE (1504 * 1024)
+// worker_l1_size in MeshDevice::create_unit_meshes
+// 1503 KB = 1536 KB (L1 total) - 33 KB (MEM_MAP_END system reserved)
+#define MEM_MAX_KERNEL_SIZE (1503 * 1024)
 
 #define MEM_BRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
 #define MEM_NCRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE

@@ -1190,12 +1190,13 @@ public:
                                 back.flags &= ~CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
                             }
                         }
-                        // Cast to uint16_t. Value can be exactly 65536 (max_paged_length_per_sub_cmd)
-                        // which overflows to 0. In cq_dispatch.cpp, we handle 0 as special case meaning 65536.
                         kernel_bins_cmd.dispatch_subcmds.emplace_back(CQDispatchWritePackedLargeSubCmd{
                             .noc_xy_addr = noc_encoding,
                             .addr = kernel_config_buffer_offset,
-                            .length = (uint16_t)write_length,  // Overflows 65536 -> 0
+                            .length_minus1 =
+                                (uint16_t)(write_length - 1),  // Always store length - 1 as +1 is unconditionally added
+                                                               // in cq_dispatch.cpp This avoids the need to handle the
+                                                               // special case where 65536 bytes overflows to 0
                             .num_mcast_dests = (uint8_t)num_mcast_dests,
                             .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK});
                         RecordDispatchData(
@@ -1342,7 +1343,7 @@ public:
                 batched_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,
-                    .length = (uint16_t)size,
+                    .length_minus1 = (uint16_t)(size - 1),
                     .num_mcast_dests = transfer_set.first.second,
                     .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
 

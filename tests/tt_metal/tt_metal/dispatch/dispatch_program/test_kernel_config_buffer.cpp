@@ -19,71 +19,151 @@ namespace kernel_size_tests {
 
 class KernelSizeTest : public UnitMeshCQFixture {
 protected:
-    // Runtime-determined values
     uint32_t actual_kernel_config_size_{};
-    uint32_t kernel_config_base_{};
     uint32_t unreserved_base_{};
     uint32_t unreserved_size_{};
     const Hal& hal_{MetalContext::instance().hal()};
+    // Maximum combined size available for kernel config buffer + unreserved user space in worker L1 memory
+    const uint32_t max_worker_l1_size_{hal::get_max_worker_l1_unreserved_size()};
+    const uint32_t kernel_config_base_{
+        hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG)};
 
-    // 65536 bytes is an edge case for testing the CQDispatchWritePackedLargeSubCmd.length
-    // as its equal to scratch_db_size/2 (64KB) which overflows to 0 when cast to uint16_t in dispatch system
-    static constexpr uint32_t packed_write_large_max_chunk_size = 65536;
+    static constexpr uint32_t PACKED_WRITE_LARGE_MAX_CHUNK_SIZE = 65536;
     static constexpr uint32_t NUM_RISCV_PROCESSORS = 5;  // BRISC, NCRISC, TRISC0/1/2
-    static constexpr uint32_t NUM_KERNELS_AGGREGATE_TEST = 4;
+    static constexpr uint32_t NUM_KERNELS_AGGREGATE_TEST = 4;  // Test on 4 separate cores simultaneously
     static constexpr uint32_t OVERSIZED_KERNEL_PADDING = 32;  // Bytes beyond limit for rejection tests
 
-    // Near limit of kernel config buffer size
-    // The kernel size is greater than whats set by KERNEL_BYTES due elf headers, alignment, etc.
-    // So we need to subtract the overhead to get the near limit of the kernel config buffer size
-    static constexpr uint32_t NEAR_LIMIT_BUFFER = 324;
+    // Estimated overhead added to KERNEL_BYTES define when creating actual kernel binaries.
+    // This accounts for ELF headers, alignment and other binary metadata
+    // When targeting the maximum kernel config buffer size, subtract this value from the
+    // available space to avoid exceeding limits during ELF loading
+    // Conservative estimate based on observed overhead
+    static constexpr uint32_t KERNEL_BINARY_OVERHEAD_ESTIMATE = 320;  // Bytes
+    // NCRISC IRAM size on Wormhole as defined in dev_mem_map.h
+    static constexpr uint32_t WORMHOLE_NCRISC_IRAM_SIZE = 16 * 1024;  // Bytes
 
     void SetUp() override {
         UnitMeshCQFixture::SetUp();
 
-        if (this->arch_ != tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP() << "Kernel size config tests are only supported on Blackhole";
-        }
+        // Kernel size config tests are only supported on Wormhole and Blackhole
+        skip_if_unsupported_arch();
 
-        kernel_config_base_ = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
-        unreserved_base_ = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        unreserved_size_ = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-
-        // kernel config buffer size
-        actual_kernel_config_size_ = unreserved_base_ - kernel_config_base_;
-
+        compute_memory_layout();
         log_l1_memory_layout();
     }
 
-    void log_l1_memory_layout() {
-        log_info(
-            LogTest,
-            "Kernel Config Buffer Size: {} KB from 0x{:x} to 0x{:x}",
-            actual_kernel_config_size_ / 1024,
-            kernel_config_base_,
-            unreserved_base_);
-        log_info(
-            LogTest,
-            "User unreserved space: {} KB from 0x{:x} to 0x{:x}",
-            unreserved_size_ / 1024,
-            unreserved_base_,
-            unreserved_base_ + unreserved_size_);
+    // Helper function to compute the partition of worker L1 memory between
+    // kernel config buffer and unreserved space
+    // The kernel config buffer occupies [kernel_config_base_, unreserved_base_).
+    // User-allocatable (unreserved) space occupies [unreserved_base_, L1_top).
+    // The worker_l1_size parameter sets the size of the unreserved region, which indirectly
+    // determines where unreserved_base_ is positioned and thus the kernel config buffer size.
+    // Larger worker_l1_size -> higher unreserved_base_ -> smaller kernel config buffer and vice versa
+    void compute_memory_layout() {
+        TT_ASSERT(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
+
+        auto single_device = devices_[0]->get_devices()[0];
+        unreserved_base_ = single_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        // User unreserved space extends from unreserved_base_ to the top of L1
+        unreserved_size_ = (l1_base + l1_size) - unreserved_base_;
+        // kernel config buffer size
+        actual_kernel_config_size_ = unreserved_base_ - kernel_config_base_;
     }
+
+    void log_l1_memory_layout() {
+        log_info(LogTest, "Kernel config base                          : 0x{:x}", kernel_config_base_);
+        log_info(LogTest, "Max available for kernel config + unreserved: {} B", max_worker_l1_size_);
+        log_info(LogTest, "Actual space used by kernel config buffer   : {} B", actual_kernel_config_size_);
+        log_info(LogTest, "Actual unreserved space                     : {} B", unreserved_size_);
+    }
+
+    void skip_if_unsupported_arch() {
+        if (arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Kernel size config tests are only supported on Wormhole and Blackhole";
+        }
+    }
+};
+
+// This test suite is used to create devices to force a non-default worker_l1_size
+// We set the worker_l1_size to the minimum possible value for the architecture
+class KernelSizeTestCustomWorkerL1SizeMin : public KernelSizeTest {
+protected:
+    // Clamp Wormhole at 1280 B. Dropping below pushes the synthetic pgm_dispatch_perf
+    // kernels over MEM_MAX_KERNEL_SIZE (1432 KB per BRISC/TRISC) and ElfFile::LoadImage
+    // aborts with "phdr overflow". Blackhole's IRAM budget is larger, so 1024 B still works there
+    static constexpr uint32_t WORMHOLE_MIN_WORKER_L1_SIZE = 1280;
+    static constexpr uint32_t BLACKHOLE_MIN_WORKER_L1_SIZE = 1024;
+    uint32_t custom_worker_l1_size_min_{};
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        // Kernel size config tests are only supported on Wormhole and Blackhole
+        skip_if_unsupported_arch();
+        custom_worker_l1_size_min_ =
+            arch_ == tt::ARCH::WORMHOLE_B0 ? WORMHOLE_MIN_WORKER_L1_SIZE : BLACKHOLE_MIN_WORKER_L1_SIZE;
+        create_devices(DEFAULT_TRACE_REGION_SIZE, custom_worker_l1_size_min_);
+        compute_memory_layout();
+        log_l1_memory_layout();
+    }
+};
+
+// This test suite is used to create devices to force a non-default worker_l1_size
+// We set the worker_l1_size to the maximum possible value for the architecture
+class KernelSizeTestCustomWorkerL1SizeMax : public KernelSizeTest {
+protected:
+    // Hardcoded floor (~29.9 KiB) observed from ProgramImpl::finalize_program_offsets()
+    // TT_FATAL when shrinking worker_l1_size. Update if binaries change
+    static constexpr uint32_t MARGIN = 5 * 1024;
+    static constexpr uint32_t WORMHOLE_KERNEL_CONFIG_BUFFER_SIZE_MIN = 29904 + MARGIN;
+    // Blackhole's sizes are slightly larger (~31.6 KB); same rationale as Wormhole
+    static constexpr uint32_t BLACKHOLE_KERNEL_CONFIG_BUFFER_SIZE_MIN = 31568 + MARGIN;
+    uint32_t custom_worker_l1_size_max_{};
+
+    void SetUp() override {
+        if (!validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        // Kernel size config tests are only supported on Wormhole and Blackhole
+        skip_if_unsupported_arch();
+        custom_worker_l1_size_max_ =
+            max_worker_l1_size_ - (arch_ == tt::ARCH::WORMHOLE_B0 ? WORMHOLE_KERNEL_CONFIG_BUFFER_SIZE_MIN
+                                                                  : BLACKHOLE_KERNEL_CONFIG_BUFFER_SIZE_MIN);
+        create_devices(DEFAULT_TRACE_REGION_SIZE, custom_worker_l1_size_max_);
+        compute_memory_layout();
+        log_l1_memory_layout();
+    }
+};
+
+// Helper for RAII kernel nullification
+class ScopedNullifyKernels {
+public:
+    ScopedNullifyKernels(bool enable = true) {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(enable);
+    }
+    ~ScopedNullifyKernels() { tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false); }
+
+    ScopedNullifyKernels(const ScopedNullifyKernels&) = delete;
+    ScopedNullifyKernels& operator=(const ScopedNullifyKernels&) = delete;
 };
 
 using namespace tt::tt_metal;
 
-// Test 1: Verify default aggregate buffer works with small programs
-TEST_F(KernelSizeTest, DefaultAggregateBuffer) {
-    log_info(LogTest, "Testing default aggregate buffer");
+// Test 1: Verify default kernel config buffer works
+TEST_F(KernelSizeTest, DefaultKernelConfigBuffer) {
+    log_info(LogTest, "Testing default kernel config buffer");
+
+    // Verify basic kernel creation and execution with default kernel config buffer sizing
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
 
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program;
-
-        // Create a simple kernel
-        CoreRange cr({0, 0}, {0, 0});
-        CoreRangeSet cr_set({cr});
 
         CreateKernel(
             program,
@@ -98,84 +178,56 @@ TEST_F(KernelSizeTest, DefaultAggregateBuffer) {
     }
 }
 
-// Test 2: Check if env var TT_METAL_KERNEL_CONFIG_BUFFER_SIZE is respected
-TEST_F(KernelSizeTest, EnvVarConfigBufferSize) {
-    log_info(LogTest, "Testing env var TT_METAL_KERNEL_CONFIG_BUFFER_SIZE parameter control");
+// Test 2: Verify kernel config buffer respects default worker_l1_size parameter
+TEST_F(KernelSizeTest, WorkerL1SizeParameterControlDefault) {
+    log_info(LogTest, "Testing default worker_l1_size parameter control");
+    log_info(LogTest, "Worker L1 size: {} B", DEFAULT_L1_SMALL_SIZE);
+    log_l1_memory_layout();
 
-    uint32_t user_set_kernel_config_size = tt::parse_env<uint32_t>("TT_METAL_KERNEL_CONFIG_BUFFER_SIZE", 0);
-
-    if (user_set_kernel_config_size == 0) {
-        GTEST_SKIP() << "Run with TT_METAL_KERNEL_CONFIG_BUFFER_SIZE set to test huge kernel config support";
-    }
-
-    const uint32_t l1_alignment = hal_.get_alignment(HalMemType::L1);
-    const uint32_t dram_alignment = hal_.get_alignment(HalMemType::DRAM);
-    uint32_t max_alignment = std::max(dram_alignment, l1_alignment);
-
-    // Calculate the expected end address by aligning (kernel_config_base_ + user_set_kernel_config_size) up
-    // to the max_alignment boundary, and then subtract the base address to get the aligned size.
-    // Same as bh_hal_tensix.cpp
-    uint32_t aligned_end_addr = (((kernel_config_base_ + user_set_kernel_config_size - 1) | (max_alignment - 1)) + 1);
-    uint32_t expected_kernel_config_size = aligned_end_addr - kernel_config_base_;
-
-    log_info(LogTest, "User set kernel config size                 : {} B", user_set_kernel_config_size);
-    log_info(LogTest, "Expected kernel config size  after alignment: {} B", expected_kernel_config_size);
-    log_info(LogTest, "Actual kernel config size                   : {} B", actual_kernel_config_size_);
-
-    // Verify that the actual kernel config size is equal to the expected kernel config size after alignment
-    EXPECT_EQ(actual_kernel_config_size_, expected_kernel_config_size);
-
-    // Verify that the actual kernel config size is at least the user set kernel config size
-    // Due to alignment, the actual kernel config size may be larger than the user set kernel config size
-    EXPECT_LE(user_set_kernel_config_size, actual_kernel_config_size_);
+    EXPECT_LE(actual_kernel_config_size_ + unreserved_size_, max_worker_l1_size_);
 }
 
-// Test 3: Verify kernel config buffer respects worker_l1_size parameter
-TEST_F(KernelSizeTest, WorkerL1SizeParameterControl) {
-    log_info(LogTest, "Testing worker_l1_size parameter control");
+// Test 3: Actually test custom worker_l1_size parameter
+// Initialize a device with a custom worker_l1_size and
+// Verify that the kernel config buffer size = to the max available L1 space - custom worker_l1_size
+TEST_F(KernelSizeTestCustomWorkerL1SizeMin, WorkerL1SizeParameterControlCustomMin) {
+    log_info(LogTest, "Testing custom minimum worker_l1_size parameter control");
+    log_l1_memory_layout();
 
-    auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-
-    uint32_t l1_end = l1_base + l1_size;
-
-    // Max available space for kernel config buffer
-    uint32_t max_available = l1_end - kernel_config_base_;
-
-    log_info(LogTest, "Kernel config base                          : 0x{:x}", kernel_config_base_);
-    log_info(LogTest, "L1 end                                      : 0x{:x}", l1_end);
-    log_info(LogTest, "Max available for kernel config + unreserved: {} B", max_available);
-    log_info(LogTest, "Actual space used by kernel config buffer   : {} B", actual_kernel_config_size_);
-
-    EXPECT_LE(actual_kernel_config_size_, max_available);
+    EXPECT_EQ(actual_kernel_config_size_, max_worker_l1_size_ - custom_worker_l1_size_min_);
+    EXPECT_EQ(unreserved_size_, custom_worker_l1_size_min_);
 }
 
-// Test 4: Test kernels with different sizes and also edge case of 65536 bytes (64KB)
-// Tests the edge case where 65536 bytes overflows to 0 in CQDispatchWritePackedLargeSubCmd.length
-// This validates the encoding/decoding of the maximum chunk size in the dispatch system
-TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
+// Test 4: Actually test custom worker_l1_size parameter
+// Initialize a device with a custom worker_l1_size and
+// Verify that the kernel config buffer size = to the max available L1 space - custom worker_l1_size
+TEST_F(KernelSizeTestCustomWorkerL1SizeMax, WorkerL1SizeParameterControlCustomMax) {
+    log_info(LogTest, "Testing custom maximum worker_l1_size parameter control");
+    log_l1_memory_layout();
 
-    log_info(LogTest, "Testing different kernel sizes and edge case of {} bytes", packed_write_large_max_chunk_size);
+    EXPECT_EQ(actual_kernel_config_size_, max_worker_l1_size_ - custom_worker_l1_size_max_);
+    EXPECT_EQ(unreserved_size_, custom_worker_l1_size_max_);
+}
+
+// Test 5: Test kernels with different sizes and also edge case of 65536 B (64KB)
+// Verify system handles this boundary condition correctly
+TEST_F(KernelSizeTestCustomWorkerL1SizeMin, KernelSizesBoundaryConditions) {
+    ScopedNullifyKernels nullify_kernels;
+
+    log_info(LogTest, "Testing different kernel sizes and edge case of {} bytes", PACKED_WRITE_LARGE_MAX_CHUNK_SIZE);
 
     // Test sizes around critical boundaries
-    std::vector<uint32_t> kernel_sizes = {
-        1_KB,                                            // 1 KB
-        16_KB,                                           // 16 KB
-        32_KB,                                           // 32 KB
-        packed_write_large_max_chunk_size - 1,           // 64KB - 1
-        packed_write_large_max_chunk_size,               // Exactly 64KB
-        packed_write_large_max_chunk_size + 1,           // 64KB + 1
-        2 * packed_write_large_max_chunk_size,           // 128KB
-        3 * packed_write_large_max_chunk_size,           // 192KB
-        212992,                                          // 212992 bytes
-        actual_kernel_config_size_ / 8,                  // 1/8 of kernel config buffer size
-        actual_kernel_config_size_ / 4,                  // 1/4 of kernel config buffer size
-        actual_kernel_config_size_ / 2,                  // Half of kernel config buffer size
-        actual_kernel_config_size_ - NEAR_LIMIT_BUFFER,  // Near limit of kernel config buffer size
+    const std::vector<uint32_t> kernel_sizes = {
+        1_KB,                                                          // 1 KB
+        32_KB,                                                         // 32 KB
+        PACKED_WRITE_LARGE_MAX_CHUNK_SIZE - 1,                         // 64KB - 1
+        PACKED_WRITE_LARGE_MAX_CHUNK_SIZE,                             // Exactly 64KB
+        PACKED_WRITE_LARGE_MAX_CHUNK_SIZE + 1,                         // 64KB + 1
+        actual_kernel_config_size_ / 2,                                // Half of kernel config buffer size
+        actual_kernel_config_size_ - KERNEL_BINARY_OVERHEAD_ESTIMATE,  // Near limit of kernel config buffer size
     };
 
-    // Select a kernel size and if it's within kernel config buffer size,
+    // Select a kernel size and if it's within kernel config buffer size and
     // test it on all devices
     for (const auto& kernel_size : kernel_sizes) {
         if (kernel_size > actual_kernel_config_size_) {
@@ -188,6 +240,7 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
         }
 
         log_info(LogTest, "Testing kernel size: {} B", kernel_size);
+        std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
         for (const auto& device : devices_) {
             distributed::MeshWorkload workload;
@@ -196,11 +249,9 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
             CoreRange cr({0, 0}, {0, 0});
             CoreRangeSet cr_set({cr});
 
-            std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
-
             CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp",
                 cr_set,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -210,33 +261,30 @@ TEST_F(KernelSizeTest, KernelSizesBoundaryConditions) {
             distributed::Finish(device->mesh_command_queue());
         }
     }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 5: Multiple kernels filling up kernel config buffer on different cores
-TEST_F(KernelSizeTest, MultipleKernelsAggregateSize) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
+// Test 6: Verify multiple kernels filling up kernel config buffer on multiple separate cores simultaneously
+TEST_F(KernelSizeTestCustomWorkerL1SizeMin, MultipleKernelsAggregateSize) {
+    ScopedNullifyKernels nullify_kernels;
 
     log_info(LogTest, "Testing multiple kernels filling up kernel config buffer");
+
+    // Use near limit of kernel config buffer size to test max utilization per core
+    const uint32_t kernel_size = actual_kernel_config_size_ - KERNEL_BINARY_OVERHEAD_ESTIMATE;
+    std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program;
 
-        // Use near limit of kernel config buffer size to test the
-        // multiple kernels filling up the buffer
-        const uint32_t kernel_size = actual_kernel_config_size_ - NEAR_LIMIT_BUFFER;
-
         for (uint32_t i = 0; i < NUM_KERNELS_AGGREGATE_TEST; i++) {
+            // Assign each large kernel to a different core to verify per-core limits
             CoreRange cr({i, 0}, {i, 0});
             CoreRangeSet cr_set({cr});
 
-            std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
-
             CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
                 cr_set,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -248,34 +296,61 @@ TEST_F(KernelSizeTest, MultipleKernelsAggregateSize) {
         EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
         distributed::Finish(device->mesh_command_queue());
     }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 6: Test all five RISC-V processors with large kernels on same core
-TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
+// Test 7: Validate that kernel config buffer is correctly partitioned among all 5 RISC-V
+// processors (BRISC, NCRISC, TRISC0/1/2) running concurrently on the same core
+// Architecture-specific constraints:
+//   Wormhole: NCRISC limited to 16 KB IRAM; remaining space split among 4 other processors
+//   Blackhole: All 5 processors share kernel config buffer equally (no NCRISC cap)
+TEST_F(KernelSizeTestCustomWorkerL1SizeMin, AllRISCVProcessorsWithLargeKernels) {
+    ScopedNullifyKernels nullify_kernels;
 
     log_info(LogTest, "Testing all five RISC-V processors with large kernels");
 
-    // Distribute the kernel size equally among the five RISC-V processors
-    const uint32_t kernel_size = ((actual_kernel_config_size_) / NUM_RISCV_PROCESSORS) - NEAR_LIMIT_BUFFER;
+    uint32_t kernel_size;
+    uint32_t ncrisc_kernel_size;
 
-    log_info(LogTest, "Kernel size: {} B", kernel_size);
+    // Wormhole: reserve the 16 KiB NCRISC IRAM first, then split the leftover evenly across
+    // BRISC/TRISC. Subtract KERNEL_BINARY_OVERHEAD_ESTIMATE to keep ELF headers/alignment under the IRAM cap.
+    // Blackhole: no NCRISC cap, so divide evenly across all processors
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        ncrisc_kernel_size = WORMHOLE_NCRISC_IRAM_SIZE - KERNEL_BINARY_OVERHEAD_ESTIMATE;
+        // Remaining space distributed among the other 4 processors (BRISC + 3 TRISCs)
+        constexpr uint32_t NUM_NON_NCRISC_PROCESSORS = NUM_RISCV_PROCESSORS - 1;
+
+        TT_ASSERT(
+            actual_kernel_config_size_ >
+                ncrisc_kernel_size + (NUM_NON_NCRISC_PROCESSORS * KERNEL_BINARY_OVERHEAD_ESTIMATE),
+            "Insufficient kernel config buffer space for test: {} B available, need at least {} B",
+            actual_kernel_config_size_,
+            ncrisc_kernel_size + (NUM_NON_NCRISC_PROCESSORS * KERNEL_BINARY_OVERHEAD_ESTIMATE));
+
+        kernel_size = ((actual_kernel_config_size_ - ncrisc_kernel_size) / NUM_NON_NCRISC_PROCESSORS) -
+                      KERNEL_BINARY_OVERHEAD_ESTIMATE;
+    } else {
+        TT_ASSERT(
+            actual_kernel_config_size_ > NUM_RISCV_PROCESSORS * KERNEL_BINARY_OVERHEAD_ESTIMATE,
+            "Insufficient kernel config buffer space for test");
+
+        kernel_size = ((actual_kernel_config_size_) / NUM_RISCV_PROCESSORS) - KERNEL_BINARY_OVERHEAD_ESTIMATE;
+        ncrisc_kernel_size = kernel_size;
+    }
+
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+
+    std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
+    std::map<std::string, std::string> ncrisc_defines = {{"KERNEL_BYTES", std::to_string(ncrisc_kernel_size)}};
 
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program;
 
-        CoreRange cr({0, 0}, {0, 0});
-        CoreRangeSet cr_set({cr});
-
-        std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
-
         // BRISC
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
             cr_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -283,15 +358,15 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
         // NCRISC
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
             cr_set,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = defines});
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = ncrisc_defines});
 
         // TRISC0, TRISC1, TRISC2
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
             cr_set,
             ComputeConfig{.compile_args = {}, .defines = defines});
 
@@ -299,135 +374,34 @@ TEST_F(KernelSizeTest, AllRISCVProcessorsWithLargeKernels) {
         EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
         distributed::Finish(device->mesh_command_queue());
     }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
-// Test 7: Stress test - rapidly vary kernel sizes on a single device
-TEST_F(KernelSizeTest, StressTestRapidlyVaryKernelSizes) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
-
-    log_info(LogTest, "Stress test - rapidly vary kernel sizes");
-
-    // Rapidly alternate between small and large kernels
-    std::vector<uint32_t> alternating_sizes = {
-        1024,                            // Small
-        actual_kernel_config_size_ / 2,  // Large
-        2048,                            // Small
-        actual_kernel_config_size_ / 4,  // Large
-        512,                             // Boundary
-        actual_kernel_config_size_ / 2,  // Large
-    };
-
-    // Take a device and vary the kernel sizes rapidly
-    for (const auto& device : devices_) {
-        for (const auto& kernel_size : alternating_sizes) {
-            if (kernel_size > actual_kernel_config_size_) {
-                log_info(
-                    LogTest,
-                    "Skipping kernel size: {} B (exceeds available space: {} B)",
-                    kernel_size,
-                    actual_kernel_config_size_);
-                continue;
-            }
-
-            distributed::MeshWorkload workload;
-            Program program;
-
-            CoreRange cr({0, 0}, {0, 0});
-            CoreRangeSet cr_set({cr});
-
-            std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
-
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
-
-            log_info(LogTest, "Testing kernel size: {} B", kernel_size);
-
-            workload.add_program(device_range_, std::move(program));
-            EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-            distributed::Finish(device->mesh_command_queue());
-        }
-    }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
-}
-
-// Test 8: Verify that kernels exceeding L1 limits are properly rejected
-TEST_F(KernelSizeTest, KernelSizeExceedsL1Limit) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
-
-    log_info(LogTest, "Testing kernel size exceeding L1 limits");
-
-    auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-
-    // Try to create a kernel larger than the entire L1 memory
-    // The kernel size is typically greater than whats specified by KERNEL_BYTES due elf headers, alignment, etc.
-    // So even adding a small amount of padding can reject the kernel
-    uint32_t oversized_kernel = l1_size + OVERSIZED_KERNEL_PADDING;
-
-    log_info(LogTest, "L1 size: {} B", l1_size);
-    log_info(LogTest, "Attempting to create kernel of size: {} B", oversized_kernel);
-    log_info(LogTest, "Kernel config buffer size: {} B", actual_kernel_config_size_);
-
-    for (const auto& device : devices_) {
-        distributed::MeshWorkload workload;
-        Program program;
-
-        CoreRange cr({0, 0}, {0, 0});
-        CoreRangeSet cr_set({cr});
-
-        std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(oversized_kernel)}};
-
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
-
-        workload.add_program(device_range_, std::move(program));
-
-        // Expect this to throw an exception
-        EXPECT_THROW(
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false), std::runtime_error);
-
-        log_info(LogTest, "Correctly rejected oversized kernel");
-    }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
-}
-
-// Test 9: Verify that kernel size exceeding kernel config buffer is rejected
+// Test 8: Verify that kernels exceeding kernel config buffer size are rejected
+// This test intentionally creates an oversized kernel (kernel_config_size + 32B) and expects
+// the dispatch system to throw TT_FATAL in ProgramImpl::finalize_program_offsets()
 TEST_F(KernelSizeTest, ExceedsKernelConfigBufferSize) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(true);
+    ScopedNullifyKernels nullify_kernels;
 
     log_info(LogTest, "Testing kernel size exceeding kernel config buffer size");
 
     // Kernel config buffer size plus padding for rejection test
-    // The kernel size is typically greater than whats specified by KERNEL_BYTES due elf headers, alignment, etc.
+    // The kernel size is typically greater than what's specified by KERNEL_BYTES due to ELF headers, alignment, etc.
     // So even adding a small amount of padding can reject the kernel
     const uint32_t kernel_size = actual_kernel_config_size_ + OVERSIZED_KERNEL_PADDING;
 
     log_info(LogTest, "Kernel config buffer size: {} B", actual_kernel_config_size_);
     log_info(LogTest, "Kernel size: {} B (exceeds by {} B)", kernel_size, kernel_size - actual_kernel_config_size_);
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+    std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
     for (const auto& device : devices_) {
         distributed::MeshWorkload workload;
         Program program;
 
-        CoreRange cr({0, 0}, {0, 0});
-        CoreRangeSet cr_set({cr});
-
-        std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
-
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_test.cpp",
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
             cr_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
@@ -439,8 +413,6 @@ TEST_F(KernelSizeTest, ExceedsKernelConfigBufferSize) {
 
         log_info(LogTest, "Correctly rejected oversized kernel configuration");
     }
-
-    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 }
 
 }  // namespace kernel_size_tests
