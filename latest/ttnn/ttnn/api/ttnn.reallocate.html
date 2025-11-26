@@ -167,11 +167,12 @@
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">new_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reallocate</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">my_memory_config</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN tensor, deallocate it, and then reallocate it</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">ttnn_tensor_reallocated</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reallocate</span><span class="p">(</span><span class="n">ttnn_tensor</span><span class="p">)</span>
+
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Reallocated TT-NN tensor shape"</span><span class="p">,</span> <span class="n">ttnn_tensor_reallocated</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

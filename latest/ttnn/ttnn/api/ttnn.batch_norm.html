@@ -228,7 +228,8 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span>
+<div class="highlight"><pre><span></span><span class="c1"># Setup input tensor and parameters</span>
+<span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span>
 
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 <span class="n">running_mean</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
@@ -236,16 +237,18 @@ See <a class="reference external" href="https://arxiv.org/abs/1502.03167">Spatia
 <span class="n">weight</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DataType</span><span class="o">.</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 <span class="n">bias</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
+<span class="c1"># Apply batch normalization</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">batch_norm</span><span class="p">(</span>
     <span class="n">input_tensor</span><span class="p">,</span>
-    <span class="n">running_mean</span> <span class="o">=</span> <span class="n">running_mean</span><span class="p">,</span>
-    <span class="n">running_var</span> <span class="o">=</span> <span class="n">running_var</span><span class="p">,</span>
-    <span class="n">weight</span> <span class="o">=</span> <span class="n">weight</span><span class="p">,</span>
-    <span class="n">bias</span> <span class="o">=</span> <span class="n">bias</span><span class="p">,</span>
-    <span class="n">eps</span> <span class="o">=</span> <span class="mf">1e-05</span><span class="p">,</span>
-    <span class="n">momentum</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>
-    <span class="n">training</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">running_mean</span><span class="o">=</span><span class="n">running_mean</span><span class="p">,</span>
+    <span class="n">running_var</span><span class="o">=</span><span class="n">running_var</span><span class="p">,</span>
+    <span class="n">weight</span><span class="o">=</span><span class="n">weight</span><span class="p">,</span>
+    <span class="n">bias</span><span class="o">=</span><span class="n">bias</span><span class="p">,</span>
+    <span class="n">eps</span><span class="o">=</span><span class="mf">1e-05</span><span class="p">,</span>
+    <span class="n">momentum</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
+    <span class="n">training</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Batch Norm result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

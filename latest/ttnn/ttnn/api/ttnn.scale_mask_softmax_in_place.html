@@ -233,24 +233,21 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1"># Setup input tensor and mask</span>
+<span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span>
 
 <span class="n">attention_mask_t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat8_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
+<span class="c1"># Apply in-place scale mask softmax</span>
 <span class="n">tt_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">scale_mask_softmax_in_place</span><span class="p">(</span>
     <span class="n">input_tensor</span><span class="o">=</span><span class="n">input_tensor</span><span class="p">,</span>
     <span class="n">scale</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
     <span class="n">mask</span><span class="o">=</span><span class="n">attention_mask_t</span><span class="p">,</span>
 <span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<dl>
-<dt>Example (Sharded):</dt>
-<dd>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">compute_grid_size</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Scale Mask Softmax In Place result: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="n">compute_grid_size</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">compute_with_storage_grid_size</span><span class="p">()</span>
 <span class="n">fuse_head</span> <span class="o">=</span> <span class="mi">2</span>
 <span class="n">batch</span> <span class="o">=</span> <span class="n">compute_grid_size</span><span class="o">.</span><span class="n">x</span>
 <span class="n">num_cores_r</span> <span class="o">=</span> <span class="n">compute_grid_size</span><span class="o">.</span><span class="n">y</span>
@@ -284,10 +281,10 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
     <span class="n">mask</span><span class="o">=</span><span class="n">attention_mask_t</span><span class="p">,</span>
     <span class="n">program_config</span><span class="o">=</span><span class="n">program_config</span><span class="p">,</span>
 <span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Scale Mask Softmax In Place result: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
-</dd>
-</dl>
+</div>
 </dd>
 </dl>
 

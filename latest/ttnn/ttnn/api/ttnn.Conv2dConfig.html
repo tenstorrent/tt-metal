@@ -215,7 +215,8 @@ This flag is only used when override_sharding_config is set to true.</p>
 <dd>
 <p>Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
 If true, the activation tensor will be deallocated after the halo micro-op is done.
-Should not be used if the input to the conv op is used by another op.</p>
+Should not be used if the input to the conv op is used by another op.
+Has no effect if input tensor is in DRAM.</p>
 </dd>
 </dl>
 

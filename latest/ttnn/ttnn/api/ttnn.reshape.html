@@ -194,7 +194,7 @@
 
 <span class="c1"># Reshape the tensor</span>
 <span class="n">reshaped_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_tensor_tt</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">"Reshaped Tensor Shape:"</span><span class="p">,</span> <span class="n">reshaped_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Reshaped Tensor Shape: Shape([1, 1, 2, 2])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Reshaped Tensor Shape:"</span><span class="p">,</span> <span class="n">reshaped_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Reshaped Tensor Shape: Shape([1, 1, 2, 2])</span>
 </pre></div>
 </div>
 </div>

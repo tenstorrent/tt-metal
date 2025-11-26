@@ -74,6 +74,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full_like.html">ttnn.full_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rand.html">ttnn.rand</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.from_buffer.html">ttnn.from_buffer</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
@@ -187,14 +188,11 @@
 </table>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
-<span class="go">ttnn.Tensor([[[[0.0, 0.0],</span>
-<span class="go">                [0.0, 0.0]],</span>
-<span class="go">                [[0.0, 0.0],</span>
-<span class="go">                [0.0, 0.0]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN tensor filled with zeros, based on the shape of another tensor</span>
+<span class="n">reference_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">reference_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN zeros_like tensor:"</span><span class="p">,</span> <span class="n">tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

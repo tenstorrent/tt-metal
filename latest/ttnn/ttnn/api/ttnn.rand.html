@@ -24,7 +24,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.matmul" href="ttnn.matmul.html" />
+    <link rel="next" title="ttnn.from_buffer" href="ttnn.from_buffer.html" />
     <link rel="prev" title="ttnn.full_like" href="ttnn.full_like.html" /> 
 </head>
 
@@ -74,6 +74,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full_like.html">ttnn.full_like</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.rand</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.from_buffer.html">ttnn.from_buffer</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
@@ -195,9 +196,10 @@ for reproducible results. Defaults to 0.</p></li>
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="n">N</span><span class="p">,</span><span class="n">N</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DRAM_MEMORY_CONFIG</span> <span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a TT-NN tensor with random values uniformly distributed between 0 and 1</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN rand tensor:"</span><span class="p">,</span> <span class="n">tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -212,7 +214,7 @@ for reproducible results. Defaults to 0.</p></li>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.full_like.html" class="btn btn-neutral float-left" title="ttnn.full_like" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.matmul.html" class="btn btn-neutral float-right" title="ttnn.matmul" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.from_buffer.html" class="btn btn-neutral float-right" title="ttnn.from_buffer" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

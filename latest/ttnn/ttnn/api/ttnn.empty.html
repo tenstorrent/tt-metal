@@ -74,6 +74,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full_like.html">ttnn.full_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.rand.html">ttnn.rand</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.from_buffer.html">ttnn.from_buffer</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
@@ -191,10 +192,10 @@
 </table>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
-<span class="go">ttnn.Tensor([[[[0.9, 0.21, 0.5], [0.67, 0.11, 0.30]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::TILE)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create an uninitialized TT-NN tensor with the specified shape and data type</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN empty tensor shape:"</span><span class="p">,</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

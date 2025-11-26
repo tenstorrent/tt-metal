@@ -24,7 +24,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.upsample" href="ttnn.upsample.html" />
+    <link rel="next" title="ttnn.avg_pool2d" href="ttnn.avg_pool2d.html" />
     <link rel="prev" title="ttnn.global_avg_pool2d" href="ttnn.global_avg_pool2d.html" /> 
 </head>
 
@@ -81,6 +81,7 @@
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#pooling">Pooling</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.global_avg_pool2d.html">ttnn.global_avg_pool2d</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.max_pool2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.avg_pool2d.html">ttnn.avg_pool2d</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
@@ -180,40 +181,46 @@ should be on the device. Height, width and block sharding schemes are supported.
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">kernel_h</span><span class="p">,</span> <span class="n">kernel_w</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">nchw_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">in_N</span><span class="p">,</span> <span class="n">in_C</span><span class="p">,</span> <span class="n">in_H</span><span class="p">,</span> <span class="n">in_W</span> <span class="o">=</span> <span class="n">nchw_shape</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">in_N</span> <span class="o">*</span> <span class="n">in_H</span> <span class="o">*</span> <span class="n">in_W</span><span class="p">,</span> <span class="n">in_C</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">nchw_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_perm</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span> <span class="c1"># this op expects a [N, H, W, C] format</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_reshape</span> <span class="o">=</span> <span class="n">input_perm</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_shape</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tt_input</span><span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_reshape</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tt_input_dev</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tt_input</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tt_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">max_pool2d</span><span class="p">(</span>
-<span class="go">                    input_tensor=tt_input_dev,</span>
-<span class="go">                    batch_size=in_N,</span>
-<span class="go">                    input_h=in_H,</span>
-<span class="go">                    input_w=in_W,</span>
-<span class="go">                    channels=in_C,</span>
-<span class="go">                    kernel_size=[kernel_h, kernel_w],</span>
-<span class="go">                    stride=[stride_h, stride_w],</span>
-<span class="go">                    padding=[pad_h, pad_w],</span>
-<span class="go">                    dilation=[dilation_h, dilation_w],</span>
-<span class="go">                    ceil_mode=False,</span>
-<span class="go">                    memory_config=None,</span>
-<span class="go">                    applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,</span>
-<span class="go">                    deallocate_input=False,</span>
-<span class="go">                    reallocate_halo_output=True,</span>
-<span class="go">                    dtype=ttnn.bfloat16,</span>
-<span class="go">                    output_layout=ttnn.ROW_MAJOR_LAYOUT,</span>
-<span class="go">                )</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CreateDevice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">)</span>
+<span class="c1"># Define input parameters</span>
+<span class="n">kernel_h</span><span class="p">,</span> <span class="n">kernel_w</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span>
+<span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
+<span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span>
+<span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span>
+<span class="n">nchw_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">40</span><span class="p">)</span>
+<span class="n">in_N</span><span class="p">,</span> <span class="n">in_C</span><span class="p">,</span> <span class="n">in_H</span><span class="p">,</span> <span class="n">in_W</span> <span class="o">=</span> <span class="n">nchw_shape</span>
+<span class="n">input_shape</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">in_N</span> <span class="o">*</span> <span class="n">in_H</span> <span class="o">*</span> <span class="n">in_W</span><span class="p">,</span> <span class="n">in_C</span><span class="p">)</span>
+
+<span class="c1"># Create a random input tensor</span>
+<span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">nchw_shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">input_perm</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>  <span class="c1"># this op expects a [N, H, W, C] format</span>
+<span class="n">input_reshape</span> <span class="o">=</span> <span class="n">input_perm</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">input_shape</span><span class="p">)</span>
+
+<span class="n">tt_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_reshape</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">tt_input_dev</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tt_input</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Perform max pooling</span>
+<span class="n">tt_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">max_pool2d</span><span class="p">(</span>
+    <span class="n">input_tensor</span><span class="o">=</span><span class="n">tt_input_dev</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="o">=</span><span class="n">in_N</span><span class="p">,</span>
+    <span class="n">input_h</span><span class="o">=</span><span class="n">in_H</span><span class="p">,</span>
+    <span class="n">input_w</span><span class="o">=</span><span class="n">in_W</span><span class="p">,</span>
+    <span class="n">channels</span><span class="o">=</span><span class="n">in_C</span><span class="p">,</span>
+    <span class="n">kernel_size</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_h</span><span class="p">,</span> <span class="n">kernel_w</span><span class="p">],</span>
+    <span class="n">stride</span><span class="o">=</span><span class="p">[</span><span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">],</span>
+    <span class="n">padding</span><span class="o">=</span><span class="p">[</span><span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span><span class="p">],</span>
+    <span class="n">dilation</span><span class="o">=</span><span class="p">[</span><span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span><span class="p">],</span>
+    <span class="n">ceil_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">applied_shard_scheme</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">BLOCK_SHARDED</span><span class="p">,</span>
+    <span class="n">deallocate_input</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="n">reallocate_halo_output</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">output_layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Output: </span><span class="si">{</span><span class="n">tt_output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -228,7 +235,7 @@ should be on the device. Height, width and block sharding schemes are supported.
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.global_avg_pool2d.html" class="btn btn-neutral float-left" title="ttnn.global_avg_pool2d" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.upsample.html" class="btn btn-neutral float-right" title="ttnn.upsample" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.avg_pool2d.html" class="btn btn-neutral float-right" title="ttnn.avg_pool2d" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

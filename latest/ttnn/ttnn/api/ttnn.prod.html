@@ -81,6 +81,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.prod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -236,28 +237,32 @@ It is only intended for use with the NC dimensions (0, 1).</p>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1"># 1D Product</span>
+<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Apply ttnn.prod() on dim=0</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prod result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="c1"># All Dims Product</span>
 <span class="n">output_all_dims</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<dl>
-<dt>Example (NC Product):</dt>
-<dd>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">dims</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">]</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prod all dims result: </span><span class="si">{</span><span class="n">output_all_dims</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="c1"># NC Product</span>
+<span class="c1"># Define reduction dims, input and output shapes</span>
+<span class="n">dims</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
 <span class="n">input_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
-<span class="n">output_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span> <span class="c1"># shape on any dimension being reduced will be 1</span>
+<span class="n">output_shape</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>  <span class="c1"># shape on any dimension being reduced will be 1</span>
 
-<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">output_shape</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
+<span class="c1"># Create input and output tensors</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">input_shape</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">output_shape</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
+<span class="c1"># Apply ttnn.prod() on specified dims</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">input_tensor</span><span class="o">=</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor</span><span class="o">=</span><span class="n">output_tensor</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="n">dims</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Prod result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
-</dd>
-</dl>
+</div>
 </dd>
 </dl>
 

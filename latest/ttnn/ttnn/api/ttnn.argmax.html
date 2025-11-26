@@ -81,6 +81,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prod.html">ttnn.prod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cumsum.html">ttnn.cumsum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.manual_seed.html">ttnn.manual_seed</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -248,13 +249,16 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create tensor</span>
+<span class="n">tensor_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
 
 <span class="c1"># Last dim reduction yields shape of [1, 1, 32, 1]</span>
-<span class="n">output_onedim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">output_onedim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Argmax onedim result: </span><span class="si">{</span><span class="n">output_onedim</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="c1"># All dim reduction yields shape of []</span>
-<span class="n">output_alldim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+<span class="n">output_alldim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Argmax alldim result: </span><span class="si">{</span><span class="n">output_alldim</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
