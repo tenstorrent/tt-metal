@@ -65,5 +65,4 @@ def test_decoder(
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    # TODO: Improve PCC (issue #21131)
-    assert_with_pcc(torch_output, ttnn_output, 0.985)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)

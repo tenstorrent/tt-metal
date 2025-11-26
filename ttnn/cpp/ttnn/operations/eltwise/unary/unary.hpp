@@ -335,6 +335,15 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rdiv {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float value,
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Where {
     static Tensor invoke(
         const Tensor& condition,
@@ -490,6 +499,7 @@ constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::o
 constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::operations::unary::Where>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto bitcast = ttnn::register_operation<"ttnn::bitcast", ttnn::operations::unary::Bitcast>();
+constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", ttnn::operations::unary::Rdiv>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
     ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::FILL>>();

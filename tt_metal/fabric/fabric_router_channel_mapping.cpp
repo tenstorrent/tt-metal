@@ -9,8 +9,8 @@
 namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
-    Topology topology, eth_chan_directions direction, bool has_tensix_extension) :
-    topology_(topology), direction_(direction), has_tensix_extension_(has_tensix_extension) {
+    Topology topology, eth_chan_directions direction, bool downstream_is_tensix_builder) :
+    topology_(topology), direction_(direction), downstream_is_tensix_builder_(downstream_is_tensix_builder) {
     initialize_mappings();
 }
 
@@ -32,7 +32,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
         for (uint32_t i = 0; i < max_2d_vc0_channels; ++i) {
             // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
             // because ERISC only has buffers for worker channel (used by VC1) and VC1 channel
-            BuilderType builder_type = has_tensix_extension_ ? BuilderType::TENSIX : BuilderType::ERISC;
+            BuilderType builder_type = downstream_is_tensix_builder_ ? BuilderType::TENSIX : BuilderType::ERISC;
             sender_channel_map_[LogicalSenderChannelKey{0, i}] =
                 InternalSenderChannelMapping{builder_type, i};
         }
@@ -45,7 +45,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
         //   [0] = local worker channel
         //   [1] = forwarding channel from upstream router
         // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
-        BuilderType vc0_builder_type = has_tensix_extension_ ? BuilderType::TENSIX : BuilderType::ERISC;
+        BuilderType vc0_builder_type = downstream_is_tensix_builder_ ? BuilderType::TENSIX : BuilderType::ERISC;
         sender_channel_map_[LogicalSenderChannelKey{0, 0}] =
             InternalSenderChannelMapping{vc0_builder_type, 0};  // worker channel
         sender_channel_map_[LogicalSenderChannelKey{0, 1}] =
