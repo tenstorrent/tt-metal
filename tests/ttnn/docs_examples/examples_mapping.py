@@ -56,6 +56,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.asinh": eltwise_unary.test_asinh,
     "ttnn.atan": eltwise_unary.test_atan,
     "ttnn.atanh": eltwise_unary.test_atanh,
+    "ttnn.bitcast": eltwise_unary.test_bitcast,
     "ttnn.bitwise_not": eltwise_unary.test_bitwise_not,
     "ttnn.bitwise_left_shift": eltwise_unary.test_bitwise_left_shift,
     "ttnn.bitwise_right_shift": eltwise_unary.test_bitwise_right_shift,

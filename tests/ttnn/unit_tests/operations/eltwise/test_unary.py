@@ -1974,7 +1974,7 @@ def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, round_mod
 @pytest.mark.parametrize(
     "input_vals, torch_input_dtype, torch_output_dtype, ttnn_input_dtype, ttnn_output_dtype",
     [
-        # uint16 <-> bfloat16 conversions
+        # uint16 -> bfloat16 conversions
         ([16457, 16429, 32641], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
         ([0, 0, 0], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
         ([65535, 65534, 65533], torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
@@ -2033,10 +2033,9 @@ def test_unary_bitcast_ttnn(
             assert torch.isinf(torch.tensor(actual)), f"Value {i}: Expected Inf, got {actual}"
         else:
             # Normal values should match exactly
-            # Note: For float32, there may be precision loss due to hardware limitations
+            # Note: There may be precision loss due to hardware limitations
             if torch_output_dtype == torch.float32:
-                # Allow tolerance for float32 precision issues (may be converted to bfloat16 internally)
-                # The difference observed is ~0.0013 which suggests bfloat16 precision
+                # Allow tolerance for precision issues
                 assert (
                     abs(expected - actual) < 0.002 or expected == actual
                 ), f"Value {i}: Expected {expected}, got {actual}, diff: {abs(expected - actual)}"

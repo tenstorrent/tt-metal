@@ -2418,29 +2418,32 @@ void py_module(py::module& module) {
     // Bind bitcast operation
     auto bitcast_doc = fmt::format(
         R"doc(
-Applies {0} to :attr:`input_tensor`.
-Bitcast reinterprets the bit pattern without conversion (unlike typecast which converts values).
+        Bitcast reinterprets the bit pattern without conversion (unlike typecast which converts values).
 
-Args:
-    * :attr:`input_tensor` (ttnn.Tensor): input tensors must be on device, in TILE layout
-    * :attr:`dtype` (ttnn.DataType): output data type. Must have the same bit size as input dtype.
-      Supported pairs: UINT16 <-> BFLOAT16 (both 16 bits), UINT32 <-> FLOAT32 (both 32 bits), UINT32 <-> INT32 (both 32 bits).
-    *
-Keyword Args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            dtype (ttnn.DataType): output data type. Must have the same bit size as input dtype. Supported pairs: UINT16 <-> BFLOAT16 (both 16 bits), UINT32 <-> FLOAT32 (both 32 bits), UINT32 <-> INT32 (both 32 bits).
 
-Returns:
-    ttnn.Tensor: The tensor with reinterpreted bits. Output tensor will be on device, in same layout, and have the given data type.
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-Example::
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-    >>> import torch
-    >>> x = torch.tensor([16457, 16429, 32641], dtype=torch.uint16)
-    >>> tensor = ttnn.from_torch(x, device=device, layout=ttnn.TILE)
-    >>> result = ttnn.bitcast(tensor, ttnn.bfloat16)
-    >>> # result will have bfloat16 values: [3.1406, 2.7031, nan]
-)doc",
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
+                 - TILE
+                 - 2, 3, 4
+        )doc",
         ttnn::bitcast.base_name());
 
     using BitcastType = decltype(ttnn::bitcast);
