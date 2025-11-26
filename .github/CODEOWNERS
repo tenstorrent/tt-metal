@@ -39,15 +39,15 @@ tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tens
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
-tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass # fabric experimental APIs
+tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass # fabric experimental APIs
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeowner-bypass
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass
-tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass
+tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/graph/ @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/codeowner-bypass # this should go away
@@ -118,7 +118,7 @@ tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @Sean
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/ @tt-asaigal @tt-aho @aliuTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
 
