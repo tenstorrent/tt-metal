@@ -61,7 +61,13 @@ class TtAttention(LightweightModule):
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
-            self.sdpa_program_config.k_chunk_size = 1024 if self.heads == 20 else 512
+            if out_dim == 640 or out_dim == 1536:
+                self.sdpa_program_config.k_chunk_size = 512
+            # TODO: 512 should be possible, latents base optimizations regressed this
+            elif out_dim == 768:
+                self.sdpa_program_config.k_chunk_size = 256
+            else:
+                self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -97,33 +103,14 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
-            if self.q_program_config is not None:
-                if hidden_states.shape[-1] == 640:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 512, 256),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-                else:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 1024 // 8, 3840 // 8),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-            else:
-                memory_config = None
-
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
-                memory_config=memory_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.q_compute_kernel_config,
                 program_config=self.q_program_config,
             )
-            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
             (
                 q_heads,
