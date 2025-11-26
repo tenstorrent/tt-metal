@@ -16,10 +16,10 @@
 
 namespace tt::tt_metal {
 
-constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
-constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
-constexpr uint16_t DEBUG_SANITIZE_NOC_SENTINEL_OK_16 = 0xbada;
-constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
+constexpr uint64_t DEBUG_SANITIZE_SENTINEL_OK_64 = 0xbadabadabadabada;
+constexpr uint32_t DEBUG_SANITIZE_SENTINEL_OK_32 = 0xbadabada;
+constexpr uint16_t DEBUG_SANITIZE_SENTINEL_OK_16 = 0xbada;
+constexpr uint8_t DEBUG_SANITIZE_SENTINEL_OK_8 = 0xda;
 
 class WatcherDeviceReader {
 public:

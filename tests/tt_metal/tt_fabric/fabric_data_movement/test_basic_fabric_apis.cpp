@@ -439,6 +439,63 @@ TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this,
 
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
+// Nightly Fabric Tensix Config UDM Mode Tests - 1-3 hops
+// NOC_UNICAST_WRITE
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+// NOC_UNICAST_ATOMIC_INC
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+// NOC_UNICAST_INLINE_WRITE
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
     for (const auto& [north, south, east, west] : valid_combinations) {
