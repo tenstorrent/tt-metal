@@ -239,15 +239,15 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         config.dtype.bits);
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
-        py_tensor.cast(nb::rv_policy::reference_internal).ptr(),
+        py_tensor.cast(nb::rv_policy::automatic).ptr(),
         // py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
         &config,
         true /*convert*/,
         nullptr);
 
-    nb::ndarray<nb::array_api> converted_array{converted_tensor_handle};
+    // nb::ndarray<nb::array_api> converted_array{converted_tensor_handle};
 
-    return {.contiguous_py_tensor = converted_array, .data_type = data_type};
+    return {.contiguous_py_tensor = converted_tensor_handle, .data_type = data_type};
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
