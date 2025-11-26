@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads::detail {
 
 namespace py = pybind11;
 
@@ -21,14 +21,10 @@ void bind_nlp_concat_heads(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, memory_config, optional_output_tensor);
-            },
+               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt});
+            py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads::detail

@@ -173,7 +173,8 @@ AsicTopology run_connectivity_validation(
         input_args.cabling_descriptor_path,
         input_args.deployment_descriptor_path,
         input_args.fsd_path,
-        input_args.output_path.string());
+        input_args.output_path.string(),
+        physical_system_descriptor.get_all_hostnames());
     auto missing_topology =
         validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
 
