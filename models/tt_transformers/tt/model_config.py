@@ -453,12 +453,13 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        prefetcher=None,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
-
+        self.prefetcher = prefetcher
         self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
@@ -619,6 +620,8 @@ class ModelArgs:
 
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
+
+            self.model_config["PREFETCHER"] = self.prefetcher
 
             # DRAM weight grid specs for dram sharding matmuls
             self.dram_weight_grid = ttnn.CoreRangeSet(
@@ -1002,6 +1005,134 @@ class ModelArgs:
                 )
             )
 
+            # ====== Prefetcher + Attention program configs ======
+            self.start_core = ttnn.CoreCoord(1, 0)
+            sdpa_grid_size = (8, 8) if is_blackhole() else (8, 4)
+            num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
+            self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=sdpa_grid_size,
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, num_sdpa_cores, self.prefetcher.all_worker_cores_range_set, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            )
+
+            wo_shape_ring = (self.dim // self.cluster_shape[1], self.dim // self.cluster_shape[0])  # Use padded K and N
+            self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
+                k=wo_shape_ring[0],
+                n=wo_shape_ring[1],
+            )
+
+            self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.dim // self.cluster_shape[0] // self.prefetcher.ring_size),  # Use padded K
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                self.dim // self.cluster_shape[0],
+                self.qkv_size // self.cluster_shape[1],  # Use padded N
+                self.prefetcher.ring_size,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+                untilize_out=True,
+            )
+
+            qkv_out_shard_shape_ring = (
+                32,
+                self.qkv_size // self.cluster_shape[1] // self.prefetcher.ring_size,
+            )  # Use padded N
+            self.model_config["PREFETCHER_SHARDED_QKV_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=qkv_out_shard_shape_ring,
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    self.prefetcher.all_worker_cores_range_set,
+                    [
+                        32,
+                        self.head_dim,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+
+            # ====== Prefetcher + MLP program configs ======
+            # FF1 and FF3 program configs
+            self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                self.dim,
+                self.hidden_dim // self.cluster_shape[1],  # Use padded N
+                self.prefetcher.ring_size,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+            )
+            # FF2 program configs
+            self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                self.hidden_dim // self.cluster_shape[1],
+                self.dim,  # Use padded N
+                self.prefetcher.ring_size,
+                num_global_cb_receivers=self.prefetcher.num_receiver_cores,
+            )
+
+            # Prefetcher Memory config for Input, FF1 and FF3 output
+            self.model_config["SHARDED_MLP_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.hidden_dim // self.cluster_shape[1] // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # Prefetcher Memory config for FF2 output
+            self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.dim // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # Prefetcher MLP All reduce output memory config
+            self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(1, 1, 32, self.dim // self.cluster_shape[1] // self.prefetcher.ring_size),
+                core_grid=self.prefetcher.to_core_range_set(
+                    self.prefetcher.receiver_cores(sender_active=True, receiver_active=True)
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # ====== END of Prefetcher + MLP program configs ======
+
             # glx doesn't support DRAM sharded matmuls yet
             self.model_config["XQKV_DECODE_PROGCFG"] = (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1109,6 +1240,7 @@ class ModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
             self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // 8 // 4),  # shard_grid_cores = 8, num_devices=4
@@ -2122,6 +2254,68 @@ class ModelArgs:
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=fused_activation,
         )
+
+    def matmul_1d_ring_config(
+        self,
+        B,
+        M,
+        K,
+        N,
+        num_cores,
+        num_global_cb_receivers,
+        prefetch=True,
+        untilize_out=False,
+    ):
+        breakpoint()
+        M *= B  # Fuse batch always enabled
+
+        in0_block_h = M // ttnn.TILE_SIZE  # 1
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 2
+        out_block_h = M // ttnn.TILE_SIZE  # 1
+        out_block_w = N // num_cores // ttnn.TILE_SIZE  # 14
+
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 32
+        num_blocks_total = num_blocks_y * num_blocks_x  # 1 * 32 = 32
+
+        if num_blocks_total != num_cores:
+            assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
+
+        out_subblock_h = 1
+        out_subblock_w = 8
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        hop_grid = []  # FIXME: Make not hard coded
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
+            }
+        )
+        grid = num_to_coregrid(num_cores)
+
+        # tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_1d_program_factory.cpp
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,  # 1
+            per_core_N=out_block_w,  # 14
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=hop_core_range_set,
+            num_global_cb_receivers=num_global_cb_receivers,
+            untilize_out=untilize_out,
+        )
+
+        return program_config
 
     def matmul_1d_config(
         self,

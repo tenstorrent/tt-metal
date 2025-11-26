@@ -13,6 +13,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import RopeScaling, gather_cos_sin, get_rot_transformation_mat
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from ttnn import ShardTensor2dMesh, replicate_tensor_to_mesh_mapper
 
 
@@ -358,14 +359,14 @@ def get_rot_mats(
     cos_matrix = ttnn.from_torch(
         cos_matrix,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
     sin_matrix = ttnn.from_torch(
         sin_matrix,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
@@ -396,6 +397,7 @@ class RotarySetup(LightweightModule):
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
+        self.start_core = ttnn.CoreCoord(1, 0)
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
@@ -493,7 +495,10 @@ class RotarySetup(LightweightModule):
         return rot_idxs
 
     def get_rot_mats(
-        self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
+        self,
+        position_idxs: Union[torch.Tensor, ttnn.Tensor],
+        return_rot_idxs: bool = False,
+        prefetcher: Optional[Prefetcher] = None,
     ) -> List[ttnn.Tensor]:
         device = self.device
 
@@ -504,34 +509,55 @@ class RotarySetup(LightweightModule):
             rot_idxs = position_idxs
             assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
         # Send the idxs to device
-
+        breakpoint()
         if rot_idxs.device != device:
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT
-        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
-        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, head_dim]
 
-        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
-        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
-
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size_per_device_group, :, :]
-            sin = sin[:, : self.batch_size_per_device_group, :, :]
+        core_grid = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.batch_size_per_device_group, prefetcher.all_worker_cores_range_set, row_wise=True
+            )
+            if prefetcher is not None
+            else self.batch_grid
+        )
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=self.batch_grid,
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        breakpoint()
 
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
+        cos = ttnn.embedding(
+            rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [1, batch, head_dim]
+        sin = ttnn.embedding(
+            rot_idxs, self.sin_matrix, layout=embedding_layout, memory_config=mem_config
+        )  # [1, batch, head_dim]
+
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
+
+        breakpoint()
+
+        if prefetcher is None:
+            cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
+            sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
+
+            if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+                cos = cos[:, : self.batch_size_per_device_group, :, :]
+                sin = sin[:, : self.batch_size_per_device_group, :, :]
+
+            cos = ttnn.interleaved_to_sharded(
+                cos, mem_config
+            )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
+            sin = ttnn.interleaved_to_sharded(
+                sin, mem_config
+            )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
 
         if return_rot_idxs:
             return [cos, sin], rot_idxs
