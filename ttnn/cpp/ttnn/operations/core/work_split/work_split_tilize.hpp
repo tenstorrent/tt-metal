@@ -72,9 +72,11 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    CoreRangeSet grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
-    const uint32_t grid_area = grid_size.x * grid_size.y;
+    auto available_cores = corerange_to_cores(grid);
+    const uint32_t grid_area = available_cores.size();
+    printf("Have a range of %u available cores\n", grid_area);
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
     // Adjust nblocks_per_core and determine the optimal block size.
@@ -98,27 +100,25 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     const uint32_t single_block_size_cliff_row = width_tiles - (full_cores_per_row * single_block_size);
     const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
     // Coordinates for assigning cores sequentially.
-    uint32_t i_x = 0;
-    uint32_t i_y = 0;
+    uint32_t core_index = 0;
     auto addCore = [&](std::set<CoreRange>& targetSet) {
-        CoreRange range{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
-        targetSet.insert(range);
-        all_cores.insert(range);
+        printf(
+            "inserting core {%zu,%zu} at index %d\n",
+            available_cores.at(core_index).x,
+            available_cores.at(core_index).y,
+            core_index);
+        targetSet.insert(available_cores.at(core_index));
+        all_cores.insert(available_cores.at(core_index));
         // Update core coordinates in a cyclic row-wise manner.
-        if (i_x == grid_size.x - 1) {
-            i_x = 0;
-            i_y++;
-        } else {
-            i_x++;
-        }
+        core_index++;
     };
     // Distribute cores over full rows (each row may have an extra "cliff" block at the end).
     for (uint32_t row = 0; row < full_cores_per_col; row++) {
         for (uint32_t col = 0; col < full_cores_per_row; col++) {
-            addCore(core_range);
+            printf("Adding to main core range\n") addCore(core_range);
         }
         if (has_cliff_row) {
-            addCore(cliff_row_core_range);
+            printf("Adding to cliff core range\n") addCore(cliff_row_core_range);
         }
     }
     // Add the cliff column if present.

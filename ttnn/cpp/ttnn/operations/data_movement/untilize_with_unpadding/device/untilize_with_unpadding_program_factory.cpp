@@ -25,6 +25,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
+    printf("Option A\n");
 
     tt::tt_metal::Program program{};
 
@@ -214,6 +215,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interleaved(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
+    printf("Option B\n");
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -225,6 +227,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
+    printf("Got available cores\n");
 
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
@@ -246,8 +251,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
-
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
+    printf("Split the workload\n");
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
     uint32_t padded_row_size_bytes;
@@ -507,6 +512,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleaved(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
+    printf("Option C\n");
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -659,6 +665,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
+    printf("Option D\n");
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -670,6 +677,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
@@ -699,7 +708,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
                  has_cliff_col,
                  full_cores_per_row,
                  full_cores_per_col] =
-                    ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
                 return untilize_with_unpadding_multi_core_block_interleaved(
                     a, output, use_pack_untilize, fp32_dest_acc_en);
@@ -877,6 +887,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
+    printf("Option E\n");
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();

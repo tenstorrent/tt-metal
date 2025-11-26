@@ -448,6 +448,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
 
     uint32_t a_tile_width = a.tensor_spec().tile().get_width();
     uint32_t a_tile_height = a.tensor_spec().tile().get_height();
@@ -472,7 +474,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -889,6 +891,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t num_tiles_per_col = tensor_height / tile_height;
 
     auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
     auto
         [num_compute_cores,
          compute_core_range,
@@ -919,7 +923,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                      full_cores_per_row,
                      full_cores_per_col] =
                         ttnn::split_blocks_for_tilize_wh(
-                            grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                            available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
                 if (num_compute_cores < ncores_block) {
                     return untilize_multi_core_block(a, output, use_pack_untilize, fp32_dest_acc_en);
                 }
