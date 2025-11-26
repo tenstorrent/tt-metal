@@ -412,7 +412,7 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
