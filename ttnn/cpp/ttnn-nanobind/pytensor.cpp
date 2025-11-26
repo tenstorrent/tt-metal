@@ -209,16 +209,6 @@ struct PreprocessedPyTensor {
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
 
-    TT_FATAL(
-        data_type == DataType::INVALID,
-        "parse_py_tensor: DataType::INVALID!.\n\t"
-        "dtype.code: {}, dtype.bits: {}\n\t"
-        "optional_data_type::has_value: {}, value: {}",
-        py_tensor.dtype().code,
-        py_tensor.dtype().bits,
-        optional_data_type.has_value(),
-        optional_data_type.value_or(DataType::INVALID));
-
     // try brute force...
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
@@ -226,6 +216,19 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.device_type = nb::device::cpu::value;
     config.ndim = py_tensor.ndim();
     config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import copies it
+
+    TT_FATAL(
+        data_type != DataType::INVALID || py_tensor.is_valid(),
+        "parse_py_tensor: DataType::INVALID!.\n\t"
+        "py_tensor: dtype.code: {}, dtype.bits: {}\n\t"
+        "optional_data_type::has_value: {}, value: {}\n\t"
+        "data_type: dtype.code: {}, dtype.bits: {}\n\t",
+        py_tensor.dtype().code,
+        py_tensor.dtype().bits,
+        optional_data_type.has_value(),
+        optional_data_type.value_or(DataType::INVALID),
+        config.dtype().code,
+        config.dtype().bits);
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::reference_internal).ptr(),
