@@ -111,10 +111,10 @@ InterleavedToShardedDeviceOperation::invoke(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     bool keep_l1_aligned,
-    std::optional<Tensor> preallocated_output) {
+    const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{output_mem_config, output_dtype, keep_l1_aligned},
-        tensor_args_t{input_tensor, std::move(preallocated_output)}};
+        tensor_args_t{input_tensor, preallocated_output}};
 }
 
 }  // namespace ttnn::operations::data_movement

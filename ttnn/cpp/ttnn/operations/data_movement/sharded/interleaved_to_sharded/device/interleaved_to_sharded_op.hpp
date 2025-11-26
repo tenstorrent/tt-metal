@@ -45,7 +45,7 @@ struct InterleavedToShardedDeviceOperation {
         const tt::tt_metal::MemoryConfig& output_mem_config,
         const tt::tt_metal::DataType& output_dtype,
         bool keep_l1_aligned,
-        std::optional<Tensor> preallocated_output = std::nullopt);
+        const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::data_movement
