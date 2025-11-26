@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "upsample_device_operation.hpp"
-#include "upsample_bilinear_program_factory_multicore.hpp"
-#include "upsample_program_factory_multicore_interleaved.hpp"
-#include "upsample_program_factory_multicore_sharded.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 
 #include "tt-metalium/buffer_types.hpp"
 #include "ttnn/tensor/types.hpp"

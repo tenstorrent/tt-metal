@@ -4,7 +4,7 @@
 
 #include "upsample.hpp"
 #include <algorithm>
-#include "device/upsample_device_operation.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/run_operation.hpp"

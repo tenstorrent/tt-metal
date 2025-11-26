@@ -16,7 +16,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "upsample_program_factory_multicore_interleaved.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
 
 namespace ttnn::operations::pool::upsample::program {
 

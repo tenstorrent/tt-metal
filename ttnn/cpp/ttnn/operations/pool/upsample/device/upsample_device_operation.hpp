@@ -10,10 +10,10 @@
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "upsample_device_operation_types.hpp"
-#include "upsample_bilinear_program_factory_multicore.hpp"
-#include "upsample_program_factory_multicore_interleaved.hpp"
-#include "upsample_program_factory_multicore_sharded.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_interleaved.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 
 namespace ttnn::operations::pool::upsample {
 

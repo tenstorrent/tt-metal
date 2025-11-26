@@ -14,7 +14,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "upsample_program_factory_multicore_sharded.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

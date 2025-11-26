@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "upsample_device_operation_types.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::pool::upsample::program {

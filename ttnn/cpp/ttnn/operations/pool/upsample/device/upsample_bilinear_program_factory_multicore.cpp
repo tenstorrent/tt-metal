@@ -19,7 +19,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "upsample_bilinear_program_factory_multicore.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_bilinear_program_factory_multicore.hpp"
 
 using namespace tt::constants;
 
