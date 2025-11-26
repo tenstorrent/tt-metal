@@ -44,7 +44,7 @@ uint32_t _start() {
     mark_stack_usage();
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < end_time);
@@ -60,7 +60,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("NCRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
     kernel_main();

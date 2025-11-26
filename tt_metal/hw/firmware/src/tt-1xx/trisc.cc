@@ -133,7 +133,7 @@ int main(int argc, char* argv[]) {
 #endif
             invalidate_l1_cache();
         }
-        DeviceZoneScopedMainN("TRISC-FW");
+        // DeviceZoneScopedMainN("TRISC-FW");
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);

@@ -108,6 +108,13 @@ private:
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
+    // Storage for all noc trace data
+    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
+
+    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
+    // twice
+    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
+
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
@@ -123,6 +130,9 @@ private:
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
+    // Clear the device-side DRAM profiler buffer
+    // void clearProfilerDramBuffer(const IDevice* device);
+
     // Read control buffer for a single core
     void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
 
@@ -135,6 +145,9 @@ private:
     // Read L1 data buffer for a single core
     void readL1DataBufferForCore(
         IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
+
+    // Log L1 markers for dispatch profiling debug
+    void logL1MarkersForDispatchDebug(const std::vector<CoreCoord>& virtual_cores, ProfilerReadState state);
 
     // Read device profiler buffer
     void readProfilerBuffer(IDevice* device);
@@ -171,7 +184,8 @@ private:
         tracy::RiscType risc_type,
         uint64_t data,
         uint32_t timer_id,
-        uint64_t timestamp);
+        uint64_t timestamp,
+        const std::string& source);
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
@@ -265,6 +279,12 @@ public:
 
     // Destroy tracy contexts
     void destroyTracyContexts();
+
+    // Reset all L1 data buffers
+    void resetL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
+
+    // Reset DRAM profiler buffer
+    void resetDramProfilerBuffer(IDevice* device);
 
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;

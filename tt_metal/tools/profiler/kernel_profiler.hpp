@@ -54,9 +54,9 @@ constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
 #endif
-constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
-constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
-constexpr uint32_t TRACE_MARK_ALL_ENDS = (1 << 29);
+constexpr uint32_t TRACE_MARK_FW_START = (1 << 0);
+constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 1);
+constexpr uint32_t TRACE_MARK_ALL_ENDS = (1 << 2);
 // Space has to be left in the buffer in order to guarantee
 // that the next dispatch command can make it fully populated
 // with its meta data (op id + command type)
@@ -472,28 +472,34 @@ template <uint32_t timer_id, uint32_t index>
 struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
     static constexpr uint32_t end_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_2_H;
+    static constexpr uint32_t op_count = 2;
 
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
+        if (profiler_control_buffer[CURRENT_TRACE_ID + 1] >= op_count) {
+            return;
+        }
+        profiler_control_buffer[CURRENT_TRACE_ID + 1] += 1;
         if constexpr (TRACE_ON_TENSIX) {
             uint32_t trace_controls = profiler_control_buffer[CURRENT_TRACE_ID];
             if constexpr (index == 0) {
-#if !defined(COMPILE_FOR_TRISC)
+                // #if !defined(COMPILE_FOR_TRISC)
                 if (trace_controls & TRACE_MARK_FW_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_KERNEL_START;
                 } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+                    // mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     wIndex = CUSTOM_MARKERS;
                 }
-#endif
+                // #endif
             } else {
                 if (trace_controls & TRACE_MARK_KERNEL_START) {
                     mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
                     profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_ALL_ENDS;
                 } else if (trace_controls == 0) {
-                    mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+                    // mark_time_at_index_inlined(start_index, get_const_id(timer_id, ZONE_START));
+                    profiler_control_buffer[CURRENT_TRACE_ID + 3] += 1;
                 }
             }
         } else {
@@ -504,6 +510,10 @@ struct profileScopeGuaranteed {
         }
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
+        if (profiler_control_buffer[CURRENT_TRACE_ID + 2] >= op_count) {
+            return;
+        }
+        profiler_control_buffer[CURRENT_TRACE_ID + 2] += 1;
         if constexpr (TRACE_ON_TENSIX) {
             if (profiler_control_buffer[CURRENT_TRACE_ID] == TRACE_MARK_ALL_ENDS) {
                 mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
@@ -514,7 +524,13 @@ struct profileScopeGuaranteed {
             } else if (
                 profiler_control_buffer[CURRENT_TRACE_ID] == 0 &&
                 profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] == 0) {
-                mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+                // ****************************************************************
+                // This the problem, first why are we storing things when CURRENT_TRACE_ID is 0
+                // Second, why are we not marking the end time
+                // ***************************************
+
+                // mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+                // profiler_control_buffer[CURRENT_TRACE_ID + 4] += 1;
             }
             if constexpr (index == 0) {
                 profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] = wIndex;
@@ -646,10 +662,7 @@ __attribute__((noinline)) void trace_only_init() {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
-#define DeviceZoneScopedMainChildN(name)                                       \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
+#define DeviceZoneScopedMainChildN(name)
 
 #define DeviceZoneScopedSumN1(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \

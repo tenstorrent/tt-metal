@@ -30,14 +30,16 @@ def test_with_ops(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    for i in range(100):
+        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(100):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(5):
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    for i in range(3):
+        ttnn.execute_trace(device, tid, cq_id=0)
+    ttnn.ReadDeviceProfiler(device)
     ttnn.release_trace(device, tid)
 
 

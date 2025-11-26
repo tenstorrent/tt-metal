@@ -685,6 +685,9 @@ void ClearProfilerControlBuffer(IDevice* device) {
 #endif
 }
 
+// Forward declaration
+std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const ProfilerReadState state);
+
 void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -728,6 +731,16 @@ void InitDeviceProfiler(IDevice* device) {
     control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
         MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     setControlBuffer(device, control_buffer);
+
+    // Reset profiler buffers on device initialization
+    std::vector<CoreCoord> virtual_cores = getVirtualCoresForProfiling(device, ProfilerReadState::NORMAL);
+    log_info(
+        tt::LogMetal,
+        "Resetting profiler L1 buffers for {} cores and DRAM buffers on device {}",
+        virtual_cores.size(),
+        device_id);
+    profiler.resetL1DataBuffers(device, virtual_cores);
+    profiler.resetDramProfilerBuffer(device);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         profiler.dumpRoutingInfo();
