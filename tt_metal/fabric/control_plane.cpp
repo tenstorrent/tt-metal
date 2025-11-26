@@ -482,10 +482,8 @@ void ControlPlane::init_control_plane(
     this->mesh_graph_->print_connectivity();
 }
 
-void ControlPlane::init_control_plane_auto_discovery(
-    std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
-        logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+void ControlPlane::init_control_plane_auto_discovery() {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -511,20 +509,9 @@ void ControlPlane::init_control_plane_auto_discovery(
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        // Initialize topology mapper with provided mapping, skipping discovery
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->mesh_graph_,
-            *this->physical_system_descriptor_,
-            this->local_mesh_binding_,
-            logical_mesh_chip_id_to_physical_chip_id_mapping->get());
-        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
-    } else {
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
-        this->load_physical_chip_mapping(
-            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
-    }
+    this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+        *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
+    this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
     // Initialize routing table generator after topology_mapper is created
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
@@ -537,7 +524,7 @@ void ControlPlane::init_control_plane_auto_discovery(
     this->mesh_graph_->print_connectivity();
 }
 
-ControlPlane::ControlPlane() { init_control_plane_auto_discovery(std::nullopt); }
+ControlPlane::ControlPlane() { init_control_plane_auto_discovery(); }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);

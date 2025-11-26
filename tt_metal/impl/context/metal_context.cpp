@@ -603,6 +603,8 @@ void MetalContext::initialize_fabric_tensix_datamover_config() {
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
 
+tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+
 void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
     fabric_tensix_config_ = fabric_tensix_config;
 }

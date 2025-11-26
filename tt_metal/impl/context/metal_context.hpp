@@ -93,6 +93,7 @@ public:
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
+    tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
