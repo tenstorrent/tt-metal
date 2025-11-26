@@ -36,6 +36,7 @@ struct AdamWFusedDeviceOperation {
         const ttnn::Tensor& grad,
         const ttnn::Tensor& exp_avg,
         const ttnn::Tensor& exp_avg_sq,
+        const std::optional<ttnn::Tensor>& max_exp_avg_sq,
         float lr,
         float beta1,
         float beta2,
@@ -43,6 +44,7 @@ struct AdamWFusedDeviceOperation {
         float beta2_pow,
         float epsilon,
         float weight_decay,
+        bool amsgrad,
         uint32_t step);
 };
 

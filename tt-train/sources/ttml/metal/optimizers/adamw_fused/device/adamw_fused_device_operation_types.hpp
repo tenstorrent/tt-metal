@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
 namespace ttml::metal::optimizers::adamw_fused::device {
@@ -16,6 +17,7 @@ struct operation_attributes_t {
     float beta2_pow{};
     float epsilon{};
     float weight_decay{};
+    bool amsgrad{false};
     uint32_t step{};
 };
 
@@ -25,6 +27,7 @@ struct tensor_args_t {
 
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
+    std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
