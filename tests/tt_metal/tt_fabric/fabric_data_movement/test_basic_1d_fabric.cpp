@@ -5,8 +5,7 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <array>
@@ -29,10 +28,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -269,27 +268,8 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
-        auto axis_hops = routing_info.num_mcast_hops;
-        if (spine_hops) {
-            // hops here include the mcast origin device.
-            // i.e mcast_routing_info specifies the size of mcast group, which included the mcast
-            // origin device.
-            // For example, if north is set to 4, it implies origin device + 3 north neighbors.
-            // Therefore, if there is an mcast trunk, decrement the trunk hop count by 1 to discount the origin
-            // device.
-            if (routing_info.mcast_dir == RoutingDirection::N or routing_info.mcast_dir == RoutingDirection::S) {
-                // Decrement the hop to account for mcast origin device.
-                axis_hops--;
-            }
-            // Also, if there is a a trunk present, we do not decrement the branch axis size.
-        } else {
-            // There is no Trunk, i.e branch line mcast.
-            // In this case decrement the branch axis hop count, because, origin devices counts as first
-            // mcast receiver device.
-            axis_hops--;
-        }
         mcast_header_rtas[static_cast<uint32_t>(
-            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = axis_hops;
+            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = routing_info.num_mcast_hops;
     }
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
     // append the EDM connection rt args
@@ -447,8 +427,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
     // common compile time args for sender and receiver
     // Note: see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
@@ -457,7 +435,6 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -567,7 +544,6 @@ void run_unicast_test_bw_chips(
     auto receiver_device = fixture->get_device(dst_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
@@ -583,7 +559,6 @@ void run_unicast_test_bw_chips(
         worker_mem_map.target_address,
         use_dram_dst,
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0 /* is_chip_multicast */,
         0 /* additional_dir */};
 
@@ -949,8 +924,6 @@ void RunTestMCastConnAPI(
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
     // common compile time args for sender and receiver
     // Note: Fabric Mcast with NOC writes to DRAM provides redudant coverage,
     // so use_dram_dst is set to 0; see run_unicast_dw_chips() for DRAM coverage
@@ -960,7 +933,6 @@ void RunTestMCastConnAPI(
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
@@ -1400,7 +1372,6 @@ void RunTest2DMCastConnAPI(
     uint32_t num_packets = 100;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     uint32_t mcast_mode;
     auto arbitrary_fabric_node_id = src_fabric_node_id;
     if (north_hops > 0 && south_hops > 0) {
@@ -1446,7 +1417,6 @@ void RunTest2DMCastConnAPI(
         0 /* use_dram_dst */,
         mcast_mode,
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         1 /* is_chip_multicast */,
         1 /* additional_dir */};
 
@@ -1757,7 +1727,6 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
         worker_mem_map.target_address,
         0 /* use_dram_dst */,
         0 /* is_2d_fabric */,
-        0 /* use_dynamic_routing */,
         1 /* is_chip_multicast */,
         0 /* additional_dir */};
 

@@ -5,8 +5,6 @@
 #include "gather_common.hpp"
 
 #include "dataflow_api.h"
-#include <tt-metalium/constants.hpp>
-
 #include <cstdint>
 /*
 This kernel implements a parallel gather operation along the last dimension (Wt_index) of the tensor, enabling support
