@@ -349,7 +349,7 @@ struct Conv2d {
 Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,
