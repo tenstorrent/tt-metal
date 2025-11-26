@@ -93,7 +93,7 @@ std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t add
             for (const auto& link_index : link_indices) {
                 const auto eth_channel = eth_cores.at(link_index);
                 const auto& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, tt::CoordSystem::LOGICAL);
-                process_core(coord, fabric_node_id, eth_core, eth_channel, direction, link_index, physical_chip_id);
+                process_core(coord, fabric_node_id, CoreCoord(eth_core.x, eth_core.y), eth_channel, direction, link_index, physical_chip_id);
             }
         }
 
