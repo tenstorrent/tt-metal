@@ -25,7 +25,14 @@ class TtMultiheadAttention:
 
         self.attn_in_proj__weight = params.in_proj.weight
         self.attn_in_proj__bias = params.in_proj.bias
-        self.attn_in_proj__weight_permute = ttnn.permute(self.attn_in_proj__weight, (1, 0))
+
+        # Pre-split Q, K, V weights in __init__ to avoid runtime slicing
+        # Note: preprocess_linear_weight already transposes, so shape is [embed_dims, 3*embed_dims]
+        # We slice along the second dimension (columns) to get Q, K, V
+        self.q_weight = self.attn_in_proj__weight[:, :embed_dims]
+        self.k_weight = self.attn_in_proj__weight[:, embed_dims : 2 * embed_dims]
+        self.v_weight = self.attn_in_proj__weight[:, 2 * embed_dims :]
+
         self.attn_in_proj__bias_squeeze = ttnn.squeeze(self.attn_in_proj__bias, 0)
         self.attn_out_proj_weight = params.out_proj.weight
         self.attn_out_proj_bias = params.out_proj.bias
@@ -88,31 +95,22 @@ class TtMultiheadAttention:
             value = ttnn.permute(value, (1, 0))
 
         in_proj_bias = self.attn_in_proj__bias_squeeze
-        in_proj_weight = self.attn_in_proj__weight_permute
 
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
 
-        # Split weights for Q, K, V projections
-        q_weight = in_proj_weight[: self.embed_dims, :]
-        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]
-        v_weight = in_proj_weight[2 * self.embed_dims :, :]
-
+        # Split biases for Q, K, V projections
         q_bias = in_proj_bias[: self.embed_dims]
         k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]
         v_bias = in_proj_bias[2 * self.embed_dims :]
 
-        # Project Q, K, V
-        q_weight = ttnn.permute(q_weight, (1, 0))
-        k_weight = ttnn.permute(k_weight, (1, 0))
-        v_weight = ttnn.permute(v_weight, (1, 0))
-
-        query = ttnn.linear(query, q_weight, bias=q_bias)
-        key = ttnn.linear(key, k_weight, bias=k_bias)
+        # Project Q, K, V using pre-split and pre-permuted weights (no runtime permute!)
+        query = ttnn.linear(query, self.q_weight, bias=q_bias)
+        key = ttnn.linear(key, self.k_weight, bias=k_bias)
 
         if value.get_layout() != ttnn.TILE_LAYOUT:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, v_weight, bias=v_bias)
+        value = ttnn.linear(value, self.v_weight, bias=v_bias)
 
         # Reshape and transpose for SDPA format
         # SDPA expects: [batch, num_heads, seq_len, head_dim]
