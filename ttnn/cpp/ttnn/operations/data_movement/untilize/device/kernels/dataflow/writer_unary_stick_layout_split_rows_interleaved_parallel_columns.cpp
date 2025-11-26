@@ -72,6 +72,7 @@ void kernel_main() {
     uint64_t mcast_sync_semaphore_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, sync_semaphore_addr);
 
+    DPRINT << "sem wait val: " << start_stick_id << "\n";
     noc_semaphore_wait(sync_semaphore_ptr, start_stick_id);
     noc_semaphore_set(sync_semaphore_ptr, start_stick_id+num_sticks);
 

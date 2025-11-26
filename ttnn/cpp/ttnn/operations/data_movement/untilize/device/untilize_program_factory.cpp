@@ -21,7 +21,8 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement {
+namespace detail {
 
 uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor = 1) {
     for (uint32_t curr_div = starting_divisor; curr_div > 0; curr_div--) {
@@ -64,9 +65,9 @@ std::array<uint32_t,5> get_fuse_sync_ct_args(const CoreRange& sync_core_grid, Me
     };
 }
 
-operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     const Tensor& input_tensor,
-    Tensor& output_tensor,
+    const Tensor& output_tensor,
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids,
@@ -75,6 +76,30 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     uint32_t max_tiles_per_block) {
     tt::tt_metal::Program program{};
 
+    return untilize::untilize_row_wise_fuseable(
+        program,
+        input_tensor,
+        output_tensor,
+        use_pack_untilize,
+        fp32_dest_acc_en,
+        sub_core_grids,
+        semaphore,
+        sync_core_grids,
+        max_tiles_per_block);
+}
+}  // namespace detail
+
+namespace untilize {
+tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const CoreRangeSet& sub_core_grids,
+    const std::optional<GlobalSemaphore>& semaphore,
+    const std::optional<CoreRangeSet>& sync_core_grids,
+    uint32_t max_tiles_per_block) {
     const auto input_dtype = input_tensor.dtype();
     const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_dtype);
     const uint32_t input_tile_size_bytes = tt::tile_size(input_cb_data_format);
@@ -133,8 +158,8 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     std::map<std::string,std::string> writer_defines;
     if(semaphore.has_value()){
         writer_defines["FUSED_OP_SYNC"] ="1";
-        const auto sync_core_range = validate_fuse_sync_args(sub_core_grids,sync_core_grids);
-        const auto sync_ct_args = get_fuse_sync_ct_args(sync_core_range, input_tensor.device());
+        const auto sync_core_range = detail::validate_fuse_sync_args(sub_core_grids, sync_core_grids);
+        const auto sync_ct_args = detail::get_fuse_sync_ct_args(sync_core_range, input_tensor.device());
         writer_ct_args.insert(writer_ct_args.end(),sync_ct_args.begin(), sync_ct_args.end());
     }
 
@@ -242,9 +267,12 @@ operation::ProgramWithCallbacks untilize_row_wise_fuseable(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        .program = tt::tt_metal::Program{}, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
+}  // namespace untilize
 
+namespace detail {
 operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     const Tensor& a,
     Tensor& output,
@@ -1703,4 +1731,5 @@ operation::ProgramWithCallbacks untilize_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace detail
+}  // namespace ttnn::operations::data_movement

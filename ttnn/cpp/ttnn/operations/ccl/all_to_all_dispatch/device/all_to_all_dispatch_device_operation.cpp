@@ -22,7 +22,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
 
-    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
     TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
 
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
@@ -61,15 +60,15 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
         "Input and indices tensor must have the same number of dimensions");
-    for (uint32_t i = 0; i < indices_shape.rank() - 1; i++) {
-        TT_FATAL(
-            input_shape[i] == indices_shape[i],
-            "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
-            "dimension {} with shape {} and {}",
-            i,
-            input_shape[i],
-            indices_shape[i]);
-    }
+    // for (uint32_t i = 0; i < indices_shape.rank() - 1; i++) {
+    //         TT_FATAL(
+    //             input_shape[i] == indices_shape[i],
+    //             "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
+    //             "dimension {} with shape {} and {}",
+    //             i,
+    //             input_shape[i],
+    //             indices_shape[i]);
+    //    }
     TT_FATAL(
         operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
         "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
@@ -129,20 +128,34 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto mem_config = operation_attributes.output_mem_config;
     auto output_tokens_spec = TensorSpec(
         Shape(output_shape),
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), mem_config));
     auto metadata_spec = TensorSpec(
         Shape(metadata_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.expert_indices_tensor.dtype(),
             tt::tt_metal::PageConfig(tensor_args.expert_indices_tensor.layout()),
             mem_config));
+
+    std::optional<TensorSpec> untilized_input_tensor = std::nullopt;
+    if (input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+        untilized_input_tensor.emplace(
+            input_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(),
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+                input_tensor.memory_config()));
+    }
+
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
-        auto preallocated_output_spec = output_tensors[0].tensor_spec();
-        auto preallocated_metadata_spec = output_tensors[1].tensor_spec();
-        return std::make_tuple(preallocated_output_spec, preallocated_metadata_spec, std::optional<TensorSpec>());
+        auto preallocated_output_spec = output_tensors.at(0).tensor_spec();
+        auto preallocated_metadata_spec = output_tensors.at(1).tensor_spec();
+        std::optional<TensorSpec> preallocated_untilized_intermediate_spec{output_tensors.at(2).tensor_spec()};
+        return std::make_tuple(
+            preallocated_output_spec, preallocated_metadata_spec, preallocated_untilized_intermediate_spec);
     }
-    return std::make_tuple(output_tokens_spec, metadata_spec, std::optional<TensorSpec>());
+    return std::make_tuple(output_tokens_spec, metadata_spec, untilized_input_tensor);
 }
 
 AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOperation::create_output_tensors(
@@ -156,7 +169,14 @@ AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOpe
 
     auto output_tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
     auto metadata_tensor = create_device_tensor(metadata_spec, tensor_args.input_tensor.device());
-    return {output_tensor, metadata_tensor, std::optional<Tensor>()};
+
+    std::optional<Tensor> intermediate_untilize_tensor = std::nullopt;
+    if (untilize_intermediate_spec.has_value()) {
+        intermediate_untilize_tensor =
+            create_device_tensor(untilize_intermediate_spec.value(), tensor_args.input_tensor.device());
+    }
+
+    return {output_tensor, metadata_tensor, intermediate_untilize_tensor};
 }
 
 std::tuple<AllToAllDispatchDeviceOperation::operation_attributes_t, AllToAllDispatchDeviceOperation::tensor_args_t>
