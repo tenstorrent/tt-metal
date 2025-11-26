@@ -123,7 +123,7 @@ void process_ethernet_connections(
     Operation&& operation) {
     const auto cluster_desc = driver->get_cluster_description();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
-
+    auto&& callable = std::forward<Operation>(operation);
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             const auto src_chip_id = asic_id_to_chip_id.at(*asic_id);
@@ -136,7 +136,7 @@ void process_ethernet_connections(
 
             if (both_mmio || both_non_mmio) {
                 for (const auto& eth_connection : eth_connections) {
-                    std::forward<Operation>(operation)(
+                    callable(
                         src_chip_id, get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan));
                 }
             }
