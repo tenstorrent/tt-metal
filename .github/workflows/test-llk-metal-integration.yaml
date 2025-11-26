@@ -373,7 +373,7 @@ jobs:
             if [ "$enabled" = "true" ]; then
               # Run monitor_workflow in background
               monitor_workflow "$run_id" "$workflow_file" "$output_var" &
-              pids+=($!)
+              pids+=("$!")
             fi
           done
 
