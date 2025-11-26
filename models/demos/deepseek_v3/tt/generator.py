@@ -525,17 +525,17 @@ class DeepseekGenerator:
             token_value = int(next_tokens[0].item())
             logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
-            positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
-            # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
-            if teacher_forcing is not None:
-                # Only enforce for the first user to keep scope minimal
-                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
-                next_tokens[0] = int(forced)
+        positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
+        # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
+        if teacher_forcing is not None:
+            # Only enforce for the first user to keep scope minimal
+            forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+            next_tokens[0] = int(forced)
 
-            generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
-            logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
-            if early_print_first_user:
-                logger.info("===== Generation for first user =====")
+        generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+        logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
+        if early_print_first_user:
+            logger.info("===== Generation for first user =====")
 
         profiler.start("inference_decode")
         for gen_idx in range(max_new_tokens):
@@ -549,10 +549,31 @@ class DeepseekGenerator:
             self.ccl.reset_sem_counters()
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
-                forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                pred_tokens[0] = int(forced)
-            next_tokens = pred_tokens
-            positions += 1
+                # Only enforce for the first user to keep scope minimal
+                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+                next_tokens[0] = int(forced)
+
+            generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+            logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
+            if early_print_first_user:
+                logger.info("===== Generation for first user =====")
+
+            profiler.start("inference_decode")
+            for gen_idx in range(max_new_tokens):
+                # Decode one step with previous next_tokens
+                logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
+                profiler.start(f"decode_time_{gen_idx}")
+                logits = self.decode_forward(
+                    next_tokens, positions, self.batch_size_per_row, enable_trace=self.enable_trace
+                )
+                profiler.end(f"decode_time_{gen_idx}")
+                self.ccl.reset_sem_counters()
+                pred_tokens = self._sample_greedy(logits)
+                if teacher_forcing is not None:
+                    forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                    pred_tokens[0] = int(forced)
+                next_tokens = pred_tokens
+                positions += 1
 
                 # Collect only for the original batch size
                 for i in range(num_of_prompts):
