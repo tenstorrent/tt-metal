@@ -9,8 +9,10 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/data_movement/untilize/device/untilize_program_factory.hpp"
+
+// #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+// #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -35,6 +37,30 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto hidden_size = tensor.logical_shape()[-1];
     TT_FATAL(logical_volume % hidden_size == 0, "Logical volume must be divisible by hidden size");
     return logical_volume / hidden_size;
+}
+
+GlobalSemaphore launch_fused_untilize(
+    Program& program,
+    IDevice* device,
+    const Tensor& input_tensor,
+    const Tensor& untilize_output_tensor,
+    const CoreRangeSet& subdevice_cores,
+    const CoreRangeSet& sender_core_grid) {
+    const auto untilize_cores = subdevice_cores.subtract(sender_core_grid);
+    // TODO this may allocate the semaphore on cores that the op doesn't need.
+    GlobalSemaphore sync_semaphore(device, untilize_cores, 0u);
+
+    data_movement::untilize::untilize_row_wise_fuseable(
+        program,
+        input_tensor,
+        untilize_output_tensor,
+        /*fp32_dest_acc_en*/ false,  // needed only for int32
+        /*use_pack_untilize*/ true,
+        untilize_cores,
+        sync_semaphore,
+        subdevice_cores);
+
+    return sync_semaphore;
 }
 
 std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
@@ -129,7 +155,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
-    auto input_tensor = tensor_args.input_tensor;
+    const bool input_tiled = (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE);
+
+    const auto& input_tensor = (input_tiled) ? std::get<2>(tensor_return_value).value() : tensor_args.input_tensor;
+
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
     const auto& output_tensor = std::get<0>(tensor_return_value);
@@ -291,6 +320,21 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
+    // launch fused untilize if input is tiled
+    std::optional<GlobalSemaphore> untilize_sync_semaphore;
+    if (input_tiled) {
+        const auto& untilize_output_tensor = std::get<2>(tensor_return_value);
+        TT_FATAL(untilize_output_tensor.has_value(), "Expected untilize intermediate buffer");
+        // !TODO deal with override RTs
+        untilize_sync_semaphore = detail::launch_fused_untilize(
+            program,
+            mesh_device,
+            tensor_args.input_tensor,
+            untilize_output_tensor.value(),
+            worker_core_range_set,
+            sender_core_grid);
+    }
+
     // create circular buffers
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
@@ -360,6 +404,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         metadata_buffer_id,
         operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
         linearized_mesh_coord,
+
+        input_tiled,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
@@ -415,7 +461,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)cross_device_semaphore.address(),
         0,
         0,
-    };
+        (untilize_sync_semaphore.has_value()) ? untilize_sync_semaphore->address() : 0};
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
