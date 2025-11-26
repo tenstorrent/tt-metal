@@ -25,6 +25,7 @@ namespace NAMESPACE {
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
  */
+template <bool stable = false>
 void sort_Wt_tiles_row_to_bitonic_sequence(
     const uint32_t input_cb_index,
     const uint32_t index_cb_index,
@@ -56,7 +57,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_wh_tile(index_cb_index, 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
+        ckernel::topk_local_sort<stable>(0, (int)ascending_local, end_phase);
 
         tile_regs_commit();
         tile_regs_wait();
