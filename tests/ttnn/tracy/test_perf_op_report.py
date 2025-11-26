@@ -23,7 +23,7 @@ def run_test(request):
     run_device_profiler(
         request.param["command"],
         request.param["name"],
-        capture_perf_counters_groups=request.param["capture_perf_counters_groups"],
+        capture_perf_counters_groups=request.param.get("capture_perf_counters_groups"),
     )
     return request.param
 
