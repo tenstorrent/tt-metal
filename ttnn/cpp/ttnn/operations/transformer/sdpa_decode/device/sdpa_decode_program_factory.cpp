@@ -37,7 +37,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& attention_sink = tensor_args.attention_sink;
 
-    auto& output_tensor = tensor_return_value;
+    const auto& output_tensor = tensor_return_value;
 
     auto scale = operation_attributes.scale;
     if (not scale.has_value()) {
@@ -1098,10 +1098,10 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : (i % num_cores_per_head) - 1;
-        uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
-        bool do_reduce = (worker_id_for_reduce == -1);
-        bool do_output = (worker_id_for_output == -1);
+        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? UINT32_MAX : (i % num_cores_per_head) - 1;
+        uint32_t worker_id_for_output = ((i % num_cores_per_batch) == 0) ? UINT32_MAX : (i % num_cores_per_batch) - 1;
+        bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
+        bool do_output = (worker_id_for_output == UINT32_MAX);
         uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
         uint32_t cur_batch = i / num_cores_per_batch;
         uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;

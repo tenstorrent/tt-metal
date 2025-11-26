@@ -28,7 +28,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     bool use_mla = operation_attributes.use_mla.value_or(false);
 
     if (use_mla) {
-        TT_FATAL(!tensor_args.v.has_value(), "Must have 2 input tensors and mask");
         TT_FATAL(
             operation_attributes.head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
         TT_FATAL(operation_attributes.is_causal, "Multi-latent attention decode only tested for causal!");
