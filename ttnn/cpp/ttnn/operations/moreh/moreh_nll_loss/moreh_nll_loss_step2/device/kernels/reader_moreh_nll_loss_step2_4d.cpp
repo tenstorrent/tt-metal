@@ -25,6 +25,8 @@ void kernel_main() {
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
 
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
 
@@ -63,7 +65,7 @@ void kernel_main() {
     cb_reserve_back(cb_weight, weight_num_tile);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
@@ -82,8 +84,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp_weight, onetile);
         auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
 
-        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
                 uint32_t tilized_idx = get_tilized_idx(h, w);
                 int32_t target_val = target_l1_ptr[tilized_idx];
                 if (target_val != ignore_index) {
@@ -101,8 +103,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp_input, onetile);
         auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
 
-        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
                 uint32_t tilized_idx = get_tilized_idx(h, w);
                 int32_t target_val = target_l1_ptr[tilized_idx];
 

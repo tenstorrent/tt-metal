@@ -22,8 +22,13 @@ Tensor MorehNllLoss::invoke(
     const int32_t ignore_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    std::cout << "HELLLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO: Inside of MorehNllLoss::invoke" << std::endl;
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
+    std::cout << "HIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII: Inside of MorehNllLoss::invoke"
+              << std::endl;
+
     if (reduction == MEAN) {
         TT_FATAL(divisor_tensor.has_value(), "Divisor tensor must not be empty");
 
