@@ -13,21 +13,21 @@ The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an 
 ## How to Run
 ### Inference pipeline with random weights and random tensor:
 ```sh
-pytest models/demos/wormhole/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
+pytest models/demos/vision/segmentation/vgg_unet/wormhole/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=1):
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
-pytest models/demos/wormhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
+pytest models/demos/vision/segmentation/vgg_unet/wormhole/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
 ```
 - end-2-end perf with Trace+2CQs is 198 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 #### Multi Device (DP=2, n300):
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
-pytest models/demos/wormhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
+pytest models/demos/vision/segmentation/vgg_unet/wormhole/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
 ```
 - end-2-end perf with Trace+2CQs is 318 FPS
 
@@ -35,13 +35,13 @@ pytest models/demos/wormhole/vgg_unet/tests/perf/test_e2e_performant.py::test_vg
 #### Single Device (BS=1):
 Use the following command to run performant model demo (supports single and multiple images):
 ```sh
-pytest models/demos/wormhole/vgg_unet/demo/demo.py::test_demo
+pytest models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo
 ```
 
 #### Multi Device (DP=2, n300):
 Use the following command to run performant model demo:
 ```sh
-pytest models/demos/wormhole/vgg_unet/demo/demo.py::test_demo_dp
+pytest models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_demo_dp
 ```
 
 ### Performant Data evaluation with Trace+2CQ:

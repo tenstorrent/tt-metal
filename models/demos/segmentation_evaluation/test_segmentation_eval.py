@@ -75,7 +75,7 @@ def evaluation(
 
             output_path = "models/demos/blackhole/"
         elif is_wormhole_b0():
-            from models.demos.wormhole.vgg_unet.demo.demo_utils import prediction, preprocess
+            from models.demos.vision.segmentation.vgg_unet.wormhole.demo.demo_utils import prediction, preprocess
 
             output_path = "models/demos/wormhole/"
         else:
