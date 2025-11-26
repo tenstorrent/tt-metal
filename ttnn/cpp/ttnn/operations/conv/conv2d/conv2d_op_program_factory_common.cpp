@@ -676,7 +676,7 @@ void post_conv2d_op_memory_checks(
     const auto& input_tensor_bias = tensor_args.bias;
     auto device = input_tensor_a.device();
 
-    const bool has_bias = input_tensor_bias.has_value();  // operation_attributes.has_bias???
+    const bool has_bias = input_tensor_bias.has_value();
 
     const auto& weights_shape = input_tensor_b.padded_shape();
 
