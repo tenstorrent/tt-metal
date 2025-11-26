@@ -718,7 +718,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
     dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline),
-    has_tensix_extension(has_tensix_extension) {
+    has_tensix_extension(has_tensix_extension),
+    // First level ack is enabled to support bubble flow control
+    enable_first_level_ack(
+        config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
@@ -922,7 +925,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         vc1_has_different_downstream_dest,
-        this->has_tensix_extension};
+        this->has_tensix_extension,
+        this->enable_first_level_ack};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,

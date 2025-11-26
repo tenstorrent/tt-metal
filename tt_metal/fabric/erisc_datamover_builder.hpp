@@ -510,6 +510,8 @@ public:
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
+    bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
+
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
@@ -566,6 +568,8 @@ public:
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
+    bool enable_first_level_ack = false;
+
     // Shared helper for setting up VC connections
     void setup_downstream_vc_connection(
         FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
