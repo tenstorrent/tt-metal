@@ -227,8 +227,8 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         py_tensor.dtype().bits,
         optional_data_type.has_value(),
         optional_data_type.value_or(DataType::INVALID),
-        config.dtype().code,
-        config.dtype().bits);
+        config.dtype.code,
+        config.dtype.bits);
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::reference_internal).ptr(),
