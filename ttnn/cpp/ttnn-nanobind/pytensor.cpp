@@ -126,6 +126,11 @@ Tensor create_typed_tt_tensor_from_py_data(
 
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
 
+    TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
+    TT_FATAL(
+        py_ndarray.size() == py_data_shape.volume(),
+        "create_typed_tt_tensor_from_py_data: array size shape volume mismatch!");
+
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
@@ -193,7 +198,7 @@ Tensor create_tt_tensor_from_py_data(
 }
 
 // Preprocess the python tensor, optionally performing dtype conversion.
-// TODO_NANOBIND: See if we can get rid of this in favor of ndarray
+// May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
     nb::ndarray<nb::array_api, nb::c_contig> contiguous_py_tensor;
     DataType data_type = DataType::INVALID;
@@ -202,13 +207,15 @@ struct PreprocessedPyTensor {
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
 
+    TT_FATAL(data_type != DataType::INVALID, "parse_py_tensor: DataType::INVALID!");
+
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
-        // py_tensor.cast(nb::rv_policy::copy, nb::handle()).ptr(),  // new handle manages ownership
-        py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
+        py_tensor.cast(nb::rv_policy::copy, nb::handle()).ptr(),  // new handle manages ownership
+        // py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
         &config,
         true /*convert*/,
         nullptr);
@@ -241,11 +248,11 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const ttnn::Shape shape = ndarray_shape_to_ttnn(py_tensor);
 
-    // TT_FATAL(
-    //     preprocessed_py_tensor.num_elements == shape.volume(),
-    //     "Number of elements from python tensor {} must match volume of shape {}!",
-    //     preprocessed_py_tensor.num_elements,
-    //     shape.volume());
+    TT_FATAL(
+        preprocessed_py_tensor.contiguous_py_tensor.size() == shape.volume(),
+        "Number of elements from python tensor {} must match volume of shape {}!",
+        preprocessed_py_tensor.contiguous_py_tensor.size(),
+        shape.volume());
 
     const Layout layout = [&]() {
         // Block float types require tile layout.
@@ -416,7 +423,6 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
     TT_THROW("Unreachable");
 }
 
-// NANOBIND_TODO: replace with ndarray
 nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
     RowMajorHostBuffer& row_major_host_buffer, nb::rv_policy policy = nb::rv_policy::copy) {
     GraphTracker::instance().track_function_start(
