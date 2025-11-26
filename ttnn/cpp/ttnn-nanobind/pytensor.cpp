@@ -129,7 +129,9 @@ Tensor create_typed_tt_tensor_from_py_data(
     TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
     TT_FATAL(
         py_ndarray.size() == py_data_shape.volume(),
-        "create_typed_tt_tensor_from_py_data: array size shape volume mismatch!");
+        "create_typed_tt_tensor_from_py_data: array size ({}) shape volume ({}) mismatch!",
+        py_ndarray.size(),
+        py_data_shape.volume());
 
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
@@ -209,9 +211,13 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 
     TT_FATAL(data_type != DataType::INVALID, "parse_py_tensor: DataType::INVALID!");
 
+    // try brute force...
     nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
+    config.device_type = nb::device::cpu::value;
+    config.ndim = py_tensor.ndim();
+    config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import copies it
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::reference_internal).ptr(),
@@ -1450,6 +1456,7 @@ void pytensor_module(nb::module_& mod) {
                 auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
                 return convert_tt_tensor_to_torch_tensor(buffer);
             },
+            nb::rv_policy::copy,
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1470,6 +1477,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_torch_tensor(buffer);
             },
+            nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to torch tensor.
@@ -1490,6 +1498,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_numpy_tensor(buffer);
             },
+            nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
