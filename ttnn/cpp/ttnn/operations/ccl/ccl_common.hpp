@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <numeric>
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"

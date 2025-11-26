@@ -158,35 +158,6 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
-# unit_tests_1d_fabric_latency
-
-add_executable(unit_tests_1d_fabric_latency)
-target_include_directories(
-    unit_tests_1d_fabric_latency
-    PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-)
-set_target_properties(
-    unit_tests_1d_fabric_latency
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
-)
-target_link_libraries(
-    unit_tests_1d_fabric_latency
-    PRIVATE
-        tt_metal
-        test_common_libs
-)
-target_sources(
-    unit_tests_1d_fabric_latency
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_1d_fabric_loopback_latency.cpp
-)
-
 # ---- Bench: unicast ----
 add_executable(
     bench_unicast
@@ -228,7 +199,8 @@ set_target_properties(
 add_executable(
     test_addrgen_write
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/test_main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/runner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/unicast_runner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/addrgen_write/multicast_runner.cpp
 )
 
 target_link_libraries(
