@@ -240,6 +240,15 @@ def run_sdpa_noncausal(
 q_chunks = [32, 64, 128, 256, 512]
 k_chunks = [32, 64, 128, 256, 512, 1024]
 
+shapes = [
+    [1, 8, 8, 1024, 128],
+    [1, 10, 10, 2432, 128],  # Wan on 32 chips pad version 2
+    [1, 10, 10, 2560, 128],  # Wan on 32 chips pad version 1
+    [1, 10, 10, 9472, 128],  # Wan on 8 chips
+    [1, 10, 10, 2048, 128],  # Llama2-70B
+]
+shape_ids = [f"shape_{'_'.join(str(x) for x in s)}" for s in shapes]
+
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram_interleaved"])
@@ -247,27 +256,39 @@ k_chunks = [32, 64, 128, 256, 512, 1024]
 @pytest.mark.parametrize("k_chunk_size", k_chunks, ids=[f"k_{c}" for c in k_chunks])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    (
-        # [1, 1, 1, 8192, 128],  # Llama2-70B
-        [1, 10, 10, 2560, 128],  # Wan on 32 chips pad version 1
-        # [1, 10, 10, 2432, 128],  # Wan on 32 chips pad version 2
-        # [1, 10, 10, 9472, 128],  # Wan on 8 chips
-    ),
+    shapes,
+    ids=shape_ids,
 )
-def test_sdpa_run_benchmark(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, reset_seeds):
+@pytest.mark.parametrize("causal", [True, False], ids=["is_causal", "non_causal"])
+def test_sdpa_run_benchmark(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, causal, reset_seeds
+):
     try:
-        run_sdpa_noncausal(
-            device,
-            b,
-            nh,
-            nkv,
-            s,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            dtype,
-            use_mask=False,
-        )
+        if causal:
+            run_test_sdpa_tt(
+                device,
+                b,
+                nh,
+                nkv,
+                s,
+                d,
+                q_chunk_size,
+                k_chunk_size,
+                dtype,
+            )
+        else:
+            run_sdpa_noncausal(
+                device,
+                b,
+                nh,
+                nkv,
+                s,
+                d,
+                q_chunk_size,
+                k_chunk_size,
+                dtype,
+                use_mask=False,
+            )
     except:
         print("run failed")
 
@@ -322,28 +343,46 @@ def test_create_perf_table():
     subdir = "ttnn_sdpa_performance"
     float_cols = ["DEVICE KERNEL DURATION [ns]"]
     cols = ["ATTRIBUTES"]
-    command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark"
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
-    )
+    results = []
 
-    duration_ns = [int(x) for x in r["DEVICE KERNEL DURATION [ns]"]]
-    q_chunks = [s.split("q_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
-    k_chunks = [s.split("k_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
+    for causal in [True, False]:
+        causal_str = "is_causal" if causal else "non_causal"
+        for shape_id, shape in zip(shape_ids, shapes):
+            print(f"Running test for {causal_str} and {shape_id}")
+            command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark -k '{causal_str} and {shape_id}'"
 
-    result = sorted(zip(duration_ns, q_chunks, k_chunks), key=lambda x: x[0])
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+            r = post_process_ops_log(
+                subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+            )
 
-    # Pretty summary table
-    header = "| q_chunk | k_chunk | measured perf (ms) |"
-    sep = "|---|---:|---:|"
-    print(header)
-    print(sep)
-    for idx, (dur, q, k) in enumerate(result):
-        measured_ms = dur / 1e6
-        measured_ms_str = f"{measured_ms:.3f}"
-        print(f"| {q} | {k} | {measured_ms_str} |")
+            duration_ns = [int(x) for x in r["DEVICE KERNEL DURATION [ns]"]]
+            q_chunks = [s.split("q_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
+            k_chunks = [s.split("k_chunk_size=")[1].split(";")[0] for s in r["ATTRIBUTES"]]
+
+            result = sorted(zip(duration_ns, q_chunks, k_chunks), key=lambda x: x[0])
+
+            results.append([causal, shape_id, result[0]])
+
+            # Pretty summary table
+            header = "| q_chunk | k_chunk | measured perf (ms) |"
+            sep = "|---|---:|---:|"
+            print(header)
+            print(sep)
+            for idx, (dur, q, k) in enumerate(result):
+                measured_ms = dur / 1e6
+                measured_ms_str = f"{measured_ms:.3f}"
+                print(f"| {q} | {k} | {measured_ms_str} |")
+
+    # Print the best measured performance for each tested shape/causal config
+    print("\n========== SDPA Performance Summary ==========")
+    print("| Causal | Shape ID | q_chunk | k_chunk | Measured Perf (ms) |")
+    print("|--------|----------|---------|---------|--------------------|")
+    for causal, shape_id, (duration_ns, q_chunk, k_chunk) in results:
+        ms = duration_ns / 1e6
+        print(f"| {'causal' if causal else 'noncausal'} | {shape_id} | {q_chunk} | {k_chunk} | {ms:.3f} |")
+    print("==============================================\n")
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
