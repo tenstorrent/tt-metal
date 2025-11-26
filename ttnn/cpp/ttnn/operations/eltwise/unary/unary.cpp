@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::unary {
@@ -369,11 +368,7 @@ Tensor Tanhshrink::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     bool approx) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-    if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
-        return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    } else {
-        return ttnn::tanhshrink_accurate(input_tensor, memory_config, optional_output_tensor);
-    }
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Hardshrink::invoke(
