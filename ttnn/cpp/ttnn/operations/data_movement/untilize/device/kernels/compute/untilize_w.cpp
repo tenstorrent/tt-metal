@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/untilize.h"
-#include "api/debug/dprint.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -12,17 +12,7 @@ void MAIN {
     uint32_t third_dim = get_compile_time_arg_val(2);
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    untilize_init(tt::CBIndex::c_0);
-
-    uint32_t onetile = 1;
-    for (uint32_t b = 0; b < per_core_block_cnt * per_core_block_tile_cnt * third_dim; ++b) {
-        cb_wait_front(tt::CBIndex::c_0, onetile);
-        cb_reserve_back(tt::CBIndex::c_16, onetile);
-
-        untilize_block(tt::CBIndex::c_0, onetile, tt::CBIndex::c_16);
-
-        cb_push_back(tt::CBIndex::c_16, onetile);
-        cb_pop_front(tt::CBIndex::c_0, onetile);
-    }
+    compute_kernel_lib::untilize(
+        tt::CBIndex::c_0, 1, tt::CBIndex::c_16, per_core_block_cnt * per_core_block_tile_cnt * third_dim);
 }
 }  // namespace NAMESPACE

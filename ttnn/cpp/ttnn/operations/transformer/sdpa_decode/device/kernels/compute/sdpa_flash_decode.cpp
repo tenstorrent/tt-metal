@@ -16,15 +16,10 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.h"
-
-constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
+#include "ttnn/kernel_lib/untilize_helpers.h"
 
 namespace NAMESPACE {
 
@@ -70,7 +65,6 @@ void MAIN {
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
-    constexpr bool use_pack_untilize = out_chunk_tiles <= MAX_PACK_UNTILIZE_WIDTH;
 
     // CB index definitions
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -543,26 +537,8 @@ void MAIN {
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
-                // Conditionally use pack_untilize or untilize
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-                } else {
-                    untilize_init(cb_out_accumulate_im);
-                }
-                cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_reserve_back(cb_out_final, out_chunk_tiles);
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
-                } else {
-                    untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
-                }
-                if constexpr (use_pack_untilize) {
-                    pack_untilize_uninit(cb_out_final);
-                } else {
-                    untilize_uninit(cb_out_final);
-                }
-                cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_push_back(cb_out_final, out_chunk_tiles);
+                // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
+                compute_kernel_lib::untilize<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final, 1);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);

@@ -11,6 +11,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -259,16 +260,9 @@ void MAIN {
                                 add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                             }
 
-                            // After reduction (if any), untilize result
-                            cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                            untilize_init(cb_matmul_interm_tiled);
-                            for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                                cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
-                                untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);
-                                cb_push_back(cb_matmul_result_rm, matmul_N_t);
-                                cb_pop_front(cb_matmul_interm_tiled, matmul_N_t);
-                            }
-                            untilize_uninit(cb_matmul_interm_tiled);
+                            // After reduction (if any), untilize result using helper
+                            compute_kernel_lib::untilize<matmul_N_t, true, true, true>(
+                                cb_matmul_interm_tiled, cb_matmul_result_rm, matmul_M_t, 1, output_tiles);
                         }
                     }
                 }

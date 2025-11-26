@@ -4,11 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
-
-constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
-constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -20,32 +16,19 @@ void MAIN {
 
     const uint32_t total_blocks = get_arg_val<uint32_t>(0);
 
-    constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
-
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
-    if constexpr (use_pack_untilize) {
-        pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
-    } else {
-        untilize_init(src_cb_id);
-    }
 
-    constexpr uint32_t tiles_per_block = block_size * tiles_per_row;
+    // Initialize once before the loop
+    compute_kernel_lib::untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
+
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        const uint32_t out_cb_id = (block_idx % NUM_RISCV_DATA_MOVEMENT_CORES == 0) ? out_cb_id0 : out_cb_id1;
+        const uint32_t out_cb_id = (block_idx % 2 == 0) ? out_cb_id0 : out_cb_id1;
 
-        cb_wait_front(src_cb_id, tiles_per_block);
-        cb_reserve_back(out_cb_id, tiles_per_block);
-        if constexpr (use_pack_untilize) {
-            pack_untilize_block<tiles_per_row>(src_cb_id, block_size, out_cb_id);
-        } else {
-            untilize_block(src_cb_id, block_size * tiles_per_row, out_cb_id);
-        }
-        cb_push_back(out_cb_id, tiles_per_block);
-        cb_pop_front(src_cb_id, tiles_per_block);
+        // Use unified untilize with init=false, uninit=false since we handle those outside the loop
+        compute_kernel_lib::untilize<tiles_per_row, false, false>(src_cb_id, out_cb_id, 1, block_size);
     }
 
-    if constexpr (use_pack_untilize) {
-        pack_untilize_uninit(out_cb_id0);
-    }
+    // Uninit after loop
+    compute_kernel_lib::untilize_uninit<tiles_per_row>(src_cb_id, out_cb_id0);
 }
 }  // namespace NAMESPACE
