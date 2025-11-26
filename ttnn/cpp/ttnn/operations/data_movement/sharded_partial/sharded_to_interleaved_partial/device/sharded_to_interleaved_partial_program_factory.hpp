@@ -1,0 +1,30 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/device_operation.hpp"
+#include "sharded_to_interleaved_partial_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+
+namespace ttnn::operations::data_movement::program {
+
+// Adapter factory that wraps the shared factory
+struct ShardedToInterleavedPartialProgramFactory {
+    using shared_variables_t = ShardedToInterleavedSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
+        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
+        partial_tensor_return_value_t& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const sharded_to_interleaved_partial_operation_attributes_t& operation_attributes,
+        const sharded_to_interleaved_partial_tensor_args_t& tensor_args,
+        partial_tensor_return_value_t& output);
+};
+
+}  // namespace ttnn::operations::data_movement::program
