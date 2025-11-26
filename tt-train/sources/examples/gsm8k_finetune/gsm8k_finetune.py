@@ -523,8 +523,8 @@ def train():
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
         # Synchronize gradients if DDP is enabled
-        if device_config.enable_ddp:
-            ttml.core.distributed.synchronize_parameters(tt_model.parameters())
+        # if device_config.enable_ddp:
+        #     ttml.core.distributed.synchronize_parameters(tt_model.parameters())
 
         # Optimizer step after micro-steps
         optim.step()
@@ -534,9 +534,9 @@ def train():
         train_losses.append(step_loss)
 
         # tqdm postfix
-        postfix = {"train_loss": f"{step_loss:.4f}", "lr": f"{lr_now:.6f}"}
+        postfix = {"train_loss": f"{float(step_loss):.4f}", "lr": f"{float(lr_now):.6f}"}
         if last_val_loss is not None:
-            postfix["val_loss"] = f"{last_val_loss:.4f}"
+            postfix["val_loss"] = f"{float(last_val_loss):.4f}"
         bar.set_postfix(postfix, refresh=False)
 
         # Validation every eval_every steps
