@@ -198,6 +198,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"tile_width", tile_width},
         {"tokens", tokens},
         {"topk_groups", operation_attributes.topk_groups},
+        {"n_groups", operation_attributes.n_groups},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};

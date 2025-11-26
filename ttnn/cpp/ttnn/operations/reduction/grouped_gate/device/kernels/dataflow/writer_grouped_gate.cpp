@@ -74,9 +74,9 @@ FORCE_INLINE void generate_index_tiles(
     }
 }
 
-// Vertically along each tile, write index 0, ..., topk_groups - 1
+// Vertically along each tile, write index 0, ..., n_groups - 1
 FORCE_INLINE void generate_group_indices_tiles(
-    const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t topk_groups, uint32_t tokens) {
+    const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t n_groups) {
     cb_reserve_back(group_indices_cb_index, width_tiles);
     uint32_t base_write_addr = get_write_ptr(group_indices_cb_index);
     constexpr uint32_t face_line = 16;
@@ -86,12 +86,12 @@ FORCE_INLINE void generate_group_indices_tiles(
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t tile_size_bytes = 2048;
     // G x W x T slice of the tile is written
-    // G x T subset of the tile is written, where G is the topk_groups and T is the tokens
+    // G x T subset of the tile is written, where G is the n_groups and T is the tokens
     // handle first face line
-    // first row –> 0, 0, 0, second row –> 1, 1, 1, topk_groups - 1 row –> topk_groups - 1, topk_groups - 1, topk_groups
+    // first row –> 0, 0, 0, second row –> 1, 1, 1, n_groups - 1 row –> n_groups - 1, n_groups - 1, n_groups
     // - 1
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
-    for (uint32_t group_index = 0; group_index < topk_groups; group_index++) {
+    for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
         // 16 uint16_t values is 8 uint32_t writes
         for (uint32_t i = 0; i < face_line / 2; i++) {
             write_ptr[i] = (group_index) << 16 | group_index;
@@ -108,7 +108,7 @@ FORCE_INLINE void generate_group_indices_tiles(
     }
     // then use noc to write the rest of the faces
     uint64_t dm_engine_index_write_offset_face_1 = get_noc_addr(base_write_addr);
-    // if topk_groups is greater than 16, we need to write the third face
+    // if n_groups is greater than 16, we need to write the third face
     uint64_t dm_engine_index_write_offset_face_3 = get_noc_addr(base_write_addr + 2 * face_size_bytes);
 
     // copy face 1 to face 2 and face 3 to face 4
@@ -125,7 +125,7 @@ FORCE_INLINE void generate_group_indices_tiles(
     }
     noc_async_read_barrier();
     for (uint32_t tile_index = 0; tile_index < width_tiles; tile_index++) {
-        print_tile(group_indices_cb_index, tile_index, true, 0, topk_groups + 1);
+        print_tile(group_indices_cb_index, tile_index, true, 0, n_groups + 1);
     }
     cb_push_back(group_indices_cb_index, width_tiles);
 }
@@ -142,6 +142,7 @@ void kernel_main() {
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
+    constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -156,5 +157,5 @@ void kernel_main() {
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
-    generate_group_indices_tiles(group_indices_cb_index, width_tiles, topk_groups, 32);
+    generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
 }
