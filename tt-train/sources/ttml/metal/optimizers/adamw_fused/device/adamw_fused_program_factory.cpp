@@ -53,7 +53,7 @@ constexpr auto kParamCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kExpAvgCbIndex = tt::CBIndex::c_2;
 constexpr auto kExpAvgSqCbIndex = tt::CBIndex::c_3;
-constexpr auto kMaxExpAvgSqCbIndex = tt::CBIndex::c_4;
+constexpr auto kMaxExpAvgSqInCbIndex = tt::CBIndex::c_4;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 constexpr auto kExpAvgOutCbIndex = tt::CBIndex::c_17;
@@ -62,6 +62,7 @@ constexpr auto kMaxExpAvgSqOutCbIndex = tt::CBIndex::c_19;
 
 constexpr auto kMomentumCbIndex = tt::CBIndex::c_24;
 constexpr auto kVarianceCbIndex = tt::CBIndex::c_25;
+constexpr auto kMaxExpAvgSqCbIndex = tt::CBIndex::c_26;
 
 }  // namespace
 
@@ -279,8 +280,8 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     [[maybe_unused]] auto cb_exp_avg_sq_out = create_circular_buffer(
         program, all_cores, kExpAvgSqOutCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
-    [[maybe_unused]] auto cb_max_exp_avg_sq = create_circular_buffer(
-        program, all_cores, kMaxExpAvgSqCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    [[maybe_unused]] auto cb_max_exp_avg_sq_in = create_circular_buffer(
+        program, all_cores, kMaxExpAvgSqInCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_max_exp_avg_sq_out = create_circular_buffer(
         program,
@@ -288,6 +289,14 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
         kMaxExpAvgSqOutCbIndex,
         output_data_format,
         bfloat16_single_tile_size_bytes,
+        num_output_tiles);
+
+    [[maybe_unused]] auto cb_max_exp_avg_sq = create_circular_buffer(
+        program,
+        all_cores,
+        kMaxExpAvgSqCbIndex,
+        intermediate_data_format,
+        float32_single_tile_size_bytes,
         num_output_tiles);
 
     [[maybe_unused]] auto cb_momentum = create_circular_buffer(
@@ -344,6 +353,7 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_to_dest_mode[kMomentumCbIndex] = UnpackToDestMode::UnpackToDestFp32;
     unpack_to_dest_mode[kVarianceCbIndex] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[kMaxExpAvgSqCbIndex] = UnpackToDestMode::UnpackToDestFp32;
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
