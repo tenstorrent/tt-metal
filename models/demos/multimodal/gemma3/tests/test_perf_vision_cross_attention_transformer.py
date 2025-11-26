@@ -10,8 +10,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
-from models.demos.gemma3.tt.model_config import ModelArgs, determine_device_name
+from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
+from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, determine_device_name
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -19,7 +19,7 @@ THRESHOLD_PERCENT = 5
 
 SAVE_NEW_PERF_TARGETS = False
 TARGETS_JSON_FILENAME = (
-    "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json"
+    "models/demos/multimodal/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json"
 )
 
 
