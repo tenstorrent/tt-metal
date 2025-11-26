@@ -1006,3 +1006,31 @@ if __name__ == "__main__":
 
         ttnn.close_device(device)
         print("Device closed.")
+
+    # Example 2: Generate MLP with fused CCL for Galaxy 2D topology
+    print("\n=== Example 2: Fused CCL MLP for Galaxy 2D ===")
+
+    mlp_config_ccl = MLPConfig(
+        hidden_size=4096,
+        intermediate_size=11008,
+        activation="silu",
+        dropout=0.0,
+        topology=Topology.GALAXY_2D,
+    )
+
+    save_source_ccl = SaveSource("mlp_galaxy_2d_fused_ccl.py")
+    module_class_ccl = MLP(
+        mlp_config_ccl,
+        save_source=save_source_ccl,
+    )
+
+    print(f"Generated class: {module_class_ccl}")
+    if module_class_ccl:
+        print("\nGenerated source preview (fused CCL):")
+        print("-" * 60)
+
+        filename_ccl = save_source_ccl.get_filename(mlp_config_ccl)
+        if filename_ccl:
+            with open(filename_ccl, "r") as f:
+                print("\n".join(f.readlines()[:80]))
+            print("... [truncated]\n")
