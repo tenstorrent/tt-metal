@@ -575,6 +575,9 @@ def get_state_dicts(
 
 def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
+    # If this is a lazy state dict (or compatible), return a lazy view to preserve laziness.
+    if hasattr(state_dict, "view_with_prefix"):
+        return state_dict.view_with_prefix(prefix, num_layers)
     if num_layers is None:
         return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     else:
