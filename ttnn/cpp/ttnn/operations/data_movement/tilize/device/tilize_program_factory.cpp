@@ -22,7 +22,8 @@ operation::ProgramWithCallbacks tilize_single_core(
     const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    CoreRange core({0, 0}, {0, 0});
+    CoreRange default_core({0, 0}, {0, 0});
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value(), 1).at(0) : default_core;
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
