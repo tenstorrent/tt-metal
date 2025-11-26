@@ -2355,6 +2355,26 @@ struct noc_traits_t {
 };
 
 /**
+ * @brief RAII style wrapper for a scoped lock
+ *
+ * @tparam ReleaseFunc The function to call when this instance goes out of scope.
+ */
+template <typename ReleaseFunc>
+class Lock {
+public:
+    inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~Lock() { release_func_(); }
+
+    Lock(const Lock&) = delete;
+    Lock(Lock&&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    Lock& operator=(Lock&&) = delete;
+
+private:
+    ReleaseFunc release_func_;
+};
+
+/**
  * @brief Noc class that provides a high-level interface for asynchronous read and write operations.
  *
  * It abstracts the details of source and destination address calculations.
@@ -2760,7 +2780,16 @@ public:
         return rd_ptr_bytes;
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        // TODO: Register with the debugger to track the lock
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t cb_id_;
 };
 
@@ -3369,6 +3398,10 @@ public:
         return byte_diff / sizeof(T);
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
     bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
     bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
@@ -3378,6 +3411,10 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     AddressType address_;
 };
 
