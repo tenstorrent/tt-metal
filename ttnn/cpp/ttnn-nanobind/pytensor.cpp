@@ -214,7 +214,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.order = nb::c_contig::value;  // force row-major contiguous
 
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
-        py_tensor.cast(nb::rv_policy::copy, nb::handle()).ptr(),  // new handle manages ownership
+        py_tensor.cast(nb::rv_policy::reference_internal).ptr(),
         // py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
         &config,
         true /*convert*/,
