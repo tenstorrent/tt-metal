@@ -7,6 +7,13 @@ import copy
 import ttnn
 import os
 from scipy.optimize import linear_sum_assignment
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 from models.experimental.vadv2.tt.tt_backbone import TtResnet50
 from models.experimental.vadv2.reference.planning_metric import PlanningMetric
 from models.experimental.vadv2.tt.tt_fpn import TtFPN
@@ -126,6 +133,8 @@ class TtVAD:
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
+        if use_signpost:
+            signpost(header="extract_img_feat_start")
         B = img.shape[0]
 
         if img is not None:
@@ -163,6 +172,8 @@ class TtVAD:
                 img_feat = ttnn.reshape(img_feat, (B, int(BN / B), C, H, W))
                 img_feats_reshaped.append(img_feat)
         ttnn.deallocate(img_feats[0])
+        if use_signpost:
+            signpost(header="extract_img_feat_end")
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas=None, len_queue=None):
@@ -284,8 +295,12 @@ class TtVAD:
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
 
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer before head
+        if use_signpost:
+            signpost(header="pts_bbox_head_start")
 
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
+        if use_signpost:
+            signpost(header="pts_bbox_head_end")
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
         outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
