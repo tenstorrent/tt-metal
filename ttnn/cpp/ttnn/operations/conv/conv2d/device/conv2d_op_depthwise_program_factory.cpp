@@ -20,6 +20,9 @@
 // Pool-related includes for reusing pool kernels
 #include <ttnn/operations/pool/pool_utils.hpp>
 
+// Unary operations for activation functions
+#include <ttnn/operations/eltwise/unary/common/unary_op_utils.hpp>
+
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -570,6 +573,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_depthwise(
     // Let the kernel compilation system handle MATH_FIDELITY and DST_ACCUM_MODE automatically
     // based on the ComputeConfig settings. Only set TILE_C_DIM manually.
     compute_defines["TILE_C_DIM"] = std::to_string(tt::constants::TILE_WIDTH);
+
+    // Merge activation defines into compute defines so they get passed to the kernel
+    if (fused_activation.has_value()) {
+        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i", a.dtype()));
+    }
 
     auto compute_kernel = CreateKernel(
         program,

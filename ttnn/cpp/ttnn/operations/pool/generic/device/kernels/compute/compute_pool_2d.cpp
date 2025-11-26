@@ -9,6 +9,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
@@ -121,6 +122,11 @@ void MAIN {
         copy_tile_to_dst_init_short(in_cb_id_0);
         max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
     }
+
+    // Initialize SFPU for activation functions if present
+#ifdef SFPU_OP_INIT_ACTIVATION
+    SFPU_OP_INIT_ACTIVATION
+#endif
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -328,6 +334,19 @@ void MAIN {
             }
             // dprint_tensix_dest_reg<true>(0);
             // dprint_tensix_dest_reg<true>(1);
+
+#ifdef SFPU_OP_FUNC_ACTIVATION
+            if (last_c_block) {
+                for (uint32_t i = 0; i < partial_iter_output_tiles; ++i) {
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+            } else {
+                for (uint32_t i = 0; i < max_tiles_per_iter; ++i) {
+                    SFPU_OP_FUNC_ACTIVATION
+                }
+            }
+#endif
+            // dprint_tensix_dest_reg<true>(1);
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
@@ -346,22 +365,30 @@ void MAIN {
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
+                        PACK(DPRINT << "TILIZE" << ENDL());
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
-                        // PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
+                        PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
 
                         // Workaround until #27504 is not closed
                         // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
                         // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
                         // to unpack_A_hw_configure.
                         tensix_sync();
-                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                            pre_tilize_cb_id)));
+                        unary_op_init_common(pre_tilize_cb_id, out_cb_id);
+                        // UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
+                        //     pre_tilize_cb_id)));
+                        // UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE,
+                        // UnpackToDestEn>(
+                        //     false /*transpose of faces*/, false /*transpose within 16x16 face*/, pre_tilize_cb_id)));
+
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+
+                        PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
 
                         cb_push_back(out_cb_id, in_ntiles_c);
 
