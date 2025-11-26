@@ -91,7 +91,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -182,7 +182,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -324,7 +324,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}
@@ -404,7 +404,7 @@ jobs:
       - name: Checkout ttsim
         uses: actions/checkout@v4
         with:
-          repository: tenstorrent/ttsim
+          repository: tenstorrent/ttsim-private
           ref: ${{ inputs.ttsim-ref }}
           path: docker-job/ttsim
           token: ${{ secrets.TTSIM_TOKEN }}

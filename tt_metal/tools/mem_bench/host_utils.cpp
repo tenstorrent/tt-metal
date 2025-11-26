@@ -11,6 +11,7 @@
 #include <random>
 #include <stdexcept>
 #include <unordered_set>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
 

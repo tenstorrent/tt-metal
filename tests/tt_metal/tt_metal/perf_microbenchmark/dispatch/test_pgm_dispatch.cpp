@@ -44,6 +44,7 @@
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
