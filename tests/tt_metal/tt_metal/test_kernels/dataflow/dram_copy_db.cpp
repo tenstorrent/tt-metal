@@ -11,8 +11,6 @@
  * APIs explicit flushes need to be used since the calls are non-blocking
  * */
 void kernel_main() {
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
-
     std::uint32_t dram_buffer_src_addr_base   = get_arg_val<uint32_t>(0);
     std::uint32_t dram_src_bank_id            = get_arg_val<uint32_t>(1);
 
@@ -38,10 +36,11 @@ void kernel_main() {
     experimental::CoreLocalMem<uint32_t> l1_mem_1(l1_buffer_addr);
     experimental::CoreLocalMem<uint32_t> l1_mem_2(l1_buffer_addr + rd_wr_l1_buffer_size_bytes);
     experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src_bank;
 
     // Copy data from DRAM into destination L1 buffer
     noc.async_read(
-        experimental::AllocatorBank<bank_type>(),
+        dram_src_bank,
         l1_mem_1,
         rd_wr_l1_buffer_size_bytes,
         {.bank_id = dram_src_bank_id, .addr = dram_buffer_src_addr},
@@ -52,7 +51,7 @@ void kernel_main() {
 
     while (num_tiles_read < num_tiles) {
         noc.async_read(
-            experimental::AllocatorBank<bank_type>(),
+            dram_src_bank,
             l1_mem_2,
             rd_wr_l1_buffer_size_bytes,
             {.bank_id = dram_src_bank_id, .addr = dram_buffer_src_addr},
@@ -66,7 +65,7 @@ void kernel_main() {
 
         noc.async_write(
             l1_mem_1,
-            experimental::AllocatorBank<bank_type>(),
+            dram_src_bank,
             rd_wr_l1_buffer_size_bytes,
             {},
             {.bank_id = dram_dst_bank_id, .addr = dram_buffer_dst_addr});
@@ -85,7 +84,7 @@ void kernel_main() {
     // DRAM NOC dst address
     noc.async_write(
         l1_mem_2,
-        experimental::AllocatorBank<bank_type>(),
+        dram_src_bank,
         rd_wr_l1_buffer_size_bytes,
         {},
         {.bank_id = dram_dst_bank_id, .addr = dram_buffer_dst_addr});
