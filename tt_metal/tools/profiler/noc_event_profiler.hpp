@@ -120,6 +120,29 @@ FORCE_INLINE void recordNocEventWithAddr(
     auto [decoded_x, decoded_y] = decode_noc_addr_to_coord(noc_addr);
     recordNocEvent(noc_event_type, decoded_x, decoded_y, num_bytes, vc);
 }
+
+template <KernelProfilerNocEventMetadata::NocEventType EventType, uint32_t STATIC_ID = 12345>
+FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t num_bytes) {
+    KernelProfilerNocEventMetadata ev_md;
+
+    auto& scoped_lock_event = ev_md.data.scoped_lock_event;
+    scoped_lock_event.noc_xfer_type = EventType;
+    scoped_lock_event.locked_address_base = locked_address_base;
+
+    // Calculate chunk size and number of chunks.
+    if (num_bytes >= KernelProfilerNocEventMetadata::PAYLOAD_CHUNK_SIZE) {
+        scoped_lock_event.chunk_size = KernelProfilerNocEventMetadata::PAYLOAD_CHUNK_SIZE;
+        scoped_lock_event.num_chunks = (num_bytes + KernelProfilerNocEventMetadata::PAYLOAD_CHUNK_SIZE - 1) /
+                                       KernelProfilerNocEventMetadata::PAYLOAD_CHUNK_SIZE;
+    } else {
+        scoped_lock_event.chunk_size = num_bytes;
+        scoped_lock_event.num_chunks = 1;
+    }
+
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+}
+
 }  // namespace noc_event_profiler
 
 #define RECORD_NOC_EVENT_WITH_ADDR(event_type, noc_addr, num_bytes, vc)                                             \
@@ -153,6 +176,11 @@ FORCE_INLINE void recordNocEventWithAddr(
         kernel_profiler::quick_push_if_linked(cmd_buf, linked); \
     }
 
+#define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)                   \
+    {                                                                                          \
+        noc_event_profiler::recordScopedLockEvent<event_type>(locked_address_base, num_bytes); \
+    }
+
 #else
 
 // null macros when noc tracing is disabled
@@ -160,5 +188,6 @@ FORCE_INLINE void recordNocEventWithAddr(
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+#define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
 
 #endif
