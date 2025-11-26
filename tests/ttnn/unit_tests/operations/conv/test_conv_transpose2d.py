@@ -87,7 +87,7 @@ def run_conv_transpose2d(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, layout=output_layout, device=device)
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -298,25 +298,11 @@ def test_simple_conv_t2d(
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
     (
-        (
-            1,
-            512,
-            512,
-            64,
-            64,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-            {"act_block_h": 32},
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            4,
-            SliceWidth,
-        ),
+        # fmt: off
+        (1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        # fmt: on
     ),
 )
 @pytest.mark.parametrize(
@@ -326,9 +312,10 @@ def test_simple_conv_t2d(
     ],
 )
 @pytest.mark.parametrize(
-    "activations_dtype",
+    "activations_dtype, layout",
     [
-        ttnn.bfloat16,
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize("preprocess_weights", [False])
@@ -352,6 +339,7 @@ def test_convt2d_dram(
     out_pad_w,
     config,
     shard_layout,
+    layout,
     mirror_kernel,
     preprocess_weights,
     num_slices,
@@ -383,6 +371,7 @@ def test_convt2d_dram(
         out_pad_w=out_pad_w,
         config_override=config,
         shard_layout=shard_layout,
+        output_layout=layout,
         auto_shard=True,
         mirror_kernel=mirror_kernel,
         preprocess_weights_bias=preprocess_weights,

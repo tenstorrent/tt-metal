@@ -121,7 +121,7 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
 
     IOShape full_input_shape;
     IOShape strided_input_shape;
-    std::array<uint32_t, 4> input_padding;
+    std::array<int, 4> input_padding;
 
 public:
     ConvT2DSliceAttr(

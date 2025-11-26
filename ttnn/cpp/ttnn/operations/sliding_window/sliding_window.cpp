@@ -193,10 +193,10 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
     uint32_t input_pad_right = base_pad_width - padding[3];
 
     TT_FATAL(
-        full_input_shape[1] - strided_input_height == input_pad_top + input_pad_bottom,
+        full_input_shape[1] - strided_input_height == input_pad_top + input_pad_bottom + output_pad_hw.first,
         "Calculated input padding height does not match the expected value.");
     TT_FATAL(
-        full_input_shape[2] - strided_input_width == input_pad_left + input_pad_right,
+        full_input_shape[2] - strided_input_width == input_pad_left + input_pad_right + output_pad_hw.second,
         "Calculated input padding width does not match the expected value.");
 
     return {std::pair{input_pad_top, input_pad_bottom}, std::pair{input_pad_left, input_pad_right}};

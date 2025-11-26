@@ -6,6 +6,7 @@
 
 #include <array>
 #include <tt-logger/tt-logger.hpp>
+#include <tuple>
 #include <utility>
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -523,13 +524,6 @@ Result conv_transpose2d_L1(
     uint32_t input_pad_left = base_pad_width - padding[2];
     uint32_t input_pad_right = base_pad_width - padding[3];
 
-    TT_FATAL(
-        full_input_height - strided_input_height == input_pad_top + input_pad_bottom,
-        "Calculated input padding height does not match the expected value.");
-    TT_FATAL(
-        full_input_width - strided_input_width == input_pad_left + input_pad_right,
-        "Calculated input padding width does not match the expected value.");
-
     log_info(tt::LogOp, "Input : {}x{}", input_height, input_width);
     log_info(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
@@ -537,6 +531,13 @@ Result conv_transpose2d_L1(
     log_info(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
     log_info(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
+
+    TT_FATAL(
+        full_input_height - strided_input_height == input_pad_top + input_pad_bottom + output_padding[0],
+        "Calculated input padding height does not match the expected value.");
+    TT_FATAL(
+        full_input_width - strided_input_width == input_pad_left + input_pad_right + output_padding[1],
+        "Calculated input padding width does not match the expected value.");
 
     const bool mm_conv = use_matmul_for_1x1_conv(
         kernel_size,
@@ -806,17 +807,19 @@ ConvT2DSliceAttr::ConvT2DSliceAttr(
 std::tuple<ConvT2DSliceAttr::IOShape, ConvT2DSliceAttr::IOShape> ConvT2DSliceAttr::get_input_slice(
     IOShape output_slice_start, IOShape output_slice_end) {
     auto [input_height, input_width] = input_shape;
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
-    int input_slice_height_start = (output_slice_height_start - input_padding[0]) / stride[0];
-    int input_slice_width_start = (output_slice_width_start - input_padding[2]) / stride[1];
+    int output_slice_height_start, output_slice_width_start;
+    int output_slice_height_end, output_slice_width_end;
+    std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
+    std::tie(output_slice_height_end, output_slice_width_end) = output_slice_end;
+    int input_slice_height_start = div_up((output_slice_height_start - (int)padding_n4[0]), (int)stride[0]);
+    int input_slice_width_start = div_up((output_slice_width_start - (int)padding_n4[2]), (int)stride[1]);
 
     int input_slice_height_end = div_up(
         (output_slice_height_end - input_padding[0] + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0] - 1),
-        stride[0]);
+        (int)stride[0]);
     int input_slice_width_end = div_up(
         (output_slice_width_end - input_padding[2] + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1] - 1),
-        stride[1]);
+        (int)stride[1]);
 
     // Clamp input slice to valid input tensor bounds
     input_slice_height_start = std::max<int>(0, input_slice_height_start);
@@ -903,22 +906,33 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
 
 ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
-    // auto [input_height, input_width] = input_shape;
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
-    int input_slice_height_start = (output_slice_height_start - padding_n4[0]) / stride[0];
-    int input_slice_width_start = (output_slice_width_start - padding_n4[2]) / stride[1];
+    int output_slice_height_start, output_slice_width_start;
+    int output_slice_height_end, output_slice_width_end;
+    std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
+    std::tie(output_slice_height_end, output_slice_width_end) = output_slice_end;
+    int input_slice_height_start = div_up((output_slice_height_start - (int)padding_n4[0]), (int)stride[0]);
+    int input_slice_width_start = div_up((output_slice_width_start - (int)padding_n4[2]), (int)stride[1]);
+    int unpadded_output_height_start = std::max<int>(0, output_slice_height_start - (int)padding_n4[0]);
+    int unpadded_output_width_start = std::max<int>(0, output_slice_width_start - (int)padding_n4[2]);
+    int pad_top_offset = unpadded_output_height_start % (int)stride[0] == 0
+                             ? 0
+                             : stride[0] - (unpadded_output_height_start % (int)stride[0]);
+    int pad_left_offset = unpadded_output_width_start % (int)stride[1] == 0
+                              ? 0
+                              : stride[1] - (unpadded_output_width_start % (int)stride[1]);
 
     int input_slice_height_end = div_up(
-        (output_slice_height_end - padding_n4[0] + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0] - 1),
-        stride[0]);
+        (output_slice_height_end - (int)padding_n4[0] + ((int)kernel_size[0] - 1) * ((int)dilation[0] - 1) +
+         (int)kernel_size[0] - 1),
+        (int)stride[0]);
     int input_slice_width_end = div_up(
-        (output_slice_width_end - padding_n4[2] + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1] - 1),
-        stride[1]);
+        (output_slice_width_end - (int)padding_n4[2] + ((int)kernel_size[1] - 1) * ((int)dilation[1] - 1) +
+         (int)kernel_size[1] - 1),
+        (int)stride[1]);
 
-    int pad_top = std::max<int>(0, -input_slice_height_start);
+    int pad_top = std::max<int>({0, -input_slice_height_start, pad_top_offset});
     int pad_bottom = std::max<int>(0, input_slice_height_end - std::get<0>(input_shape));
-    int pad_left = std::max<int>(0, -input_slice_width_start);
+    int pad_left = std::max<int>({0, -input_slice_width_start, pad_left_offset});
     int pad_right = std::max<int>(0, input_slice_width_end - std::get<1>(input_shape));
 
     input_slice_height_start = std::max<int>(0, input_slice_height_start);
@@ -926,12 +940,14 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     input_slice_width_start = std::max<int>(0, input_slice_width_start);
     input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
 
-    auto [output_height, output_width] = calculate_output_image_size(
-        std::array<uint32_t, 2>{std::get<0>(input_shape), std::get<1>(input_shape)},
-        kernel_size,
-        stride,
-        padding_n4,
-        dilation);
+    auto [input_height, input_width] = input_shape;
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (padding_n4[0] + padding_n4[1]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (padding_n4[2] + padding_n4[3]) +
+                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
+
+    std::array<uint32_t, 2> this_output_pad = {0, 0};
     if (output_slice_height_start == 0) {
         pad_top = padding_n4[0];
         input_slice_height_start = 0;
@@ -939,6 +955,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     if (output_slice_height_end == output_height) {
         pad_bottom = padding_n4[1];
         input_slice_height_end = std::get<0>(input_shape);
+        this_output_pad[0] = output_padding[0];
     }
     if (output_slice_width_start == 0) {
         pad_left = padding_n4[2];
@@ -947,6 +964,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     if (output_slice_width_end == output_width) {
         pad_right = padding_n4[3];
         input_slice_width_end = std::get<1>(input_shape);
+        this_output_pad[1] = output_padding[1];
     }
 
     int input_slice_height = input_slice_height_end - input_slice_height_start;
@@ -1003,7 +1021,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
         kernel_size,
         stride,
         this_op_padding,
-        output_padding,
+        this_output_pad,
         dilation,
         groups,
         output_dtype,
