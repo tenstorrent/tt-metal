@@ -6,6 +6,59 @@ import ttnn
 import math
 
 
+def get_mha_matmul_program_configs(device, embed_dims=256, num_heads=8):
+    """Get specialized matmul program configs for MHA operations - optimized for VAD-v2"""
+    # Calculate core grid - use 8x8 cores for VAD-v2 MHA operations
+    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+
+    # VAD-v2 MHA dimensions:
+    # embed_dims = 256, num_heads = 8, head_dim = 32
+    # Assuming tile size of 32, so dimensions in tiles:
+    # 256/32 = 8 tiles, 32/32 = 1 tile
+
+    head_dim_t = 1  # head_dim (32) / tile_size (32)
+    embed_dim_t = 8  # embed_dims (256) / tile_size (32)
+
+    # For attention operations, assume typical sequence lengths
+    # These are conservative estimates for VAD-v2
+    seq_len_t = 4  # Assume sequence length around 128 tokens / tile_size
+
+    return {
+        "qkv_proj_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=embed_dim_t,  # Input embed dim in tiles
+            out_subblock_h=1,
+            out_subblock_w=8,  # Must be <= 8 (hardware limit)
+            per_core_M=seq_len_t,  # Sequence length distributed
+            per_core_N=embed_dim_t,  # Conservative N dimension
+        ),
+        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=head_dim_t,  # head_dim in tiles
+            out_subblock_h=1,
+            out_subblock_w=4,  # Conservative subblock width
+            per_core_M=8,  # Conservative per-core M
+            per_core_N=4,  # Conservative per-core N
+        ),
+        "attention_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=4,  # Conservative block width
+            out_subblock_h=1,
+            out_subblock_w=head_dim_t,  # head_dim
+            per_core_M=8,  # Conservative per-core M
+            per_core_N=head_dim_t,  # head_dim
+        ),
+        "output_proj_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=embed_dim_t,  # embed_dim in tiles
+            out_subblock_h=1,
+            out_subblock_w=8,  # Must be <= 8 (hardware limit)
+            per_core_M=seq_len_t,  # sequence length
+            per_core_N=embed_dim_t,  # embed_dim
+        ),
+    }
+
+
 def get_high_perf_compute_config():
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -41,6 +94,10 @@ class TtMultiheadAttention:
         self.compute_cfg = get_high_perf_compute_config()
         self.head_dim = embed_dims // num_heads
         self.scaling = 1.0 / math.sqrt(self.head_dim)
+
+        # STEP 3: Get specialized matmul program configs for MHA operations
+        # These configs optimize memory usage and performance for VAD-v2 attention
+        self.program_configs = get_mha_matmul_program_configs(device, embed_dims, num_heads)
 
     def __call__(
         self,
@@ -233,11 +290,7 @@ class TtMultiheadAttention:
         query_bf = ensure_attn_memory(query_bf)
 
         if share_qkv:
-            qkv_states = linear_with_attn_mem(
-                query_bf,
-                self.attn_in_proj__weight_permute,
-                self.attn_in_proj__bias,
-            )
+            qkv_states = linear_with_attn_mem(query_bf, self.attn_in_proj__weight_permute, self.attn_in_proj__bias)
             qkv_states = ttnn.unsqueeze(qkv_states, dim=1)
             qkv_states = ensure_attn_memory(qkv_states)
             query_heads, key_heads, value_heads = ttnn.experimental.nlp_create_qkv_heads(
@@ -262,11 +315,7 @@ class TtMultiheadAttention:
             k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]
             v_bias = in_proj_bias[2 * self.embed_dims :]
 
-            query_proj = linear_with_attn_mem(
-                query_bf,
-                q_weight,
-                bias=q_bias,
-            )
+            query_proj = linear_with_attn_mem(query_bf, q_weight, bias=q_bias)
             query_proj = ttnn.unsqueeze(query_proj, dim=1)
             query_proj = ensure_attn_memory(query_proj)
             query_heads = ttnn.experimental.nlp_create_qkv_heads(
@@ -280,11 +329,7 @@ class TtMultiheadAttention:
 
             key_bf = ttnn.permute(key, (1, 0, 2))
             key_bf = ensure_attn_memory(key_bf)
-            key_proj = linear_with_attn_mem(
-                key_bf,
-                k_weight,
-                bias=k_bias,
-            )
+            key_proj = linear_with_attn_mem(key_bf, k_weight, bias=k_bias)
             key_proj = ttnn.unsqueeze(key_proj, dim=1)
             key_proj = ensure_attn_memory(key_proj)
             key_heads = ttnn.experimental.nlp_create_qkv_heads(
@@ -299,11 +344,7 @@ class TtMultiheadAttention:
 
             value_bf = ttnn.permute(value, (1, 0, 2))
             value_bf = ensure_attn_memory(value_bf)
-            value_proj = linear_with_attn_mem(
-                value_bf,
-                v_weight,
-                bias=v_bias,
-            )
+            value_proj = linear_with_attn_mem(value_bf, v_weight, bias=v_bias)
             value_proj = ttnn.unsqueeze(value_proj, dim=1)
             value_proj = ensure_attn_memory(value_proj)
             value_heads = ttnn.experimental.nlp_create_qkv_heads(
@@ -334,11 +375,7 @@ class TtMultiheadAttention:
         attn_output = matmul_with_attn_mem(attn_weights, value_heads)
 
         attn_output = concat_heads_with_attn_mem(attn_output)
-        attn_output = linear_with_attn_mem(
-            attn_output,
-            self.attn_out_proj_weight,
-            bias=self.attn_out_proj_bias,
-        )
+        attn_output = linear_with_attn_mem(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
 
         attn_output = ttnn.permute(attn_output, (1, 0, 2))
 
