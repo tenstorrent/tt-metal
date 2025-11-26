@@ -112,7 +112,7 @@ jobs:
           prefix: "test_reports_"
       - name: Upload benchmark data
         ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 't3k fabric tests') }}
+        if: ${{ !cancelled() && github.ref_name == 'main'}}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
