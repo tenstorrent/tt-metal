@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "hw/inc/dataflow_api.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -12,13 +13,13 @@
  * */
 void kernel_main() {
     // Kernel args
-    std::uint32_t src_addr = get_arg_val<uint32_t>(0);
-    std::uint32_t src_bank_id = get_arg_val<uint32_t>(1);
-    std::uint32_t num_tiles_r = get_arg_val<uint32_t>(2);
-    std::uint32_t num_tiles_c = get_arg_val<uint32_t>(3);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t src_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles_r = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles_c = get_arg_val<uint32_t>(3);
 
     // How many bytes along a row in the original tensor
-    std::uint32_t num_bytes_per_tensor_row = get_arg_val<uint32_t>(4);
+    uint32_t num_bytes_per_tensor_row = get_arg_val<uint32_t>(4);
 
     /*
         Constants
@@ -56,26 +57,38 @@ void kernel_main() {
                 cb.reserve_back(1);
 
                 // Read one row of data
-                std::uint32_t l1_write_addr = cb.get_write_ptr();
-                experimental::CoreLocalMem<std::uint32_t> l1_write_buffer(l1_write_addr);
+                uint32_t cb_write_offset = 0;
 
                 noc.async_read(
-                    src_dram, l1_write_buffer, num_bytes_per_tile_row, {.bank_id = src_bank_id, .addr = src_addr_}, {});
+                    src_dram,
+                    cb,
+                    num_bytes_per_tile_row,
+                    {.bank_id = src_bank_id, .addr = src_addr_},
+                    {.offset_bytes = cb_write_offset});
 
                 // We move one row down
-                l1_write_addr += num_bytes_per_tile_row;
+                cb_write_offset += num_bytes_per_tile_row;
 
                 /*
                     Move 31 rows of zeros behind the row that we just moved. We send
                     8 rows three times, then we send 7 rows
-                    Note: Using old noc API for local L1 to L1 copies via NOC
                 */
                 for (std::uint32_t z = 0; z < 3; z++) {
-                    noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_eight_tile_rows);
-                    l1_write_addr += num_bytes_for_sending_eight_tile_rows;
+                    noc.async_read(
+                        experimental::UnicastEndpoint{},
+                        cb,
+                        num_bytes_for_sending_eight_tile_rows,
+                        {.addr = MEM_ZEROS_BASE},
+                        {.offset_bytes = cb_write_offset});
+                    cb_write_offset += num_bytes_for_sending_eight_tile_rows;
                 }
 
-                noc_async_read(zeros_base_noc_addr, l1_write_addr, num_bytes_for_sending_seven_tile_rows);
+                noc.async_read(
+                    experimental::UnicastEndpoint{},
+                    cb,
+                    num_bytes_for_sending_seven_tile_rows,
+                    {.addr = MEM_ZEROS_BASE},
+                    {.offset_bytes = cb_write_offset});
 
                 src_addr_ += num_bytes_per_tile;
                 noc.async_read_barrier();
