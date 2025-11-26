@@ -31,6 +31,13 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     bool assert_on_connection_mismatch = true,
     bool log_output = true);
 
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation = true,
+    bool assert_on_connection_mismatch = true,
+    bool log_output = true);
+
 // Validate cabling descriptor against discovered system topology
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
     const std::string& cabling_descriptor_path,
