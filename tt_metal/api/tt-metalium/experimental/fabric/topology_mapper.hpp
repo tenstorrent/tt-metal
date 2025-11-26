@@ -258,6 +258,10 @@ public:
      */
     MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
+    IntraMeshConnectivity get_intra_mesh_connectivity(MeshId mesh_id) const;
+
+    InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
+
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs

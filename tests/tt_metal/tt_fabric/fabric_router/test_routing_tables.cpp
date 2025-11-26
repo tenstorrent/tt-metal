@@ -17,6 +17,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace {
 
@@ -43,6 +46,38 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
 }
 
 constexpr auto kFabricConfig1D = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+
+// Helper struct to keep dependencies alive for RoutingTableGenerator tests
+struct RoutingTableGeneratorTestHelper {
+    std::unique_ptr<tt::tt_fabric::MeshGraph> mesh_graph;
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper;
+    std::unique_ptr<tt::tt_fabric::RoutingTableGenerator> routing_table_generator;
+
+    RoutingTableGeneratorTestHelper(const std::string& mesh_graph_desc_file) {
+        mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(mesh_graph_desc_file);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& driver = cluster.get_driver();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+        tt::tt_fabric::LocalMeshBinding local_mesh_binding;
+        local_mesh_binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
+        local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+
+        topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *mesh_graph, *physical_system_descriptor, local_mesh_binding);
+
+        routing_table_generator = std::make_unique<tt::tt_fabric::RoutingTableGenerator>(*topology_mapper);
+    }
+};
+
+// Helper function to create RoutingTableGenerator for tests
+std::unique_ptr<RoutingTableGeneratorTestHelper> make_routing_table_generator(const std::string& mesh_graph_desc_file) {
+    return std::make_unique<RoutingTableGeneratorTestHelper>(mesh_graph_desc_file);
+}
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
@@ -526,8 +561,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyMesh) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
@@ -600,8 +635,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusXY) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -686,8 +721,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusX) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -773,8 +808,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);

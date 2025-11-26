@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topology_mapper.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -1418,6 +1418,30 @@ void TopologyMapper::print_physical_adjacency_map(const std::map<MeshId, Physica
             log_debug(tt::LogFabric, "    Host_name = {}", physical_system_descriptor_.get_host_name_for_asic(node));
         }
     }
+}
+
+IntraMeshConnectivity TopologyMapper::get_intra_mesh_connectivity(MeshId mesh_id) const {
+    // Passthrough to mesh graph - return the full intra-mesh connectivity structure
+    // The mesh_id parameter is validated by checking bounds against the connectivity structure
+    const auto& connectivity = mesh_graph_.get_intra_mesh_connectivity();
+    TT_FATAL(
+        *mesh_id < connectivity.size(),
+        "TopologyMapper: mesh_id {} not found in mesh graph (connectivity size: {})",
+        mesh_id,
+        connectivity.size());
+    return connectivity;
+}
+
+InterMeshConnectivity TopologyMapper::get_inter_mesh_connectivity(MeshId mesh_id) const {
+    // Passthrough to mesh graph - return the full inter-mesh connectivity structure
+    // The mesh_id parameter is validated by checking bounds against the connectivity structure
+    const auto& connectivity = mesh_graph_.get_inter_mesh_connectivity();
+    TT_FATAL(
+        *mesh_id < connectivity.size(),
+        "TopologyMapper: mesh_id {} not found in mesh graph (connectivity size: {})",
+        mesh_id,
+        connectivity.size());
+    return connectivity;
 }
 
 }  // namespace tt::tt_fabric
