@@ -1,21 +1,22 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "argmax_program_factory.hpp"
+
 #include <string>
 
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::program {
 
 using namespace tt::constants;
 
@@ -201,8 +202,19 @@ auto get_ctime_args_single_core(
     return ctime_args;
 }
 
-operation::ProgramWithCallbacks argmax_single_core(
-    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
+// ============================================================================
+// ArgMaxSingleCoreProgramFactory
+// ============================================================================
+
+ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const auto& dim = operation_attributes.dim;
+    const bool keepdim = operation_attributes.keepdim;
+
     tt::tt_metal::Program program{};
     const tt::tt_metal::IDevice* device = output.device();
     const bool reduce_all = not dim.has_value();
@@ -255,23 +267,31 @@ operation::ProgramWithCallbacks argmax_single_core(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        for (const auto& core : cores) {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id, cores}};
 }
+
+void ArgMaxSingleCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto src_buffer = tensor_args.input.buffer();
+    auto dst_buffer = tensor_return_value.buffer();
+
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& cores = cached_program.shared_variables.cores;
+
+    for (const auto& core : cores) {
+        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        runtime_args[0] = src_buffer->address();
+        runtime_args[1] = dst_buffer->address();
+    }
+}
+
+// ============================================================================
+// ArgMaxMultiCoreProgramFactory
+// ============================================================================
 
 /*
  * Design of argmax_multi_core:
@@ -346,12 +366,16 @@ operation::ProgramWithCallbacks argmax_single_core(
  *
  *    Refer to the kernel code for info on compile time args and runtime args
  */
-operation::ProgramWithCallbacks argmax_multi_core(
-    const Tensor& input,
-    const Tensor& output,
-    const std::optional<uint32_t> dim,
-    const bool keepdim,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const auto& dim = operation_attributes.dim;
+    const bool keepdim = operation_attributes.keepdim;
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
+
     tt::tt_metal::Program program{};
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -575,32 +599,33 @@ operation::ProgramWithCallbacks argmax_multi_core(
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        for (const auto& core : cores_coords0) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
-            }
-        }
-        for (const auto& core : cores_coords1) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1}};
 }
 
-}  // namespace ttnn::operations::reduction::detail
+void ArgMaxMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto src_buffer = tensor_args.input.buffer();
+    auto dst_buffer = tensor_return_value.buffer();
+
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id0 = cached_program.shared_variables.reader_kernel_id0;
+    const auto& reader_kernel_id1 = cached_program.shared_variables.reader_kernel_id1;
+    const auto& cores_coords0 = cached_program.shared_variables.cores_coords0;
+    const auto& cores_coords1 = cached_program.shared_variables.cores_coords1;
+
+    for (const auto& core : cores_coords0) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
+        reader_runtime_args[0] = src_buffer->address();
+        reader_runtime_args[1] = dst_buffer->address();
+    }
+    for (const auto& core : cores_coords1) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
+        reader_runtime_args[0] = src_buffer->address();
+        reader_runtime_args[1] = dst_buffer->address();
+    }
+}
+
+}  // namespace ttnn::operations::reduction::program

@@ -34,7 +34,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        argmax/device/argmax_op.cpp
+        argmax/device/argmax_device_operation.cpp
         argmax/device/argmax_program_factory.cpp
         argmax/argmax.cpp
         accumulation/accumulation_common.cpp
