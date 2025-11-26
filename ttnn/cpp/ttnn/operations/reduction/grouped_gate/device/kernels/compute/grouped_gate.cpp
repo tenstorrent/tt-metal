@@ -58,17 +58,17 @@ void process_and_sort_tiles(
         cb_wait_front(input_cb_index, 2);
         cb_wait_front(index_cb_index, 2);
 
+        // transpose and unpack into dest regs
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
         transpose_wh_tile(input_cb_index, 0, 0);
         transpose_wh_tile(input_cb_index, 1, 1);
-        // dprint_tensix_dest_reg(1); // good here
 
+        // transpose and unpack into dest regs
         reconfig_data_format_srca(index_cb_index);
         transpose_wh_init_short(index_cb_index);
         transpose_wh_tile(index_cb_index, 0, 2);
         transpose_wh_tile(index_cb_index, 1, 3);
-        // dprint_tensix_dest_reg(1); // bad here – other transpose is corrupting dest reg 1 somehow?
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -167,11 +167,6 @@ void MAIN {
         cb_wait_front(add_bias_cb_index, width_tiles);
         cb_wait_front(topk_index_creation_cb_index, width_tiles);
 
-        // for (uint32_t w = 0; w < width_tiles; w++) {
-        //     UNPACK(print_tile(add_bias_cb_index, w, true));
-        //     UNPACK(print_tile(topk_index_creation_cb_index, w, true));
-        // }
-
         topk_tile_init();
         blocks::process_and_sort_tiles(
             add_bias_cb_index,
@@ -187,6 +182,7 @@ void MAIN {
         cb_wait_front(topk_index_cb_index, width_tiles);
         for (uint32_t w = 0; w < width_tiles; w++) {
             UNPACK(print_tile(topk_input_cb_index, w, true));
+            UNPACK(print_tile(topk_index_cb_index, w, true));
         }
     }
 }

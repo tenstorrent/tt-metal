@@ -69,8 +69,7 @@ FORCE_INLINE void generate_index_tiles(
     uint32_t write_addr = get_write_ptr(topk_index_creation_cb_index);
     constexpr uint32_t face_size = 16;
     for (uint32_t i = 0; i < width_tiles; i++) {
-        generate_index_tile(
-            topk_index_creation_cb_index, get_write_ptr(topk_index_creation_cb_index) + i * page_size, 32 * i);
+        generate_index_tile(topk_index_creation_cb_index, get_write_ptr(topk_index_creation_cb_index), 32 * i);
     }
 }
 
