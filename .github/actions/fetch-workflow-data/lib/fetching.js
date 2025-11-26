@@ -278,6 +278,24 @@ function groupRunsByName(runs) {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * Remove manually triggered workflow runs.
+ * @param {Array} runs - Runs to filter
+ * @param {string} source - Label used in logs
+ * @returns {Array} Filtered runs
+ */
+function filterManualRuns(runs, source) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    return runs;
+  }
+  const filteredRuns = runs.filter(run => run.event !== 'workflow_dispatch');
+  const removed = runs.length - filteredRuns.length;
+  if (removed > 0) {
+    core.info(`[${source}] Filtered out ${removed} manually triggered runs (workflow_dispatch)`);
+  }
+  return filteredRuns;
+}
+
+/**
  * Fetches new workflow runs from GitHub API
  * @param {object} octokit - Octokit client
  * @param {object} context - GitHub Actions context
@@ -310,16 +328,7 @@ async function fetchNewWorkflowRuns(octokit, context, days, cachedRunIds, workfl
     core.info(`[FETCH] Total new runs fetched: ${newRuns.length} (from ${workflowIds.length} workflows)`);
   }
 
-  // Filter out manually triggered runs (workflow_dispatch)
-  const beforeFilter = newRuns.length;
-  newRuns = newRuns.filter(run => run.event !== 'workflow_dispatch');
-  const filteredCount = beforeFilter - newRuns.length;
-  if (filteredCount > 0) {
-    core.info(`[FETCH] Filtered out ${filteredCount} manually triggered runs (workflow_dispatch)`);
-  }
-  core.info(`[FETCH] Final count after filtering: ${newRuns.length} runs`);
-
-  return newRuns;
+  return filterManualRuns(newRuns, 'FETCH');
 }
 
 /**
@@ -351,11 +360,14 @@ function mergeAndDeduplicateRuns(previousRuns, newRuns, days) {
 
   // Filter by date (branch and status are already filtered at API level)
   const cutoff = getCutoffDate(days);
-  const beforeFilter = mergedRuns.length;
+  const beforeDateFilter = mergedRuns.length;
   mergedRuns = mergedRuns.filter(run =>
     new Date(run.created_at) >= cutoff
   );
-  core.info(`[MERGE] After filtering (date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeFilter - mergedRuns.length})`);
+  core.info(`[MERGE] After filtering (date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeDateFilter - mergedRuns.length})`);
+
+  mergedRuns = filterManualRuns(mergedRuns, 'MERGE');
+  core.info(`[MERGE] Final count after all filtering: ${mergedRuns.length} runs`);
   core.info(`[MERGE] Note: branch and status=completed were already filtered at API level`);
 
   return mergedRuns;
