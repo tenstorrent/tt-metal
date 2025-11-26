@@ -110,7 +110,7 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
-    nb::ndarray<nb::array_api, nb::c_contig> py_ndarray,
+    nb::ndarray<nb::array_api> py_ndarray,
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
@@ -166,7 +166,7 @@ Tensor create_typed_tt_tensor_from_py_data(
 }
 
 Tensor create_tt_tensor_from_py_data(
-    nb::ndarray<nb::array_api, nb::c_contig> py_data,
+    nb::ndarray<nb::array_api> py_data,
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
@@ -202,7 +202,7 @@ Tensor create_tt_tensor_from_py_data(
 // Preprocess the python tensor, optionally performing dtype conversion.
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
-    nb::ndarray<nb::array_api, nb::c_contig> contiguous_py_tensor;
+    nb::ndarray<nb::array_api> contiguous_py_tensor;
     DataType data_type = DataType::INVALID;
 };
 
@@ -245,7 +245,9 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         true /*convert*/,
         nullptr);
 
-    return {.contiguous_py_tensor = converted_tensor_handle, .data_type = data_type};
+    nb::ndarray<nb::array_api> converted_array{converted_tensor_handle};
+
+    return {.contiguous_py_tensor = converted_array, .data_type = data_type};
 }
 
 Tensor convert_python_tensor_to_tt_tensor(
@@ -275,9 +277,18 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     TT_FATAL(
         preprocessed_py_tensor.contiguous_py_tensor.size() == shape.volume(),
-        "Number of elements from python tensor {} must match volume of shape {}!",
+        "Number of elements from python tensor {} must match volume of shape {}!\n\t"
+        "is_valid: {}, itemsize: {}, deviceid: {}, nbytes: {}, ndim: {}\n\t"
+        "dtype.code: {}, dtype.bits: {}",
         preprocessed_py_tensor.contiguous_py_tensor.size(),
-        shape.volume());
+        shape.volume(),
+        preprocessed_py_tensor.contiguous_py_tensor.is_valid(),
+        preprocessed_py_tensor.contiguous_py_tensor.itemsize(),
+        preprocessed_py_tensor.contiguous_py_tensor.device_id(),
+        preprocessed_py_tensor.contiguous_py_tensor.nbytes(),
+        preprocessed_py_tensor.contiguous_py_tensor.ndim(),
+        preprocessed_py_tensor.contiguous_py_tensor.dtype().code,
+        preprocessed_py_tensor.contiguous_py_tensor.dtype().bits);
 
     const Layout layout = [&]() {
         // Block float types require tile layout.
@@ -300,7 +311,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     // from the nanobind caller thread, which will correctly decrement the `nb::object` reference count while hodling
     // GIL.
     tt::tt_metal::MemoryPin pydata_pin(
-        std::make_shared<nb::ndarray<nb::array_api, nb::c_contig>>(preprocessed_py_tensor.contiguous_py_tensor));
+        std::make_shared<nb::ndarray<nb::array_api>>(preprocessed_py_tensor.contiguous_py_tensor));
 
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.contiguous_py_tensor,
