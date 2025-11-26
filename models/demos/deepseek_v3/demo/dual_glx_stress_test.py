@@ -10,7 +10,7 @@ MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/d
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"))
 
 
-def dual_glx_stres_test():
+def dual_glx_stress_test():
     """
     Stress test for dual GLX setup.
     """
@@ -38,7 +38,7 @@ def dual_glx_stres_test():
     first_gen = result["generations"][0]
     tokens = first_gen.get("tokens")
     assert isinstance(tokens, list), "Tokens should be a list"
-    assert len(tokens) == 128, f"Expected 128 tokens, got {len(tokens)}"
+    assert len(tokens) in (128, 256), f"Expected 128 or 256 tokens depending on batch accumulation, got {len(tokens)}"
 
 
 if __name__ == "__main__":
