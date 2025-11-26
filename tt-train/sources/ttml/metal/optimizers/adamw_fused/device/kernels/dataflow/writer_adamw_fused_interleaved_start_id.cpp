@@ -11,6 +11,7 @@
 constexpr auto cb_param_out_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
 constexpr auto cb_exp_avg_sq_out_idx = tt::CBIndex::c_18;
+constexpr auto cb_max_exp_avg_sq_out_idx = tt::CBIndex::c_19;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 
