@@ -26,7 +26,6 @@ from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
     PROFILER_ARTIFACTS_DIR,
-    PROFILER_PERF_COUNTER_LOG,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
@@ -784,8 +783,6 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
-    if os.path.isfile(f"{logFolder / PROFILER_PERF_COUNTER_LOG}"):
-        os.system(f"cp {logFolder / PROFILER_PERF_COUNTER_LOG} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")

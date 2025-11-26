@@ -197,9 +197,7 @@ void JitBuildEnv::init(
     }
     if (rtoptions.get_profiler_perf_counter_mode() != 0) {
         // force profiler on if perf counters are being captured
-        if (not tt::tt_metal::getDeviceProfilerState()) {
-            this->defines_ += "-DPROFILE_KERNEL=1 ";
-        }
+        TT_ASSERT(tt::tt_metal::getDeviceProfilerState());
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
     }
 
