@@ -17,9 +17,9 @@ class TtFFN:
         if identity is None:
             identity = x
 
-        # First linear + ReLU
-        x = ttnn.linear(x, self.linear1_weight, bias=self.linear1_bias)
-        x = ttnn.relu(x)
+        # STEP 2: Fuse GeLU activation with first linear operation
+        # This eliminates the separate ttnn.relu() call and improves performance
+        x = ttnn.linear(x, self.linear1_weight, bias=self.linear1_bias, activation="gelu")
 
         # Second linear
         x = ttnn.linear(x, self.linear2_weight, bias=self.linear2_bias)
