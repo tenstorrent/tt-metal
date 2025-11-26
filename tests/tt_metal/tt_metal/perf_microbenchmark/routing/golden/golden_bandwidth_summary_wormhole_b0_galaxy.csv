@@ -1,4 +1,4 @@
-test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_GB_per_s,bw_min_GB_per_s,bw_max_GB_per_s,bw_std_dev_GB_per_s,tolerance_percent
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
 LinearMulticast,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,"[4,8]",1,2048,3,41854741.000000,3344902.294207,6.850360,6.847170,6.853376,0.002536,1.000000
 LinearMulticast,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,"[4,8]",2,2048,3,41904743.666667,3340910.612711,6.842185,6.840947,6.843328,0.000974,1.000000
 LinearMulticast,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,"[4,8]",3,2048,3,41914315.666667,3340148.018380,6.840623,6.838494,6.844103,0.002481,1.000000
