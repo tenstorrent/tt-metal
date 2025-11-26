@@ -1,20 +1,26 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
-
-#include <tt-metalium/constants.hpp>
-
-using namespace tt::tt_metal;
+#include "update_cache_device_operation.hpp"
 
 namespace ttnn::operations::kv_cache {
 
 using namespace tt::constants;
 
-void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& cache_tensor = input_tensors.at(0);
-    const auto& input_tensor = input_tensors.at(1);
+UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (args.op_type == UpdateCacheOpType::FILL) {
+        return program::FillCacheMultiCoreProgramFactory{};
+    } else {
+        return program::UpdateCacheMultiCoreProgramFactory{};
+    }
+}
+
+void UpdateKVCacheOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& cache_tensor = tensor_args.cache;
+    const auto& input_tensor = tensor_args.input;
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE and cache_tensor.storage_type() == StorageType::DEVICE,
         "Operands to update_cache need to be on device!");
@@ -54,7 +60,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Cache tensor memory layout must be INTERLEAVED but got {}",
         cache_tensor.memory_config().memory_layout());
-    if (this->op_type == UpdateCacheOpType::FILL) {
+    if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
 
@@ -92,16 +98,16 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         }
 
         TT_FATAL(
-            this->batch_idx < cache_tensor.padded_shape()[0],
+            args.batch_idx < cache_tensor.padded_shape()[0],
             "Batch index ({}) must be less than cache tensor batch size ({})",
-            this->batch_idx,
+            args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
             input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
             "Input tensor height ({}) must be <= cache tensor height ({})",
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
-    } else if (this->op_type == UpdateCacheOpType::UPDATE) {
+    } else if (args.op_type == UpdateCacheOpType::UPDATE) {
         if (input_tensor.device()->arch() == tt::ARCH::GRAYSKULL) {
             TT_FATAL(
                 cache_tensor.dtype() == DataType::BFLOAT16,
@@ -138,50 +144,57 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {
             TT_FATAL(
-                this->batch_offset + cache_tensor.padded_shape()[0] <= 32,
+                args.batch_offset + cache_tensor.padded_shape()[0] <= 32,
                 "Batch offset ({}) + cache tensor batch size ({}) must be <= 32",
-                this->batch_offset,
+                args.batch_offset,
                 cache_tensor.padded_shape()[0]);
         } else {
-            TT_FATAL(this->batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
+            TT_FATAL(args.batch_offset == 0, "Batch offset must be 0 when cache tensor batch size >= 32");
         }
     }
 }
 
-std::vector<TensorSpec> UpdateCache::compute_output_specs(const std::vector<Tensor>&) const {
-    // Do nothing because it's an in-place operation
-    return {};
+void UpdateKVCacheOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
-std::vector<Tensor> UpdateCache::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
+spec_return_value_t UpdateKVCacheOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
+    return tensor_args.cache.tensor_spec();
 }
 
-operation::ProgramWithCallbacks UpdateCache::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& cache_tensor = input_tensors.at(0);
-    const auto& input_tensor = input_tensors.at(1);
-
-    switch (this->get_parallelization_strategy(input_tensors)) {
-        case UpdateCacheOpParallelizationStrategy::MULTI_CORE:
-        default:
-            if (this->op_type == UpdateCacheOpType::FILL) {
-                return fill_cache_multi_core(cache_tensor, input_tensor, this->batch_idx, this->update_idx);
-            } else {
-                return update_cache_multi_core(
-                    cache_tensor, input_tensor, this->update_idx, this->batch_offset, this->compute_kernel_config);
-            }
-    };
+tensor_return_value_t UpdateKVCacheOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Do nothing because it's an in-place operation. Cache Tensor is the output tensor.
+    return tensor_args.cache;
 }
 
-UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(
-    const std::vector<Tensor>& input_tensors) const {
-    return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
+tt::tt_metal::operation::Hash UpdateKVCacheOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return tt::tt_metal::operation::hash_operation<UpdateKVCacheOperation>(
+        args.op_type, std::vector<Tensor>{tensor_args.cache, tensor_args.input});
 }
 
-operation::Hash UpdateCache::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    return operation::hash_operation<UpdateCache>(this->op_type, input_tensors);
+std::tuple<operation_attributes_t, tensor_args_t> UpdateKVCacheOperation::invoke(
+    const Tensor& cache,
+    const Tensor& input,
+    const uint32_t batch_idx,
+    const uint32_t update_index,
+    const uint32_t batch_offset,
+    const UpdateCacheOpType op_type,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return {
+        operation_attributes_t{
+            .batch_idx = batch_idx,
+            .update_idx = update_index,
+            .batch_offset = batch_offset,
+            .op_type = op_type,
+            .compute_kernel_config = compute_kernel_config},
+        tensor_args_t{
+            .cache = cache,
+            .input = input,
+        }};
 }
-
 }  // namespace ttnn::operations::kv_cache
