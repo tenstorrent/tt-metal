@@ -6,6 +6,76 @@ import ttnn
 import math
 
 
+def create_dynamic_matmul_program_config(lhs_shape, rhs_shape, core_grid_8x8):
+    """
+    Create dynamic matmul program config based on actual tensor dimensions.
+
+    Args:
+        lhs_shape: Shape of left-hand side tensor [..., M, K]
+        rhs_shape: Shape of right-hand side tensor [..., K, N]
+        core_grid_8x8: 8x8 core grid for computation
+
+    Returns:
+        MatmulMultiCoreReuseProgramConfig optimized for the given dimensions, or None if creation fails
+    """
+    try:
+        # Extract M, K, N dimensions (last two dimensions for matmul)
+        M = lhs_shape[-2]  # Output rows
+        K = lhs_shape[-1]  # Inner dimension
+        N = rhs_shape[-1]  # Output columns
+
+        # For attention matmuls, per_core_M should divide M, per_core_N should divide N
+        # Start with conservative values and find divisors
+
+        # Find per_core_M that divides M
+        per_core_M = min(M, 8)  # Start conservative
+        while per_core_M > 1 and M % per_core_M != 0:
+            per_core_M -= 1
+        # If still 1, try to find any reasonable divisor
+        if per_core_M == 1 and M > 1:
+            for candidate in [4, 2, 6, 3, 8]:
+                if candidate <= M and M % candidate == 0:
+                    per_core_M = candidate
+                    break
+
+        # Find per_core_N that divides N
+        per_core_N = min(N, 8)  # Start conservative
+        while per_core_N > 1 and N % per_core_N != 0:
+            per_core_N -= 1
+        # If still 1, try to find any reasonable divisor
+        if per_core_N == 1 and N > 1:
+            for candidate in [4, 2, 6, 3, 8]:
+                if candidate <= N and N % candidate == 0:
+                    per_core_N = candidate
+                    break
+
+        # Calculate block parameters
+        # in0_block_w should divide K (typically the inner dimension)
+        in0_block_w = min(K // 32, 8) if K >= 32 else 1
+        if in0_block_w > 1:
+            while in0_block_w > 1 and K % (in0_block_w * 32) != 0:
+                in0_block_w -= 1
+
+        out_subblock_w = min(per_core_N, 8)  # Must be <= 8
+
+        # Ensure minimum values
+        per_core_M = max(1, per_core_M)
+        per_core_N = max(1, per_core_N)
+        in0_block_w = max(1, in0_block_w)
+
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+    except Exception:
+        # If anything fails, return None to use default behavior
+        return None
+
+
 def get_mha_matmul_program_configs(device, embed_dims=256, num_heads=8):
     """Get specialized matmul program configs for MHA operations - optimized for VAD-v2"""
     # Calculate core grid - use 8x8 cores for VAD-v2 MHA operations
@@ -32,22 +102,7 @@ def get_mha_matmul_program_configs(device, embed_dims=256, num_heads=8):
             per_core_M=seq_len_t,  # Sequence length distributed
             per_core_N=embed_dim_t,  # Conservative N dimension
         ),
-        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            in0_block_w=head_dim_t,  # head_dim in tiles
-            out_subblock_h=1,
-            out_subblock_w=4,  # Conservative subblock width
-            per_core_M=8,  # Conservative per-core M
-            per_core_N=4,  # Conservative per-core N
-        ),
-        "attention_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-            in0_block_w=4,  # Conservative block width
-            out_subblock_h=1,
-            out_subblock_w=head_dim_t,  # head_dim
-            per_core_M=8,  # Conservative per-core M
-            per_core_N=head_dim_t,  # head_dim
-        ),
+        # Note: query_by_key and attention_by_value configs are now created dynamically
         "output_proj_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
             in0_block_w=embed_dim_t,  # embed_dim in tiles
@@ -169,31 +224,39 @@ class TtMultiheadAttention:
             nonlocal attn_mem_cfg
             lhs = ensure_attn_memory(lhs)
             rhs = ensure_attn_memory(rhs)
+
+            # If no program config provided, create one dynamically based on tensor shapes
+            if program_config is None:
+                core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+                program_config = create_dynamic_matmul_program_config(lhs.shape, rhs.shape, core_grid_8x8)
+
             try:
                 kwargs = {"memory_config": attn_mem_cfg}
                 if attn_compute_cfg is not None:
                     kwargs["compute_kernel_config"] = attn_compute_cfg
-                if program_config is not None:
-                    kwargs["program_config"] = program_config
+                kwargs["program_config"] = program_config
                 return ttnn.matmul(lhs, rhs, **kwargs)
             except RuntimeError as err:
                 error_msg = str(err).lower()
-                # If it's a dimension mismatch error with program config, try without program config
+                # If program config still fails, fall back to default matmul (likely single-core)
                 if (
                     "must divide" in error_msg
                     or "not equal to per_core" in error_msg
                     or "Kt must be divisible" in error_msg
-                ) and program_config is not None:
-                    # Fall back to default matmul without program config
+                ):
                     return ttnn.matmul(lhs, rhs, memory_config=attn_mem_cfg, compute_kernel_config=attn_compute_cfg)
                 elif requires_dram_fallback(err) and attn_mem_cfg != ttnn.DRAM_MEMORY_CONFIG:
                     switch_to_dram()
                     lhs = ensure_attn_memory(lhs)
                     rhs = ensure_attn_memory(rhs)
-                    kwargs = {"memory_config": attn_mem_cfg}
-                    if attn_compute_cfg is not None:
-                        kwargs["compute_kernel_config"] = attn_compute_cfg
-                    # Note: Don't use program_config in fallback to avoid DRAM sharding issues
+                    # Try with DRAM and dynamic config
+                    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+                    dram_program_config = create_dynamic_matmul_program_config(lhs.shape, rhs.shape, core_grid_8x8)
+                    kwargs = {
+                        "memory_config": attn_mem_cfg,
+                        "compute_kernel_config": attn_compute_cfg,
+                        "program_config": dram_program_config,
+                    }
                     return ttnn.matmul(lhs, rhs, **kwargs)
                 raise
 
@@ -374,7 +437,7 @@ class TtMultiheadAttention:
         query_heads = ensure_attn_memory(query_heads)
         key_heads = ensure_attn_memory(key_heads)
 
-        # NOTE: Using default matmul config as program configs don't match tensor dimensions
+        # STEP 6: Use dynamic multi-core program config for query-key attention matmul
         attn_weights = matmul_with_attn_mem(query_heads, key_heads)
 
         if attn_mask is not None:
@@ -386,7 +449,7 @@ class TtMultiheadAttention:
         attn_weights = softmax_with_attn_mem(attn_weights, dim=-1)
 
         value_heads = ensure_attn_memory(value_heads)
-        # NOTE: Using default matmul config as program configs don't match tensor dimensions
+        # STEP 6: Use dynamic multi-core program config for attention-value matmul
         attn_output = matmul_with_attn_mem(attn_weights, value_heads)
 
         attn_output = concat_heads_with_attn_mem(attn_output)
