@@ -7,7 +7,7 @@
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <map>
@@ -28,10 +28,11 @@
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 

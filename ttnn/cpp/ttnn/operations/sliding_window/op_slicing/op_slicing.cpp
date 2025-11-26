@@ -11,7 +11,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 namespace ttnn::operations::op_slicing {
 
 void run_sliced_op(
