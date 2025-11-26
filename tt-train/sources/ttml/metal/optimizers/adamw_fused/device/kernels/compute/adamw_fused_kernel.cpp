@@ -22,13 +22,16 @@ constexpr auto cb_param_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
+constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
 
 constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
 constexpr auto cb_exp_avg_sq_out_idx = tt::CBIndex::c_18;
+constexpr auto cb_max_exp_avg_sq_out_idx = tt::CBIndex::c_19;
 
 constexpr auto cb_m_t = tt::CBIndex::c_24;
 constexpr auto cb_v_t = tt::CBIndex::c_25;
+constexpr auto cb_max_exp_avg_sq_idx = tt::CBIndex::c_26;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -135,17 +138,41 @@ void MAIN {
 
 #if AMSGRAD
         // TODO: I think this can be merged, check
+        cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
         copy_tile_init();
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
-            copy_tile(cb_max_exp_avg_sq_out, cb_tile_idx, block_idx + 1);
+            copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
         }
+        cb_pop_front(cb_max_exp_avg_sq_in_idx, block_size);
         max_tile_init();
         for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
             // max_tile api is garbage, second argument is irrelevant
             max_tile(block_idx, block_idx + 1);
         }
-        // TODO:
-        // push every second block to max_exp_avg_out
+        tile_regs_commit();
+        // push every second block to max_exp_avg_sq_out
+        cb_reserve_back(cb_max_exp_avg_sq_out_idx, block_size);
+        cb_reserve_back(cb_max_exp_avg_sq_idx, block_size);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_max_exp_avg_sq_out_idx);
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            pack_tile(block_idx, cb_max_exp_avg_sq_out_idx);
+        }
+        pack_reconfig_data_format(cb_max_exp_avg_sq_idx);
+        for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
+            pack_tile(block_idx, cb_max_exp_avg_sq_idx);
+        }
+        tile_regs_release();
+        cb_push_back(cb_max_exp_avg_sq_out_idx, block_size);
+        cb_push_back(cb_max_exp_avg_sq_idx, block_size);
+
+        cb_wait_front(cb_max_exp_avg_sq_idx, block_size);
+        tile_regs_acquire();
+        copy_tile_init();
+        for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
+            copy_tile(cb_max_exp_avg_sq_idx, cb_tile_idx, block_idx);
+        }
+        cb_pop_front(cb_max_exp_avg_sq_idx, block_size);
 #endif
         sqrt_tile_init();
         for (uint32_t block_idx = 0; block_idx < twice_block_size; block_idx += 2) {
