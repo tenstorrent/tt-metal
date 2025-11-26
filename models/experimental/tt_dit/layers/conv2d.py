@@ -35,60 +35,6 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
-    slice_params = {
-        (1, 4): {
-            (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
-            (128, 128, 512, 512): 4,
-            (256, 256, 512, 512): 8,
-            (512, 512, 512, 512): 16,
-            (512, 512, 512, 256): 16,
-            (512, 512, 256, 256): 4,
-            (1024, 1024, 256, 256): 16,
-            (1024, 1024, 256, 128): 16,
-            (1024, 1024, 128, 128): 16,
-            (1024, 1024, 128, 3): 8,
-        },
-        (4, 4): {
-            (512, 512, 512, 64): 16,
-            (128, 128, 16, 512): 8,
-            (128, 128, 512, 512): 4,
-            (256, 256, 512, 512): 8,
-            (512, 512, 512, 512): 16,
-            (512, 512, 512, 256): 16,
-            (512, 512, 256, 256): 4,
-            (1024, 1024, 256, 256): 16,
-            (1024, 1024, 256, 128): 16,
-            (1024, 1024, 128, 128): 16,
-            (1024, 1024, 128, 3): 8,
-        },
-        (2, 4): {
-            (128, 128, 16, 512): 8,
-            (128, 128, 512, 512): 4,
-            (256, 256, 512, 512): 8,
-            (512, 512, 512, 512): 16,
-            (512, 512, 512, 256): 16,
-            (512, 512, 256, 256): 4,
-            (1024, 1024, 256, 256): 16,
-            (1024, 1024, 256, 128): 16,
-            (1024, 1024, 128, 128): 16,
-            (1024, 1024, 128, 3): 8,
-        },
-    }
-    slice_default = {
-        (512, 512, 512, 64): 16,
-        (128, 128, 16, 512): 8,
-        (128, 128, 512, 512): 4,
-        (256, 256, 512, 512): 8,
-        (512, 512, 512, 512): 16,
-        (512, 512, 512, 256): 16,
-        (512, 512, 256, 256): 4,
-        (1024, 1024, 256, 256): 16,
-        (1024, 1024, 256, 128): 16,
-        (1024, 1024, 128, 128): 16,
-        (1024, 1024, 128, 3): 8,
-    }
-
     # TODO: Allow weight initilization?
     def __init__(
         self,
@@ -268,13 +214,6 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
-                (h, w, self.in_channels, self.out_channels)
-            ],
-            slice_type=ttnn.Conv2dDRAMSliceWidth,
-        )
-
         try:
             x, [out_height, out_width] = ttnn.conv2d(
                 input_tensor=x,
@@ -289,9 +228,10 @@ class Conv2d(Module):
                 batch_size=b,
                 input_height=h,
                 input_width=w,
-                conv_config=ttnn.Conv2dConfig(act_block_h_override=32),
+                conv_config=ttnn.Conv2dConfig(
+                    act_block_h_override=128, enable_act_double_buffer=True, enable_weights_double_buffer=True
+                ),
                 compute_config=self.compute_config,
-                slice_config=slice_config,
                 return_output_dim=True,
             )
         except RuntimeError as e:
