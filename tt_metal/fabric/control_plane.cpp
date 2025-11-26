@@ -53,7 +53,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
-#include "tt_metal/fabric/topology_mapper.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
 namespace tt::tt_fabric {

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topology_mapper.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 #include <algorithm>
 #include <climits>
