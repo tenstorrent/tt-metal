@@ -75,6 +75,7 @@ target_link_libraries(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
+        scaleout_tools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
@@ -126,23 +127,45 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+# =========================================================================
+# Generate MGD tool - Converts cabling descriptors to Mesh Graph Descriptors
+# =========================================================================
+add_executable(
+    generate_mgd
+    generate_mgd/generate_mgd_main.cpp
+    generate_mgd/generate_mgd.cpp
+)
 
 set_target_properties(
-    generate_cluster_descriptor
+    generate_mgd
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
-add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
+# Depend on scaleout and fabric protos
+add_dependencies(generate_mgd scaleout_generated_protos)
+add_custom_target(
+    fabric_protos_for_mgd
+    DEPENDS
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.h
+)
+add_dependencies(generate_mgd fabric_protos_for_mgd)
 
-target_include_directories(generate_cluster_descriptor SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Include directories for the executable
+target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(generate_mgd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generate_mgd)
+target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(generate_mgd SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric)
+
+# Add the mesh_graph_descriptor protobuf source
+target_sources(generate_mgd PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc)
 
 target_link_libraries(
-    generate_cluster_descriptor
+    generate_mgd
     PRIVATE
-        scaleout_tools
-        protobuf::libprotobuf
-        cxxopts::cxxopts
+        scaleout_tools # For CablingGenerator and cabling descriptor parsing
+        protobuf::libprotobuf # For protobuf runtime
+        cxxopts # For command line argument parsing
 )
