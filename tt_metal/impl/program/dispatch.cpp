@@ -1190,6 +1190,8 @@ public:
                                 back.flags &= ~CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
                             }
                         }
+                        TT_ASSERT(write_length > 0);
+                        TT_ASSERT(write_length - 1 <= std::numeric_limits<uint16_t>::max());
                         kernel_bins_cmd.dispatch_subcmds.emplace_back(CQDispatchWritePackedLargeSubCmd{
                             .noc_xy_addr = noc_encoding,
                             .addr = kernel_config_buffer_offset,
@@ -1340,6 +1342,8 @@ public:
                 }
                 TT_ASSERT(start == transfer_vector.front().start);
                 size_t size = transfer_vector.back().end() - start;
+                TT_ASSERT(size > 0);
+                TT_ASSERT(size - 1 <= std::numeric_limits<uint16_t>::max());
                 batched_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,

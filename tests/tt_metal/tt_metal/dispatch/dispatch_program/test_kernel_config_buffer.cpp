@@ -113,6 +113,8 @@ public:
 
     ScopedNullifyKernels(const ScopedNullifyKernels&) = delete;
     ScopedNullifyKernels& operator=(const ScopedNullifyKernels&) = delete;
+    ScopedNullifyKernels(ScopedNullifyKernels&&) = delete;
+    ScopedNullifyKernels& operator=(ScopedNullifyKernels&&) = delete;
 };
 
 using namespace tt::tt_metal;
@@ -130,21 +132,20 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
     CoreRangeSet cr_set({cr});
     std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
-    for (const auto& device : devices_) {
-        distributed::MeshWorkload workload;
-        Program program;
+    auto& device = devices_[0];
+    distributed::MeshWorkload workload;
+    Program program;
 
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
-        workload.add_program(device_range_, std::move(program));
-        EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-        distributed::Finish(device->mesh_command_queue());
-    }
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
+    distributed::Finish(device->mesh_command_queue());
 }
 
 // Test 2: Verify that kernels exceeding kernel config buffer size are rejected
@@ -164,23 +165,21 @@ TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
     CoreRangeSet cr_set({cr});
     std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
-    for (const auto& device : devices_) {
-        distributed::MeshWorkload workload;
-        Program program;
+    auto& device = devices_[0];
+    distributed::MeshWorkload workload;
+    Program program;
 
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
-        workload.add_program(device_range_, std::move(program));
-        EXPECT_THROW(
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false), std::runtime_error);
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false), std::runtime_error);
 
-        log_info(LogTest, "Correctly rejected oversized kernel configuration");
-    }
+    log_info(LogTest, "Correctly rejected oversized kernel configuration");
 }
 
 // Test 3: Test kernels with sizes around the 64KB boundary (65532, 65536, 65540 bytes)
@@ -215,21 +214,20 @@ TEST_F(KernelSizeTestDefaultBuffer, KernelSizesBoundaryConditions) {
         log_info(LogTest, "Testing kernel size: {} B", kernel_size);
         std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(kernel_size)}};
 
-        for (const auto& device : devices_) {
-            distributed::MeshWorkload workload;
-            Program program;
+        auto& device = devices_[0];
+        distributed::MeshWorkload workload;
+        Program program;
 
-            CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+            cr_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
-            workload.add_program(device_range_, std::move(program));
-            EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-            distributed::Finish(device->mesh_command_queue());
-        }
+        workload.add_program(device_range_, std::move(program));
+        EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
+        distributed::Finish(device->mesh_command_queue());
     }
 }
 
@@ -245,41 +243,40 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
-    for (const auto& device : devices_) {
-        distributed::MeshWorkload workload;
-        Program program;
+    auto& device = devices_[0];
+    distributed::MeshWorkload workload;
+    Program program;
 
-        // Get unreserved L1 base address - this is where we can safely write
-        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // Get unreserved L1 base address - this is where we can safely write
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
-        auto kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_add_test.cpp",
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+    auto kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_add_test.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
 
-        // Pass the L1 address directly as runtime arg
-        SetRuntimeArgs(program, kernel, cr_set, {l1_unreserved_base});
+    // Pass the L1 address directly as runtime arg
+    SetRuntimeArgs(program, kernel, cr_set, {l1_unreserved_base});
 
-        // Execute the kernel
-        workload.add_program(device_range_, std::move(program));
-        EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
-        distributed::Finish(device->mesh_command_queue());
+    // Execute the kernel
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
+    distributed::Finish(device->mesh_command_queue());
 
-        // Read the result back directly from L1 using device API
-        auto single_device = device->get_devices()[0];
-        std::vector<uint32_t> result;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            single_device,
-            CoreCoord(0, 0),  // Physical or logical core (0,0)
-            l1_unreserved_base,
-            sizeof(uint32_t),
-            result);
+    // Read the result back directly from L1 using device API
+    auto single_device = device->get_devices()[0];
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        single_device,
+        CoreCoord(0, 0),  // Physical or logical core (0,0)
+        l1_unreserved_base,
+        sizeof(uint32_t),
+        result);
 
-        log_info(LogTest, "Result: {} (expected: {})", result[0], NUM_ADDS);
-        EXPECT_EQ(result[0], NUM_ADDS) << "Kernel should have performed " << NUM_ADDS << " additions";
-    }
+    log_info(LogTest, "Result: {} (expected: {})", result[0], NUM_ADDS);
+    EXPECT_EQ(result[0], NUM_ADDS) << "Kernel should have performed " << NUM_ADDS << " additions";
 }
 
 }  // namespace kernel_size_tests
