@@ -58,7 +58,12 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FABRIC_ROUTING_FIELDS_1D = 37,
         FABRIC_ROUTING_FIELDS_2D = 38,
 
-        UNSUPPORTED = 39
+        CB_LOCK = 39,
+        CB_UNLOCK = 40,
+        MEM_LOCK = 41,
+        MEM_UNLOCK = 42,
+
+        UNSUPPORTED = 43
     };
 
     enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
@@ -119,6 +124,13 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         bool is_mcast;
     } __attribute__((packed));
 
+    struct ScopedLockEvent {
+        NocEventType noc_xfer_type;
+        uint32_t locked_address_base;
+        int16_t chunk_size;
+        int8_t num_chunks;
+    } __attribute__((packed));
+
     struct RawEvent {
         NocEventType noc_xfer_type;
         uint64_t remaining_data : 56;
@@ -132,6 +144,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
         FabricRoutingFields2D fabric_routing_fields_2d;
+        ScopedLockEvent scoped_lock_event;
     } data{};
 
     KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF}} {}
@@ -142,7 +155,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     }
 
     static bool isValidEventType(NocEventType event_type) {
-        return event_type >= NocEventType::READ && event_type <= NocEventType::FABRIC_ROUTING_FIELDS_2D;
+        return event_type >= NocEventType::READ && event_type < NocEventType::UNSUPPORTED;
     }
 
     static bool isFabricEventType(NocEventType event_type) {
@@ -172,8 +185,18 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
 
+    static bool isScopedLockEventType(NocEventType event_type) {
+        return event_type >= NocEventType::CB_LOCK && event_type <= NocEventType::MEM_UNLOCK;
+    }
+
     // Getter to return the correct variant based on the tag
-    std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields1D, FabricRoutingFields2D>
+    std::variant<
+        LocalNocEvent,
+        FabricNoCEvent,
+        FabricNoCScatterEvent,
+        FabricRoutingFields1D,
+        FabricRoutingFields2D,
+        ScopedLockEvent>
     getContents() const {
         if (isFabricEventType(data.raw_event.noc_xfer_type)) {
             if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
@@ -185,6 +208,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
             return data.fabric_routing_fields_1d;
         } else if (isFabricRoutingFields2D(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields_2d;
+        } else if (isScopedLockEventType(data.raw_event.noc_xfer_type)) {
+            return data.scoped_lock_event;
         } else {
             return data.local_event;
         }
