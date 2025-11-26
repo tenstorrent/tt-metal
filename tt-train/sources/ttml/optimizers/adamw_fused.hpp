@@ -15,6 +15,7 @@ struct AdamWFusedConfig {
     float beta2{0.999F};
     float epsilon{1e-8F};
     float weight_decay{0.0F};
+    bool amsgrad{false};
 };
 
 class AdamWFused : public OptimizerBase {
@@ -46,13 +47,19 @@ public:
     [[nodiscard]] float get_weight_decay() const;
     void set_weight_decay(float weight_decay);
 
+    [[nodiscard]] bool get_amsgrad() const;
+    void set_amsgrad(bool amsgrad);
+
 private:
+    void init_max_exp_avg_sq();
+
     size_t m_steps{0};
     float m_beta1_pow{1.0F};
     float m_beta2_pow{1.0F};
     AdamWFusedConfig m_config;
     ttml::serialization::NamedParameters m_exp_avg;
     ttml::serialization::NamedParameters m_exp_avg_sq;
+    ttml::serialization::NamedParameters m_max_exp_avg_sq;
 };
 
 }  // namespace ttml::optimizers
