@@ -12,11 +12,11 @@ namespace ttnn::operations::experimental::create_qkv_heads_from_separate_tensors
 
 struct CreateQKVHeadsSeparateTensorsProgramFactory {
     struct shared_variables_t {
-        uint32_t cb_in0_id;
-        uint32_t cb_in1_id;
-        uint32_t cb_out0_id;
-        uint32_t cb_out1_id;
-        uint32_t cb_out2_id;
+        tt::tt_metal::CBHandle cb_in0_id = 0;
+        tt::tt_metal::CBHandle cb_in1_id = 0;
+        tt::tt_metal::CBHandle cb_out0_id = 0;
+        tt::tt_metal::CBHandle cb_out1_id = 0;
+        tt::tt_metal::CBHandle cb_out2_id = 0;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

@@ -39,6 +39,8 @@
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {

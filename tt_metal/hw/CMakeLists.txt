@@ -440,7 +440,7 @@ target_sources(
             inc/debug/fw_debug.h
             inc/debug/noc_logging.h
             inc/debug/ring_buffer.h
-            inc/debug/sanitize_noc.h
+            inc/debug/sanitize.h
             inc/debug/stack_usage.h
             inc/debug/watcher_common.h
             inc/debug/waypoint.h

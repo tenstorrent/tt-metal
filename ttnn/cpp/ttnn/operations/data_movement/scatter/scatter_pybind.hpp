@@ -10,5 +10,6 @@ namespace ttnn::operations::data_movement::detail {
 
 namespace py = pybind11;
 void bind_scatter(py::module& module);
+void bind_scatter_add(py::module& module);
 
 }  // namespace ttnn::operations::data_movement::detail

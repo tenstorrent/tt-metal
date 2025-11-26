@@ -18,6 +18,7 @@
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace physical_discovery {

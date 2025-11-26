@@ -9,8 +9,11 @@
 namespace ttnn::operations::reduction {
 
 Tensor ExecuteManualSeed::invoke(
-    MeshDevice& device, std::variant<uint32_t, Tensor> seeds, std::optional<std::variant<uint32_t, Tensor>> user_ids) {
-    return ttnn::prim::manual_seed(device, seeds, user_ids);
+    const std::variant<uint32_t, Tensor>& seeds,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
+    const std::optional<std::variant<uint32_t, Tensor>>& user_ids,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::prim::manual_seed(seeds, device, user_ids, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::reduction

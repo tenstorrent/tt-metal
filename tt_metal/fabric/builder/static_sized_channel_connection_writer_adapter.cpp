@@ -4,6 +4,9 @@
 
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -71,6 +74,25 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
 }
 
+void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
+    const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, CoreCoord tensix_noc_xy) {
+    this->relay_connection_info.noc_xy = tensix_noc_xy;
+    this->relay_connection_info.buffer_base_address = adapter_spec.edm_buffer_base_addr;
+    this->relay_connection_info.worker_registration_address = adapter_spec.edm_connection_handshake_addr;
+    this->relay_connection_info.worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
+
+    // Get relay-specific info from fabric context
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+
+    // Store free slots stream ID
+    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
+    this->relay_connection_info.free_slots_stream_id =
+        tensix_config.get_channel_credits_stream_id(relay_channel_id, FabricTensixCoreType::RELAY);
+
+    this->relay_connection_info.is_connected = true;
+}
+
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
     if (vc_idx == 0 && is_2D_routing) {
         // For VC0 in 2D: pack connection mask and data for 3 downstream EDMs
@@ -119,6 +141,35 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
 
         args_out.reserve(args_out.size() + rt_args.size());
         std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(args_out));
+    }
+}
+
+void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const {
+    // Pack local tensix (relay) connection info at the end of runtime args
+    // If no relay connection, just pack the flag (0)
+    if (!this->relay_connection_info.is_connected) {
+        args_out.push_back(0u);  // has_local_tensix_relay_connection = false
+    } else {
+        // Query the fabric router config from fabric context
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        const auto& fabric_router_config = fabric_context.get_fabric_router_config();
+
+        // Pack full relay connection info
+        // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
+        auto relay_rt_args = std::initializer_list<uint32_t>{
+            1u,                                                            // has_local_tensix_relay_connection = true
+            this->relay_connection_info.buffer_base_address,               // relay_buffer_base_addr
+            this->relay_connection_info.noc_xy.x,                          // relay_noc_x
+            this->relay_connection_info.noc_xy.y,                          // relay_noc_y
+            this->relay_connection_info.worker_registration_address,       // relay_connection_handshake_addr
+            this->relay_connection_info.worker_location_info_address,      // relay_worker_location_info_addr
+            this->relay_connection_info.free_slots_stream_id,              // relay_free_slots_stream_id
+            fabric_router_config.tensix_relay_connection_buffer_index_id,  // relay_connection_buffer_index_id (queried
+                                                                           // from fabric context)
+        };
+
+        args_out.reserve(args_out.size() + relay_rt_args.size());
+        std::copy(relay_rt_args.begin(), relay_rt_args.end(), std::back_inserter(args_out));
     }
 }
 

@@ -213,8 +213,6 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
-            jit_build/genfiles.cpp
-            jit_build/genfiles.hpp
             ${TT_LLK_HEADERS}
 )
 

@@ -83,7 +83,7 @@ private:
     Topology topology_;
     // will become used when Z-link support is added
     [[maybe_unused]] eth_chan_directions direction_;
-    bool has_tensix_extension_;
+    bool downstream_is_tensix_builder_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
