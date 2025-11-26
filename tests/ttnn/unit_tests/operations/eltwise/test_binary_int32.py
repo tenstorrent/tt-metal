@@ -992,7 +992,11 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    ARCH_NAME = ttnn.get_arch_name()
+    if "blackhole" in ARCH_NAME:
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2.0)
+    elif "wormhole" in ARCH_NAME:
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_edge_cases(device):

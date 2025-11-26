@@ -2534,7 +2534,6 @@ void py_module(py::module& module) {
         )doc",
         R"doc(BFLOAT16, FLOAT32, INT32)doc",
         R"doc(
-        When the inputs are INT32, the outputs are also returned as INT32.
         With INT32 inputs, round_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
         )doc");
 
