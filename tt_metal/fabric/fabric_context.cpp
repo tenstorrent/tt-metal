@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
@@ -223,6 +223,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::DISABLED:
+        case tt::tt_fabric::FabricTensixConfig::UDM:
             switch (fabric_edm_type) {
                 case tt::tt_fabric::FabricEriscDatamoverType::Default:
                     TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");

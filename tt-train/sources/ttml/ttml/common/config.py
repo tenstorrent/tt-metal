@@ -77,7 +77,7 @@ class TrainingConfig:
         elif tokenizer_type == "char":
             self.use_bpe = False
         else:
-            raise ValueError(f"Unknown tokenizer_type: {use_bpe}")
+            raise ValueError(f"Unknown tokenizer_type: {tokenizer_type}")
 
         self.lr = float(tc.get("learning_rate", 3e-4))
         self.beta1 = float(tc.get("beta1", 0.9))
