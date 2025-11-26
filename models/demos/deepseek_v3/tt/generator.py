@@ -426,9 +426,20 @@ class DeepseekGenerator:
         # Use provided page tables or fall back to internal ones
         page_tables_to_use = page_tables if page_tables is not None else self.page_tables_tt
 
+        # Determine actual batch size from input tokens/positions
+        actual_batch_size = tokens_step.shape[0] if tokens_step.dim() > 0 else 1
+        # For RoPE, we need to use the actual batch size, but it needs to match the sharding pattern
+        # If batch is sharded across mesh rows, calculate batch_size_per_row accordingly
+        if actual_batch_size % self.mesh_device.shape[0] == 0:
+            # Row-sharded case
+            rope_batch_size_per_row = actual_batch_size // self.mesh_device.shape[0]
+        else:
+            # Use the provided batch_size_per_row (row-interleaved case)
+            rope_batch_size_per_row = batch_size_per_row
+
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
-        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+        rope_tensors = get_rope_tensors(self.hf_config, rope_batch_size_per_row, 1, positions, self.mesh_device)
         tt_positions = ttnn.from_torch(
             positions,
             device=self.mesh_device,
@@ -831,32 +842,26 @@ class DeepseekGenerator:
         Returns:
             Tuple of TTNN tensors, one per layer
         """
-        # Calculate expected shape: [batch_per_shard, blocks_per_user]
-        _, dp_factor = self.mesh_device.shape
-        batch_per_shard = even_int_div(self.batch_size_per_row, self.mesh_device.shape[0])
-        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
+        # Use vLLM page table directly, but shard it across devices to match the sharded batch size
+        # in paged_update_cache.
+        # page_table shape: [batch_size, max_blocks_per_req]
 
-        # Create a full page table structure for all users
-        full_page_table = torch.full((batch_per_shard, blocks_per_user), -1, dtype=torch.int32)
+        # Ensure int32
+        page_table = page_table.to(torch.int32)
 
-        batch_size = page_table.shape[0]
-        for user_id in range(batch_size):
-            local_user_id = user_id % batch_per_shard
-            user_blocks = page_table[user_id, :blocks_per_user].clone()
-            num_user_blocks = min(user_blocks.shape[0], blocks_per_user)
-            full_page_table[local_user_id, :num_user_blocks] = user_blocks[:num_user_blocks]
-
-        # Convert to TTNN format
-        page_table_tt = MLA2D.create_page_table(
-            paged_config=self.paged_config,
-            mesh_device=self.mesh_device,
-            page_table=full_page_table,
-            batch_size_per_row=self.batch_size_per_row // self.mesh_device.shape[0],
+        # Shard across dim 0 (batch dimension)
+        # This distributes the batch rows across the mesh devices
+        # With 32 batch and 32 devices, each device gets 1 row, matching bsz_local=1
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Create one page table per layer
-        num_layers = self.hf_config.num_hidden_layers
-        return tuple(page_table_tt for _ in range(num_layers))
+        return tuple(page_table_tt for _ in range(self.hf_config.num_hidden_layers))
 
     def prefill_forward(self, *args, **kwargs):
         """Prefill forward pass, following vLLM interface."""
