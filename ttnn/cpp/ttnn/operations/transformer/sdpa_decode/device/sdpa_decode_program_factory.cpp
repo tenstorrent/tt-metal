@@ -48,7 +48,6 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         sliding_window_size = 0;
     }
     const auto is_causal = operation_attributes.is_causal;
-    // const auto& cur_pos = operation_attributes.cur_pos;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
     const auto& k_chunk_size = operation_attributes.k_chunk_size;
