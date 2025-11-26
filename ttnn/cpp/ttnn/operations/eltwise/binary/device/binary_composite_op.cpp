@@ -293,12 +293,12 @@ Tensor ExecuteDiv::invoke(
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32);
         Tensor b = typecast(input_b, DataType::FLOAT32);
-        if (is_int32) {
-            result = ttnn::divide(a, b, std::nullopt, output_mem_config, output_tensor);
-        } else {
-            result = ttnn::multiply(
-                a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
-        }
+        // if (is_int32) {
+        result = ttnn::divide(a, b, std::nullopt, output_mem_config, output_tensor);
+        // } else {
+        //     result = ttnn::multiply(
+        //         a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
+        // }
     }
 
     if (round_mode == "trunc") {
