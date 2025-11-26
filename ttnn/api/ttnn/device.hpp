@@ -26,6 +26,20 @@ void disable_and_clear_program_cache(IDevice& device);
 bool is_wormhole_or_blackhole(tt::ARCH arch);
 void deallocate_buffers(IDevice* device);
 
+/**
+ * Sets the default device to be used for auto-formatting operations
+ * @param dev Pointer to the device to be used
+ * @note This functionality is planned for deprecation in the future.
+ */
+void SetDefaultDevice(MeshDevice* dev);
+
+/**
+ * Gets the default device used for auto-formatting operations
+ * @return Pointer to the default device
+ * @note This functionality is planned for deprecation in the future.
+ */
+MeshDevice* GetDefaultDevice();
+
 }  // namespace device
 
 using namespace device;
