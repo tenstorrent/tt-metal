@@ -297,6 +297,39 @@ def extract_dispatch_op_id(dispatchOps):
     return opId
 
 
+def extract_perf_counters(events):
+    # If perf counter data exists, extract relevant columns and return as a dataframe
+    EVENT_METADATA_IDX = 0
+    EVENT_TIMESTAMP_IDX = 1
+    EVENT_RISC_TYPE_IDX = 3
+    EVENT_CORE_COORDS_IDX = 4
+    PERF_COUNTER_ID = 9090
+
+    try:
+        # Process events: extract metadata, add timestamp and coords
+        perf_counter_events = []
+        for event in events:
+            metadata = event[EVENT_METADATA_IDX]
+            if metadata["id"] == PERF_COUNTER_ID:
+                meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '"'))
+                perf_counter_events.append(
+                    {
+                        "run_host_id": metadata["run_host_id"],
+                        "trace_id_count": metadata["trace_id_count"],
+                        "record time": event[EVENT_TIMESTAMP_IDX],
+                        "core_x": event[EVENT_CORE_COORDS_IDX][0],
+                        "core_y": event[EVENT_CORE_COORDS_IDX][1],
+                        "risc_type": event[EVENT_RISC_TYPE_IDX],
+                        **meta_dict,
+                    }
+                )
+
+        if perf_counter_events:
+            return pd.DataFrame(perf_counter_events)
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types):
     traceReplayCounts = {}
@@ -429,6 +462,76 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
             traceOps = {}
 
+            for device in devicesOps:
+                events = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]
+                perf_counter_df = extract_perf_counters(events["perf_counter_data"])
+
+                # Check if perf counters data is available
+                if perf_counter_df is None or perf_counter_df.empty:
+                    continue
+
+                total_compute_cores = deviceData["deviceInfo"]["max_compute_cores"]
+
+                # For each counter type, divide counter value by ref cnt to get util metrics per core
+                #   then group by runtime id and trace id counter to get util metric for all cores in a single op
+                #   then get aggregate statistics for this distribution of values (min, median, max)
+                perf_counter_df["Util"] = perf_counter_df["value"] / perf_counter_df["ref cnt"] * 100
+
+                # SFPU Counter aggregations
+                sfpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "SFPU_COUNTER"].groupby(
+                    ["run_host_id", "trace_id_count"], group_keys=True
+                )
+                agg_sfpu_util_min = sfpu_counters_grouped["Util"].min()
+                agg_sfpu_util_median = sfpu_counters_grouped["Util"].median()
+                agg_sfpu_util_max = sfpu_counters_grouped["Util"].max()
+                avg_sfpu_count = sfpu_counters_grouped["value"].sum() / total_compute_cores
+
+                # FPU Counter aggregations
+                fpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "FPU_COUNTER"].groupby(
+                    ["run_host_id", "trace_id_count"], group_keys=True
+                )
+                agg_fpu_util_min = fpu_counters_grouped["Util"].min()
+                agg_fpu_util_median = fpu_counters_grouped["Util"].median()
+                agg_fpu_util_max = fpu_counters_grouped["Util"].max()
+                avg_fpu_count = fpu_counters_grouped["value"].sum() / total_compute_cores
+
+                # MATH Counter aggregations
+                math_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "MATH_COUNTER"].groupby(
+                    ["run_host_id", "trace_id_count"], group_keys=True
+                )
+                agg_math_util_min = math_counters_grouped["Util"].min()
+                agg_math_util_median = math_counters_grouped["Util"].median()
+                agg_math_util_max = math_counters_grouped["Util"].max()
+                avg_math_count = math_counters_grouped["value"].sum() / total_compute_cores
+
+                for deviceOp in devicesOps[device]:
+                    # get trace id counter and global_call_count/runtime id
+                    trace_id_counter = deviceOp.get("metal_trace_replay_session_id", -1)
+                    global_call_count = deviceOp["global_call_count"]
+
+                    # SFPU Counter
+                    deviceOp["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
+                    deviceOp["SFPU Util Median (%)"] = agg_sfpu_util_median.get(
+                        (global_call_count, trace_id_counter), nan
+                    )
+                    deviceOp["SFPU Util Max (%)"] = agg_sfpu_util_max.get((global_call_count, trace_id_counter), nan)
+                    # FPU Counter
+                    deviceOp["FPU Util Min (%)"] = agg_fpu_util_min.get((global_call_count, trace_id_counter), nan)
+                    deviceOp["FPU Util Median (%)"] = agg_fpu_util_median.get(
+                        (global_call_count, trace_id_counter), nan
+                    )
+                    deviceOp["FPU Util Max (%)"] = agg_fpu_util_max.get((global_call_count, trace_id_counter), nan)
+                    # MATH Counter
+                    deviceOp["MATH Util Min (%)"] = agg_math_util_min.get((global_call_count, trace_id_counter), nan)
+                    deviceOp["MATH Util Median (%)"] = agg_math_util_median.get(
+                        (global_call_count, trace_id_counter), nan
+                    )
+                    deviceOp["MATH Util Max (%)"] = agg_math_util_max.get((global_call_count, trace_id_counter), nan)
+
+                    deviceOp["avg_sfpu_count"] = avg_sfpu_count.get((global_call_count, trace_id_counter), nan)
+                    deviceOp["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
+                    deviceOp["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
+
             # Tag trace ops with a UID
             for device in devicesOps:
                 for deviceOp in devicesOps[device]:
@@ -456,83 +559,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
                     ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
-
-    # Check if perf counters data is available (in logFolder / perf_counters.csv)
-    if os.path.isfile(logFolder / "perf_counters.csv"):
-        # For each counter type, divide counter value by ref cnt to get util metrics per core
-        #   then group by runtime id and trace id counter to get util metric for all cores in a single op
-        #   then get aggregate statistics for this distribution of values (min, median, max)
-        with open(logFolder / "perf_counters.csv") as perf_counter_file:
-            # read first line and convert to dict
-            cluster_type_str = ast.literal_eval(perf_counter_file.readline().strip())["cluster type"]
-            df = pd.read_csv(perf_counter_file, header=0, sep=",")
-
-        # get total num of compute/tensix cores avaialable on grid using cluster type
-        if cluster_type_str == "N150":
-            total_compute_cores = 72
-        else:
-            raise ValueError(f"Cluster type {cluster_type_str} not supported")
-
-        df = df.fillna(value={"trace id counter": 0})
-        df["trace id counter"] = df["trace id counter"].astype(int)
-        df["Util"] = df["value"] / df["ref cnt"] * 100
-
-        # SFPU Counter aggregations
-        sfpu_counters_grouped = df[df["counter type"] == "SFPU_COUNTER"].groupby(
-            ["runtime id", "trace id counter"], group_keys=True
-        )
-        agg_sfpu_util_min = sfpu_counters_grouped["Util"].min()
-        agg_sfpu_util_median = sfpu_counters_grouped["Util"].median()
-        agg_sfpu_util_max = sfpu_counters_grouped["Util"].max()
-        avg_sfpu_count = sfpu_counters_grouped["value"].sum() / total_compute_cores
-
-        # FPU Counter aggregations
-        fpu_counters_grouped = df[df["counter type"] == "FPU_COUNTER"].groupby(
-            ["runtime id", "trace id counter"], group_keys=True
-        )
-        agg_fpu_util_min = fpu_counters_grouped["Util"].min()
-        agg_fpu_util_median = fpu_counters_grouped["Util"].median()
-        agg_fpu_util_max = fpu_counters_grouped["Util"].max()
-        avg_fpu_count = fpu_counters_grouped["value"].sum() / total_compute_cores
-
-        # MATH Counter aggregations
-        math_counters_grouped = df[df["counter type"] == "MATH_COUNTER"].groupby(
-            ["runtime id", "trace id counter"], group_keys=True
-        )
-        agg_math_util_min = math_counters_grouped["Util"].min()
-        agg_math_util_median = math_counters_grouped["Util"].median()
-        agg_math_util_max = math_counters_grouped["Util"].max()
-        avg_math_count = math_counters_grouped["value"].sum() / total_compute_cores
-
-        op_lists = [ops, traceOps]
-        for op_list in op_lists:
-            for op_id in op_list:
-                # get trace id counter and global_call_count/runtime id
-                trace_id_counter = op_id >> TRACE_OP_ID_BITSHIFT
-                global_call_count = op_id & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
-
-                # SFPU Counter
-                op_list[op_id]["SFPU Util Min (%)"] = agg_sfpu_util_min.get((global_call_count, trace_id_counter), nan)
-                op_list[op_id]["SFPU Util Median (%)"] = agg_sfpu_util_median.get(
-                    (global_call_count, trace_id_counter), nan
-                )
-                op_list[op_id]["SFPU Util Max (%)"] = agg_sfpu_util_max.get((global_call_count, trace_id_counter), nan)
-                # FPU Counter
-                op_list[op_id]["FPU Util Min (%)"] = agg_fpu_util_min.get((global_call_count, trace_id_counter), nan)
-                op_list[op_id]["FPU Util Median (%)"] = agg_fpu_util_median.get(
-                    (global_call_count, trace_id_counter), nan
-                )
-                op_list[op_id]["FPU Util Max (%)"] = agg_fpu_util_max.get((global_call_count, trace_id_counter), nan)
-                # MATH Counter
-                op_list[op_id]["MATH Util Min (%)"] = agg_math_util_min.get((global_call_count, trace_id_counter), nan)
-                op_list[op_id]["MATH Util Median (%)"] = agg_math_util_median.get(
-                    (global_call_count, trace_id_counter), nan
-                )
-                op_list[op_id]["MATH Util Max (%)"] = agg_math_util_max.get((global_call_count, trace_id_counter), nan)
-
-                op_list[op_id]["avg_sfpu_count"] = avg_sfpu_count.get((global_call_count, trace_id_counter), nan)
-                op_list[op_id]["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
-                op_list[op_id]["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
 
     return devicesOps, traceOps
 

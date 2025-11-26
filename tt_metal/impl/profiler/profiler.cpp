@@ -905,9 +905,11 @@ void dumpJsonNocTraces(
     }
 }
 
-void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency) {
+void writeCSVHeader(
+    std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency, uint32_t max_compute_cores) {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
-                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
+                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
+                 << std::endl;
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
                     "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;
@@ -918,6 +920,7 @@ void dumpDeviceResultsToCSV(
         device_markers_per_core_risc_map,
     tt::ARCH device_arch,
     int device_core_frequency,
+    uint32_t max_compute_cores,
     const std::filesystem::path& log_path) {
     TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
     TT_ASSERT(log_path.extension() == ".csv");
@@ -930,7 +933,7 @@ void dumpDeviceResultsToCSV(
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
-        writeCSVHeader(log_file_ofs, device_arch, device_core_frequency);
+        writeCSVHeader(log_file_ofs, device_arch, device_core_frequency, max_compute_cores);
     }
 
     if (!log_file_ofs) {
@@ -1721,6 +1724,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     start_marker_stack.pop();
                     start_marker_stack.push(curr_zone_start_marker_it);
                 }
+
+                // If this is a performance counter, extract fields from data and store in marker meta_data
+                if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
+                    marker.meta_data["counter type"] = enchantum::to_string(PerfCounter(marker.data).counter_type);
+                    marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
+                    marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
+
+                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = marker_ret.first;
+                    next_device_marker_it = marker_ret.second;
+                }
             }
         }
 
@@ -1743,7 +1757,8 @@ bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_don
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[maybe_unused]]) :
     device_arch(device->arch()),
     device_id(device->id()),
-    device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
+    device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)),
+    max_compute_cores(device->logical_grid_size().x * device->logical_grid_size().y) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     if (!getDeviceProfilerState()) {
@@ -1970,75 +1985,6 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
          ((old_info.device_time / old_info.frequency) < (new_info.device_time / new_info.frequency))));
 }
 
-// Output perf counter data into a csv
-// Filter for timetsamped datapoints with PERF_COUNTER_PROFILER_ID
-void dumpPerfCounters(
-    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
-        device_markers_per_core_risc_map,
-    const std::filesystem::path& device_logs_output_dir) {
-    // open CSV log file
-    const std::filesystem::path log_path = device_logs_output_dir / PERF_COUNTER_LOG;
-    std::ofstream log_file_ofs;
-
-    // append to existing CSV log file if it already exists
-    if (std::filesystem::exists(log_path)) {
-        log_file_ofs.open(log_path, std::ios_base::app);
-    } else {
-        log_file_ofs.open(log_path);
-        log_file_ofs << R"({"cluster type": ")"
-                     << enchantum::to_string(tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type())
-                     << R"("})" << std::endl;
-        log_file_ofs << "runtime id,trace id,trace id counter,op name,device id,core_x,core_y,RISC processor "
-                        "type,counter type,record time,ref cnt,value"
-                     << std::endl;
-    }
-
-    if (!log_file_ofs) {
-        log_error(tt::LogMetal, "Could not open kernel profiler dump file '{}'", log_path);
-        return;
-    }
-
-    std::vector<tracy::TTDeviceMarker> markers;
-    for (const auto& [core, device_markers_per_risc_map] : device_markers_per_core_risc_map) {
-        for (const auto& [risc, device_markers] : device_markers_per_risc_map) {
-            for (const tracy::TTDeviceMarker& marker : device_markers) {
-                if (isMarkerATimestampedDatapoint(marker) && marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    markers.push_back(marker);
-                }
-            }
-        }
-    }
-
-    std::sort(markers.begin(), markers.end(), [](const tracy::TTDeviceMarker& a, const tracy::TTDeviceMarker& b) {
-        return std::tie(a.runtime_host_id, a.trace_id, a.trace_id_counter) <
-               std::tie(b.runtime_host_id, b.trace_id, b.trace_id_counter);
-    });
-
-    for (const auto& marker : markers) {
-        const std::string trace_id_str =
-            marker.trace_id == tracy::TTDeviceMarker::INVALID_NUM ? "" : fmt::format("{}", marker.trace_id);
-        const std::string trace_id_counter_str = marker.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM
-                                                     ? ""
-                                                     : fmt::format("{}", marker.trace_id_counter);
-        log_file_ofs << fmt::format(
-            "{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            marker.runtime_host_id,
-            trace_id_str,
-            trace_id_counter_str,
-            marker.op_name,
-            marker.chip_id,
-            marker.core_x,
-            marker.core_y,
-            enchantum::to_string(marker.risc),
-            enchantum::to_string(PerfCounter(marker.data).counter_type),
-            marker.timestamp,
-            PerfCounter(marker.data).ref_cnt,
-            PerfCounter(marker.data).counter_value);
-    }
-
-    log_file_ofs.close();
-}
-
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -2049,11 +1995,8 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
-    dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
-
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_perf_counter_mode() != 0) {
-        dumpPerfCounters(device_markers_per_core_risc_map, device_logs_output_dir);
-    }
+    dumpDeviceResultsToCSV(
+        device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         log_warning(

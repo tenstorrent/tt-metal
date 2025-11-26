@@ -126,15 +126,16 @@ def extract_device_info(logPath):
         info = line.split(",")
         arch = info[0].split(":")[-1].strip(" \n")
         freq = info[1].split(":")[-1].strip(" \n")
-        return arch, int(freq)
+        max_compute_cores = info[2].split(":")[-1].strip(" \n")
+        return arch, int(freq), int(max_compute_cores)
     else:
         raise Exception
 
 
 def import_device_profile_log(logPath):
     devicesData = {"devices": {}}
-    arch, freq = extract_device_info(logPath)
-    devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
+    arch, freq, max_compute_cores = extract_device_info(logPath)
+    devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq, max_compute_cores=max_compute_cores)))
 
     df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
 
