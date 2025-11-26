@@ -427,6 +427,7 @@ def test_llama_TG_perf_device(
     adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run
     first_run_end = first_run_start + adjusted_len
     last_run_start = len(df) - adjusted_len
+
     df_model_compilation = df[0:first_run_start]  # Compile run
     df_model_trace = df[last_run_start:]  # Trace run
 
@@ -436,7 +437,8 @@ def test_llama_TG_perf_device(
     # [op_start_index:op_end_index] = all core layers region
     op_start_index = head_tail_ops["num_head_ops"]
     num_tail_ops = head_tail_ops["num_tail_ops"]
-    op_end_index = len(df_model_compilation) - head_tail_ops["num_tail_ops"]
+    num_layer_block_ops = head_tail_ops["num_layer_block_ops"]
+    op_end_index = op_start_index + num_layer_block_ops * num_layers
     df_layers_compilation = df_model_compilation[op_start_index:op_end_index]
     df_layers_trace = df_model_trace[op_start_index:op_end_index]
 
@@ -860,7 +862,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     # [op_start_index:op_end_index] = all core layers region
     op_start_index = head_tail_ops["num_head_ops"]
-    op_end_index = len(df_model_trace) - head_tail_ops["num_tail_ops"]
+    num_layer_block_ops = head_tail_ops["num_layer_block_ops"]
+    op_end_index = op_start_index + num_layer_block_ops * num_layers
 
     # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
     df_layers = df_model_trace[op_start_index:op_end_index]
