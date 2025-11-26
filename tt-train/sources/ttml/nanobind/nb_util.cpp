@@ -206,16 +206,15 @@ nb::object make_numpy_tensor(
 
     const auto make_numpy_tensor_from_data =
         []<typename NumpyType>(
-            const auto& tensor_data, const auto& tensor_spec /*, const auto& tensor_strides*/) -> nb::object {
+            const auto& tensor_data, const auto& tensor_spec, const auto& tensor_strides) -> nb::object {
         const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
 
         const auto tensor_shape_rank = tensor_shape.rank();
         std::vector<size_t> numpy_shape(tensor_shape_rank);
         std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
 
-        // Copying strides does not work in all cases, fortunately ndarray will compute them at construction
-        // std::vector<int64_t> numpy_strides;
-        // numpy_strides.assign(tensor_strides.cbegin(), tensor_strides.cend());
+        std::vector<int64_t> numpy_strides;
+        numpy_strides.assign(tensor_strides.cbegin(), tensor_strides.cend());
 
         // For bfloat16, use ml_dtypes.bfloat16 dtype if available
         if constexpr (std::is_same_v<NumpyType, bfloat16>) {
@@ -294,15 +293,19 @@ nb::object make_numpy_tensor(
                 const auto row_major_tensor = convert_to_row_major(tensor);
                 const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<MetalType const>(row_major_tensor);
                 return make_numpy_tensor_from_data.template operator()<NumpyType>(
-                    row_major_tensor_data, row_major_tensor.tensor_spec());
+                    row_major_tensor_data, row_major_tensor.tensor_spec(), row_major_tensor.strides());
             }
             const auto tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(tensor);
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(tensor_data, tensor.tensor_spec());
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(
+                tensor_data, tensor.tensor_spec(), tensor.strides());
         }
 
         // Move to CPU and convert to row major
         auto cpu_tensor = tensor.cpu(/*blocking=*/true);
         cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
+
+        const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
+        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         // If composer is provided, use it to compose distributed tensor shards
         if (composer != nullptr) {
@@ -312,19 +315,19 @@ nb::object make_numpy_tensor(
 
             // Create a temporary tensor spec with the composed shape
             auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec, cpu_tensor_strides);
         }
 
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
-        const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
-        const auto cpu_tensor_strides = cpu_tensor.strides();
 
         if (tt::tt_metal::tensor_impl::logical_matches_physical(cpu_tensor_spec)) {
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(
+                cpu_tensor_data, cpu_tensor_spec, cpu_tensor_strides);
         }
 
         const auto decoded_data = tt::tt_metal::tensor_impl::decode_tensor_data(cpu_tensor_data, cpu_tensor_spec);
-        return make_numpy_tensor_from_data.template operator()<NumpyType>(decoded_data, cpu_tensor_spec);
+        return make_numpy_tensor_from_data.template operator()<NumpyType>(
+            decoded_data, cpu_tensor_spec, cpu_tensor_strides);
     };
 
     const auto& tensor_spec = t.tensor_spec();
