@@ -13,6 +13,7 @@ ttnn::Tensor adamw_fused(
     const ttnn::Tensor& grad,
     const ttnn::Tensor& exp_avg,
     const ttnn::Tensor& exp_avg_sq,
+    const std::optional<ttnn::Tensor>& max_exp_avg_sq,
     const float lr,
     const float beta1,
     const float beta2,
@@ -22,7 +23,20 @@ ttnn::Tensor adamw_fused(
     const float weight_decay,
     const uint32_t step) {
     return ttnn::prim::ttml_adamw_fused(
-        param_in, grad, exp_avg, exp_avg_sq, lr, beta1, beta2, beta1_pow, beta2_pow, epsilon, weight_decay, step);
+        param_in,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        max_exp_avg_sq,
+        lr,
+        beta1,
+        beta2,
+        beta1_pow,
+        beta2_pow,
+        epsilon,
+        weight_decay,
+        max_exp_avg_sq.has_value(),
+        step);
 }
 
 }  // namespace ttml::metal
