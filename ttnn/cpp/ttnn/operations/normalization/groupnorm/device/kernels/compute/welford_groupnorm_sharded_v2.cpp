@@ -22,6 +22,7 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -438,15 +439,8 @@ void kernel_main() {
     }
 
 #ifdef UNTILIZE_OUT
-    // untilize
-    untilize_init(cb_untilize_in);
-    cb_wait_front(cb_untilize_in, per_core_MN);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_untilize_out, per_core_N);
-        untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-        cb_push_back(cb_untilize_out, per_core_N);
-        cb_pop_front(cb_untilize_in, per_core_N);
-    }
-    untilize_uninit(cb_untilize_in);
+    // untilize - DEST capacity auto-detected
+    compute_kernel_lib::untilize<per_core_N, true, true, true>(
+        cb_untilize_in, cb_untilize_out, per_core_M, 1, per_core_MN);
 #endif
 }

@@ -8,6 +8,7 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 using std::uint32_t;
 
@@ -59,14 +60,7 @@ void kernel_main() {
 
                     // untilize tile and write to CBIndex::c_25
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    cb_wait_front(cb_intermed0, onetile);
-                    untilize_init(cb_intermed0);
-                    cb_reserve_back(cb_intermed1, onetile);
-                    untilize_block(cb_intermed0, onetile, cb_intermed1);
-                    cb_push_back(cb_intermed1, onetile);
-
-                    cb_pop_front(cb_intermed0, onetile);
-                    untilize_uninit(cb_intermed0);
+                    compute_kernel_lib::untilize<onetile>(cb_intermed0, cb_intermed1, 1);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
