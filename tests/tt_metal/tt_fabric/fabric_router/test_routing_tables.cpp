@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -13,7 +13,7 @@
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
