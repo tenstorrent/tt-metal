@@ -8,7 +8,7 @@ GSM8K Fine-tuning Script
 Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 """
 
-import os
+import os, sys
 import datasets
 import numpy as np
 import torch
@@ -18,6 +18,7 @@ from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 import ttml
 from ttml.common.config import (
     TrainingConfig,
@@ -523,8 +524,8 @@ def train():
             ttml.autograd.AutoContext.get_instance().reset_graph()
 
         # Synchronize gradients if DDP is enabled
-        # if device_config.enable_ddp:
-        #     ttml.core.distributed.synchronize_parameters(tt_model.parameters())
+        if device_config.enable_ddp:
+            ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
         # Optimizer step after micro-steps
         optim.step()
