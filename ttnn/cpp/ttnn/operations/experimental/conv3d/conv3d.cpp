@@ -6,12 +6,9 @@
 #include "device/conv3d_device_operation.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::conv3d {
@@ -23,18 +20,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
     const Conv3dConfig& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
-
-    return operation::run(
-               Conv3dOp{
-                   .config = config,
-                   .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor, weight_tensor},
-               {bias_tensor},
-               {})
-        .at(0);
+    return ttnn::prim::conv3d(input_tensor, weight_tensor, bias_tensor, config, memory_config, compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::conv3d
