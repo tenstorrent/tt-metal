@@ -13,9 +13,9 @@ on:
         required: false
         type: number
         default: 10
-      build-artifact-name:
-        required: true
-        type: string
+      # build-artifact-name:
+      #   required: true
+      #   type: string
       docker-image:
         required: true
         type: string
@@ -62,22 +62,13 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        # uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        # timeout-minutes: 10
-        # with:
-        #   build-artifact-name: ${{ inputs.build-artifact-name }}
-        #   #wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        #   enable-watcher: ${{ inputs.enable-watcher || false }}
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name || 'packages artifact unresolved!' }}
-          path: /work/pkgs/
+          #build-artifact-name: ${{ inputs.build-artifact-name }}
+          #wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
-      - name: Install packages
-        run: |
-          # Ideally only tt-metalium-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-validation_*.deb
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
