@@ -22,6 +22,13 @@
 
 namespace tt::tt_fabric::fabric_tests {
 
+// Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
+enum class PerformanceTestMode {
+    NONE,       // No performance testing (functional test only)
+    BANDWIDTH,  // Bandwidth/throughput test mode (formerly benchmark_mode)
+    LATENCY     // Latency measurement test mode (formerly latency_test_mode)
+};
+
 // Device identifier that can be resolved later (used during parsing)
 using DeviceIdentifier = std::variant<
     FabricNodeId,                      // Already resolved
@@ -138,7 +145,8 @@ struct ParsedTestConfig {
     std::vector<SenderConfig> global_sync_configs;
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
-    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    PerformanceTestMode performance_test_mode =
+        PerformanceTestMode::NONE;   // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;  // Enable telemetry for performance testing
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
@@ -162,13 +170,28 @@ struct TestConfig {
     std::vector<SenderConfig> global_sync_configs;
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
-    bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    PerformanceTestMode performance_test_mode =
+        PerformanceTestMode::NONE;  // Performance testing mode (NONE, BANDWIDTH, or LATENCY)
     bool telemetry_enabled = false;
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
     uint32_t seed{};
+};
+
+// Latency test results structure (parallel to bandwidth results)
+struct LatencyResults {
+    std::string test_name;
+    uint32_t num_samples;
+    uint32_t message_size_bytes;
+    std::vector<uint64_t> latencies_cycles;  // raw cycle counts
+    std::vector<double> latencies_ns;        // converted to ns
+    uint64_t min_latency_cycles;
+    uint64_t max_latency_cycles;
+    double avg_latency_ns;
+    double p50_latency_ns;
+    double p99_latency_ns;
 };
 
 // ======================================================================================

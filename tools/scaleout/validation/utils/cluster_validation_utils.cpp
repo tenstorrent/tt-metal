@@ -21,6 +21,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -956,7 +957,8 @@ void handle_workload_timeout(
             validation_config.cabling_descriptor_path,
             validation_config.deployment_descriptor_path,
             validation_config.fsd_path,
-            validation_config.output_path.string());
+            validation_config.output_path.string(),
+            ctx.physical_system_descriptor.get_all_hostnames());
         validate_connectivity(
             fsd_file_path, gsd_yaml_path, validation_config.fail_on_warning, ctx.physical_system_descriptor);
     } else {
@@ -1433,16 +1435,24 @@ std::string get_factory_system_descriptor_path(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
     const std::optional<std::string>& fsd_path,
-    const std::string& output_path) {
+    const std::string& output_path,
+    const std::vector<std::string>& hostnames) {
     std::string fsd_file_path;
     if (cabling_descriptor_path.has_value()) {
         const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            cabling_descriptor_path.value(), deployment_descriptor_path.value());
+        CablingGenerator cabling_generator;
         std::string filename =
             "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
         fsd_file_path = std::filesystem::path(output_path) / filename;
+
+        if (!deployment_descriptor_path.has_value()) {
+            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
+            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
+        } else {
+            cabling_generator = tt::scaleout_tools::CablingGenerator(
+                cabling_descriptor_path.value(), deployment_descriptor_path.value());
+        }
         cabling_generator.emit_factory_system_descriptor(fsd_file_path);
     } else {
         fsd_file_path = fsd_path.value();
