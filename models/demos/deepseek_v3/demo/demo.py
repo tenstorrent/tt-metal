@@ -255,7 +255,7 @@ def run_demo(
     )
 
     # Open mesh device (reusing test fixture defaults) and set fabric to 1D
-    mesh_shape = ttnn.MeshShape(8, 8)
+    mesh_shape = _default_mesh_shape()
     logger.info("Setting fabric config to FABRIC_1D for demo run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
