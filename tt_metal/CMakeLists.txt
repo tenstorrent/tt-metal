@@ -109,6 +109,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
+    api/tt-metalium/experimental/pinned_memory.hpp
 )
 target_sources(
     tt_metal
@@ -213,8 +214,6 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
-            jit_build/genfiles.cpp
-            jit_build/genfiles.hpp
             ${TT_LLK_HEADERS}
 )
 
