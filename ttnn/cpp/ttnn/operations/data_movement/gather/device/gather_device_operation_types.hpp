@@ -12,6 +12,7 @@ struct operation_attributes_t {
     const int8_t dim;
     const bool sparse_grad;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    const std::optional<CoreRangeSet> sub_core_grids;
 };
 
 struct tensor_args_t {
