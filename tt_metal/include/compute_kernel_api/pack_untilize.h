@@ -60,7 +60,7 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM>
 ALWI void pack_untilize_dest_init(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::PACK>(ocb, call_line);
+    PACK((state_configure<Operand::PACK>(ocb, call_line)));
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_reconfig_remap(true)));
@@ -107,7 +107,7 @@ ALWI void pack_untilize_dest_init(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false, false, icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
@@ -224,8 +224,8 @@ ALWI void pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
-    PACK((llk_init_packer_dest_offset_registers<false>()));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_init_packer_dest_offset_registers<false>()));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));

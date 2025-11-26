@@ -32,7 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line)));
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -43,6 +43,32 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
 #endif
+}
+
+// clang-format off
+/**
+ * The same as tilize_init, but skips the packer configuration on blackhole in preparation to leave the
+ * tilized result in DST without packing to an out CB
+ *
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                   | Type     | Valid Range | Required |
+ * |----------- |--------|-----------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier              | uint32_t | 0 to 31     | True     |
+ * | Function   | block  | Size of tile block to work on                 | uint32_t | > 0         | True     |
+ */
+// clang-format on
+ALWI void tilize_init_no_pack(uint32_t icb, uint32_t block, uint32_t call_line = __builtin_LINE()) {
+    PACK(state_configure(icb, call_line));
+    UNPACK((llk_unpack_tilize_init(icb, block)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*is_int_en*/,
+          true /*tilize en*/>(icb)));
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
@@ -74,14 +100,15 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb0, icb1_scaler, ocb, call_line);
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK(state_configure(icb0, icb1_scaler, ocb, call_line));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -123,6 +150,48 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 
 // clang-format off
 /**
+ * The same as tilize_init_short_with_dt, but skips part of the packer configuration on blackhole in
+ * preparation to leave the tilized result in DST without packing to an out CB
+ *
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | old_icb  | Previous input circular buffer identifier| uint32_t | 0 to 31     | True     |
+ * | Function   | new_icb  | New input circular buffer identifier     | uint32_t | 0 to 31     | True     |
+ * | Function   | block    | Size of tile block to work on            | uint32_t | > 0         | True     |
+ */
+// clang-format on
+ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, uint32_t block) {
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*is_int_en*/,
+          true /*tilize en*/>(new_icb)));
+    // This reconfig call checks if old operand has different data format to
+    // new operand idx, otherwise no reconfig call occurs
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_tilize_init(new_icb, block)));
+
+// while the *_no_pack variants do not configure the packer, testing has shown that this call is
+// still necessary to ensure the data type is properly updated
+#ifdef ARCH_BLACKHOLE
+    PACK((_llk_pack_init_<false, false, true>(
+        pack_dst_format[new_icb],
+        get_output_face_r_dim(new_icb),
+        get_output_tile_c_dim(new_icb),
+        get_output_num_faces(new_icb),
+        get_output_partial_face(new_icb),
+        get_output_narrow_tile(new_icb))));
+#endif
+}
+
+// clang-format off
+/**
  * Performs the tilize operation on a block.
  *
  * Return value: None
@@ -153,6 +222,33 @@ ALWI void tilize_block(
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    }
+}
+
+// clang-format off
+/**
+ * The same as tilize_block, but skips the packing step and MATH/PACK synchronization to leave the
+ * tilized result in DST without packing to an out CB
+ *
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                              | Type     | Valid Range   | Required |
+ * |----------- |------------------|------------------------------------------|----------|---------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31       | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0           | True     |
+ * | Function   | dst_idx          | Index of the tile in DST to write to     | uint32_t | 0 to DST size | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0          | False    |
+ */
+// clang-format on
+ALWI void tilize_block_no_pack(uint32_t icb, uint32_t block, uint32_t dst_idx, uint32_t input_tile_index = 0) {
+    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
+
+    for (uint32_t t = 0; t < block; t++) {
+        // Datacopy
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+            dst_idx /*dst index*/)));
     }
 }
 
@@ -217,6 +313,25 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 
 // clang-format off
 /**
+ * The same as tilize_uninit, but skips the packer configuration on blackhole in preparation to leave
+ * the tilized result in DST without packing to an out CB
+ *
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
+ *
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                              | Type     | Valid Range | Required |
+ * |----------- |--------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb    | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void tilize_uninit_no_pack(uint32_t icb) { UNPACK((llk_unpack_tilize_uninit(icb))); }
+
+// clang-format off
+/**
  * Uninitializes the tilize operation and reconfigures the unpacker with CB data types.
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
@@ -240,8 +355,32 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
+// clang-format off
+/**
+ * The same as tilize_uninit_with_dt, but skips the packer configuration on blackhole in preparation to
+ * leave the tilized result in DST without packing to an out CB
+ *
+ * Note: Should only be used with *_no_pack variants. Skips Low-Level API layer to enhance perf but limits use case.
+ *
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
+ * |----------- |----------|------------------------------------------|----------|-------------|----------|
+ * | Function   | old_icb  | Previous input circular buffer identifier| uint32_t | 0 to 31     | True     |
+ * | Function   | new_icb  | New input circular buffer identifier     | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void tilize_uninit_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb) {
+    UNPACK((llk_unpack_tilize_uninit(old_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+}
+
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line)));
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_init(icb, full_dim, ocb, call_line);

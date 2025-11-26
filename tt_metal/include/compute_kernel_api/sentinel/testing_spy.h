@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,13 @@
 #include "compute_kernel_api/common_globals.h"
 
 #ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED
+#ifdef TRISC_PACK
 #define TEST_RECONFIG_CALLS(expected_calls) ComputeKernelSentinel::instance().verify_calls(expected_calls)
 #define SET_CALLED_RECONFIG(call_bit) ComputeKernelSentinel::instance().record_reconfig_call(call_bit)
+#else
+#define TEST_RECONFIG_CALLS(expected_calls) true
+#define SET_CALLED_RECONFIG(call_bit)
+#endif
 #else
 #define TEST_RECONFIG_CALLS(expected_calls) false
 #define SET_CALLED_RECONFIG(call_bit)

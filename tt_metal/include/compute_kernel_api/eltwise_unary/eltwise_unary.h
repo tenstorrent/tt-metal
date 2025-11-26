@@ -16,7 +16,8 @@
 namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    // TODO(issue #34432): Wrapping state_configure inside PACK will serve as a workaround but it need investigation
+    PACK((state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line)));
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -28,7 +29,24 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
+}
+
+// clang-format off
+/**
+ * no_pack variant of unary_op_init_common, to be used with tilize_*_no_pack variants.
+ *
+ * Note: This function does not configure PACK thread, use with caution.
+ */
+// clang-format on
+ALWI void unary_op_init_common_no_pack(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    PACK(state_configure(icb, call_line));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
 }
 
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {

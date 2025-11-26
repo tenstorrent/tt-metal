@@ -31,7 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void untilize_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, call_line);
+    PACK(state_configure(icb, call_line));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }

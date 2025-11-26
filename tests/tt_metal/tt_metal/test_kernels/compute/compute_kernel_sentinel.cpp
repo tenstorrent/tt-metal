@@ -88,6 +88,9 @@ void MAIN {
     tilize_init(cb_in0, 1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
+    tilize_init_no_pack(cb_in1, 1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
@@ -102,6 +105,9 @@ void MAIN {
 
     unary_op_init_common(cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    unary_op_init_common_no_pack(cb_in2);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     transpose_wh_init(cb_in0, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));

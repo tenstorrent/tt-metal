@@ -89,13 +89,13 @@ ALWI void mm_init(
     uint32_t out_cb_id,
     const uint32_t transpose = 0,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line)));
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
@@ -105,7 +105,7 @@ ALWI void mm_init(
 // clang-format off
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles in two
- * specified input CBs and accumulates the result to DST (DST += C). The DST register buffer
+ * specified input CBs and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
@@ -129,7 +129,7 @@ ALWI void matmul_tiles(
 // clang-format off
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
- * located in SRCA and SRCB and accumulates the result to DST (DST += C). The DST register buffer
+ * located in SRCA and SRCB and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
@@ -161,7 +161,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
 // clang-format on
 ALWI void mm_init_short(
     uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, call_line)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 }
@@ -213,14 +213,14 @@ ALWI void mm_block_init(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line)));
 
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
@@ -234,7 +234,7 @@ ALWI void mm_block_init(
 // clang-format off
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
- * different input CBs and accumulates the result to DST (DST += C). The DST register buffer
+ * different input CBs and writes the result to DST. The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
@@ -264,7 +264,7 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, call_line)));
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
@@ -299,7 +299,7 @@ ALWI void mm_block_init_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, call_line)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
@@ -334,7 +334,7 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
-    state_configure(in1_cb_id, in0_cb_id, call_line);
+    PACK((state_configure(in1_cb_id, in0_cb_id, call_line)));
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);

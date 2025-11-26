@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
+#include "compute_kernel_api/sentinel/operation_init_mapping.h"
 
 // Constants and types needed by both SentinelCore and testing components
 #define RECONFIG_NOTHING_CHANGED 0x00
@@ -71,6 +72,7 @@ public:
     uint32_t pack() const;
     uint32_t last_call_line() const;
     void set_last_call_line(uint32_t line);
+    OperationType current_operation() const;
     void reset();
 
     // State setters (chainable)
@@ -109,6 +111,17 @@ public:
     void inject_all_operands(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out);
 
     /**
+     * @brief Dispatch operation init/uninit.
+     * Calls uninit for previous operation (if exists), saves new operation state,
+     * and calls init for the new operation.
+     * @tparam OpType The operation type to dispatch
+     * @tparam Args Variadic template for init function arguments
+     * @param args Arguments to pass to the init function
+     */
+    template <OperationType OpType, typename... Args>
+    void dispatch_operation(Args... args);
+
+    /**
      * @brief Set the StateMonitorSpy reference (for testing).
      * @param spy Pointer to StateMonitorSpy instance
      */
@@ -121,15 +134,32 @@ private:
     uint32_t m_srcb_cb = INVALID_CB_INDEX;
     uint32_t m_pack_cb = INVALID_CB_INDEX;
     uint32_t m_last_call_line = INVALID_LINE_NUMBER;
-#ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_DEFAULT_INJECTION
-    bool m_enabled = true;
-#else
+    OperationType m_current_operation = OperationType::NONE;
+#ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_DISABLED_INJECTION
     bool m_enabled = false;
+#else
+    bool m_enabled = true;
 #endif
 
 #ifdef TT_METAL_COMPUTE_KERNEL_SENTINEL_TESTING_ENABLED
     StateMonitorSpy* m_spy = nullptr;
 #endif
+
+    /**
+     * @brief Helper to call uninit for a previous operation.
+     * This is a template helper that can be specialized for operations
+     * that require specific uninit signatures.
+     * @tparam PrevOpType The previous operation type
+     */
+    template <OperationType PrevOpType>
+    void call_previous_uninit();
+
+    /**
+     * @brief Helper to call uninit based on runtime operation type.
+     * This is a placeholder that the user can extend with proper dispatch logic.
+     * @param op_type The operation type to call uninit for
+     */
+    void call_previous_uninit_for_operation(OperationType op_type);
 };
 
 // ==================================================
@@ -152,11 +182,14 @@ ALWI uint32_t SentinelCore::last_call_line() const { return m_last_call_line; }
 
 ALWI void SentinelCore::set_last_call_line(uint32_t line) { m_last_call_line = line; }
 
+ALWI OperationType SentinelCore::current_operation() const { return m_current_operation; }
+
 ALWI void SentinelCore::reset() {
     m_srca_cb = INVALID_CB_INDEX;
     m_srcb_cb = INVALID_CB_INDEX;
     m_pack_cb = INVALID_CB_INDEX;
     m_last_call_line = INVALID_LINE_NUMBER;
+    m_current_operation = OperationType::NONE;
 }
 
 ALWI SentinelCore& SentinelCore::set_srca(uint32_t cb) {
@@ -235,6 +268,19 @@ ALWI void SentinelCore::inject_all_operands(uint32_t cb_a, uint32_t cb_b, uint32
     inject_dual_operand<Operand::SRCA, Operand::SRCB>(cb_a, cb_b);
     // Reconfigure pack operand
     inject_single_operand<Operand::PACK>(cb_out);
+}
+
+template <OperationType OpType, typename... Args>
+ALWI void SentinelCore::dispatch_operation(Args... args) {
+    // 1. Call uninit for previous operation if it exists
+    if (m_current_operation != OperationType::NONE) {
+        // TODO njokovic: See how am I going to handle calling uninit calls?
+        OperationDispatcher<m_current_operation>::call_uninit();
+    }
+
+    m_current_operation = OpType;
+
+    OperationDispatcher<OpType, Args...>::call(args...);
 }
 
 }  // namespace ckernel
