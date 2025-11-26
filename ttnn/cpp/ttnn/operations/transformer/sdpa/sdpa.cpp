@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "device/sdpa_op.hpp"
+#include "device/sdpa_device_operation.hpp"
 #include "device/joint_sdpa_op.hpp"
 #include "device/ring_joint_sdpa_op.hpp"
 #include "device/ring_distributed_sdpa_op.hpp"
@@ -34,21 +34,22 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = is_causal,
-                   .chunk_start_idx = std::nullopt,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = false,
-                   .head_dim_v = std::nullopt,
-                   .sliding_window_size = sliding_window_size},
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {attn_mask, std::nullopt, attention_sink},
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        attn_mask,
+        std::nullopt,  // page_table
+        attention_sink,
+        is_causal,
+        scale,
+        sliding_window_size,
+        std::nullopt,  // chunk_start_idx
+        /*use_mla=*/false,
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
@@ -68,21 +69,22 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = true,  // Always causal for chunked version
-                   .chunk_start_idx = chunk_start_idx,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = false,
-                   .head_dim_v = std::nullopt,
-                   .sliding_window_size = std::nullopt},  // Chunked version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,        // attn_mask
+        page_table_tensor,   // page_table
+        std::nullopt,        // attention_sink
+        /*is_causal=*/true,  // Always causal for chunked version
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        chunk_start_idx,
+        /*use_mla=*/false,
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
@@ -222,21 +224,22 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = is_causal,
-                   .chunk_start_idx = std::nullopt,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = true,
-                   .head_dim_v = head_dim_v,
-                   .sliding_window_size = std::nullopt},  // MLA version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k},
-               {attn_mask},
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        std::nullopt,  // V is implied by K in MLA mode
+        attn_mask,
+        std::nullopt,  // page_table
+        std::nullopt,  // attention_sink
+        is_causal,
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        std::nullopt,  // chunk_start_idx
+        /*use_mla=*/true,
+        head_dim_v,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
@@ -256,21 +259,22 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               ScaledDotProductAttention{
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .is_causal = true,  // Always causal for chunked version
-                   .chunk_start_idx = chunk_start_idx,
-                   .compute_kernel_config = kernel_config_val,
-                   .use_mla = true,
-                   .head_dim_v = head_dim_v,
-                   .sliding_window_size = std::nullopt},  // Chunked MLA version doesn't support sliding window yet
-               {input_tensor_q, input_tensor_k},
-               {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {})
-        .at(0);
+    return ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        std::nullopt,       // V is implied by K in MLA mode
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        std::nullopt,       // attention_sink
+        /*is_causal=*/true,
+        scale,
+        std::nullopt,  // sliding_window_size (not supported yet)
+        chunk_start_idx,
+        /*use_mla=*/true,
+        head_dim_v,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
