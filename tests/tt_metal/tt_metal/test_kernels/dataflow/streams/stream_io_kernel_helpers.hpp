@@ -8,7 +8,7 @@
 
 #include "dataflow_api.h"
 #include "stream_interface.h"
-#include "tt_metal/hw/inc/wormhole/noc/noc_overlay_parameters.h"
+#include "noc_overlay_parameters.h"
 
 struct stream_state_t {
     const uint32_t local_data_buffer_base_address;

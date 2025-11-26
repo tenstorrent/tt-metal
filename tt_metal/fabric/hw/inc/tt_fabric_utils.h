@@ -5,12 +5,12 @@
 #pragma once
 
 #include "eth_chan_noc_mapping.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
-#include "tt_metal/hw/inc/dataflow_api.h"
-#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
+#include "ethernet/tunneling.h"
+#include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
 namespace tt::tt_fabric {
 

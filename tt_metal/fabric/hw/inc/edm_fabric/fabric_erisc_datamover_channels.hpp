@@ -12,18 +12,18 @@
 
 #include "dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "ethernet/tunneling.h"
 #endif
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "utils/utils.h"
 #include "risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/outbound_channel.hpp"
+#include "fabric/hw/inc/edm_fabric/datastructures/outbound_channel.hpp"
 #include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {

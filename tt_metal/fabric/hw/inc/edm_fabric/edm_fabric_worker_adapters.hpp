@@ -7,16 +7,16 @@
 #include "dataflow_api.h"
 
 #include "risc_common.h"
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "ethernet/dataflow_api.h"
 #include "edm_fabric_utils.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_stream_regs.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "utils/utils.h"
 #include "debug/assert.h"
 
 #include <cstdint>

@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/risc_attribs.h"
+#include "risc_attribs.h"
 #include "noc_overlay_parameters.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
+#include "ethernet/tunneling.h"
+#include "fabric/hw/inc/edm_fabric/named_types.hpp"
 
 using StreamId = tt::tt_fabric::NamedType<uint32_t, struct StreamIdType>;
 

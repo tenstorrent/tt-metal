@@ -12,12 +12,10 @@
 #include <limits>
 
 #include "debug/assert.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
+#include "fabric/hw/inc/edm_fabric/named_types.hpp"
 
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "utils/utils.h"
 #include "risc_attribs.h"
-
-#include "debug/assert.h"
 
 namespace tt::tt_fabric {
 

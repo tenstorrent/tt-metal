@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/circular_buffer.h"
-#include "tt_metal/hw/inc/debug/assert.h"
+#include "circular_buffer.h"
+#include "debug/assert.h"
 #include "utils/utils.h"
 #ifndef COMPILE_FOR_TRISC
 #include "dataflow_api.h"

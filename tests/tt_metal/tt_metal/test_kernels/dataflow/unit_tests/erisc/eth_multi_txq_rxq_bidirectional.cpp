@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "risc_common.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
+#include "fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+#include "fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "ethernet/tunneling.h"
+#include "ethernet/tt_eth_api.h"
 #include <tuple>
 #include <cstdint>
 #include <cstddef>
 #include "debug/dprint.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
+#include "fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 constexpr uint32_t data_txq_id = get_compile_time_arg_val(0);
 constexpr uint32_t ack_txq_id = get_compile_time_arg_val(1);
 constexpr uint32_t PAYLOAD_SIZE = get_compile_time_arg_val(2);
