@@ -26,6 +26,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 # space left in base variant as well.
 SDXL_L1_SMALL_SIZE = 30000
 SDXL_TRACE_REGION_SIZE = 34000000
+SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 MAX_SEQUENCE_LENGTH = 77
@@ -195,6 +196,12 @@ def batch_encode_prompt_on_device(
     prompt_2 = prompt_2 or prompt
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
+    # Convert negative prompts to lists early
+    if negative_prompt is not None:
+        negative_prompt = [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+    if negative_prompt_2 is not None:
+        negative_prompt_2 = [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+
     num_devices = ttnn_device.get_num_devices()
     num_prompts = len(prompt)
     if use_cfg_parallel and num_prompts < num_devices:
@@ -202,6 +209,12 @@ def batch_encode_prompt_on_device(
         prompt = prompt + [""] * (num_devices - len(prompt))
         if prompt_2 is not None:
             prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
+
+        # Pad negative prompts as well
+        if negative_prompt is not None:
+            negative_prompt = negative_prompt + [""] * (num_devices - len(negative_prompt))
+        if negative_prompt_2 is not None:
+            negative_prompt_2 = negative_prompt_2 + [""] * (num_devices - len(negative_prompt_2))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
@@ -516,23 +529,23 @@ def prepare_image_latents(
         int(width) // torch_pipeline.vae_scale_factor,
     )
 
-    cpu_device = torch.device("cpu")
-    image = image.to(device=cpu_device, dtype=dtype)
-
-    if image.shape[1] == 4:
+    if isinstance(image, ttnn.Tensor):
         image_latents = image
     else:
-        if tt_pipeline.pipeline_config.vae_on_device:
-            image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
-            image_latents = torch.cat(image_latents, dim=0)
+        if image.shape[1] == 4:
+            image_latents = image
         else:
-            image_latents = [
-                torch_pipeline.vae.encode(img).latent_dist.sample()
-                for img in torch.chunk(image, chunks=batch_size, dim=0)
-            ]
-            image_latents = torch.cat(image_latents, dim=0)
-        image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
-    image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
+            if tt_pipeline.pipeline_config.vae_on_device:
+                image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+                image_latents = torch.cat(image_latents, dim=0)
+            else:
+                image_latents = [
+                    torch_pipeline.vae.encode(img).latent_dist.sample()
+                    for img in torch.chunk(image, chunks=batch_size, dim=0)
+                ]
+                image_latents = torch.cat(image_latents, dim=0)
+            image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
+        image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     if add_noise:
         torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
@@ -560,10 +573,7 @@ def prepare_image_latents(
         )
         latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
 
-        return ttnn.to_torch(
-            latents,
-            mesh_composer=ttnn.ConcatMeshToTensor(tt_pipeline.ttnn_device, dim=0),
-        )[:batch_size, ...]
+        return latents
     else:
         return image_latents
 
@@ -736,8 +746,6 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
-    persistent_buffer,
-    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
@@ -746,6 +754,7 @@ def run_tt_image_gen(
     use_cfg_parallel=False,
     guidance_rescale=0.0,
     one_minus_guidance_rescale=1.0,
+    return_latents=False,  # If True, skip VAE decoding and return latents
 ):
     assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
@@ -773,16 +782,11 @@ def run_tt_image_gen(
                 noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
+                noise_pred_out = ttnn.all_gather(
                     noise_pred,
                     dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
                     cluster_axis=0,
-                    mesh_device=ttnn_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
                 )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
@@ -847,6 +851,11 @@ def run_tt_image_gen(
 
     profiler.end("denoising_loop")
 
+    # Skip VAE decoding if return_latents is True
+    if return_latents:
+        profiler.end("image_gen")
+        return tt_latents, tid, output_device, output_shape, tid_vae
+
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
     if vae_on_device:
@@ -877,8 +886,7 @@ def run_tt_image_gen(
         profiler.end("read_output_tensor")
 
         B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
+        imgs = output_tensor.reshape(batch_size * B, C, H, W)
     else:
         profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
@@ -928,8 +936,6 @@ def run_tt_image_gen_inpainting(
     image_latents_shape,  # 4 channels
     vae,  # can be host vae or tt vae
     batch_size,
-    persistent_buffer,
-    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
@@ -967,16 +973,11 @@ def run_tt_image_gen_inpainting(
                 noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
+                noise_pred_out = ttnn.all_gather(
                     noise_pred,
                     dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
                     cluster_axis=0,
-                    mesh_device=ttnn_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
                 )
                 ttnn.deallocate(noise_pred)
                 noise_pred = noise_pred_out
@@ -1071,8 +1072,7 @@ def run_tt_image_gen_inpainting(
         profiler.end("read_output_tensor")
 
         B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
+        imgs = output_tensor.reshape(batch_size * B, C, H, W)
     else:
         profiler.start("read_output_tensor")
         latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
