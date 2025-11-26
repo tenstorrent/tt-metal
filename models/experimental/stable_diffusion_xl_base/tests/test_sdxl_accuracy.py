@@ -76,7 +76,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 @pytest.mark.parametrize(
     "capture_trace",
     [
-        (False),
+        (True),
         (False),
     ],
     ids=("with_trace", "no_trace"),

@@ -331,7 +331,7 @@ class TtSDXLPipeline(LightweightModule):
             profiler.start("warmup_run")
             logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
 
-            _, _, _, self.output_shape, _ = run_tt_image_gen(
+            _, _, _, _, self.output_shape, _ = run_tt_image_gen(
                 self.ttnn_device,
                 self.tt_unet,
                 self.tt_scheduler,
@@ -339,7 +339,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                1,
+                2,
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -592,7 +592,7 @@ class TtSDXLPipeline(LightweightModule):
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
         logger.info("Generating images...")
-        imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+        imgs, self.tid_ref, self.tid_cache, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
@@ -609,7 +609,8 @@ class TtSDXLPipeline(LightweightModule):
             self.batch_size,
             self.ag_persistent_buffer,
             self.ag_semaphores,
-            tid=self.tid if hasattr(self, "tid") else None,
+            tid_ref=self.tid_ref if hasattr(self, "tid_ref") else None,
+            tid_cache=self.tid_cache if hasattr(self, "tid_cache") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
@@ -779,7 +780,7 @@ class TtSDXLPipeline(LightweightModule):
         logger.info("Capturing model trace...")
         profiler.start("capture_model_trace")
 
-        _, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+        _, self.tid_ref, self.tid_cache, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
@@ -787,7 +788,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            1,
+            2,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -806,9 +807,13 @@ class TtSDXLPipeline(LightweightModule):
 
     def __release_trace(self):
         # Helper method for trace release.
-        if self.pipeline_config.capture_trace and hasattr(self, "tid") and self.tid is not None:
-            ttnn.release_trace(self.ttnn_device, self.tid)
-            delattr(self, "tid")
+        if self.pipeline_config.capture_trace and hasattr(self, "tid_ref") and self.tid_ref is not None:
+            ttnn.release_trace(self.ttnn_device, self.tid_ref)
+            delattr(self, "tid_ref")
+
+        if self.pipeline_config.capture_trace and hasattr(self, "tid_cache") and self.tid_cache is not None:
+            ttnn.release_trace(self.ttnn_device, self.tid_cache)
+            delattr(self, "tid_cache")
 
         if self.pipeline_config.vae_on_device and hasattr(self, "tid_vae") and self.tid_vae is not None:
             ttnn.release_trace(self.ttnn_device, self.tid_vae)
