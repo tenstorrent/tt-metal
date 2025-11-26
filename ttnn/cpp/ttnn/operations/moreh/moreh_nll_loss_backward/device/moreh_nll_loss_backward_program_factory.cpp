@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 
+// #include "/proj_sw/user_dev/fplavec/git_workspace_2025_11_20/tt-metal/tt_metal/hw/inc/debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
 #include <tt-metalium/math.hpp>
@@ -66,6 +67,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp2
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
+
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
 
     // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
@@ -238,7 +246,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
@@ -412,7 +427,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);

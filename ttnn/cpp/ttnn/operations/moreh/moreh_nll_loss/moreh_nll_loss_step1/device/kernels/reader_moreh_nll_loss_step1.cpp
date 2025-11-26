@@ -18,7 +18,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_target = tt::CBIndex::c_0;
     constexpr uint32_t cb_weight = tt::CBIndex::c_1;
-
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
@@ -46,7 +46,10 @@ void kernel_main() {
 
 #if defined(WEIGHT)
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    DPRINT << "Calling read_line for weight: " << cb_weight << ", weight_num_tile: " << weight_num_tile << ENDL();
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
+
+    DPRINT << "After read_line for weight: " << cb_weight << ", weight_num_tile: " << weight_num_tile << ENDL();
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
@@ -64,9 +67,9 @@ void kernel_main() {
         auto output_l1_ptr = get_write_ptr<uint16_t>(cb_output);
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
-        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t inout_idx = h * TILE_WIDTH + w;
+        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
+                uint32_t inout_idx = h * tt::constants::TILE_WIDTH + w;
                 int32_t target_val = target_l1_ptr[inout_idx];
                 if (target_val != ignore_index) {
                     if (0 <= target_val && target_val < static_cast<int32_t>(C)) {

@@ -23,6 +23,8 @@ void kernel_main() {
     constexpr uint32_t cb_weight = tt::CBIndex::c_2;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
 
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
 
     // ublocks size defined in tiles
@@ -50,7 +52,7 @@ void kernel_main() {
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
@@ -80,9 +82,9 @@ void kernel_main() {
         auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
-        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t idx = h * TILE_WIDTH + w;
+        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
+                uint32_t idx = h * tt::constants::TILE_WIDTH + w;
                 int32_t target_val = target_l1_ptr[idx];
                 FP32_DEST_ACC_FTYPE val;
 

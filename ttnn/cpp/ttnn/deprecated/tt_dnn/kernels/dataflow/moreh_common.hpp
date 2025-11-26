@@ -9,13 +9,9 @@
 #include <cstdint>
 #include <cstring>
 
+#include "tt-metalium/constants.hpp"
 #include "dataflow_api.h"
-
-constexpr std::uint32_t FACE_HEIGHT = 16;
-constexpr std::uint32_t FACE_WIDTH = 16;
-constexpr std::uint32_t TILE_HEIGHT = 32;
-constexpr std::uint32_t TILE_WIDTH = 32;
-constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes
+#include "noc/noc_parameters.h"
 
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
@@ -648,19 +644,19 @@ FORCE_INLINE void generate_mask_tiles(
 }
 
 uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
-    h = h % TILE_HEIGHT;
-    w = w % TILE_WIDTH;
+    h = h % tt::constants::TILE_HEIGHT;
+    w = w % tt::constants::TILE_WIDTH;
     uint32_t idx = 0;
-    if (w >= FACE_WIDTH) {
-        w -= FACE_WIDTH;
-        idx += FACE_HEIGHT * FACE_WIDTH;
+    if (w >= tt::constants::FACE_WIDTH) {
+        w -= tt::constants::FACE_WIDTH;
+        idx += tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH;
     }
-    if (h >= FACE_WIDTH) {
-        h -= FACE_WIDTH;
-        idx += FACE_HEIGHT * TILE_WIDTH;
+    if (h >= tt::constants::FACE_WIDTH) {
+        h -= tt::constants::FACE_WIDTH;
+        idx += tt::constants::FACE_HEIGHT * tt::constants::TILE_WIDTH;
     }
 
-    idx += h * FACE_WIDTH + w;
+    idx += h * tt::constants::FACE_WIDTH + w;
     return idx;
 }
 
@@ -668,27 +664,32 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
     noc_offset = 0;
 
     // compute h, w in tile
-    h = h - (h / TILE_HEIGHT) * TILE_HEIGHT;
-    w = w - (w / TILE_WIDTH) * TILE_WIDTH;
+    h = h - (h / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    w = w - (w / tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
 
-    const bool is_even_face = (w < FACE_HEIGHT);
+    const bool is_even_face = (w < tt::constants::FACE_HEIGHT);
     const bool is_odd_face = !is_even_face;
 
-    const uint32_t face_width_bytes = FACE_WIDTH * element_size;
+    const uint32_t face_width_bytes = tt::constants::FACE_WIDTH * element_size;
 
-    if (h < FACE_WIDTH && is_even_face) {
+    if (h < tt::constants::FACE_WIDTH && is_even_face) {
         noc_offset += h * face_width_bytes + w * element_size;  // face 0
-    } else if (h < FACE_WIDTH && is_odd_face) {
-        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 1
-    } else if (h >= FACE_WIDTH && is_even_face) {
-        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
-    } else if (h >= FACE_WIDTH && is_odd_face) {
-        noc_offset += (2 * FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 3
+    } else if (h < tt::constants::FACE_WIDTH && is_odd_face) {
+        noc_offset += (tt::constants::FACE_HEIGHT + h) * face_width_bytes +
+                      (w - tt::constants::FACE_WIDTH) * element_size;  // face 1
+    } else if (h >= tt::constants::FACE_WIDTH && is_even_face) {
+        noc_offset += (tt::constants::FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
+    } else if (h >= tt::constants::FACE_WIDTH && is_odd_face) {
+        noc_offset += (2 * tt::constants::FACE_HEIGHT + h) * face_width_bytes +
+                      (w - tt::constants::FACE_WIDTH) * element_size;  // face 3
     }
 
-    const uint32_t noc_offset_alilgn_32 = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
+    // !!!!!!!!
+    // Do I need to make below conditional on reading from DRAM, or is it already assumed that we are reading from DRAM?
+    // !!!!!!!!
+    const uint32_t noc_offset_align = (noc_offset / NOC_DRAM_READ_ALIGNMENT_BYTES) * NOC_DRAM_READ_ALIGNMENT_BYTES;
 
-    noc_offset = noc_offset_alilgn_32;
+    noc_offset = noc_offset_align;
 }
 
 template <typename T>
@@ -763,30 +764,78 @@ void read_value(
     }
 }
 
-// It reads values from a tilized tensor with shape (1, W).
+// clang-format off
+/**
+ * Reads values from a tilized tensor with shape (1, W).
+ * The assumption is that only the first row of the tensor contains useful data.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                             | Data type | Valid range                    | required |
+ * |------------------------------|-----------------------------------------|-----------|--------------------------------|----------|
+ * | cb_id                        | CB to read data from                    | uint32_t  | Any valid CB ID                | True     |
+ * | cb_scratch_id                | CB to use as scratch storage            | uint32_t  | Any valid CB ID                | True     |
+ * | addrgen                      | Address generator object                | AddrGen   | N/A                            | True     |
+ * | num_tiles                    | Number of tiles to read                 | uint32_t  | Any uint32_t number            | True     |
+ * | do_reserve                   | Whether to reserve space in the CB      | bool      | true or false                  | False    |
+ * | do_push_back                 | Whether to push the data back to the CB | bool      | true or false                  | False    |
+ */
+// clang-format on
 template <typename T>
-void read_line(uint32_t cb_id, T addrgen, uint32_t num_tiles, bool do_reserve = true, bool do_push_back = true) {
+void read_line(
+    uint32_t cb_id,
+    uint32_t cb_scratch_id,
+    T addrgen,
+    uint32_t num_tiles,
+    bool do_reserve = true,
+    bool do_push_back = true) {
+    DPRINT << "Starting read_line: cb_id: " << cb_id << ", cb_scratch_id: " << cb_scratch_id
+           << ", num_tiles: " << num_tiles << ENDL();
     if (do_reserve) {
         cb_reserve_back(cb_id, num_tiles);
     }
 
     auto tile_bytes = get_tile_size(cb_id);
-    auto element_size = tile_bytes / 1024;
-    auto noc_read_size = FACE_WIDTH * element_size;
+    auto element_bytes = tile_bytes / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+    auto valid_elements_bytes = tt::constants::FACE_WIDTH * element_bytes;
+
+    // !!!!!!!!
+    // Do I need to make below conditional on reading from DRAM, or is it already assumed that we are reading from DRAM?
+    // !!!!!!!!
+    auto noc_read_size_bytes = std::max(valid_elements_bytes, static_cast<uint32_t>(NOC_DRAM_READ_ALIGNMENT_BYTES));
+
+    DPRINT << "read_line: tile_bytes: " << tile_bytes << ", element_size: " << element_bytes
+           << ", noc_read_size: " << noc_read_size_bytes << ENDL();
 
     uint32_t l1_write_addr = get_write_ptr(cb_id);
-
+    DPRINT << "read_line: l1_write_addr: " << l1_write_addr << ENDL();
     for (uint32_t i = 0; i < num_tiles * 2; ++i) {
         uint32_t noc_id = i / 2;
         uint32_t noc_offset = 0;
         if (noc_id * 2 != i) {
-            noc_offset += 256 * element_size;
+            noc_offset += (tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH) * element_bytes;
         }
         auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
-        noc_async_read(src_noc_addr, l1_write_addr, noc_read_size);
-        noc_async_read_barrier();
+        DPRINT << "read_line: i: " << i << ", src_noc_addr: " << src_noc_addr << ENDL();
+        if (noc_read_size_bytes == valid_elements_bytes) {
+            DPRINT << "Already aligned" << ENDL();
+            // No misalignment, so we can read directly into the destination CB.
+            noc_async_read(src_noc_addr, l1_write_addr, noc_read_size_bytes);
+            noc_async_read_barrier();
+        } else {
+            DPRINT << "Not aligned" << ENDL();
+            // Need to use scratch CB to read from DRAM, then copy valid parts to the destination CB.
+            auto scratch_l1_write_addr = get_write_ptr(cb_scratch_id);
+            DPRINT << "read_line: scratch_l1_write_addr: " << scratch_l1_write_addr << ENDL();
+            noc_async_read(src_noc_addr, scratch_l1_write_addr, noc_read_size_bytes);
+            noc_async_read_barrier();
+            auto scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr);
+            DPRINT << "read_line: scratch_l1_noc_read_addr: " << scratch_l1_noc_read_addr << ENDL();
+            noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, valid_elements_bytes);
+            noc_async_read_barrier();
+        }
 
-        l1_write_addr += noc_read_size;
+        l1_write_addr += valid_elements_bytes;
     }
 
     if (do_push_back) {

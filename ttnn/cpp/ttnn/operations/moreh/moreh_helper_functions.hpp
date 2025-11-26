@@ -147,6 +147,9 @@ struct CircularBufferArg {
     tt::DataFormat data_format,
     const CircularBufferArg& arg);
 
+[[maybe_unused]] CBHandle CreateScratchCB(
+    Program& program, const CoreRangeSet& cores, uint32_t scratch_cb_index, tt::DataFormat data_format);
+
 void check_tensor(
     const Tensor& tensor,
     const std::string& op_name,

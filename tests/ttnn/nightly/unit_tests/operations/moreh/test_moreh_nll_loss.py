@@ -292,7 +292,7 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
     )
 
 
-@skip_for_blackhole("Fails on BH. Issue #20579")
+# @skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [

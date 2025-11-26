@@ -73,7 +73,27 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
+
+    /*
+        if (weight_has_value) {
+            // This CB will be used as scratch storage when reading data from DRAM into L1,
+            // since the two have different alignment requirements on some architectures.
+            constexpr uint32_t scratch_cb_index = CBIndex::c_7;
+            // 2 tiles in scratch CB so one can be written to while the other is being read from.
+            constexpr uint32_t scratch_cb_num_tiles = 2;
+            tt_metal::CircularBufferConfig cb_config =
+                tt_metal::CircularBufferConfig(scratch_cb_num_tiles * tt::tile_size(data_format), {{scratch_cb_index,
+       data_format}}) .set_page_size(scratch_cb_index, tt::tile_size(data_format));
+            tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        }
+    */
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -247,7 +267,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -434,7 +461,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_16, 1},                                                             // output
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
+        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+    } else {
+        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
