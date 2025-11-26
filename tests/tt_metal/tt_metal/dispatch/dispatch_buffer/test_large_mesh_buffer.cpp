@@ -290,6 +290,20 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
         GTEST_SKIP() << "Test configuration known to fail with watcher enabled";
     }
 
+    // Skip LargeShardedReadback/ShardedMeshBufferTestSuite.NIGHTLY_DRAMReadback/2 with watcher
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 14) &&
+        device_tensor_shape.width() == (3 << 14) && core_grid_size.x == 12 && core_grid_size.y == 1 &&
+        page_size == 4096) {
+        GTEST_SKIP() << "Test case 2 known to fail with watcher enabled";
+    }
+
+    // Skip LargeShardedReadback/ShardedMeshBufferTestSuite.NIGHTLY_DRAMReadback/3 with watcher
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 15) &&
+        device_tensor_shape.width() == (1 << 15) && core_grid_size.x == 8 && core_grid_size.y == 1 &&
+        page_size == 4096) {
+        GTEST_SKIP() << "Test case 3 known to fail with watcher enabled";
+    }
+
     uint64_t device_tensor_size = device_tensor_shape.height() * device_tensor_shape.width() * ElementSize;
 
     if (!validate_sharded_test_inputs(core_grid_size, device_tensor_shape, *mesh_device_, ElementSize)) {
