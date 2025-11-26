@@ -77,14 +77,22 @@ struct ToMemoryConfig {
                                       .at(0);
                     const bool keep_l1_aligned = false;
                     return ttnn::interleaved_to_sharded(
-                        temp, memory_config, dtype.value_or(temp.dtype()), keep_l1_aligned);
+                        temp,
+                        memory_config,
+                        dtype.value_or(temp.dtype()),
+                        keep_l1_aligned,
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
                 }
             } else {
                 auto bbox = memory_config.shard_spec().value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
                 const bool keep_l1_aligned = false;
                 return ttnn::interleaved_to_sharded(
-                    tensor, memory_config, dtype.value_or(tensor.dtype()), keep_l1_aligned);
+                    tensor,
+                    memory_config,
+                    dtype.value_or(tensor.dtype()),
+                    keep_l1_aligned,
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             }
         } else {
             // to_interleaved path

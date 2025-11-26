@@ -15,12 +15,14 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
-    const std::optional<bool>& keep_l1_aligned) {
+    const std::optional<bool>& keep_l1_aligned,
+    std::optional<Tensor> preallocated_output) {
     return ttnn::prim::interleaved_to_sharded(
         input_tensor,
         sharded_memory_config,
         data_type_arg.value_or(input_tensor.dtype()),
-        keep_l1_aligned.value_or(false));
+        keep_l1_aligned.value_or(false),
+        preallocated_output);
 }
 
 ttnn::Tensor InterleavedToShardedOperation::invoke(

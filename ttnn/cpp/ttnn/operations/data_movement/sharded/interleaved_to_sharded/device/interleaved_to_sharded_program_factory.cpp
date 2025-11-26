@@ -389,13 +389,6 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    bool partial_op = num_slices > 1;
-    uint32_t starting_idx_h = 0;
-    if (partial_op) {
-        uint32_t runtime_slice_index = slice_index;
-        starting_idx_h = detail::calculate_starting_idx_h(tensor_args.input_tensor, num_slices, runtime_slice_index);
-    }
-
     auto& shared_variables = cached_program.shared_variables;
     auto& program = cached_program.program;
     auto unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
@@ -407,10 +400,6 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     for (const auto& core : cores) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
         runtime_args[0] = src_buffer->address();
-        if (partial_op) {
-            // This block is unreachable with num_slices=1 but keeping structure
-            runtime_args[7] = starting_idx_h;
-        }
     }
 
     if (dst_is_dram) {
