@@ -231,7 +231,6 @@ def run_ring_joint_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
             )
-
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
 

@@ -19,7 +19,6 @@ from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cach
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.test import ring_params, line_params
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
-from ....utils import quantization_helper
 
 
 @pytest.mark.parametrize(
@@ -173,22 +172,15 @@ def test_wan_transformer_block(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
 
-    tensor_io = quantization_helper.TensorIO(mesh_device, filter_key="attention")
-
-    with ttnn.register_pre_operation_hook(tensor_io.pre_hook_write_io), ttnn.register_post_operation_hook(
-        tensor_io.post_hook_write_io
-    ):
-        tt_spatial_out = tt_model(
-            spatial_1BND=tt_spatial,
-            prompt_1BLP=tt_prompt,
-            temb_1BTD=tt_temb,
-            N=spatial_seq_len,
-            rope_cos=tt_rope_cos,
-            rope_sin=tt_rope_sin,
-            trans_mat=tt_trans_mat,
-        )
-
-    return
+    tt_spatial_out = tt_model(
+        spatial_1BND=tt_spatial,
+        prompt_1BLP=tt_prompt,
+        temb_1BTD=tt_temb,
+        N=spatial_seq_len,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
+        trans_mat=tt_trans_mat,
+    )
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
@@ -366,24 +358,15 @@ def test_wan_transformer_model(
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
-    tensor_io = quantization_helper.TensorIO(
-        mesh_device, filter_key="attention", ccl_manager=ccl_manager, parallel_config=parallel_config
-    )
-
     # Run TT model
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    with ttnn.register_pre_operation_hook(tensor_io.pre_hook_write_io), ttnn.register_post_operation_hook(
-        tensor_io.post_hook_write_io
-    ):
-        tt_spatial_out = tt_model(
-            spatial=spatial_input,
-            prompt=prompt_input,
-            timestep=timestep_input,
-        )
-
-    return
+    tt_spatial_out = tt_model(
+        spatial=spatial_input,
+        prompt=prompt_input,
+        timestep=timestep_input,
+    )
 
     del tt_model
 
