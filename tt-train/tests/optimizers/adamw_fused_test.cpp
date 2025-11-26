@@ -24,13 +24,14 @@ struct AdamWCase {
     float beta2{0.999f};
     float epsilon{1e-8f};
     float weight_decay{0.0f};
+    bool amsgrad{false};
     std::string name;
 };
 
 // Custom printer for AdamWCase used by gtest to make test output readable
 void PrintTo(const AdamWCase& pc, std::ostream* os) {
     *os << fmt::format(
-        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={})",
+        "AdamWCase(name='{}', shape=[{},{},{},{}], lr={}, beta1={}, beta2={}, eps={}, wd={}, amsgrad={})",
         pc.name,
         pc.shape[0],
         pc.shape[1],
@@ -40,7 +41,8 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
         pc.beta1,
         pc.beta2,
         pc.epsilon,
-        pc.weight_decay);
+        pc.weight_decay,
+        pc.amsgrad);
 }
 
 class AdamWFusedComparisonTest : public ::testing::TestWithParam<AdamWCase> {
@@ -71,14 +73,23 @@ static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
 // CPU reference implementation of AdamW
 class CPUAdamW {
 public:
-    CPUAdamW(float lr, float beta1, float beta2, float epsilon, float weight_decay = 0.0f) :
-        m_lr(lr), m_beta1(beta1), m_beta2(beta2), m_epsilon(epsilon), m_weight_decay(weight_decay), m_steps(0) {
+    CPUAdamW(float lr, float beta1, float beta2, float epsilon, float weight_decay = 0.0f, bool amsgrad = false) :
+        m_lr(lr),
+        m_beta1(beta1),
+        m_beta2(beta2),
+        m_epsilon(epsilon),
+        m_weight_decay(weight_decay),
+        m_amsgrad(amsgrad),
+        m_steps(0) {
     }
 
     void step(xt::xarray<float>& params, const xt::xarray<float>& grads) {
         if (m_steps == 0) {
             m_first_moment = xt::zeros_like(params);
             m_second_moment = xt::zeros_like(params);
+            if (m_amsgrad) {
+                m_max_second_moment = xt::zeros_like(params);
+            }
         }
 
         m_steps++;
@@ -96,9 +107,17 @@ public:
         // v_hat = v_t / (1 - beta2^t)
         xt::xarray<float> second_moment_hat = m_second_moment / bias_correction2;
 
-        // params = params - lr * m_hat / (sqrt(v_hat) + epsilon) - lr * weight_decay * params
-        params = params - m_lr * first_moment_hat / (xt::sqrt(second_moment_hat) + m_epsilon) -
-                 m_lr * m_weight_decay * params;
+        // For AMSGrad: use max of past squared gradients
+        xt::xarray<float> denom;
+        if (m_amsgrad) {
+            m_max_second_moment = xt::maximum(m_max_second_moment, second_moment_hat);
+            denom = xt::sqrt(m_max_second_moment) + m_epsilon;
+        } else {
+            denom = xt::sqrt(second_moment_hat) + m_epsilon;
+        }
+
+        // params = params - lr * m_hat / denom - lr * weight_decay * params
+        params = params - m_lr * first_moment_hat / denom - m_lr * m_weight_decay * params;
     }
 
 private:
@@ -107,9 +126,11 @@ private:
     float m_beta2;
     float m_epsilon;
     float m_weight_decay;
+    bool m_amsgrad;
     size_t m_steps;
     xt::xarray<float> m_first_moment;
     xt::xarray<float> m_second_moment;
+    xt::xarray<float> m_max_second_moment;
 };
 
 struct ErrorMetrics {
@@ -152,7 +173,7 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     // CPU reference implementation
     xt::xarray<float> w_cpu = w0;
     xt::xarray<float> g_cpu = g0;
-    CPUAdamW cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay);
+    CPUAdamW cpu_opt(pc.lr, pc.beta1, pc.beta2, pc.epsilon, pc.weight_decay, pc.amsgrad);
 
     // MorehAdamW implementation
     auto theta_moreh = autograd::create_tensor(to_tt(w0), true);
@@ -165,6 +186,7 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     moreh_cfg.beta2 = pc.beta2;
     moreh_cfg.epsilon = pc.epsilon;
     moreh_cfg.weight_decay = pc.weight_decay;
+    moreh_cfg.amsgrad = pc.amsgrad;
 
     ttml::optimizers::MorehAdamW opt_moreh(params_moreh, moreh_cfg);
 
@@ -179,6 +201,7 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     composite_cfg.beta2 = pc.beta2;
     composite_cfg.epsilon = pc.epsilon;
     composite_cfg.weight_decay = pc.weight_decay;
+    composite_cfg.amsgrad = pc.amsgrad;
     composite_cfg.use_kahan_summation = false;
     ttml::optimizers::AdamW opt_composite(params_composite, composite_cfg);
 
@@ -192,6 +215,7 @@ static void run_steps_and_compare(const AdamWCase& pc, uint32_t steps) {
     fused_cfg.beta2 = pc.beta2;
     fused_cfg.epsilon = pc.epsilon;
     fused_cfg.weight_decay = pc.weight_decay;
+    fused_cfg.amsgrad = pc.amsgrad;
 
     ttml::optimizers::AdamWFused opt_fused(params_fused, fused_cfg);
 
@@ -241,41 +265,41 @@ static std::string CaseName(const ::testing::TestParamInfo<AdamWCase>& info) {
 TEST_P(AdamWFusedComparisonTest, CompareImplementations) {
     const auto& pc = GetParam();
     // Run 3 steps to ensure momentum buffers are properly exercised
-    const uint32_t steps = 3;
+    const uint32_t steps = 20;
     run_steps_and_compare(pc, steps);
 }
 
 // Test cases with various hyperparameter configurations
 static const AdamWCase kBasicCases[] = {
     // Standard configurations with different learning rates
-    {{4, 8, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, "Standard_lr1e2"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, "Standard_lr1e3"},
-    {{4, 8, 256, 512}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, "Standard_lr1e4"},
+    {{4, 8, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e2"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e3"},
+    {{2, 4, 128, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Standard_lr1e4"},
 
     // Different beta1 values
-    {{1, 16, 128, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, "Beta1_0p8"},
-    {{2, 8, 128, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.0f, "Beta1_0p95"},
-    {{4, 4, 128, 128}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, "Beta1_0p5"},
+    {{1, 16, 128, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p8"},
+    {{2, 8, 128, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p95"},
+    {{4, 4, 128, 128}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, false, "Beta1_0p5"},
 
     // Different beta2 values
-    {{1, 32, 64, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, "Beta2_0p99"},
-    {{2, 16, 64, 128}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.0f, "Beta2_0p9999"},
-    {{1, 64, 64, 64}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, "Beta2_0p95"},
+    {{1, 32, 64, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, false, "Beta2_0p99"},
+    {{2, 16, 64, 128}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.0f, false, "Beta2_0p9999"},
+    {{1, 64, 64, 64}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, false, "Beta2_0p95"},
 
     // Different epsilon values
-    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-7f, 0.0f, "Epsilon_1e7"},
-    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, "Epsilon_1e9"},
-    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, "Epsilon_1e6"},
+    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-7f, 0.0f, false, "Epsilon_1e7"},
+    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, false, "Epsilon_1e9"},
+    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, false, "Epsilon_1e6"},
 
     // Mixed configurations
-    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.0f, "Mixed_1"},
-    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.0f, "Mixed_2"},
-    {{1, 32, 128, 512}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.0f, "Mixed_3"},
+    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.0f, false, "Mixed_1"},
+    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.0f, false, "Mixed_2"},
+    {{1, 32, 128, 512}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.0f, false, "Mixed_3"},
 
     // Large and small tensor shapes
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, "Large_flat"},
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, "Large_4D"},
-    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, "Wide"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_flat"},
+    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Large_4D"},
+    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false, "Wide"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -290,45 +314,45 @@ INSTANTIATE_TEST_SUITE_P(
 static const AdamWCase kIsolatedFeatureCases[] = {
     // Pure learning rate only (beta1=0, beta2=0)
     // This should behave like: params = params - lr * grad
-    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, "PureLR_1"},
-    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1e-8f, 0.0f, "PureLR_2"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1.0f, 0.0f, "PureLR_3"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1e-8f, 0.0f, "PureLR_4"},
+    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, false, "PureLR_1"},
+    {{1, 4, 128, 128}, 1.0f, 0.0f, 0.0f, 1e-8f, 0.0f, false, "PureLR_2"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1.0f, 0.0f, false, "PureLR_3"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1e-8f, 0.0f, false, "PureLR_4"},
 
     // Only beta1 (first moment/momentum) with lr, beta2=0
     // Tests exponential moving average of gradients
-    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.0f, "OnlyBeta1_0p9"},
-    {{1, 8, 128, 64}, 1e-3f, 0.8f, 0.0f, 1e-8f, 0.0f, "OnlyBeta1_0p8"},
-    {{2, 4, 128, 64}, 1e-3f, 0.95f, 0.0f, 1e-8f, 0.0f, "OnlyBeta1_0p95"},
-    {{1, 4, 128, 128}, 1e-3f, 0.5f, 0.0f, 1e-8f, 0.0f, "OnlyBeta1_0p5"},
+    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.0f, false, "OnlyBeta1_0p9"},
+    {{1, 8, 128, 64}, 1e-3f, 0.8f, 0.0f, 1e-8f, 0.0f, false, "OnlyBeta1_0p8"},
+    {{2, 4, 128, 64}, 1e-3f, 0.95f, 0.0f, 1e-8f, 0.0f, false, "OnlyBeta1_0p95"},
+    {{1, 4, 128, 128}, 1e-3f, 0.5f, 0.0f, 1e-8f, 0.0f, false, "OnlyBeta1_0p5"},
 
     // Only beta2 (second moment) with lr, beta1=0
     // Tests exponential moving average of squared gradients (adaptive learning rate)
-    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, "OnlyBeta2_0p999"},
-    {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.0f, "OnlyBeta2_0p99"},
-    {{2, 4, 128, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, "OnlyBeta2_0p9999"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.95f, 1e-8f, 0.0f, "OnlyBeta2_0p95"},
+    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p999"},
+    {{1, 8, 128, 64}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "OnlyBeta2_0p99"},
+    {{2, 4, 128, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "OnlyBeta2_0p9999"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.95f, 1e-8f, 0.0f, false, "OnlyBeta2_0p95"},
 
     // Learning rate + beta1 only (momentum without adaptive learning rate)
-    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.0f, "LR_Beta1_std"},
-    {{1, 8, 128, 64}, 1e-2f, 0.8f, 0.0f, 1e-8f, 0.0f, "LR_Beta1_high_lr"},
-    {{4, 8, 128, 512}, 1e-4f, 0.95f, 0.0f, 1e-8f, 0.0f, "LR_Beta1_low_lr"},
+    {{1, 1, 1, 32'768}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.0f, false, "LR_Beta1_std"},
+    {{1, 8, 128, 64}, 1e-2f, 0.8f, 0.0f, 1e-8f, 0.0f, false, "LR_Beta1_high_lr"},
+    {{4, 8, 128, 512}, 1e-4f, 0.95f, 0.0f, 1e-8f, 0.0f, false, "LR_Beta1_low_lr"},
 
     // Learning rate + beta2 only (adaptive learning rate without momentum)
-    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, "LR_Beta2_std"},
-    {{1, 8, 128, 64}, 1e-2f, 0.0f, 0.99f, 1e-8f, 0.0f, "LR_Beta2_high_lr"},
-    {{2, 4, 128, 64}, 1e-4f, 0.0f, 0.9999f, 1e-8f, 0.0f, "LR_Beta2_low_lr"},
+    {{1, 1, 1, 32'768}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, false, "LR_Beta2_std"},
+    {{1, 8, 128, 64}, 1e-2f, 0.0f, 0.99f, 1e-8f, 0.0f, false, "LR_Beta2_high_lr"},
+    {{2, 4, 128, 64}, 1e-4f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "LR_Beta2_low_lr"},
 
     // Epsilon variations with only beta2 (tests numerical stability)
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, "Beta2_eps1e6"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-7f, 0.0f, "Beta2_eps1e7"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-9f, 0.0f, "Beta2_eps1e9"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-6f, 0.0f, false, "Beta2_eps1e6"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-7f, 0.0f, false, "Beta2_eps1e7"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-9f, 0.0f, false, "Beta2_eps1e9"},
 
     // Edge cases: extreme beta values
-    {{1, 4, 128, 128}, 1e-3f, 0.1f, 0.0f, 1e-8f, 0.0f, "Beta1_0p1_low_momentum"},
-    {{1, 4, 128, 128}, 1e-3f, 0.99f, 0.0f, 1e-8f, 0.0f, "Beta1_0p99_high_momentum"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9f, 1e-8f, 0.0f, "Beta2_0p9_fast_adapt"},
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, "Beta2_0p9999_slow_adapt"},
+    {{1, 4, 128, 128}, 1e-3f, 0.1f, 0.0f, 1e-8f, 0.0f, false, "Beta1_0p1_low_momentum"},
+    {{1, 4, 128, 128}, 1e-3f, 0.99f, 0.0f, 1e-8f, 0.0f, false, "Beta1_0p99_high_momentum"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9f, 1e-8f, 0.0f, false, "Beta2_0p9_fast_adapt"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.0f, false, "Beta2_0p9999_slow_adapt"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -342,66 +366,127 @@ INSTANTIATE_TEST_SUITE_P(
 // Test cases with weight decay enabled
 static const AdamWCase kWeightDecayCases[] = {
     // Standard configurations with different weight decay values
-    {{4, 8, 256, 1024}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, "Standard_wd0p01"},
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.001f, "Standard_wd0p001"},
-    {{4, 8, 256, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, "Standard_wd0p1"},
-    {{2, 16, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0001f, "Standard_wd0p0001"},
+    {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Standard_wd0p01"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.001f, false, "Standard_wd0p001"},
+    {{2, 4, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, false, "Standard_wd0p1"},
+    {{2, 8, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0001f, false, "Standard_wd0p0001"},
 
     // Weight decay with different learning rates
-    {{1, 16, 128, 128}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.01f, "HighLR_wd0p01"},
-    {{2, 8, 128, 128}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, "LowLR_wd0p01"},
-    {{4, 4, 128, 128}, 5e-3f, 0.9f, 0.999f, 1e-8f, 0.05f, "MidLR_wd0p05"},
+    {{1, 16, 128, 128}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "HighLR_wd0p01"},
+    {{2, 8, 128, 128}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "LowLR_wd0p01"},
+    {{4, 4, 128, 128}, 5e-3f, 0.9f, 0.999f, 1e-8f, 0.05f, false, "MidLR_wd0p05"},
 
     // Weight decay with different beta1 values
-    {{1, 32, 64, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.01f, "Beta1_0p8_wd0p01"},
-    {{2, 16, 64, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.01f, "Beta1_0p95_wd0p01"},
-    {{1, 64, 64, 64}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.01f, "Beta1_0p5_wd0p01"},
+    {{1, 32, 64, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p8_wd0p01"},
+    {{2, 16, 64, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p95_wd0p01"},
+    {{1, 64, 64, 64}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.01f, false, "Beta1_0p5_wd0p01"},
 
     // Weight decay with different beta2 values
-    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f, "Beta2_0p99_wd0p01"},
-    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.01f, "Beta2_0p9999_wd0p01"},
-    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.01f, "Beta2_0p95_wd0p01"},
+    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f, false, "Beta2_0p99_wd0p01"},
+    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.01f, false, "Beta2_0p9999_wd0p01"},
+    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.01f, false, "Beta2_0p95_wd0p01"},
 
     // Mixed configurations with weight decay
-    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.02f, "Mixed_wd1"},
-    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.001f, "Mixed_wd2"},
-    {{2, 16, 256, 256}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.015f, "Mixed_wd3"},
+    {{1, 32, 128, 256}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.02f, false, "Mixed_wd1"},
+    {{1, 32, 128, 256}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.001f, false, "Mixed_wd2"},
+    {{1, 32, 128, 256}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.015f, false, "Mixed_wd3"},
 
     // Large and small tensor shapes with weight decay
-    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, "Large_flat_wd0p01"},
-    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, "Large_4D_wd0p01"},
-    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, "Wide_wd0p005"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Large_flat_wd0p01"},
+    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, false, "Large_4D_wd0p01"},
+    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, false, "Wide_wd0p005"},
 
     // High weight decay (aggressive regularization)
-    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, "HighWD_0p5"},
-    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.2f, "HighWD_0p2"},
-    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.3f, "HighWD_0p3"},
+    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, false, "HighWD_0p5"},
+    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.2f, false, "HighWD_0p2"},
+    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.3f, false, "HighWD_0p3"},
 
     // Small weight decay (light regularization)
-    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-4f, "SmallWD_1e4"},
-    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, "SmallWD_1e5"},
-    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-3f, "SmallWD_1e3"},
+    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-4f, false, "SmallWD_1e4"},
+    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-5f, false, "SmallWD_1e5"},
+    {{1, 16, 64, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-3f, false, "SmallWD_1e3"},
 
     // Weight decay with isolated features
     // Weight decay with only beta1 (momentum + weight decay, no adaptive LR)
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.01f, "Beta1Only_wd0p01"},
-    {{2, 8, 64, 128}, 1e-3f, 0.8f, 0.0f, 1e-8f, 0.05f, "Beta1_0p8_wd0p05"},
-    {{1, 16, 64, 64}, 1e-3f, 0.95f, 0.0f, 1e-8f, 0.001f, "Beta1_0p95_wd0p001"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.01f, false, "Beta1Only_wd0p01"},
+    {{2, 8, 64, 128}, 1e-3f, 0.8f, 0.0f, 1e-8f, 0.05f, false, "Beta1_0p8_wd0p05"},
+    {{1, 16, 64, 64}, 1e-3f, 0.95f, 0.0f, 1e-8f, 0.001f, false, "Beta1_0p95_wd0p001"},
 
     // Weight decay with only beta2 (adaptive LR + weight decay, no momentum)
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.01f, "Beta2Only_wd0p01"},
-    {{2, 8, 64, 128}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.05f, "Beta2_0p99_wd0p05"},
-    {{1, 16, 64, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.001f, "Beta2_0p9999_wd0p001"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.01f, false, "Beta2Only_wd0p01"},
+    {{2, 8, 64, 128}, 1e-3f, 0.0f, 0.99f, 1e-8f, 0.05f, false, "Beta2_0p99_wd0p05"},
+    {{1, 16, 64, 64}, 1e-3f, 0.0f, 0.9999f, 1e-8f, 0.001f, false, "Beta2_0p9999_wd0p001"},
 
     // Weight decay with pure learning rate (no momentum, no adaptive LR)
-    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1e-8f, 0.01f, "PureLR_wd0p01"},
-    {{2, 8, 64, 128}, 1e-2f, 0.0f, 0.0f, 1e-8f, 0.1f, "PureLR_high_wd0p1"},
-    {{1, 16, 64, 64}, 1e-4f, 0.0f, 0.0f, 1e-8f, 0.001f, "PureLR_low_wd0p001"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.0f, 1e-8f, 0.01f, false, "PureLR_wd0p01"},
+    {{2, 8, 64, 128}, 1e-2f, 0.0f, 0.0f, 1e-8f, 0.1f, false, "PureLR_high_wd0p1"},
+    {{1, 16, 64, 64}, 1e-4f, 0.0f, 0.0f, 1e-8f, 0.001f, false, "PureLR_low_wd0p001"},
 
     // Edge cases: very high and very low weight decay
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-6f, "VerySmallWD_1e6"},
-    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.9f, "VeryHighWD_0p9"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 1e-6f, false, "VerySmallWD_1e6"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.9f, false, "VeryHighWD_0p9"},
 };
 
 INSTANTIATE_TEST_SUITE_P(
     AdamWFusedWeightDecay, AdamWFusedComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
+
+// ====================================================================
+// AMSGrad Tests
+// Test AdamW with AMSGrad variant enabled
+// ====================================================================
+
+// Test cases with AMSGrad enabled
+static const AdamWCase kAMSGradCases[] = {
+    // Standard configurations with AMSGrad
+    {{4, 8, 256, 1024}, 1e-2f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e2"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e3"},
+    {{2, 4, 128, 256}, 1e-4f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard_lr1e4"},
+
+    // AMSGrad with different beta1 values
+    {{1, 16, 128, 128}, 1e-3f, 0.8f, 0.999f, 1e-8f, 0.0f, true, "Beta1_0p8"},
+    {{2, 8, 128, 128}, 1e-3f, 0.95f, 0.999f, 1e-8f, 0.0f, true, "Beta1_0p95"},
+    {{4, 4, 128, 128}, 1e-3f, 0.5f, 0.999f, 1e-8f, 0.0f, true, "Beta1_0p5"},
+
+    // AMSGrad with different beta2 values
+    {{1, 32, 64, 128}, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.0f, true, "Beta2_0p99"},
+    {{2, 16, 64, 128}, 1e-3f, 0.9f, 0.9999f, 1e-8f, 0.0f, true, "Beta2_0p9999"},
+    {{1, 64, 64, 64}, 1e-3f, 0.9f, 0.95f, 1e-8f, 0.0f, true, "Beta2_0p95"},
+
+    // AMSGrad with different epsilon values
+    {{2, 32, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-7f, 0.0f, true, "Epsilon_1e7"},
+    {{4, 16, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-9f, 0.0f, true, "Epsilon_1e9"},
+    {{1, 4, 256, 256}, 1e-3f, 0.9f, 0.999f, 1e-6f, 0.0f, true, "Epsilon_1e6"},
+
+    // AMSGrad with weight decay
+    {{2, 4, 128, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.001f, true, "WeightDecay_0p001"},
+    {{2, 4, 128, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.1f, true, "WeightDecay_0p1"},
+
+    // AMSGrad with high weight decay
+    {{1, 8, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.5f, true, "HighWD_0p5"},
+    {{2, 4, 128, 128}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.2f, true, "HighWD_0p2"},
+
+    // Mixed configurations with AMSGrad
+    {{1, 32, 128, 512}, 1e-2f, 0.95f, 0.9999f, 1e-7f, 0.02f, true, "Mixed_1"},
+    {{1, 32, 128, 512}, 1e-4f, 0.8f, 0.99f, 1e-9f, 0.001f, true, "Mixed_2"},
+    {{1, 32, 128, 512}, 5e-3f, 0.85f, 0.995f, 1e-8f, 0.015f, true, "Mixed_3"},
+
+    // Large and small tensor shapes with AMSGrad
+    {{1, 1, 1, 262'144}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "Large_flat"},
+    {{8, 8, 64, 64}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "Large_4D"},
+    {{1, 256, 32, 32}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.005f, true, "Wide"},
+
+    // AMSGrad with isolated features (beta1 or beta2 only)
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.0f, true, "OnlyBeta1"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.0f, true, "OnlyBeta2"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.0f, 1e-8f, 0.01f, true, "Beta1_WD"},
+    {{1, 4, 128, 128}, 1e-3f, 0.0f, 0.999f, 1e-8f, 0.01f, true, "Beta2_WD"},
+
+    // Edge cases: extreme values with AMSGrad
+    {{1, 4, 128, 128}, 1e-3f, 0.1f, 0.999f, 1e-8f, 0.0f, true, "LowBeta1"},
+    {{1, 4, 128, 128}, 1e-3f, 0.99f, 0.999f, 1e-8f, 0.0f, true, "HighBeta1"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.9f, 1e-8f, 0.0f, true, "LowBeta2"},
+    {{1, 4, 128, 128}, 1e-3f, 0.9f, 0.99999f, 1e-8f, 0.0f, true, "HighBeta2"},
+};
+
+INSTANTIATE_TEST_SUITE_P(AdamWFusedAMSGrad, AdamWFusedComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
