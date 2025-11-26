@@ -80,6 +80,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
@@ -457,6 +458,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (gathering disabled)
         // Usage: export TT_METAL_ENABLE_GATHERING=1
         case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
+
+        // TT_METAL_FABRIC_BW_TELEMETRY
+        // Enable fabric bandwidth telemetry data collection.
+        // Default: false (telemetry disabled)
+        // Usage: export TT_METAL_FABRIC_BW_TELEMETRY=1
+        case EnvVarID::TT_METAL_FABRIC_BW_TELEMETRY: this->enable_fabric_bw_telemetry = true; break;
 
         // TT_METAL_FABRIC_TELEMETRY
         // Enable fabric telemetry data collection.

@@ -445,6 +445,7 @@ target_sources(
             inc/debug/watcher_common.h
             inc/debug/waypoint.h
             inc/dev_msgs.h
+            inc/fabric_telemetry_msgs.h
             inc/ethernet/dataflow_api.h
             inc/ethernet/erisc.h
             inc/ethernet/tt_eth_api.h

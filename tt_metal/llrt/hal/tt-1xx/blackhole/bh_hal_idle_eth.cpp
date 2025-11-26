@@ -7,6 +7,7 @@
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::blackhole::idle_eth;
 
 #include <cstdint>
@@ -26,6 +27,10 @@ namespace tt::tt_metal::blackhole {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace idle_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace idle_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_idle_eth_mem_map() {
@@ -112,7 +117,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        idle_eth_dev_msgs::create_factory()};
+        idle_eth_dev_msgs::create_factory(),
+        idle_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole
