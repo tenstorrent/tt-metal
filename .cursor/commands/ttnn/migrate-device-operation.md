@@ -36,7 +36,7 @@ See the Dropout operation migration for a complete example:
 - Location: `ttnn/cpp/ttnn/operations/experimental/dropout`
 - PRs: https://github.com/tenstorrent/tt-metal/pull/11793, https://github.com/tenstorrent/tt-metal/pull/11956
 
-Also see the send_async operation migration for a very similar example:
+See send_async operation migration for a CCL example:
 - Location: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async`
 - PR: https://github.com/tenstorrent/tt-metal/pull/33005
 
