@@ -4,7 +4,7 @@
 
 #include "upsample.hpp"
 #include <algorithm>
-#include "device/upsample_op.hpp"
+#include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/run_operation.hpp"
@@ -91,19 +91,14 @@ ttnn::Tensor ExecuteUpSample::invoke(
         // Output sharding should be the same as input
         // Output shard shape gets rescaled in op
         auto output_tensor =
-            tt::tt_metal::operation::run(
-                UpSample{scale_h, scale_w, mode, sharded_memory_config, config}, {input_tensor_sharded})
-                .front();
-
+            ttnn::prim::upsample(input_tensor_sharded, scale_h, scale_w, mode, sharded_memory_config, config);
         if (output_mem_config.has_value() && output_tensor.memory_config() != output_mem_config) {
             output_tensor = to_memory_config(output_tensor, output_mem_config.value());
         }
         return output_tensor;
     }
 
-    auto output_tensor =
-        tt::tt_metal::operation::run(UpSample{scale_h, scale_w, mode, mem_config, config}, {input_tensor}).front();
+    auto output_tensor = ttnn::prim::upsample(input_tensor, scale_h, scale_w, mode, mem_config, config);
     return output_tensor;
 }
-
 }  // namespace ttnn::operations::upsample
