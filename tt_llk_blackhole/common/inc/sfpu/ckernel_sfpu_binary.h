@@ -138,7 +138,7 @@ inline void _calculate_sfpu_binary_(const uint dst_index_in0, const uint dst_ind
             }
             v_else
             {
-                result = in0 * sfpi::setsgn(_sfpu_reciprocal_<2>(in1), in1);
+                result = in0 * _sfpu_reciprocal_<2>(in1);
             }
             v_endif;
         }
