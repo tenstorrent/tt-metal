@@ -699,6 +699,7 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc)
     ttnn_output_torch_nchw = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
+    ttnn_output_torch_nchw = ttnn_output_torch_nchw.to(torch.bfloat16)
 
     atol = 0.35
     allclose = torch.allclose(ttnn_output_torch_nchw, torch_output, atol=atol)
