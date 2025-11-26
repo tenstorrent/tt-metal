@@ -250,7 +250,6 @@ void JitBuildEnv::init(
     std::vector<std::string> includeDirs = {
         ".",
         "..",
-        root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
         root_ + "tt_metal",
