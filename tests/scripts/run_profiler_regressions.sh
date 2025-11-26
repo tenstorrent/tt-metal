@@ -81,6 +81,12 @@ main() {
         exit 1
     fi
 
+    # Skip profiler regression tests when watcher is enabled
+    if python -c "import tt_metal.test_utils as test_utils; exit(0 if test_utils.is_watcher_enabled() else 1)" 2>/dev/null; then
+        echo "Skipping profiler regression tests - watcher is enabled"
+        exit 0
+    fi
+
     echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
     if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
