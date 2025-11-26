@@ -43,3 +43,9 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
     vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
 
     return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    # state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict
