@@ -315,8 +315,8 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
-            True,  # enable_trace
-            None,  # num_layers, if None -> defaults to all layers
+            False,  # enable_trace
+            1,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)

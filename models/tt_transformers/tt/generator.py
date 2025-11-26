@@ -42,6 +42,7 @@ class SamplingParams:
     presence_penalty: float | list[float] = 0.0
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
+    log_probs: bool | list[bool] = False
 
 
 # Split lists into chunks
@@ -489,6 +490,11 @@ class Generator:
                 else:
                     repetition_chunks = [sampling_params.repetition_penalty] * self.data_parallel
 
+                if isinstance(sampling_params.log_probs, List):
+                    log_probs_chunks = split_list(sampling_params.log_probs, self.data_parallel)
+                else:
+                    log_probs_chunks = [sampling_params.log_probs] * self.data_parallel
+
                 sampling_params_list = []
                 for i in range(self.data_parallel):
                     new_params = SamplingParams(
@@ -498,6 +504,7 @@ class Generator:
                         presence_penalty=presence_chunks[i],
                         frequency_penalty=frequency_chunks[i],
                         repetition_penalty=repetition_chunks[i],
+                        log_probs=log_probs_chunks[i],
                     )
                     sampling_params_list.append(new_params)
 
@@ -512,6 +519,7 @@ class Generator:
                     k=formatted_params.top_k,
                     p=formatted_params.top_p,
                     temp=formatted_params.temperature,
+                    calculate_log_probs=formatted_params.log_probs,
                 )
                 if sampling_module.tt_penalties is not None:
                     sampling_module.reset_penalty_params(
@@ -561,7 +569,7 @@ class Generator:
         Returns tt_logits on device
         """
         tt_logits = []
-
+        tt_log_probs = []
         tt_tokens = []
         tt_current_pos = []
         tt_rot_mat_idxs = []
@@ -582,7 +590,7 @@ class Generator:
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
                 rot_mat_idxs=tt_rot_mat_idxs[i],
@@ -591,8 +599,9 @@ class Generator:
                 sampling_on_device=sampling_on_device,
             )
             tt_logits.append(tt_logits_i)
+            tt_log_probs.append(tt_log_probs_i)
 
-        return tt_logits
+        return tt_logits, tt_log_probs
 
     def _capture_decode_trace_text(
         self,
@@ -1079,12 +1088,14 @@ class Generator:
         Input tt_out is a list of ttnn device tensors
         """
         if not async_read:
-            return [out.cpu() for out in tt_out]
+            # output is a tuple of (tt_out_tok, tt_log_probs)
+            return [(out[0].cpu(), out[1].cpu()) for out in tt_out]
 
         host_outputs = []
         read_events = []
         for i in range(self.data_parallel):
-            host_outputs.append(tt_out[i].cpu(blocking=False))
+            outputs = (tt_out[i][0].cpu(blocking=False), tt_out[i][1].cpu(blocking=False))  # logits  # log-probs
+            host_outputs.append(outputs)
             read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
 
         return host_outputs, read_events
@@ -1100,7 +1111,7 @@ class Generator:
         logits = []
         for i in range(self.data_parallel):
             logits_i = self.model[i].process_output_decode(
-                tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
+                tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
             )
             logits.append(logits_i)
 
@@ -1171,10 +1182,11 @@ class Generator:
             tt_cross_page_table.append(tt_cross_page_table_i)
 
         tt_logits = []
+        tt_log_probs = []
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            tt_logits_i = self.model[i].ttnn_decode_forward(
+            tt_logits_i, tt_log_probs_i = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1187,8 +1199,9 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits.append(tt_logits_i)
+            tt_log_probs.append(tt_log_probs_i)
 
-        return tt_logits
+        return tt_logits, tt_log_probs
 
     def _capture_trace(
         self,
@@ -1250,8 +1263,8 @@ class Generator:
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             xattn_cache = xattn_caches[i] if xattn_caches is not None else None
-            # tt_logits_rm unused later, no need to make a list
-            tt_logits_rm = self.model[i].ttnn_decode_forward(
+            # tt_logits_rm and tt_log_probs_rm unused later, no need to make a list
+            tt_logits_rm, tt_log_probs_rm = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
@@ -1332,6 +1345,7 @@ class Generator:
         tt_h_trace_input = tt_h
 
         tt_logits_rm = []
+        tt_log_probs_rm = []
         trace_ids = {}
         # Do on-device transformations of inputs before forward
         for i in range(self.data_parallel):
@@ -1355,7 +1369,7 @@ class Generator:
                 B=B,
             )
 
-            tt_logits_rm_i = self.model[i].ttnn_decode_forward(
+            tt_logits_rm_i, tt_log_probs_rm_i = self.model[i].ttnn_decode_forward(
                 tt_h_transform,
                 tt_xattn_mask_transform,
                 tt_full_text_mask_expand_1NSH_transform,
@@ -1368,12 +1382,14 @@ class Generator:
                 cross_page_table=tt_cross_page_table[i],
             )
             tt_logits_rm.append(tt_logits_rm_i)
+            tt_log_probs_rm.append(tt_log_probs_rm_i)
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
         return (
             trace_ids,
             tt_logits_rm,
+            tt_log_probs_rm,
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,

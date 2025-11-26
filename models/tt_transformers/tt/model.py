@@ -353,11 +353,11 @@ class Transformer(LightweightModule):
         """
         return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        if is_tokens:
+        if is_tokens or is_log_probs:
             # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
             tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
@@ -412,6 +412,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
+        calculate_log_probs=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -434,18 +435,13 @@ class Transformer(LightweightModule):
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             if capture_sampling_trace:
                 return tt_logits
-            tt_toks = self.sampling.sample(
+            tt_toks, tt_log_probs = self.sampling.sample(
                 tt_logits,
                 tt_out_tok=x,
                 enable_trace=False,
                 batch_size=self.args.max_batch_size,
+                calculate_log_probs=calculate_log_probs,
             )
-
-            # Calculate log-prob stats
-            self.log_probs_calculator.compute_global_stats(tt_logits)
-            # Prepare correct logits for each user on all chips
-            selected_logits = self.log_probs_calculator.prepare_correct_logits(tt_logits, tt_toks)
-            tt_log_probs = self.log_probs_calculator.calculate_log_probs(selected_logits)
 
             return tt_toks, tt_log_probs
 
@@ -474,7 +470,7 @@ class Transformer(LightweightModule):
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        return tt_logits
+        return tt_logits, None  # TODO: Add log_probs_return_value
 
     def forward(
         self,
