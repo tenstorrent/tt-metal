@@ -257,11 +257,9 @@ void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    [[maybe_unused]] tensor_return_value_t& tensor_return_value) {
     // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        (void)coordinate_range;     // Suppress unused variable warning
-        (void)tensor_return_value;  // Suppress unused variable warning
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         // auto& shared_vars = cached_workload.shared_variables;
