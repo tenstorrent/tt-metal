@@ -46,6 +46,7 @@ def run_conv_transpose2d(
     mirror_kernel=True,
     enable_act_double_buffer=False,
     preprocess_weights_bias=False,
+    config_tensors_in_dram=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -94,6 +95,7 @@ def run_conv_transpose2d(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         output_layout=output_layout,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -358,4 +360,54 @@ def test_conv_transpose2d_model_fruit(
         auto_shard=True,
         enable_act_double_buffer=enable_act_double_buffer,
         mirror_kernel=mirror_kernel,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, shard_layout",
+    (
+        # Test config_tensors_in_dram parameter with various configurations
+        # No l1_small_size fixture - the point is to test DRAM storage to avoid L1_SMALL usage
+        (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ),
+)
+def test_conv_transpose2d_config_tensors_in_dram(
+    device,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    shard_layout,
+):
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        shard_layout=shard_layout,
+        config_tensors_in_dram=True,
     )
