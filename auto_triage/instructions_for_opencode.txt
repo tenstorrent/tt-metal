@@ -17,15 +17,15 @@ Workspace Layout
 -Case Matrix
 ------------
 - **Case 1 – Failure attributable to a specific commit**
-  - You have enough evidence to tie the observed failure to a particular commit (or tiny set) within a ≤200 commit window (the scripts can download metadata in batches). Matching failures across runs strengthens the case but is **not** required; a single failing run plus a compelling diff/copilot summary is sufficient.
+  - Only use this when you can defend a single culprit commit beyond reasonable doubt. If you still have other viable suspects, you must not choose Case 1.
 - **Case 2 – Deterministic failure, culprit commit unknown**
   - The failure is deterministic but you cannot identify the exact commit (expired logs, >200 commits so the download script aborts, or other data gaps). Focus on root-cause instructions rather than naming a commit.
 - **Case 3 – Failure unrelated to tt-metal changes**
   - Evidence shows the issue is probably external (infrastructure, flaky machines, mismatched dependencies, or commits that clearly cannot affect the failing test). Use this only when you have exhausted reasonable tt-metal hypotheses.
 - **Case 4 – Deterministic failure with multiple plausible commits**
-  - The issue clearly comes from the commit window, but the evidence cannot single out one commit with high confidence. You have 2+ viable suspects and need to present a ranked list instead of a single culprit.
+  - The issue clearly comes from the commit window, but the evidence cannot single out one commit with high confidence. Use this whenever you have ≥2 plausible suspects (even if one is slightly more likely).
 
-You must justify the selected case explicitly in `./output/explanation.md`.
+You must justify the selected case explicitly in `./output/explanation.md`, and the report must include a subtitle like `## Case X – <case name>` so readers instantly know which scenario you chose.
 
 Shared Workflow (All Cases)
 ---------------------------
@@ -43,9 +43,9 @@ Shared Workflow (All Cases)
 4. Determine whether the failure is likely caused by tt-metal changes. Matching errors across runs help establish determinism, but a single run can still justify Case 1 if the commit evidence is strong. **Never** assume determinism just because a run is the latest; always explain your rationale.
 4. If you can map the failure to code changes (even from a single run), proceed toward Case 1. If you believe the failure is deterministic but cannot identify a culprit commit, you are heading toward Case 2. If tt-metal seems unrelated, that’s Case 3.
 5. Contact planning: while you work, note commit authors, file owners (`git log`, `git blame`, `.github/CODEOWNERS`), and capture GitHub profile URLs for everyone you may need to ping.
-6. Run `./download_data_between_commits.sh` before analyzing commits. If it prints `BATCH_COUNT=<n>`, call `./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index>` for each batch index `0..n-1`. Let both scripts use their default output (`./data/commit_info.json`) so each batch automatically appends to the same file.
-   - Keep a ranked shortlist of every commit that plausibly explains the failure. `alternatives.json` should always list those candidates (at least two when more than one looks plausible), with the LLM’s confidence ordering and justification.
-   - If the evidence never reaches “beyond reasonable doubt” for a single commit, you must favor Case 4 and can omit `chosen_commit.json` entirely instead of forcing a guess.
+6. Run `./download_data_between_commits.sh` before analyzing commits. If it prints `BATCH_COUNT=<n>`, call `./download_data_between_commits_batch.sh <good_commit> <bad_commit> <batch_index>` for each batch index `0..n-1`. Both scripts populate `./data/commit_info.json` with complete metadata (Copilot overview, PR title/URL, *and* structured `authors`/`approvers`). If either script times out or exits due to transient network/API errors, immediately retry up to **two** additional times before giving up and documenting the failure. Use `commit_info.json` as your source of truth for people/contact info.
+   - Keep a ranked shortlist of every commit that plausibly explains the failure. If more than one candidate survives your reasoning, you **must** choose Case 4 (no `chosen_commit.json`) and describe them all.
+   - Case 1 is exclusive: if you deliver `chosen_commit.json`, you must **not** emit any alternatives. Conversely, Case 4 emits only `alternatives.json` (grouped by confidence) and leaves `chosen_commit.json` blank or absent.
 7. In your final report, include links to the last successful job run, the first failing job run, and every commit between them (use the compare URL and `commit_info.json`).
 
 Failure Evidence Rules
@@ -96,10 +96,10 @@ Trigger this case when:
 
 Actions:
 1. Run `./download_data_between_commits.sh <good> <bad>` to gather metadata.
-2. Use Copilot summaries, changed files, and diffs to rank all plausible commits. Even when you name a single culprit, capture every runner-up (with confidence notes) in `alternatives.json`.
+2. Use Copilot summaries, changed files, and diffs to confirm that exactly one commit remains plausible. If any other commit still looks viable, stop and treat the whole analysis as Case 4 instead.
 3. Prepare outputs under `./output/`:
    - `chosen_commit.json` (must include: `commit` SHA, `commit_url`, `authors` (array of `{login,name,is_org_member}`), `approvers` (array of `{login,name,is_org_member}`), and a short `summary`).
-   - `alternatives.json` (ranked list where every entry includes `commit`, `commit_url`, `authors`, `approvers`, `confidence`, and a justification).
+   - Do **not** produce `alternatives.json` (or leave it as an empty `[]`) for Case 1.
    - `explanation.md` (title should be `Auto Triage Explanation: <failing job name>`). Cover:
      - Why the failure is deterministic.
      - The commit window, Copilot summaries referenced, and supporting diffs.
@@ -152,10 +152,10 @@ Use this case when the failure is clearly caused by code in the commit window bu
 
 Actions:
 1. Run the same commit download workflow as Case 1 so you understand every suspect.
-2. Populate `./output/alternatives.json` with a ranked array. Each entry must include `commit`, `commit_url`, `authors`, `approvers`, `confidence` (e.g., high/medium/low), the concrete evidence tying that commit to the failure, and recommended contacts for that commit.
-3. You may omit `./output/chosen_commit.json` entirely (or leave it as an empty JSON object) when none of the candidates exceed your confidence threshold. If one candidate truly stands out, you may still provide `chosen_commit.json`, but you must also list the runners-up in `alternatives.json`.
-4. In `./output/explanation.md`, clearly state this is Case 4, summarize the shared failure signature, and explain why each candidate commit could be responsible (cite files and hunks for every entry, similar depth as Case 1). Include guidance on how to validate or bisect the suspects sequentially.
-5. Add the standard contact section, ensuring that each candidate’s author/approvers or CODEOWNERS are mentioned so humans know who to pull in.
+2. Populate `./output/alternatives.json` only (no `chosen_commit.json`). The JSON must be grouped or tagged by `confidence` using the fixed values `high`, `medium`, or `low`, sorted from highest to lowest likelihood. Each entry still includes `commit`, `commit_url`, `authors`, `approvers`, the evidence summary, and recommended contacts.
+3. Leave `./output/chosen_commit.json` absent (or an explicit empty `{}`) for Case 4—never pick a single culprit here even if one is slightly ahead of the others.
+4. In `./output/explanation.md`, clearly state this is Case 4, summarize the shared failure signature, and explain why each candidate commit could be responsible. Cite files + before/after hunks, link to each commit URL, and note the confidence bucket for every entry. Include guidance on how to validate or bisect the suspects sequentially.
+5. Treat every candidate as if it were the Case 1 culprit: list clickable commit links, exact error tie-in, and the “who to contact” details (authors, approvers, CODEOWNERS, other file owners). After covering the per-commit info, add the overall contact section so humans know who to loop in.
 
 Contact Guidance (All Cases)
 ----------------------------
@@ -174,5 +174,6 @@ Final Reminders
 - When log downloads fail, document the attempt and reason before moving on.
 - Keep reasoning concise but explicit, and always tie conclusions back to logs or commit data.
 - Accuracy matters—engineers will act on your findings. Choose the correct case and justify it thoroughly.
+- Case 1 and Case 4 are mutually exclusive: a single culprit means Case 1 (no alternatives), while any list of suspects means Case 4 (no chosen commit).
 - When evidence points to multiple risky commits, explicitly say so (Case 4) instead of forcing a guess.
 - If there are **no failing runs** after reading `boundaries_summary.json`, write `./output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.

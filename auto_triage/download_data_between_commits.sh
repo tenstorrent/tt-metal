@@ -13,7 +13,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 MAX_BATCHES=200
-BATCH_SIZE=30
+BATCH_SIZE=5
 
 if [ $# -lt 2 ]; then
     echo -e "${RED}Error: Missing required arguments${NC}"
