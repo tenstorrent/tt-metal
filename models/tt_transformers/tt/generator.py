@@ -1628,6 +1628,9 @@ class Generator:
                 page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
 
+    def warmup_model_prefill(self, kv_cache, enable_trace):
+        self.warmup_prefill_traces(kv_cache, enable_trace)
+
     ## Destructor
 
     def __del__(self):
