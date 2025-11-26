@@ -43,10 +43,10 @@ Result conv_transpose2d_DRAM(
     uint32_t groups,
     const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel);
 
 Result conv_transpose2d_L1(
@@ -66,7 +66,7 @@ Result conv_transpose2d_L1(
     uint32_t groups,
     const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     bool mirror_kernel);
@@ -91,7 +91,7 @@ struct ConvTranpose2dOperation {
         const std::optional<const conv2d::Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
+        const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
         bool mirror_kernel = true,
         bool return_output_dim = false,
         bool return_weights_and_bias = false);
@@ -99,6 +99,8 @@ struct ConvTranpose2dOperation {
 
 class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    uint32_t batch_size;
+    IOShape input_shape;
     uint32_t input_channels;
     uint32_t output_channels;
     std::array<uint32_t, 2> kernel_size;
@@ -112,7 +114,7 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     DataType output_dtype;
     Tensor& weight_tensor;
     OptionalRefTensor bias_tensor;
-    Conv2dConfig conv_config;
+    conv2d::Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
     bool mirror_kernel;
@@ -138,7 +140,7 @@ public:
         DataType output_dtype,
         Tensor& weight_tensor,
         OptionalRefTensor bias_tensor,
-        Conv2dConfig& conv_config,
+        conv2d::Conv2dConfig& conv_config,
         DeviceComputeKernelConfig& compute_config,
         MeshDevice* device,
         bool mirror_kernel);
@@ -150,10 +152,8 @@ public:
     std::string name() override;
 };
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
-
+}  // namespace ttnn::operations::conv::conv_transpose2d
 namespace ttnn {
 constexpr auto conv_transpose2d =
     ttnn::register_operation<"ttnn::conv_transpose2d", operations::conv::conv_transpose2d::ConvTranpose2dOperation>();
+}
