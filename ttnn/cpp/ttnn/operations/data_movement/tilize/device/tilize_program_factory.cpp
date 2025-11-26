@@ -638,8 +638,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_sharded(
-    const Tensor& input, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
+operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
