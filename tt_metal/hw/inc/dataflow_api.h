@@ -2971,13 +2971,23 @@ public:
     }
 
     [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
-        return Lock([this]() { release_scoped_lock(); });
+        record_scoped_lock<false>();
+        return Lock([this]() { record_scoped_lock<true>(); });
     }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
+    template <bool unlock>
+    void record_scoped_lock() {
+        auto& cb_if = get_local_cb_interface(cb_id_);
+        // Derived from circular_buffer_init.h
+        uint32_t base_addr = (cb_if.fifo_limit * 16) - (cb_if.fifo_size * 16);
+        // Plus an extra word because CB range is inclusive
+        uint32_t num_bytes = (cb_if.fifo_size + 1) * 16;
+        if constexpr (unlock) {
+            RECORD_SCOPED_LOCK_EVENT(KernelProfilerNocEventMetadata::NocEventType::CB_UNLOCK, base_addr, num_bytes);
+        } else {
+            RECORD_SCOPED_LOCK_EVENT(KernelProfilerNocEventMetadata::NocEventType::CB_LOCK, base_addr, num_bytes);
+        }
     }
 
     uint32_t cb_id_;
@@ -3603,8 +3613,12 @@ public:
         return byte_diff / sizeof(T);
     }
 
-    [[nodiscard]] auto scoped_lock() {
-        return Lock([this]() { release_scoped_lock(); });
+    // Register a lock event for the memory region this pointer is currently pointing to. As CoreLocalMem is
+    // a pointer, potentially to an array, specify the number of elements to lock will set a lock for memory from
+    // the base address this pointer is pointing to to base address + num_elements * sizeof(T).
+    [[nodiscard]] auto scoped_lock(uint32_t num_elements = 1) {
+        record_scoped_lock<false>(num_elements);
+        return Lock([this, num_elements]() { this->record_scoped_lock<true>(num_elements); });
     }
 
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
@@ -3616,8 +3630,15 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
+    template <bool unlock>
+    void record_scoped_lock(uint32_t num_elements) {
+        if constexpr (unlock) {
+            RECORD_SCOPED_LOCK_EVENT(
+                KernelProfilerNocEventMetadata::NocEventType::MEM_UNLOCK, address_, num_elements * sizeof(T));
+        } else {
+            RECORD_SCOPED_LOCK_EVENT(
+                KernelProfilerNocEventMetadata::NocEventType::MEM_LOCK, address_, num_elements * sizeof(T));
+        }
     }
 
     AddressType address_;

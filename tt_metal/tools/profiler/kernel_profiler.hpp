@@ -717,6 +717,7 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+#define RECORD_SCOPED_LOCK_EVENT(event_type, locked_address_base, num_bytes)
 
 // null macros when perf counters are disabled
 #define StartPerfCounters()
