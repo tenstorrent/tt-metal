@@ -5,12 +5,17 @@
 #pragma once
 
 #include <mutex>
-#include <nlohmann/json.hpp>
-#include <tracy/Tracy.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+#include <tracy/Tracy.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using json = nlohmann::json;
 

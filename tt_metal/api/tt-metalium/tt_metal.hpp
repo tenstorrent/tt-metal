@@ -51,13 +51,14 @@ std::map<ChipId, IDevice*> CreateDevices(
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
- * Returns a pionter to an active device with the given ID, NULL otherwise
+ * Returns a pointer to an active device with the given ID, NULL otherwise
  *
  * Return value: IDevice*
  *
- * | Argument    | Description                                     | Data type               | Valid range | Required |
+ * | Argument    | Description                                     | Data type               | Valid range      |
+ * Required |
  * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
- * | device_id   | ID of the device to look for                    | ChipId                  | Yes         | Yes      |
+ * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
 IDevice* GetActiveDevice(ChipId device_id);
 

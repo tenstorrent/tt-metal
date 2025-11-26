@@ -5,7 +5,6 @@
 #include <stack>
 #include <tracy/TracyC.h>
 #include <tt-metalium/tt_metal.hpp>
-#include "ttnn/operation.hpp"
 #include "api/tools/profiler/op_profiler.hpp"
 
 using json = nlohmann::json;
