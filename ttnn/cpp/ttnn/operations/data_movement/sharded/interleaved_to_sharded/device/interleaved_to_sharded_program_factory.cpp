@@ -22,7 +22,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::interleaved_to_sharded {
 
-// Hardcoded for non-partial op
+// Hardcoded for non-partial interleaved_to_sharded operation
+// to keep backward compatibility after migration to new infra
+// https://github.com/tenstorrent/tt-metal/issues/32752
 constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
