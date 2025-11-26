@@ -881,16 +881,16 @@ def get_weight_config(
     weight_path = weight_cache_path / "weights"
     for _ in range(1):
         if force_recalculate:
-            logger.info("Force recalculating weights")
+            logger.info("Forcing recalculation of weights")
             break
         if not config_path.exists():
-            logger.info(f"No cached weights found at {config_path} - recalculating weights")
+            logger.info(f"No cached weights found at {config_path} - must recalculate weights")
             break
         weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
         if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
-            logger.info(f"Weights cached at {weight_cache_path} are invalid - recalculating weights")
+            logger.info(f"Weights cached at {weight_cache_path} are invalid - must recalculate weights")
             break
-        logger.info(f"Using weights cached at {weight_cache_path} - no recalculation needed")
+        logger.info(f"Using weights cached at {weight_cache_path} - no need to recalculate")
         return weight_config
 
     # Only prepare state dicts if we need to convert weights
@@ -910,7 +910,6 @@ def get_weight_config(
     logger.info("Converting weights to SavedWeight format...")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
-    logger.info("Done!")
 
     # TODO: This function validates paths and also normalizes weight_config by mutation so that all paths are absolute; this is confusing and should be refactored.
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
