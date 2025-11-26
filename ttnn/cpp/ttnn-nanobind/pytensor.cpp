@@ -238,12 +238,15 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         config.dtype.code,
         config.dtype.bits);
 
+    auto cast_tensor =
+        py_tensor.cast(nb::rv_policy::take_ownership, nb::handle());  // maybe a data race with ownership?
+
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
-        py_tensor.cast(nb::rv_policy::automatic).ptr(),
+        cast_tensor.ptr(),
         // py_tensor.cast(nb::rv_policy::none, nb::handle()).ptr(),
         &config,
         true /*convert*/,
-        nullptr);
+        nullptr /*(cleanup*)*/);
 
     // nb::ndarray<nb::array_api> converted_array{converted_tensor_handle};
 
@@ -272,14 +275,16 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const ttnn::Shape shape = ndarray_shape_to_ttnn(py_tensor);
+    const auto initial_size = py_tensor.size();
+    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
 
     TT_FATAL(
         preprocessed_py_tensor.contiguous_py_tensor.size() == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!\n\t"
         "is_valid: {}, itemsize: {}, deviceid: {}, nbytes: {}, ndim: {}\n\t"
-        "dtype.code: {}, dtype.bits: {}",
+        "dtype.code: {}, dtype.bits: {}\n\t"
+        "original_size: {}",
         preprocessed_py_tensor.contiguous_py_tensor.size(),
         shape.volume(),
         preprocessed_py_tensor.contiguous_py_tensor.is_valid(),
@@ -288,7 +293,8 @@ Tensor convert_python_tensor_to_tt_tensor(
         preprocessed_py_tensor.contiguous_py_tensor.nbytes(),
         preprocessed_py_tensor.contiguous_py_tensor.ndim(),
         preprocessed_py_tensor.contiguous_py_tensor.dtype().code,
-        preprocessed_py_tensor.contiguous_py_tensor.dtype().bits);
+        preprocessed_py_tensor.contiguous_py_tensor.dtype().bits,
+        initial_size);
 
     const Layout layout = [&]() {
         // Block float types require tile layout.
