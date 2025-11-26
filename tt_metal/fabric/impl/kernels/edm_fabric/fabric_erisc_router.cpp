@@ -1589,7 +1589,6 @@ FORCE_INLINE void update_bw_cycles(
 ////////////////////////////////////
 ////////////////////////////////////
 template <
-    bool enable_packet_header_recording,
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
     bool SKIP_CONNECTION_LIVENESS_CHECK,
@@ -1684,7 +1683,6 @@ FORCE_INLINE bool run_sender_channel_step_impl(
 };
 
 template <
-    bool enable_packet_header_recording,
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
     typename EthSenderChannels,
@@ -1708,7 +1706,6 @@ FORCE_INLINE bool run_sender_channel_step(
         // L1 locations to see if it can make progress
         invalidate_l1_cache();
         return run_sender_channel_step_impl<
-            enable_packet_header_recording,
             sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
             sender_ch_live_check_skip[sender_channel_index]>(
@@ -1951,7 +1948,6 @@ FORCE_INLINE bool run_receiver_channel_step(
  * channels every iteration unless it is unsafe/undesirable to do so (e.g. for performance reasons).
  */
 template <
-    bool enable_packet_header_recording,
     size_t NUM_RECEIVER_CHANNELS,
     typename DownstreamSenderVC0T,
     typename DownstreamSenderVC1T,
@@ -2044,7 +2040,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            tx_progress |= run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -2090,7 +2086,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
 
             if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {
-                tx_progress |= run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -2102,7 +2098,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_fabric_telemetry);
             }
             if constexpr (is_2d_fabric) {
-                tx_progress |= run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -2112,7 +2108,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector,
                     local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
+                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch0,
@@ -2124,10 +2120,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_fabric_telemetry);
             }
             if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
-                tx_progress |= run_sender_channel_step<
-                    enable_packet_header_recording,
-                    VC1_RECEIVER_CHANNEL,
-                    NUM_SENDER_CHANNELS - 1>(
+                tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -2494,55 +2487,6 @@ void kernel_main() {
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
 
-    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(sender_0_completed_packet_header_cb_address),
-            sender_0_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(sender_1_completed_packet_header_cb_address),
-            sender_1_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(sender_2_completed_packet_header_cb_address),
-            sender_2_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(sender_3_completed_packet_header_cb_address),
-            sender_3_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(sender_4_completed_packet_header_cb_address),
-            sender_4_completed_packet_header_cb_size_headers)};
-    std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_packet_recorders{
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(receiver_0_completed_packet_header_cb_address),
-            receiver_0_completed_packet_header_cb_size_headers),
-        PacketHeaderRecorder<PACKET_HEADER_TYPE>(
-            reinterpret_cast<volatile uint32_t*>(receiver_1_completed_packet_header_cb_address),
-            receiver_1_completed_packet_header_cb_size_headers)};
-
-    volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_0_channel_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_1_channel_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_0_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_1_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_2_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_3_counters_ptr = nullptr;
-    volatile tt::tt_fabric::EdmFabricSenderChannelCounters* sender_channel_4_counters_ptr = nullptr;
-
-    if constexpr (enable_fabric_counters) {
-        new (const_cast<tt::tt_fabric::EdmFabricReceiverChannelCounters*>(receiver_0_channel_counters_ptr))
-            tt::tt_fabric::EdmFabricReceiverChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricReceiverChannelCounters*>(receiver_1_channel_counters_ptr))
-            tt::tt_fabric::EdmFabricReceiverChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_0_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_1_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_2_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_3_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-        new (const_cast<tt::tt_fabric::EdmFabricSenderChannelCounters*>(sender_channel_4_counters_ptr))
-            tt::tt_fabric::EdmFabricSenderChannelCounters();
-    }
-
     size_t arg_idx = 0;
     ///////////////////////
     // Common runtime args:
@@ -2881,10 +2825,6 @@ void kernel_main() {
         }
     }
 
-    // helps ubenchmark performance
-    __asm__("nop");
-    __asm__("nop");
-    __asm__("nop");
     // Setup local tensix relay connection (UDM mode only)
     // This is a separate connection path from downstream EDM connections
     // Relay handles forwarding packets to local chip workers
@@ -2926,6 +2866,9 @@ void kernel_main() {
         }
     }
 
+    // helps ubenchmark performance
+    __asm__("nop");
+
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
         channel_buffer_size,
@@ -2951,8 +2894,6 @@ void kernel_main() {
             local_sender_channel_worker_interfaces);
     }
 
-    __asm__("nop");
-    __asm__("nop");
     __asm__("nop");
 
     WriteTransactionIdTracker<
@@ -3148,7 +3089,6 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
     run_fabric_edm_main_loop<
-        enable_packet_header_recording,
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>,

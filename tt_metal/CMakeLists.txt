@@ -111,6 +111,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/work_split.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
+    api/tt-metalium/experimental/pinned_memory.hpp
 )
 target_sources(
     tt_metal
