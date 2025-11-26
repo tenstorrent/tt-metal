@@ -448,7 +448,7 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 9830],
         "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
         "dispatch_total_cq_cmd_op_time": [219],
         "dispatch_go_send_wait_time": [219],
@@ -466,6 +466,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
+            setOpSupportCount=1500,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -477,6 +478,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
+            setOpSupportCount=3000,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -500,13 +502,30 @@ def test_dispatch_cores():
 @pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2083, 2464, 2648, 2827, 3178, 3661, 5011, 5362],
-        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 5846],
+        "Ethernet CQ Dispatch": [
+            590,
+            1080,
+            1430,
+            1660,
+            1994,
+            2083,
+            2464,
+            2648,
+            2827,
+            3178,
+            3661,
+            5011,
+            5362,
+            7661,
+            10224,
+        ],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 4577, 5846, 7795],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
+        setOpSupportCount=1500,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -526,6 +545,7 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
+        setOpSupportCount=3000,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
