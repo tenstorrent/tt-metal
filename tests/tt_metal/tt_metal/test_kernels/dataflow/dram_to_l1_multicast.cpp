@@ -42,7 +42,6 @@ void kernel_main() {
          .noc_y_start = dst_noc_y_start,
          .noc_x_end = dst_noc_x_end,
          .noc_y_end = dst_noc_y_end,
-         .addr = dst_addr},
-        true);
+         .addr = dst_addr});
     noc.async_write_barrier();
 }
