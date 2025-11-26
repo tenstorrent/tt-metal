@@ -42,9 +42,8 @@ void InterleavedToShardedDeviceOperation::validate_on_program_cache_miss(
     }
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
-            (*output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
-                    tt::tt_metal::hal::get_l1_alignment() ==
-                0,
+            0 == (*output_mem_config.shard_spec()).shape[1] * input_tensor.element_size() %
+                     tt::tt_metal::hal::get_l1_alignment(),
             "Shard page size must currently have L1 aligned page size");
     }
     if (input_tensor.dtype() != output_dtype) {
