@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "grid_sample_utils.hpp"
-#include "grid_sample_device_operation.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 

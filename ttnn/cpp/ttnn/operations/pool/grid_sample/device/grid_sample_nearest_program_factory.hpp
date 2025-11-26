@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "grid_sample_device_operation_types.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::pool::grid_sample::program {

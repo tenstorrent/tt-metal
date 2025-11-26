@@ -10,9 +10,9 @@
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "grid_sample_device_operation_types.hpp"
-#include "grid_sample_bilinear_program_factory.hpp"
-#include "grid_sample_nearest_program_factory.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation_types.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_nearest_program_factory.hpp"
 
 namespace ttnn::operations::pool::grid_sample {
 

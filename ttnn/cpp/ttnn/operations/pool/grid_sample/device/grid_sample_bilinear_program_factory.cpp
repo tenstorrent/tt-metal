@@ -14,7 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
-#include "grid_sample_bilinear_program_factory.hpp"
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
 namespace ttnn::operations::pool::grid_sample::program {
 
