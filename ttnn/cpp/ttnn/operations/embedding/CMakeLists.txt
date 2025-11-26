@@ -24,6 +24,10 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/embedding_device_operation.cpp
+        device/embeddings_fused_program_factory.cpp
+        device/embeddings_rm_program_factory.cpp
+        device/embeddings_tilized_indices_program_factory.cpp
+        device/embedding_program_factory_common.cpp
         embedding.cpp
 )
 
