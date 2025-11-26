@@ -8,6 +8,16 @@
 
 using namespace ttnn::operations::ccl::common;
 
+namespace detail {
+
+template <uint32_t tile_size = 32>
+void wait_untilize_sync(uint32_t i, volatile tt_l1_ptr uint32_t* sync_semaphore_ptr) {
+    if (i % tile_size) {
+        noc_semaphore_wait_min(sync_semaphore_ptr, i + tile_size);
+    }
+}
+}  // namespace detail
+
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
@@ -40,7 +50,9 @@ void kernel_main() {
     constexpr bool write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<37>();
+    constexpr bool untilize_input_sync = get_compile_time_arg_val(37);
+
+    constexpr auto input_args = TensorAccessorArgs<38>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
@@ -56,16 +68,21 @@ void kernel_main() {
     constexpr uint32_t dispatch_devices = num_devices;
     constexpr uint32_t dispatch_index = linearized_mesh_coord;
 #endif
-    uint32_t rt_ags = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t rt_args = 0;
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args++);
 
-    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_ags++);
+    uint32_t global_semaphore_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
+
+    volatile tt_l1_ptr uint32_t* untilize_semaphore_ptr;
+    if constexpr (untilize_input_sync) {
+        untilize_semaphore_ptr = get_arg_val<decltype(untilize_semaphore_ptr)>(rt_args++);
+    }
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
@@ -83,19 +100,32 @@ void kernel_main() {
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
 
     ASSERT(indices_pages == input_pages);
-    // read the input tokens and the selected experts for each token
+    // read the selected experts for each token
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
-        cb_reserve_back(input_tensor_cb_id, 1);
 
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
 
-        l1_write_addr = get_write_ptr(input_tensor_cb_id);
+        noc_async_read_barrier();
+        cb_push_back(indices_tensor_cb_id, 1);
+    }
+
+    // read the input tokens
+    for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
+        cb_reserve_back(input_tensor_cb_id, 1);
+
+        if constexpr (untilize_input_sync) {
+            DPRINT << "i: " << i << "\n";
+            noc_semaphore_wait_min(untilize_semaphore_ptr, i + 1);
+
+            // detail::wait_untilize_sync(i, untilize_semaphore_ptr);
+        }
+
+        uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);
 
         noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
         cb_push_back(input_tensor_cb_id, 1);
     }
 

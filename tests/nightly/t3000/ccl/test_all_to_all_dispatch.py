@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from math import prod
+
 import torch
 import pytest
 import random
@@ -200,6 +202,7 @@ def run_all_to_all_dispatch_test(
     dtype=ttnn.bfloat16,
     profiler=BenchmarkProfiler(),
     topology=None,
+    input_layout=ttnn.ROW_MAJOR_LAYOUT,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
@@ -262,10 +265,21 @@ def run_all_to_all_dispatch_test(
         output_metadata_goldens_list.append(metadata_tensor)
         torch_expert_mappings.append(expert_mapping)
 
+        # TODO more elegant handling and validation in op.
+        if input_layout == ttnn.TILE_LAYOUT:
+            input_shape = input_tokens.shape
+            tile_shape = [
+                mesh_shape[cluster_axis],
+                1,
+                input_shape[0] * input_shape[2] // mesh_shape[cluster_axis],
+                input_shape[-1],
+            ]
+            input_tokens = input_tokens.reshape(tile_shape)
+
         tt_input = ttnn.from_torch(
             input_tokens,
             device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=input_layout,
             dtype=dtype,
             memory_config=input_memory_config,
             mesh_mapper=mesh_mapper,
@@ -538,11 +552,12 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters, input_memory_config, output_memory_config",
     [
-        (16, 2, 2, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
-        (1, 3, 2, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
+        (16, 2, 1, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
+        (1, 3, 1, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
     ],
     ids=["b16s2-dram", "b1s3-l1"],
 )
@@ -560,6 +575,7 @@ def test_all_to_all_dispatch_no_trace(
     seq_len,
     num_iters,
     warmup_iters,
+    input_layout,
     input_memory_config,
     output_memory_config,
     num_links,
@@ -590,6 +606,7 @@ def test_all_to_all_dispatch_no_trace(
         trace_mode,
         num_links=num_links,
         scheme="random",
+        input_layout=input_layout,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
