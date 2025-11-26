@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "api/debug/dprint.h"
-#include "common.cpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
 
 void kernel_main() {
 #ifdef DST_ACCUM_MODE
@@ -23,16 +20,11 @@ void kernel_main() {
     constexpr uint32_t full_ct_dim = block_size_row;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    pack_untilize_init<block_ct_dim, full_ct_dim>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    for (uint32_t b = 0; b < block_size_col * third_dim; ++b) {
-        cb_reserve_back(tt::CBIndex::c_16, full_ct_dim);
-        for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
-            cb_wait_front(tt::CBIndex::c_0, block_ct_dim);
-            pack_untilize_block<block_ct_dim, full_ct_dim>(tt::CBIndex::c_0, 1, tt::CBIndex::c_16, b);
-            cb_pop_front(tt::CBIndex::c_0, block_ct_dim);
-        }
-        cb_push_back(tt::CBIndex::c_16, full_ct_dim);
-    }
-    pack_untilize_uninit(tt::CBIndex::c_16);
+    // Unified untilize automatically:
+    // - Detects DEST limit from DST_SYNC_MODE and DST_ACCUM_MODE
+    // - Detects data format (integer vs non-integer) from unpack_dst_format
+    // - Uses block-based pack_untilize for wide integer types (hardware-accelerated)
+    // - Falls back to standard untilize for wide non-integer types
+    compute_kernel_lib::untilize<block_size_row, tt::CBIndex::c_0, tt::CBIndex::c_16>(block_size_col * third_dim);
 }
