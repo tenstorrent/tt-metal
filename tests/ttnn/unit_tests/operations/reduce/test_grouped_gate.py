@@ -8,6 +8,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
+# Import from local reference files
+from models.demos.deepseek_v3.reference.configuration_deepseek import DeepseekV3Config
+from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
+
 
 def grouped_gate_golden(
     scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
@@ -57,6 +61,30 @@ def grouped_gate_golden(
     scaled_scores = normalized_scores * route_scale
 
     return scaled_scores, top_k_experts_indices
+
+
+def test_grouped_gate_against_reference():
+    torch.manual_seed(42)
+    torch.use_deterministic_algorithms(True)
+
+    hf_config = DeepseekV3Config()
+    moe_gate = MoEGate(hf_config, use_bitonic_sort=False).eval()
+    # set the e_score_correction_bias to a random values
+    moe_gate.e_score_correction_bias.data = torch.randn(
+        moe_gate.e_score_correction_bias.data.shape, dtype=torch.bfloat16
+    )
+
+    seq_lens = [32, 128, 2048]
+    batch_size = 1
+
+    for seq_len in seq_lens:
+        torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+
+        reference_topk_indices, reference_scores = moe_gate.forward(torch_input)
+        grouped_fn_topk_indices, grouped_fn_scores = moe_gate.grouped_forward(torch_input)
+
+        assert torch.allclose(reference_topk_indices, grouped_fn_topk_indices)
+        assert torch.allclose(reference_scores, grouped_fn_scores)
 
 
 def test_grouped_gate(device):
