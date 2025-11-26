@@ -53,7 +53,7 @@ def load_partial_weights(weights_path, embedding_layer_prefix):
     ],
 )
 @pytest.mark.parametrize("pre_embed", [False, True])
-def test_conv2d_inference(
+def test_tile_position_emb_inference(
     mesh_device,
     reset_seeds,
     # Input params
@@ -71,7 +71,7 @@ def test_conv2d_inference(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    # TT models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder." + (
         "pre_tile_pos_embed." if pre_embed else "post_tile_pos_embed."
     )
@@ -128,8 +128,8 @@ def test_conv2d_inference(
             self.max_aspect_ratio_id = max_aspect_ratio_id
             self.is_gated = is_gated
 
-    # partial loading of HF safetensors to match model graph expect dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(model_args.model_base_path.__str__(), embedding_layer_prefix)
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
+    partial_state_dict = load_partial_weights(os.getenv("TT_CACHE_PATH"), embedding_layer_prefix)
     reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
