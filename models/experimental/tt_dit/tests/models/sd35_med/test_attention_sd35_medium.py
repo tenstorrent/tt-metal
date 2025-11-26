@@ -34,7 +34,7 @@ class RMSNorm(torch.nn.Module):
 class SelfAttention(torch.nn.Module):
     """Reference matching MM-DiT SelfAttention"""
 
-    def __init__(self, dim, num_heads, qkv_bias=False, pre_only=False):
+    def __init__(self, dim, num_heads, qkv_bias=False, pre_only=False, qk_norm="rms"):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
