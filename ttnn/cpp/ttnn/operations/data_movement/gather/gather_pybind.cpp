@@ -28,6 +28,7 @@ void bind_gather_operation(py::module& module) {
             sparse_grad (bool, optional): If `True`, the gradient computation will be sparse. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to `None`.
 
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
@@ -74,8 +75,16 @@ void bind_gather_operation(py::module& module) {
                const ttnn::Tensor& input_index_tensor,
                const bool sparse_grad,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config) -> Tensor {
-                return self(input_tensor, dim, input_index_tensor, sparse_grad, memory_config, optional_output_tensor);
+               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
+                return self(
+                    input_tensor,
+                    dim,
+                    input_index_tensor,
+                    sparse_grad,
+                    memory_config,
+                    optional_output_tensor,
+                    sub_core_grids);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -83,7 +92,8 @@ void bind_gather_operation(py::module& module) {
             py::kw_only(),
             py::arg("sparse_grad") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

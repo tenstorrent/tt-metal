@@ -3961,3 +3961,69 @@ def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device, dtype_pt, 
         out_tt_sharded = ttnn.add(a_tt, scalar, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.float32, ttnn.float32],
+    ),
+)
+@pytest.mark.parametrize(
+    "nb, nc, nh, nw",
+    (
+        # binary shapes
+        (1, 1, 32, 32 * 1024),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.eq_,
+        ttnn.gt_,
+        ttnn.lt_,
+        ttnn.le_,
+        ttnn.ge_,
+        ttnn.ne_,
+        ttnn.logical_and_,
+        ttnn.logical_or_,
+        ttnn.logical_xor_,
+    ],
+)
+def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw, device, ttnn_fn):
+    torch.manual_seed(10)
+    shape = [nb, nc, nh, nw]
+    inp_a = torch.rand(*shape).to(dtype_pt)
+    inp_b = torch.rand(*shape).to(dtype_pt)
+
+    a = ttnn.Tensor(
+        inp_a.flatten().tolist(),
+        shape,
+        dtype_tt,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+
+    b = ttnn.Tensor(
+        inp_b.flatten().tolist(),
+        shape,
+        dtype_tt,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+
+    out_tt = ttnn_fn(
+        a,
+        b,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    )
+    out = ttnn.to_torch(out_tt)
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    expected = golden_fn(inp_a, inp_b)
+    assert torch.equal(out, expected)
