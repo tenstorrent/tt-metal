@@ -241,38 +241,7 @@ std::map<ChannelTypes, uint32_t> get_num_mux_channels(
         // UDM mode: calculate channels based on compute grid
         // UDM has WORKER_CHANNEL, RELAY_TO_MUX_CHANNEL, MUX_TO_MUX_CHANNEL (NO ROUTER_CHANNEL)
 
-        // Get compute grid size from first device (should be same across devices)
-        auto device = all_active_devices.front();
-        auto compute_grid = device->compute_with_storage_grid_size();
-        uint32_t num_workers = compute_grid.x * compute_grid.y;
-
-        log_info(tt::LogMetal, "num_workers: {}", num_workers);
-        log_info(tt::LogMetal, "min_eth_channels: {}", min_eth_channels);
-
-        // // Get number of active routing planes (links) from fabric context
-        // const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        // auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-        // auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-        // // Count unique routing plane IDs (num_links)
-        // std::set<routing_plane_id_t> unique_routing_planes;
-        // for (const auto& [eth_chan, direction] : active_channels) {
-        //     auto routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
-        //     unique_routing_planes.insert(routing_plane_id);
-        // }
-        // size_t num_links = unique_routing_planes.size();
-
-        // // If dispatch tunnel is present, exclude workers assigned to the dispatch link
-        // const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device->id());
-        // if (has_dispatch_tunnel && num_links > 0) {
-        //     uint32_t num_workers_per_link = num_workers / num_links;
-        //     num_workers = num_workers - num_workers_per_link;
-        // }
-
-        // // Calculate worker channels: number of workers per routing plane
-        // uint32_t num_worker_channels = (num_workers + min_eth_channels - 1) / min_eth_channels;
-        // TODO: this is just testing original behave
-        // channel_counts[ChannelTypes::WORKER_CHANNEL] = num_worker_channels;
+        // TODO: this is just testing original behave, later PR will support full grid of workers
         channel_counts[ChannelTypes::WORKER_CHANNEL] = 1;  // Always 1 worker channel in legacy mode
 
         // Relay channels: 3 channels (LOCAL_RELAY, EAST_OR_NORTH_RELAY, WEST_OR_SOUTH_RELAY)
