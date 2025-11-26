@@ -27,16 +27,11 @@ Tensor EmbeddingBackwardOperation::invoke(
     auto sentence_size = input_shape[-1];
     auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape({batch_size, 1, 1, sentence_size}));
 
-    auto input_gradient =
-        tt::tt_metal::operation::run(
-            EmbeddingBackward{
-                .output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config()),
-                .output_dtype = dtype.value_or(output_gradient_tensor_arg.dtype()),
-                .num_embeddings = num_embeddings},
-            {input_tensor, output_gradient_tensor_arg})
-            .at(0);
+    const auto output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config());
+    const auto out_dtype = dtype.value_or(output_gradient_tensor_arg.dtype());
 
-    return input_gradient;
+    return ttnn::prim::embedding_backward(
+        input_tensor, output_gradient_tensor_arg, output_mem_config, out_dtype, num_embeddings, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::embedding_backward
