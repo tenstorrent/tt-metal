@@ -61,11 +61,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     if (composite_common::use_composite_all_gather(input_tensor, dim, memory_config)) {
-        TT_FATAL(
-            !sub_core_grid.has_value(),
-            "Composite OP does not currently support sub core grid",
-            optional_output_tensor_spec.page_config(),
-            output_spec.page_config());
+        TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
     }
