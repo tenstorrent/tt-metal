@@ -11,14 +11,14 @@ from loguru import logger
 import ttnn
 
 
-@pytest.mark.parametrize("tile_height", [1])
+@pytest.mark.parametrize("tile_height", [1, 32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_matmul(device, tile_height):
     """Test TTNN matmul with width-sharded input and mcast 1d using DeepSeek B1 op"""
 
     # Hardcoded matrix dimensions
     m = tile_height  # set to minimum tile height for b1
-    k = 32 * 4
+    k = 32 * 128
 
     # Core grid: 48 cores (6x8 grid)
     # n = 1536
@@ -108,29 +108,19 @@ def test_matmul(device, tile_height):
 
     # Use the new simplified DeepSeek B1 matmul_1d operation
     print(f"ttnn_a: {ttnn_a}")
-    # for i in range(100):
-    ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
-        ttnn_a,
-        ttnn_b,
-        core_grid=grid_size,
-        memory_config=output_width_sharded_mem_config,
-    )
+    for i in range(100):
+        ttnn_output = ttnn.experimental.deepseek_b1.matmul_1d(
+            ttnn_a,
+            ttnn_b,
+            core_grid=grid_size,
+            memory_config=output_width_sharded_mem_config,
+        )
 
     # Convert back to torch for comparison
     output_torch = ttnn.to_torch(ttnn_output)
 
     # Verify output shape
     assert output_torch.shape == (m, n), f"Expected shape ({m}, {n}), got {output_torch.shape}"
-    # # Print input matrices without ellipses and with full width
-    # torch.set_printoptions(threshold=torch.numel(torch_a), linewidth=300, sci_mode=False)
-    # print(f"torch_a:\n{torch_a}")
-    # torch.set_printoptions(threshold=torch.numel(torch_b), linewidth=300, sci_mode=False)
-    # print(f"torch_b:\n{torch_b}")
-    # # Reset to default print options
-    # torch.set_printoptions(threshold=torch.numel(output_torch), linewidth=300, sci_mode=False)
-    # print(f"result:\n{output_torch}")
-    # torch.set_printoptions(threshold=torch.numel(torch_output), linewidth=300, sci_mode=False)
-    # print(f"golden:\n{torch_output}")
 
     # Compute PCC (Pearson Correlation Coefficient) for accuracy check
     output_flat = output_torch.flatten().float()
