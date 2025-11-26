@@ -42,16 +42,6 @@ namespace fs = std::filesystem;
 using namespace std;
 using namespace tt;
 
-namespace {
-
-void sync_events(auto& events) {
-    for (auto& f : events) {
-        f.get();
-    }
-}
-
-}  // namespace
-
 namespace tt::tt_metal {
 
 namespace {
@@ -478,7 +468,7 @@ size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* set
         }
     }
 
-    sync_events(events);
+    sync_build_steps(events);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -607,7 +597,7 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
-    sync_events(events);
+    sync_build_steps(events);
     for (auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
