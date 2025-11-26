@@ -8,10 +8,8 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "reshard_program_factory.hpp"
-#include "nd_reshard_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -53,16 +51,94 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
-void ReshardDeviceOperation::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+
+    // Determine output memory config and create a temporary output to check specs
+    const auto& out_mem_config = tensor_args.preallocated_output.has_value()
+                                     ? tensor_args.preallocated_output->memory_config()
+                                     : args.output_mem_config;
+
+    // Check if we should use legacy reshard or nd reshard
+    if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
+        if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+            out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            // Use reader if output is L1, writer if output is DRAM
+            if (out_mem_config.buffer_type() == BufferType::L1) {
+                return program::ReshardSameWidthFactory</*is_reader*/ true>{};
+            } else {
+                return program::ReshardSameWidthFactory</*is_reader*/ false>{};
+            }
+        } else if (
+            input_tensor.layout() == Layout::ROW_MAJOR &&
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            out_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (out_mem_config.buffer_type() == BufferType::L1) {
+                bool has_padding = false;
+                CoreCoord input_shard_grid = input_tensor.buffer()->shard_spec().grid().ranges()[0].grid_size();
+                CoreCoord output_shard_grid = out_mem_config.shard_spec().value().grid.ranges()[0].grid_size();
+                uint32_t input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
+                uint32_t output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
+                uint32_t input_shard_width = input_tensor.buffer()->shard_spec().shape()[1];
+                uint32_t output_shard_width = out_mem_config.shard_spec().value().shape[1];
+                has_padding = input_num_shard_cores * input_shard_width > input_tensor.logical_shape()[-1];
+                has_padding =
+                    has_padding || output_num_shard_cores * output_shard_width > input_tensor.logical_shape()[-1];
+                if (has_padding) {
+                    return program::ReshardGenericFactory{};
+                }
+                return program::ReshardSameHeightFactory</*is_reader*/ true>{};
+            } else {
+                return program::ReshardSameHeightFactory</*is_reader*/ false>{};
+            }
+        } else {
+            // All other cases: use generic factory
+            return program::ReshardGenericFactory{};
+        }
+    } else {
+        auto input_buffer_type = input_tensor.memory_config().buffer_type();
+        auto output_buffer_type = out_mem_config.buffer_type();
+        auto input_page_size = input_tensor.buffer()->page_size();
+        auto output_tensor_spec = compute_output_specs(args, tensor_args);
+        auto output_page_size = output_tensor_spec.compute_page_size_bytes();
+
+        TT_FATAL(
+            input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
+            "Input buffer type must be DRAM or L1");
+        TT_FATAL(
+            output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
+            "Output buffer type must be DRAM or L1");
+
+        if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
+            return program::NdReshardCopyPagesFactory{};
+        }
+        if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
+            input_page_size != output_page_size) {
+            return program::NdReshardCopyLocalShardFactory</*is_reader*/ true>{};
+        }
+
+        if (input_buffer_type == BufferType::DRAM) {
+            return program::NdReshardCopyLocalShardFactory</*is_reader*/ false>{};
+        }
+        return program::NdReshardCopyLocalShardFactory</*is_reader*/ true>{};
+    }
+}
+
+void ReshardDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void ReshardDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.is_sharded(), "input must be sharded");
 
-    bool has_output_tensor = output_tensors.size() == 1 && output_tensors[0].has_value();
-    if (has_output_tensor) {
-        const auto& output_tensor = output_tensors[0].value();
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto& output_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(
             input_tensor.logical_shape() == output_tensor.logical_shape(),
             "Input tensor logical shape ({}) must equal output tensor logical shape ({})",
@@ -79,11 +155,13 @@ void ReshardDeviceOperation::validate_with_output_tensors(
             input_tensor.layout(),
             output_tensor.layout());
     }
-    const auto& out_mem_config =
-        has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
+
+    const auto& out_mem_config = tensor_args.preallocated_output.has_value()
+                                     ? tensor_args.preallocated_output->memory_config()
+                                     : args.output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
 
-    auto output_tensor_spec = compute_output_specs(input_tensors, output_tensors).front();
+    auto output_tensor_spec = compute_output_specs(args, tensor_args);
     if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
@@ -112,55 +190,42 @@ void ReshardDeviceOperation::validate_with_output_tensors(
     }
 }
 
-std::vector<ttnn::TensorSpec> ReshardDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
-        return {output_tensors[0]->tensor_spec()};
+ReshardDeviceOperation::spec_return_value_t ReshardDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output->tensor_spec();
     }
 
-    const auto& input_tensor = input_tensors.at(0);
-    return {TensorSpec(
+    const auto& input_tensor = tensor_args.input;
+    return TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
             input_tensor.layout(),
-            output_mem_config,
+            args.output_mem_config,
             input_tensor.logical_shape(),
-            input_tensor.padded_shape()))};
+            input_tensor.padded_shape()));
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-ReshardDeviceOperation::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
-}
-
-operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
-
-    if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
-        return detail::reshard_multi_core(input_tensor, output_tensor);
-    } else {
-        return detail::nd_reshard_multi_core(input_tensor, output_tensor);
-    }
-}
-
-std::vector<Tensor> ReshardDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
-        return {output_tensors[0].value()};
+ReshardDeviceOperation::tensor_return_value_t ReshardDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
     }
 
-    return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors.at(0).device())};
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::tuple<ReshardDeviceOperation::operation_attributes_t, ReshardDeviceOperation::tensor_args_t>
+ReshardDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return {
+        operation_attributes_t{
+            .output_mem_config = memory_config,
+        },
+        tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor}};
 }
 
 }  // namespace ttnn::operations::data_movement

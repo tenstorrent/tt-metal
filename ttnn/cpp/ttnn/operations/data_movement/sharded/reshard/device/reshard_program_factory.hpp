@@ -4,46 +4,88 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "reshard_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement {
 
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
+namespace program {
+
+// HEIGHT_SHARDED -> HEIGHT_SHARDED reshard
+template <bool is_reader>
+struct ReshardSameWidthFactory {
+    struct ReshardSameWidthSharedVariables {
+        tt::tt_metal::KernelHandle kernel_id_0{};
+        tt::tt_metal::KernelHandle kernel_id_1{};
+        tt::tt_metal::CBHandle cb_0{};
+        std::vector<CoreCoord> local_cores{};
+    };
+
+    using shared_variables_t = ReshardSameWidthSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
 };
 
-struct Stride {
-    CoreCoord core;
-    uint32_t data{};
+// WIDTH_SHARDED -> WIDTH_SHARDED reshard
+template <bool is_reader>
+struct ReshardSameHeightFactory {
+    struct ReshardSameHeightSharedVariables {
+        tt::tt_metal::KernelHandle kernel_id_0{};
+        tt::tt_metal::KernelHandle kernel_id_1{};
+        tt::tt_metal::CBHandle cb_0{};
+        std::vector<CoreCoord> local_cores{};
+    };
+
+    using shared_variables_t = ReshardSameHeightSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
 };
 
-struct PageStride {
-    CoreCoord start_core;
-    uint32_t start_data{};
-    uint32_t stride_size{};  // number of pages per stride
-    Stride stride;
-    uint32_t num_strides{};
-    bool skip{};
+// Factory for generic resharding (all other cases)
+struct ReshardGenericFactory {
+    struct ReshardGenericSharedVariables {
+        tt::tt_metal::KernelHandle kernel_id_0{};
+        tt::tt_metal::KernelHandle kernel_id_1{};
+        tt::tt_metal::CBHandle cb_dst0{};
+        CoreCoord grid{};
+        std::vector<CoreCoord> cores{};
+    };
+
+    using shared_variables_t = ReshardGenericSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
 };
 
-struct CompressedStrideBlock {
-    std::vector<PageStride> base_pattern;
-    std::vector<Stride> meta_strides;
-    uint32_t num_repeats = 0;
-};
+}  // namespace program
 
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range{};
-};
-
-struct CorePageStride {
-    CoreCoord core;
-    PageStride page_stride;
-};
-
-tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output);
-
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement

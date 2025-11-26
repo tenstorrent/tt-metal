@@ -57,14 +57,9 @@ struct ToMemoryConfig {
                         throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
-                    return tt::tt_metal::operation::run(
-                               data_movement::ReshardDeviceOperation{
-                                   .output_mem_config = memory_config,
-                               },
-                               {tensor},
-                               {},
-                               optional_output_tensors)
-                        .at(0);
+                    std::optional<Tensor> optional_output =
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors[0];
+                    return ttnn::prim::reshard(tensor, memory_config, optional_output);
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 

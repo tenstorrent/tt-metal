@@ -4,30 +4,49 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
+#include "ttnn/decorators.hpp"
+
+#include "reshard_device_operation_types.hpp"
+#include "reshard_program_factory.hpp"
+#include "nd_reshard_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
 
 struct ReshardDeviceOperation {
-    const tt::tt_metal::MemoryConfig output_mem_config;
+    using operation_attributes_t = reshard::operation_attributes_t;
+    using tensor_args_t = reshard::tensor_args_t;
+    using spec_return_value_t = reshard::spec_return_value_t;
+    using tensor_return_value_t = reshard::tensor_return_value_t;
+    using program_factory_t = std::variant<
+        program::ReshardSameWidthFactory</*is_reader*/ true>,
+        program::ReshardSameWidthFactory</*is_reader*/ false>,
+        program::ReshardSameHeightFactory</*is_reader*/ true>,
+        program::ReshardSameHeightFactory</*is_reader*/ false>,
+        program::ReshardGenericFactory,
+        program::NdReshardCopyPagesFactory,
+        program::NdReshardCopyLocalShardFactory</*is_reader*/ true>,
+        program::NdReshardCopyLocalShardFactory</*is_reader*/ false>>;
 
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
-    auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const tt::tt_metal::MemoryConfig& memory_config,
+        const std::optional<Tensor>& optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::data_movement
+
+namespace ttnn::prim {
+constexpr auto reshard =
+    ttnn::register_operation<"ttnn::prim::reshard", ttnn::operations::data_movement::ReshardDeviceOperation>();
+}  // namespace ttnn::prim

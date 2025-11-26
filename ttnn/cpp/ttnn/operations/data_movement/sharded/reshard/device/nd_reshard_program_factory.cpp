@@ -9,8 +9,16 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
-operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& input, Tensor& output) {
+namespace ttnn::operations::data_movement::program {
+
+// NdReshardCopyPagesFactory implementation
+NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
+    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::tensor_args_t& tensor_args,
+    reshard::tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    auto& output = tensor_return_value;
+
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
 
@@ -65,64 +73,76 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& in
             .compile_args = compile_time_args_writer,
         });
 
-    // That common and unique runtime arguments to 0, and call overrtime_runtime_arguments callback
+    // Set common and unique runtime arguments
     SetCommonRuntimeArgs(program, reader_kernel_id, {input.buffer()->address()});
     SetCommonRuntimeArgs(program, writer_kernel_id, {output.buffer()->address()});
+
+    // Initialize runtime args and call override to set them properly
     for (const auto& core : cores) {
         SetRuntimeArgs(program, reader_kernel_id, core, {0, 0});
         SetRuntimeArgs(program, writer_kernel_id, core, {0, 0});
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, grid, cores](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto& input = input_tensors.at(0);
-        const auto& output = output_tensors.at(0);
+    // Create cached program with shared variables
+    auto cached_program = cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .grid = grid, .cores = cores}};
 
-        auto& common_runtime_args_reader = GetCommonRuntimeArgs(program, reader_kernel_id);
-        auto& common_runtime_args_writer = GetCommonRuntimeArgs(program, writer_kernel_id);
-        common_runtime_args_reader[0] = input.buffer()->address();
-        common_runtime_args_writer[0] = output.buffer()->address();
+    // Set initial runtime arguments
+    override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
 
-        auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
-        auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
-
-        uint32_t start_page = 0;
-        uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->tensor_shape_in_pages().volume();
-        uint32_t n_pages_per_core = num_dev_pages / cores.size();
-        uint32_t remainder = num_dev_pages % cores.size();
-
-        for (const auto& core : cores) {
-            uint32_t num_pages_for_core = n_pages_per_core;
-            if (remainder > 0) {
-                num_pages_for_core++;
-                remainder--;
-            }
-            runtime_args_by_core_reader[core.x][core.y][0] = start_page;
-            runtime_args_by_core_reader[core.x][core.y][1] = start_page + num_pages_for_core;
-            runtime_args_by_core_writer[core.x][core.y][0] = start_page;
-            runtime_args_by_core_writer[core.x][core.y][1] = start_page + num_pages_for_core;
-            start_page += num_pages_for_core;
-        }
-    };
-
-    override_runtime_arguments_callback(
-        nullptr, program, {input}, std::vector<std::optional<const Tensor>>{}, {output});
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program;
 }
 
-/*
-    - This implementation runs program on grid from input (if is_reader is true) or output (if is_reader is false)
-   sharded spec.
-   - If is_reader is true, then all reads are local (cores are taken from input buffer distribution spec).
-   - If is_reader is false, then all writes are local (cores are taken from output buffer distribution).
-*/
-operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
-    const Tensor& input, Tensor& output, bool is_reader) {
+void NdReshardCopyPagesFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::tensor_args_t& tensor_args,
+    reshard::tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& cores = cached_program.shared_variables.cores;
+
+    auto& common_runtime_args_reader = GetCommonRuntimeArgs(program, reader_kernel_id);
+    auto& common_runtime_args_writer = GetCommonRuntimeArgs(program, writer_kernel_id);
+    common_runtime_args_reader[0] = input.buffer()->address();
+    common_runtime_args_writer[0] = output.buffer()->address();
+
+    auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
+    auto& runtime_args_by_core_writer = GetRuntimeArgs(program, writer_kernel_id);
+
+    uint32_t start_page = 0;
+    uint32_t num_dev_pages = input.buffer()->buffer_distribution_spec()->tensor_shape_in_pages().volume();
+    uint32_t n_pages_per_core = num_dev_pages / cores.size();
+    uint32_t remainder = num_dev_pages % cores.size();
+
+    for (const auto& core : cores) {
+        uint32_t num_pages_for_core = n_pages_per_core;
+        if (remainder > 0) {
+            num_pages_for_core++;
+            remainder--;
+        }
+        runtime_args_by_core_reader[core.x][core.y][0] = start_page;
+        runtime_args_by_core_reader[core.x][core.y][1] = start_page + num_pages_for_core;
+        runtime_args_by_core_writer[core.x][core.y][0] = start_page;
+        runtime_args_by_core_writer[core.x][core.y][1] = start_page + num_pages_for_core;
+        start_page += num_pages_for_core;
+    }
+}
+
+// Reader factory - wraps the helper with is_reader=true
+template <bool is_reader>
+NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalShardFactory<is_reader>::create(
+    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::tensor_args_t& tensor_args,
+    reshard::tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    auto& output = tensor_return_value;
+
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
 
@@ -138,8 +158,8 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
     auto program = CreateProgram();
 
     // This implementation assumes that input and output grids are the same.
-    auto cores = local_buffer->buffer_distribution_spec()->cores_with_data();
-    auto grid = CoreRangeSet(cores);
+    auto cores_vec = local_buffer->buffer_distribution_spec()->cores_with_data();
+    auto grid = CoreRangeSet(cores_vec);
 
     auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
 
@@ -218,81 +238,92 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
     SetCommonRuntimeArgs(program, brisc_kernel_id, common_runtime_args);
     SetCommonRuntimeArgs(program, ncrisc_kernel_id, common_runtime_args);
 
-    // That unique runtime arguments to 0, and call overrtime_runtime_arguments callback
-    for (const auto& core : cores) {
+    // Set unique runtime arguments to 0
+    for (const auto& core : cores_vec) {
         SetRuntimeArgs(program, brisc_kernel_id, core, {0});
         SetRuntimeArgs(program, ncrisc_kernel_id, core, {0});
     }
-    auto override_runtime_arguments_callback = [brisc_kernel_id, ncrisc_kernel_id, grid, cores, is_reader](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto& input = input_tensors.at(0);
-        const auto& output = output_tensors.at(0);
 
-        // Choose buffer for distribution spec based on is_reader flag
+    // Create cached program with shared variables
+    auto cached_program = NdReshardCopyLocalShardFactory::cached_program_t{
+        std::move(program),
+        {.brisc_kernel_id = brisc_kernel_id, .ncrisc_kernel_id = ncrisc_kernel_id, .grid = grid, .cores = cores_vec}};
+
+    // For now, directly set runtime args
+    {
+        const auto& input = tensor_args.input;
+        const auto& output = tensor_return_value;
         auto local_buffer = is_reader ? input.buffer() : output.buffer();
         auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
         std::vector<uint32_t> common_runtime_args = {
             input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
-        auto& common_runtime_args_brisc = GetCommonRuntimeArgs(program, brisc_kernel_id);
-        auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(program, ncrisc_kernel_id);
+        auto& common_runtime_args_brisc = GetCommonRuntimeArgs(cached_program.program, brisc_kernel_id);
+        auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(cached_program.program, ncrisc_kernel_id);
         for (size_t i = 0; i < common_runtime_args.size(); i++) {
             common_runtime_args_brisc[i] = common_runtime_args[i];
             common_runtime_args_ncrisc[i] = common_runtime_args[i];
         }
 
-        auto& runtime_args_by_core_brisc = GetRuntimeArgs(program, brisc_kernel_id);
-        auto& runtime_args_by_core_ncrisc = GetRuntimeArgs(program, ncrisc_kernel_id);
+        auto& runtime_args_by_core_brisc = GetRuntimeArgs(cached_program.program, brisc_kernel_id);
+        auto& runtime_args_by_core_ncrisc = GetRuntimeArgs(cached_program.program, ncrisc_kernel_id);
 
         auto start_shard_id = 0;
-
-        // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
-        // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, num_data_cores*7, ...]
-        for (const auto& core : cores) {
+        for (const auto& core : cores_vec) {
             runtime_args_by_core_brisc[core.x][core.y][0] = start_shard_id;
             runtime_args_by_core_ncrisc[core.x][core.y][0] = start_shard_id + shard_id_stride / 2;
             ++start_shard_id;
         }
-    };
-    override_runtime_arguments_callback(
-        nullptr, program, {input}, std::vector<std::optional<const Tensor>>{}, {output});
+    }
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program;
 }
 
-/*
-   - Usually is_reader perform better for L1->L1 resharding, but if one of buffers is DRAM, then it's always better to
-   take implementation such that accessing L1 banks are local to the core
-   - For DRAM->DRAM resharding, simple copy of page by page is used.
-*/
-operation::ProgramWithCallbacks nd_reshard_multi_core(const Tensor& input, Tensor& output) {
-    auto input_buffer_type = input.memory_config().buffer_type();
-    auto output_buffer_type = output.memory_config().buffer_type();
-    auto input_page_size = input.buffer()->page_size();
-    auto output_page_size = output.buffer()->page_size();
+template <bool is_reader>
+void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const reshard::operation_attributes_t& operation_attributes,
+    const reshard::tensor_args_t& tensor_args,
+    reshard::tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
 
-    TT_FATAL(
-        input_buffer_type == BufferType::DRAM || input_buffer_type == BufferType::L1,
-        "Input buffer type must be DRAM or L1");
-    TT_FATAL(
-        output_buffer_type == BufferType::DRAM || output_buffer_type == BufferType::L1,
-        "Output buffer type must be DRAM or L1");
+    auto& program = cached_program.program;
+    const auto& brisc_kernel_id = cached_program.shared_variables.brisc_kernel_id;
+    const auto& ncrisc_kernel_id = cached_program.shared_variables.ncrisc_kernel_id;
+    const auto& cores = cached_program.shared_variables.cores;
 
-    if (input_buffer_type == BufferType::DRAM && output_buffer_type == BufferType::DRAM) {
-        return nd_reshard_multicore_copy_pages(input, output);
+    // Choose buffer for distribution spec based on is_reader flag
+    auto local_buffer = is_reader ? input.buffer() : output.buffer();
+    auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
+    auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
+
+    std::vector<uint32_t> common_runtime_args = {
+        input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+    auto& common_runtime_args_brisc = GetCommonRuntimeArgs(program, brisc_kernel_id);
+    auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(program, ncrisc_kernel_id);
+    for (size_t i = 0; i < common_runtime_args.size(); i++) {
+        common_runtime_args_brisc[i] = common_runtime_args[i];
+        common_runtime_args_ncrisc[i] = common_runtime_args[i];
     }
-    if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
-        input_page_size != output_page_size) {
-        return nd_reshard_multicore_copy_local_shard(input, output, true);
+
+    auto& runtime_args_by_core_brisc = GetRuntimeArgs(program, brisc_kernel_id);
+    auto& runtime_args_by_core_ncrisc = GetRuntimeArgs(program, ncrisc_kernel_id);
+
+    auto start_shard_id = 0;
+
+    // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
+    // ncrisc copies shards [num_data_cores, num_data_cores*3, num_data_cores*5, num_data_cores*7, ...]
+    for (const auto& core : cores) {
+        runtime_args_by_core_brisc[core.x][core.y][0] = start_shard_id;
+        runtime_args_by_core_ncrisc[core.x][core.y][0] = start_shard_id + shard_id_stride / 2;
+        ++start_shard_id;
     }
-    if (input_buffer_type == BufferType::DRAM) {
-        return nd_reshard_multicore_copy_local_shard(input, output, false);
-    }
-    return nd_reshard_multicore_copy_local_shard(input, output, true);
 }
-}  // namespace ttnn::operations::data_movement::detail
+
+// Explicit template instantiations
+template struct NdReshardCopyLocalShardFactory<true>;
+template struct NdReshardCopyLocalShardFactory<false>;
+
+}  // namespace ttnn::operations::data_movement::program

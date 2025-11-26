@@ -4,8 +4,58 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "reshard_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
-tt::tt_metal::operation::ProgramWithCallbacks nd_reshard_multi_core(const Tensor& input, Tensor& output);
-}
+namespace ttnn::operations::data_movement::program {
+
+// Factory for DRAM->DRAM nd reshard (simple page by page copy)
+struct NdReshardCopyPagesFactory {
+    struct NdReshardCopyPagesSharedVariables {
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        CoreRangeSet grid{};
+        std::vector<CoreCoord> cores{};
+    };
+
+    using shared_variables_t = NdReshardCopyPagesSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+};
+
+// Factory for L1<->DRAM or L1->L1 (different page sizes) nd reshard - Reader variant
+template <bool is_reader>
+struct NdReshardCopyLocalShardFactory {
+    struct NdReshardCopyLocalShardSharedVariables {
+        tt::tt_metal::KernelHandle brisc_kernel_id{};
+        tt::tt_metal::KernelHandle ncrisc_kernel_id{};
+        CoreRangeSet grid{};
+        std::vector<CoreCoord> cores{};
+    };
+
+    using shared_variables_t = NdReshardCopyLocalShardSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const reshard::operation_attributes_t& operation_attributes,
+        const reshard::tensor_args_t& tensor_args,
+        reshard::tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::data_movement::program
