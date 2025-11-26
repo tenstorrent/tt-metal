@@ -1664,6 +1664,7 @@ class MasterConfigLoader:
             input_specs_list = []
             compute_configs_list = []
             dtypes_list = []
+            config_tensors_in_dram_list = []
 
             for config in configs:
                 params = self._extract_conv2d_parameters(config)
@@ -1693,18 +1694,26 @@ class MasterConfigLoader:
                     compute_configs_list.append(params.get("compute_config"))
                     # Extract dtype if available
                     dtypes_list.append(params.get("dtype", "bfloat16"))
+                    # Extract config_tensors_in_dram if available (default True for model_traced to help with OOM)
+                    config_tensors_in_dram_list.append(params.get("config_tensors_in_dram", True))
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d, compute_config, and dtype to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, and config_tensors_in_dram to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
                 paired_configs = list(
-                    zip(input_specs_list, [False] * len(input_specs_list), compute_configs_list, dtypes_list)
+                    zip(
+                        input_specs_list,
+                        [False] * len(input_specs_list),
+                        compute_configs_list,
+                        dtypes_list,
+                        config_tensors_in_dram_list,
+                    )
                 )
                 return {
-                    "input_specs,is_conv1d,compute_config,dtype": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}

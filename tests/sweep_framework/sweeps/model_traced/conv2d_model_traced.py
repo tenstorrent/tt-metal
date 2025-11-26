@@ -52,8 +52,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_specs,
     is_conv1d=False,
+    compute_config=None,
+    dtype=None,
+    config_tensors_in_dram=False,
     storage_type="StorageType::DEVICE",
-    config_tensors_in_dram=True,
     *,
     device,
 ) -> list:
