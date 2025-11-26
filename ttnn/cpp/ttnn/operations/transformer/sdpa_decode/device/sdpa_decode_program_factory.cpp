@@ -1062,7 +1062,6 @@ void SdpaDecodeProgramFactory::override_runtime_arguments(
     const auto& cb_in9_id = shared_variables.cb_in9_id;
     const auto& is_output_sharded = shared_variables.is_output_sharded;
     const auto& cb_out4_id = shared_variables.cb_out4_id;
-    // const auto& B = shared_variables.B;
     const auto& q_heads_parallel_factor = shared_variables.q_heads_parallel_factor;
     const auto& cur_pos_ids = operation_attributes.cur_pos;
     const bool use_cur_pos_tensor = shared_variables.use_cur_pos_tensor;
