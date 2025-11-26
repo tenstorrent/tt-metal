@@ -9,7 +9,6 @@
 #include "nlp_concat_heads_boltz_device_operation_types.hpp"
 
 namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
-namespace program {
 
 struct NLPConcatHeadsBoltzSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id;
@@ -35,5 +34,4 @@ struct NLPConcatHeadsBoltzProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace program
 }  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz

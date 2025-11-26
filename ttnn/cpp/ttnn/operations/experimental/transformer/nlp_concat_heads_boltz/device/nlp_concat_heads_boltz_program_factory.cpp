@@ -235,5 +235,4 @@ void NLPConcatHeadsBoltzProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace program
 }  // namespace ttnn::operations::experimental::nlp_concat_heads_boltz

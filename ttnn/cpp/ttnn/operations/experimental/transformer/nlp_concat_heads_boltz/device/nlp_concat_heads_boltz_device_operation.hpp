@@ -18,7 +18,7 @@ struct NLPConcatHeadsBoltzDeviceOperation {
     using tensor_args_t = nlp_concat_heads_boltz::tensor_args_t;
     using spec_return_value_t = nlp_concat_heads_boltz::spec_return_value_t;
     using tensor_return_value_t = nlp_concat_heads_boltz::tensor_return_value_t;
-    using program_factory_t = std::variant<program::NLPConcatHeadsBoltzProgramFactory>;
+    using program_factory_t = std::variant<NLPConcatHeadsBoltzProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
