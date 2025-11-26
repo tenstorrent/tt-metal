@@ -19,6 +19,7 @@ void process_and_sort_tiles(
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         acquire_dst();
         // local sort into k groups
+        // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
         cb_wait_front(input_cb_index, tiles_to_wait);
         cb_wait_front(index_cb_index, tiles_to_wait);
