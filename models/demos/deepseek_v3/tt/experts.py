@@ -215,9 +215,11 @@ class Experts(AbstractModule):
         _, _, num_tokens, hidden_size = x.shape
         num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
         x = ttnn.reshape(x, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, hidden_size))
+        x2 = ttnn.clone(x)
 
         # Gate and up projections
-        w1_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w1_experts"])
+        w1_out = ttnn.sparse_matmul(x2, sparsity=sparsity, **cfg["w1_experts"])
+        ttnn.deallocate(x2)
         w3_out = ttnn.sparse_matmul(x, sparsity=sparsity, **cfg["w3_experts"])
 
         # Apply activation and multiply
