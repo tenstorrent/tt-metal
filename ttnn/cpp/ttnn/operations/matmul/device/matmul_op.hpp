@@ -251,8 +251,8 @@ struct Matmul {
     const std::optional<const CoreCoord> user_core_coord = std::nullopt;
     const std::optional<UnaryWithParam> user_fused_activation = std::nullopt;
     const bool user_run_batched = false;
-    const bool transpose_a = false;
-    const bool transpose_b = false;
+    bool transpose_a = false;
+    bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
@@ -385,6 +385,16 @@ Tensor sparse_matmul(
 }  // namespace ttnn::operations::matmul
 
 namespace bmm_op_utils {
+
+using ttnn::operations::matmul::Matmul;
+
+inline ttnn::operations::matmul::MatmulProgramConfig get_program_config(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const uint32_t bias_single_tile_size,
+    const ttnn::operations::matmul::Matmul* matmul);
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     uint32_t per_core_M,

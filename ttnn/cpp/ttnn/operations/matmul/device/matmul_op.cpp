@@ -1345,15 +1345,73 @@ inline MatmulProgramConfig generate_matmul_program_config(
     }
 }
 
+tt::tt_metal::Tile get_output_tile(
+    const MemoryConfig& output_mem_config,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const std::optional<const tt::tt_metal::Tile> output_tile,
+    const std::optional<const tt::tt_metal::Tile> optional_output_tensor_tile) {
+    if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
+        TT_FATAL(
+            !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
+            "Matmul cannot have both an output_tile and an optional_output_tensor. Configure the tile type of the "
+            "output tensor instead if both are required.");
+        const auto& override_output_tile =
+            output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
+        const auto& out_tile_shape = override_output_tile.get_tile_shape();
+
+        const uint32_t in0_tile_h = in0_tile.get_height();
+        const uint32_t in1_tile_w = in1_tile.get_width();
+
+        TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
+        TT_FATAL(
+            out_tile_shape[1] % in1_tile_w == 0,
+            "the override output tile width ({}) must be a multiple of in1 tile width ({})",
+            out_tile_shape[1],
+            in1_tile_w);
+        TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
+        TT_FATAL(
+            out_tile_shape[0] == in0_tile_h,
+            "the override output tile height ({}) must equal to the in0 tile height ({})",
+            out_tile_shape[0],
+            in0_tile_h);
+        if (out_tile_shape[1] != in1_tile_w) {
+            TT_FATAL(
+                out_tile_shape[0] <= constants::FACE_HEIGHT,
+                "the override output tile height ({}) must equal or less to face height ({})",
+                out_tile_shape[0],
+                constants::FACE_HEIGHT);
+        }
+        if (!output_mem_config.is_sharded()) {
+            TT_FATAL(
+                out_tile_shape[1] == in1_tile_w,
+                "the override output tile width ({}) must equal the in0 tile width ({})",
+                out_tile_shape[1],
+                in1_tile_w);
+        }
+
+        return override_output_tile;
+    } else {
+        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
+    }
+}
+
+}  // namespace
+
+namespace bmm_op_utils {
+
+using ttnn::operations::matmul::Matmul;
+
 inline MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool transpose_a,
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
-    const struct Matmul* matmul) {
-    if (matmul->program_config.has_value()) {
-        return matmul->program_config.value();
+    const Matmul* matmul) {
+    // Explicitly dereference the pointer to resolve incomplete type error.
+    if ((*matmul).program_config.has_value()) {
+        return (*matmul).program_config.value();
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
@@ -1409,61 +1467,6 @@ inline MatmulProgramConfig get_program_config(
         config);
     return config;
 }
-
-tt::tt_metal::Tile get_output_tile(
-    const MemoryConfig& output_mem_config,
-    const tt::tt_metal::Tile& in0_tile,
-    const tt::tt_metal::Tile& in1_tile,
-    const std::optional<const tt::tt_metal::Tile> output_tile,
-    const std::optional<const tt::tt_metal::Tile> optional_output_tensor_tile) {
-    if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
-        TT_FATAL(
-            !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
-            "Matmul cannot have both an output_tile and an optional_output_tensor. Configure the tile type of the "
-            "output tensor instead if both are required.");
-        const auto& override_output_tile =
-            output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
-        const auto& out_tile_shape = override_output_tile.get_tile_shape();
-
-        const uint32_t in0_tile_h = in0_tile.get_height();
-        const uint32_t in1_tile_w = in1_tile.get_width();
-
-        TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
-        TT_FATAL(
-            out_tile_shape[1] % in1_tile_w == 0,
-            "the override output tile width ({}) must be a multiple of in1 tile width ({})",
-            out_tile_shape[1],
-            in1_tile_w);
-        TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
-        TT_FATAL(
-            out_tile_shape[0] == in0_tile_h,
-            "the override output tile height ({}) must equal to the in0 tile height ({})",
-            out_tile_shape[0],
-            in0_tile_h);
-        if (out_tile_shape[1] != in1_tile_w) {
-            TT_FATAL(
-                out_tile_shape[0] <= constants::FACE_HEIGHT,
-                "the override output tile height ({}) must equal or less to face height ({})",
-                out_tile_shape[0],
-                constants::FACE_HEIGHT);
-        }
-        if (!output_mem_config.is_sharded()) {
-            TT_FATAL(
-                out_tile_shape[1] == in1_tile_w,
-                "the override output tile width ({}) must equal the in0 tile width ({})",
-                out_tile_shape[1],
-                in1_tile_w);
-        }
-
-        return override_output_tile;
-    } else {
-        return tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
-    }
-}
-
-}  // namespace
-
-namespace bmm_op_utils {
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const uint32_t per_core_M,
@@ -1909,7 +1912,7 @@ void Matmul::validate(
         auto bias_data_format = tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
-    MatmulProgramConfig chosen_program_config = get_program_config(
+    auto chosen_program_config = bmm_op_utils::get_program_config(
         input_tensor_a, input_tensor_b, this->transpose_a, this->transpose_b, bias_single_tile_size, this);
 
     // Transpose_a is only supported for MatmulMultiCoreReuseMultiCastProgramConfig
@@ -2633,7 +2636,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
             auto bias_data_format = tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
             bias_single_tile_size = tt::tile_size(bias_data_format);
         }
-        MatmulProgramConfig chosen_program_config = get_program_config(
+        MatmulProgramConfig chosen_program_config = bmm_op_utils::get_program_config(
             input_tensor_a, input_tensor_b, this->transpose_a, this->transpose_b, bias_single_tile_size, this);
         return std::visit(
             [&](const auto& program_config) -> std::vector<TensorSpec> {
@@ -2840,7 +2843,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
         bias_single_tile_size = tt::tile_size(bias_data_format);
     }
 
-    MatmulProgramConfig chosen_program_config = get_program_config(
+    MatmulProgramConfig chosen_program_config = bmm_op_utils::get_program_config(
         input_tensor_a, input_tensor_b, this->transpose_a, this->transpose_b, bias_single_tile_size, this);
 
     return std::visit(
@@ -3130,7 +3133,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
     const auto& sparsity = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
-    auto chosen_program_config = get_program_config(
+    auto chosen_program_config = bmm_op_utils::get_program_config(
         input_tensor_a,
         input_tensor_b,
         /*transpose_a=*/false,
