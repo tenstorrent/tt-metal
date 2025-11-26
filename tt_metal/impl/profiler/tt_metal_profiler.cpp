@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include <device_pool.hpp>
 #include <dispatch_core_common.hpp>
 #include <host_api.hpp>
 #include <profiler.hpp>
@@ -54,6 +53,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push

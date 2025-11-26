@@ -41,7 +41,6 @@ class ModelArgs:
             logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
         self.optimizations = None
         self.cache_hf = cache_hf
-        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
@@ -83,7 +82,7 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
+        self.model_name = "gpt-oss-120b" if "gpt-oss-120b" in self.model_path else "gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -97,13 +96,25 @@ class ModelArgs:
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
+        """
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
     def get_trace_prefill_supported_seq_lens(self):
-        default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
-        }
+        # No supported sequence lengths for GPT-OSS model, see issue below
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
+        default_supported_seq_lens = {}
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {

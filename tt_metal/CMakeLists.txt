@@ -42,7 +42,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/circular_buffer_constants.h
     api/tt-metalium/cluster.hpp
     api/tt-metalium/constants.hpp
-    api/tt-metalium/control_plane.hpp
+    api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
@@ -51,12 +51,12 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
-    api/tt-metalium/edm_fabric_counters.hpp
+    api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     api/tt-metalium/event.hpp
     api/tt-metalium/experimental/profiler.hpp
-    api/tt-metalium/fabric.hpp
-    api/tt-metalium/fabric_edm_types.hpp
-    api/tt-metalium/fabric_types.hpp
+    api/tt-metalium/experimental/fabric/fabric.hpp
+    api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
+    api/tt-metalium/experimental/fabric/fabric_types.hpp
     api/tt-metalium/global_circular_buffer.hpp
     api/tt-metalium/global_semaphore.hpp
     api/tt-metalium/graph_tracking.hpp
@@ -79,8 +79,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/mesh_device.hpp
     api/tt-metalium/mesh_device_view.hpp
     api/tt-metalium/mesh_event.hpp
-    api/tt-metalium/mesh_graph.hpp
-    api/tt-metalium/mesh_graph_descriptor.hpp
+    api/tt-metalium/experimental/fabric/mesh_graph.hpp
+    api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
     api/tt-metalium/mesh_socket.hpp
     api/tt-metalium/mesh_trace_id.hpp
     api/tt-metalium/mesh_workload.hpp
@@ -92,7 +92,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
     api/tt-metalium/queue_id.hpp
-    api/tt-metalium/routing_table_generator.hpp
+    api/tt-metalium/experimental/fabric/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
@@ -109,6 +109,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
+    api/tt-metalium/experimental/pinned_memory.hpp
 )
 target_sources(
     tt_metal
@@ -160,8 +161,8 @@ target_sources(
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/constants.hpp
-            api/tt-metalium/fabric_edm_types.hpp
-            api/tt-metalium/edm_fabric_counters.hpp
+            api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
+            api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/blackhole_140_arch_eth_dispatch.yaml
             core_descriptors/blackhole_140_arch_fabric_mux.yaml
@@ -213,8 +214,6 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
-            jit_build/genfiles.cpp
-            jit_build/genfiles.hpp
             ${TT_LLK_HEADERS}
 )
 

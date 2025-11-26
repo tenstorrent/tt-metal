@@ -6,7 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
@@ -117,7 +117,7 @@ uint32_t default_workers(
 }
 
 uint32_t default_chunks_per_sync(
-    ttnn::ccl::Topology topology, uint32_t tiles_to_read, uint32_t tiles_read, uint32_t tile_granularity) {
+    ttnn::ccl::Topology topology, uint32_t num_tiles_to_process_per_slice, uint32_t tile_granularity) {
     // For Line, as early as 20 chunks per sync we get statistically significant performance improvements
     // For Ring there is no statistically significant performance improvements until 80 chunks per sync, which beats the
     // default value of syncing once This was determined by the sweep test:
@@ -127,7 +127,7 @@ uint32_t default_chunks_per_sync(
     constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
     uint32_t default_value =
         topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
-    uint32_t total_chunks = std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1);
+    uint32_t total_chunks = std::max(num_tiles_to_process_per_slice / tile_granularity / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
 }
 
@@ -1052,16 +1052,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         input_tensor_Wt,
                         normalized_dim);
 
-                uint32_t chunks_per_sync_val;
-                if (normalized_dim == 0) {
-                    chunks_per_sync_val =
-                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                            topology, start_tiles_to_read * slice_B, start_tiles_read * slice_B, tile_granularity));
-                } else {
-                    chunks_per_sync_val =
-                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                            topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
-                }
+                // for dim 0 scatters we process each slice in batches
+                // for all other dims we process each slice in channels
+                uint32_t tiles_to_process_per_slice =
+                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                        topology, tiles_to_process_per_slice, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> reader_rt_args = {
@@ -1761,16 +1758,13 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                         input_tensor_Wt,
                         normalized_dim);
 
-                uint32_t chunks_per_sync_val;
-                if (normalized_dim == 0) {
-                    chunks_per_sync_val =
-                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                            topology, start_tiles_to_read * slice_B, start_tiles_read * slice_B, tile_granularity));
-                } else {
-                    chunks_per_sync_val =
-                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                            topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
-                }
+                // for dim 0 scatters we process each slice in batches
+                // for all other dims we process each slice in channels
+                uint32_t tiles_to_process_per_slice =
+                    (start_tiles_to_read - start_tiles_read) * (normalized_dim == 0 ? slice_B : slice_C);
+                uint32_t chunks_per_sync_val =
+                    chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                        topology, tiles_to_process_per_slice, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader RT args

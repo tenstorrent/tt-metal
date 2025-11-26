@@ -23,6 +23,14 @@ using tt::CoordSystem;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
+struct ConnectivityValidationConfig {
+    std::filesystem::path output_path;
+    std::optional<std::string> cabling_descriptor_path = std::nullopt;
+    std::optional<std::string> deployment_descriptor_path = std::nullopt;
+    std::optional<std::string> fsd_path = std::nullopt;
+    bool fail_on_warning = false;
+};
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -56,13 +64,26 @@ bool generate_link_metrics(
     bool sweep_traffic_configs,
     uint32_t packet_size_bytes,
     uint32_t data_size,
-    const std::filesystem::path& output_path);
+    const ConnectivityValidationConfig& validation_config);
 
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
 tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
+    PhysicalSystemDescriptor& physical_system_descriptor);
+
+std::string get_factory_system_descriptor_path(
+    const std::optional<std::string>& cabling_descriptor_path,
+    const std::optional<std::string>& deployment_descriptor_path,
+    const std::optional<std::string>& fsd_path,
+    const std::string& output_path,
+    const std::vector<std::string>& hostnames);
+
+tt_metal::AsicTopology validate_connectivity(
+    const std::string& fsd_path,
+    const std::string& gsd_yaml_path,
+    bool fail_on_warning,
     PhysicalSystemDescriptor& physical_system_descriptor);
 
 }  // namespace tt::scaleout_tools

@@ -21,15 +21,16 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -94,10 +95,6 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
     {"Torus", Topology::Torus},
-});
-
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"LowLatency", RoutingType::LowLatency},
 });
 
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
@@ -459,7 +456,7 @@ private:
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
         resolved_test.global_sync_configs = parsed_test.global_sync_configs;
-        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.performance_test_mode = parsed_test.performance_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
@@ -661,8 +658,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -687,8 +684,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -1488,10 +1485,6 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
-    static std::string to_string(RoutingType rtype) {
-        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
-    }
-
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
@@ -1581,9 +1574,12 @@ private:
             out << YAML::Value << config.seed;
         }
 
-        if (config.benchmark_mode) {
+        if (config.performance_test_mode == PerformanceTestMode::BANDWIDTH) {
             out << YAML::Key << "benchmark_mode";
-            out << YAML::Value << config.benchmark_mode;
+            out << YAML::Value << true;
+        } else if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
+            out << YAML::Key << "latency_test_mode";
+            out << YAML::Value << true;
         }
 
         if (config.global_sync) {
@@ -1664,10 +1660,6 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "topology";
         out << YAML::Value << to_string(config.topology);
-        if (config.routing_type.has_value()) {
-            out << YAML::Key << "routing_type";
-            out << YAML::Value << to_string(config.routing_type.value());
-        }
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());

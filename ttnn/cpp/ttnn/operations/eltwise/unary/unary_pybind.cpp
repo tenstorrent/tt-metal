@@ -476,6 +476,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -510,14 +511,16 @@ void bind_unary_operation_with_fast_and_approximate_mode(
                const Tensor& input_tensor,
                const bool parameter,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, parameter, memory_config, output_tensor);
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, parameter, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("fast_and_approximate_mode") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt});
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 template <typename unary_operation_t>
