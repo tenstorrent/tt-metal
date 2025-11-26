@@ -11,6 +11,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "reduce_to_root_op.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::ccl {
@@ -291,9 +292,22 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
 
     const auto& coords = tensor_coords.coords();
-
+    // assume linear topology for now
+    auto topology = tt::tt_fabric::Topology::Linear;
     for (const auto& coord : coords) {
-        auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value, semaphores);
+        std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor_l, coord, 1, topology, std::nullopt);
+
+        std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor_l, coord, -1, topology, std::nullopt);
+
+        if (coord == operation_attributes.root_coord) {
+            if (forward_coord.has_value() == 0 || backward_coord.has_value() == 0) {
+                TT_FATAL(false, "Root device must have both forward and backward neighbors in reduce_to_root op");
+            }
+        }
+        auto cached_workload = create_at(
+            operation_attributes, coord, forward_coord, backward_coord, tensor_args, tensor_return_value, semaphores);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_workload.program));
         shared_variables.emplace(coord, std::move(cached_workload.shared_variables));
     }
@@ -303,13 +317,22 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
 cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     const auto& root_coordinate = operation_attributes.root_coord;
 
     return reduce_to_root_program_factory(
-        tensor_args, operation_attributes, root_coordinate, mesh_coordinate, tensor_return_value, semaphores);
+        tensor_args,
+        operation_attributes,
+        root_coordinate,
+        mesh_coordinate,
+        forward_coord,
+        backward_coord,
+        tensor_return_value,
+        semaphores);
 
     return {Program{}, shared_variables_t{.semaphores = semaphores}};
 }

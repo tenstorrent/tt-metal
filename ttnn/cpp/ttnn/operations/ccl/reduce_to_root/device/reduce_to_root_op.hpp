@@ -72,6 +72,8 @@ struct ReduceToRootOp {
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
+            std::optional<MeshCoordinate>& forward_coord,
+            std::optional<MeshCoordinate>& backward_coord,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
             std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
@@ -173,6 +175,8 @@ device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
     const MeshCoordinate& device_coordinate,
+    std::optional<MeshCoordinate>& forward_coord,
+    std::optional<MeshCoordinate>& backward_coord,
     ReduceToRootOp::tensor_return_value_t& output_tensor,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores);
 }  // namespace operations::ccl

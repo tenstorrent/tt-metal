@@ -83,6 +83,8 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -137,7 +139,7 @@ void kernel_main() {
     cb_wait_front(cb_id_l, chunk_size);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
     tt_memmove<false, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
-    cb_pop_front(cb_id_l, 1);
+    cb_pop_front(cb_id_l, chunk_size);
 
     cb_wait_front(cb_id_s, 1);
     const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);

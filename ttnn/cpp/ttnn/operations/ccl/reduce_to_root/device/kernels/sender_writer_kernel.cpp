@@ -51,6 +51,15 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
+    DPRINT << "the ct args for fabric mux are: \n";
+    DPRINT << "num buffers per channel: " << (uint32_t)fabric_mux_num_buffers_per_channel << "\n";
+    DPRINT << "channel buffer size bytes: " << (uint32_t)fabric_mux_channel_buffer_size_bytes << "\n";
+    DPRINT << "status address: " << (uint32_t)fabric_mux_status_address << "\n";
+    DPRINT << "termination signal address: " << (uint32_t)fabric_mux_termination_signal_address << "\n";
+    DPRINT << "num mux clients: " << (uint32_t)num_mux_clients << "\n";
+
+    uint32_t chunk_size = 4;  // 8; HERE
+
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
     const uint32_t page_idx_start = get_arg_val<uint32_t>(1);
     const uint32_t page_idx_end = get_arg_val<uint32_t>(2);
@@ -74,6 +83,8 @@ void kernel_main() {
         payload_size_bytes + 2 * aligned_page_size_bytes;  // add the extra size for s and m
     DPRINT << "new payload size bytes: " << (uint32_t)new_payload_size_bytes << ENDL();
 
+    DPRINT << "core noc x: " << (uint32_t)core_noc_x << ", y: " << (uint32_t)core_noc_y << "\n";
+
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 11;
 
@@ -96,6 +107,29 @@ void kernel_main() {
 
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
+
+    DPRINT << "fabric mux rt args are: \n";
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << ", y: " << (uint32_t)fabric_mux_y
+           << ", channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+    DPRINT << "fabric_mux_channel_base_address: " << (uint32_t)fabric_mux_channel_base_address << "\n";
+    DPRINT << "fabric_mux_connection_info_address: " << (uint32_t)fabric_mux_connection_info_address << "\n";
+    DPRINT << "fabric_mux_connection_handshake_address: " << (uint32_t)fabric_mux_connection_handshake_address << "\n";
+    DPRINT << "fabric_mux_flow_control_address: " << (uint32_t)fabric_mux_flow_control_address << "\n";
+    DPRINT << "fabric_mux_buffer_index_address: " << (uint32_t)fabric_mux_buffer_index_address << "\n";
+    DPRINT << "termination master noc x: " << (uint32_t)termination_master_noc_x
+           << ", y: " << (uint32_t)termination_master_noc_y << "\n";
+    DPRINT << "termination sync address: " << (uint32_t)termination_sync_address << "\n";
+    DPRINT << "local fabric mux status address: " << (uint32_t)local_fabric_mux_status_address << "\n";
+    DPRINT << "local flow control address: " << (uint32_t)local_flow_control_address << "\n";
+    DPRINT << "local teardown address: " << (uint32_t)local_teardown_address << "\n";
+    DPRINT << "local buffer index address: " << (uint32_t)local_buffer_index_address << "\n";
+    DPRINT << "END OF fabric mux rt args\n";
+
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << ", y: " << (uint32_t)fabric_mux_y
+           << ", channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+    DPRINT << "is forward: " << (uint32_t)is_forward << "\n";
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
@@ -125,7 +159,7 @@ void kernel_main() {
     // set up packet header buffer
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
-    // cb_push_back(packet_header_cb_id, 1);
+    cb_push_back(packet_header_cb_id, 1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
@@ -137,73 +171,55 @@ void kernel_main() {
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
-    uint32_t packet_idx = page_idx_start / max_pages_per_packet_l;
+    uint32_t packet_idx = 0;  // page_idx_start / max_pages_per_packet_l;
 
-    DPRINT << "before semaphore wait\n";
+    const uint64_t sem_addr = get_noc_addr(core_noc_x, core_noc_y, receive_semaphore_addr);
+    DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sem_addr << "\n";
     // wait for receiver to signal it is ready
-    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
-
-    DPRINT << "waiting on semaphore at addr: " << (uint32_t)receive_semaphore_addr << "\n";
-    // HEREEEE Change to 1 if this doesn't work
+    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    DPRINT << "before waiting on receiver semaphore\n";
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
     // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
     // in subsequent program cache hits
     // noc_semaphore_set(local_semaphore_ptr, 0);
 
-    DPRINT << "before loop\n";
-    for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
-        cb_wait_front(cb_id_l, 1);
-        uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
-        print_full_tile(cb_id_l, 0, false);
-        const uint32_t src_addr = src_page_base_addr;
-        const uint32_t transfer_size_bytes = std::min(page_size_bytes, payload_size_bytes);
+    DPRINT << "after waiting on receiver semaphore\n";
 
-        // copy page to packet buffer with offset
-        const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
-        tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
-        ++packet_page_idx;
-        if (packet_page_idx >= curr_pages_per_packet) {
-            // add s and m data to the packet before sending it
-            DPRINT << "adding s and m data to the packet before sending it\n";
-            cb_wait_front(cb_id_m, 1);
-            const uint32_t src_page_base_addr_m = get_read_ptr(cb_id_m);
-            uint32_t packet_m_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
-            tt_memmove<false, false, false, 0>(packet_m_addr, src_page_base_addr_m, page_size_bytes);
-            cb_pop_front(cb_id_m, 1);
-            cb_wait_front(cb_id_s, 1);
-            const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);
-            tt_memmove<false, false, false, 0>(
-                packet_m_addr + aligned_page_size_bytes, src_page_base_addr_s, page_size_bytes);
-            cb_pop_front(cb_id_s, 1);
-            DPRINT << "finished adding s and m data to the packet\n";
-            // const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);
-            const uint32_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
-            DPRINT << "before NOC UNICAST WRITE\n";
-            packet_header_ptr->to_noc_unicast_write(
-                NocUnicastCommandHeader{dst_noc_addr}, align(new_payload_size_bytes, alignment));
+    cb_wait_front(cb_id_l, chunk_size);
+    uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
+    tt_memmove<false, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
+    cb_pop_front(cb_id_l, chunk_size);
 
-            DPRINT << "AFTER NOC UNICAST WRITE\n";
-            // perform_payload_send(mux_connection, packet_base_addr, new_payload_size_bytes, packet_header_ptr);
-            mux_connection.wait_for_empty_write_slot();
-            mux_connection.send_payload_without_header_non_blocking_from_address(
-                packet_base_addr, new_payload_size_bytes);
-            mux_connection.send_payload_flush_non_blocking_from_address(
-                (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
+    DPRINT << "after moving l tensor data to packet buffer\n";
+    cb_wait_front(cb_id_s, 1);
+    const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);
+    tt_memmove<false, false, false, 0>(
+        packet_base_addr + payload_size_bytes, src_page_base_addr_s, aligned_page_size_bytes);
+    cb_pop_front(cb_id_s, 1);
 
-            DPRINT << "performing packet send for packet idx: " << (uint32_t)packet_idx << ENDL();
-            // reset counters
-            packet_page_idx = 0;
-            curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx - 1);
+    DPRINT << "after moving s tensor data to packet buffer\n";
+    cb_wait_front(cb_id_m, 1);
+    const uint32_t src_page_base_addr_m = get_read_ptr(cb_id_m);
+    tt_memmove<false, false, false, 0>(
+        packet_base_addr + payload_size_bytes + aligned_page_size_bytes, src_page_base_addr_m, aligned_page_size_bytes);
+    cb_pop_front(cb_id_m, 1);
 
-            ++packet_idx;
-        }
-        cb_pop_front(cb_id_l, 1);
-    }
+    DPRINT << "print data from packet cb before send\n";
+    cb_push_back(packet_cb_id, 1);
 
-    DPRINT << "after loop\n";
+    // const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);
+    const uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
+    packet_header_ptr->to_noc_unicast_write(
+        NocUnicastCommandHeader{dst_noc_addr}, align(new_payload_size_bytes, alignment));
+
+    // perform_payload_send(mux_connection, packet_base_addr, new_payload_size_bytes, packet_header_ptr);
+    mux_connection.wait_for_empty_write_slot();
+    mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
+    mux_connection.send_payload_flush_non_blocking_from_address(
+        (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
     cb_reserve_back(packet_header_cb_id, 1);
-    uint32_t sem_header_addr = get_read_ptr(packet_header_cb_id);
+    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
