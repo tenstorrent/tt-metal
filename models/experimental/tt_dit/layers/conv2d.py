@@ -228,7 +228,7 @@ class Conv2d(Module):
             bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
             state["bias"] = torch.cat([bias, bias_zeros])
 
-    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
@@ -309,6 +309,8 @@ class Conv2d(Module):
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
         if self.in_mesh_axis is not None:
-            x = self.ccl_manager.reduce_scatter_persistent_buffer(x, dim=-1, mesh_axis=self.in_mesh_axis)
+            x = self.ccl_manager.reduce_scatter(
+                x, dim=-1, mesh_axis=self.in_mesh_axis, use_persistent_buffer=use_persistent_buffer
+            )
 
         return x
