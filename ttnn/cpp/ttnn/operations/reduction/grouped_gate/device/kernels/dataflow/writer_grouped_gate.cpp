@@ -4,10 +4,11 @@
 
 #include <cstdint>
 
-void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+void print_tile(
+    uint32_t cb_idx, uint32_t tile_idx, bool untilize = true, uint16_t start_row = 0, uint16_t end_row = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
+    for (uint16_t r = start_row; r < end_row; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
                       cb_idx,
@@ -73,16 +74,74 @@ FORCE_INLINE void generate_index_tiles(
     }
 }
 
+// Vertically along each tile, write index 0, ..., topk_groups - 1
+FORCE_INLINE void generate_group_indices_tiles(
+    const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t topk_groups, uint32_t tokens) {
+    cb_reserve_back(group_indices_cb_index, width_tiles);
+    uint32_t base_write_addr = get_write_ptr(group_indices_cb_index);
+    constexpr uint32_t face_line = 16;
+    constexpr uint32_t face_line_bytes = 32;
+    constexpr uint32_t num_tile_elements = 1024;
+    constexpr uint32_t num_tile_elements_div_2 = num_tile_elements / 2;
+    constexpr uint32_t face_size_bytes = 512;
+    constexpr uint32_t tile_size_bytes = 2048;
+    // G x W x T slice of the tile is written
+    // G x T subset of the tile is written, where G is the topk_groups and T is the tokens
+    // handle first face line
+    // first row –> 0, 0, 0, second row –> 1, 1, 1, topk_groups - 1 row –> topk_groups - 1, topk_groups - 1, topk_groups
+    // - 1
+    volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
+    for (uint32_t group_index = 0; group_index < topk_groups; group_index++) {
+        // 16 uint16_t values is 8 uint32_t writes
+        for (uint32_t i = 0; i < face_line / 2; i++) {
+            write_ptr[i] = (group_index) << 16 | group_index;
+        }
+        if (group_index > 15) {
+            // skip to face 3
+            constexpr uint32_t skip_elements = face_size_bytes / sizeof(uint32_t);
+            write_ptr += skip_elements;
+        } else {
+            // skip to next face line
+            constexpr uint32_t skip_elements = face_line_bytes / sizeof(uint32_t);
+            write_ptr += skip_elements;
+        }
+    }
+    // then use noc to write the rest of the faces
+    uint64_t dm_engine_index_write_offset_face_1 = get_noc_addr(base_write_addr);
+    // if topk_groups is greater than 16, we need to write the third face
+    uint64_t dm_engine_index_write_offset_face_3 = get_noc_addr(base_write_addr + 2 * face_size_bytes);
+
+    // copy face 1 to face 2 and face 3 to face 4
+    uint32_t face_2_l1_write_addr = base_write_addr + face_size_bytes;
+    uint32_t face_4_l1_write_addr = base_write_addr + 3 * face_size_bytes;
+    noc_async_read(dm_engine_index_write_offset_face_1, face_2_l1_write_addr, face_size_bytes);
+    noc_async_read(dm_engine_index_write_offset_face_3, face_4_l1_write_addr, face_size_bytes);
+    uint32_t tile_write_addr = base_write_addr + tile_size_bytes;
+    noc_async_read_barrier();
+    // then copy the tile to the rest of the tiles
+    for (uint32_t tile_index = 1; tile_index < width_tiles; tile_index++) {
+        noc_async_read(dm_engine_index_write_offset_face_1, tile_write_addr, tile_size_bytes);
+        tile_write_addr += tile_size_bytes;
+    }
+    noc_async_read_barrier();
+    for (uint32_t tile_index = 0; tile_index < width_tiles; tile_index++) {
+        print_tile(group_indices_cb_index, tile_index, true, 0, topk_groups + 1);
+    }
+    cb_push_back(group_indices_cb_index, width_tiles);
+}
+
 void kernel_main() {
     constexpr uint32_t weights_cb_index = get_named_compile_time_arg_val("weights_cb_index");
     constexpr uint32_t indices_cb_index = get_named_compile_time_arg_val("indices_cb_index");
     constexpr uint32_t weights_page_size = get_named_compile_time_arg_val("weights_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t topk_index_creation_cb_index = get_named_compile_time_arg_val("topk_index_creation_cb_index");
+    constexpr uint32_t group_indices_cb_index = get_named_compile_time_arg_val("group_indices_cb_index");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
+    constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -93,6 +152,9 @@ void kernel_main() {
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
 
+    constexpr uint32_t tokens_per_tile = 32;  // hardcoded for now, but this is std::min(tokens, tile_width)
+
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
+    generate_group_indices_tiles(group_indices_cb_index, width_tiles, topk_groups, 32);
 }

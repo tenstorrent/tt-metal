@@ -106,6 +106,23 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         width_tiles,
         tt::DataFormat::UInt16);
 
+    // Generated group indices, intermediate CB for (summed_experts_per_group - 1) CBs, and one for the final summed
+    // scores
+    auto group_indices_cb_index = tt::CBIndex::c_9;
+    auto group_scores_cb_index = tt::CBIndex::c_10;
+    auto summed_experts_cb_index = tt::CBIndex::c_11;
+    tt::tt_metal::create_cb(
+        group_indices_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, tt::DataFormat::UInt16);
+    tt::tt_metal::create_cb(
+        summed_experts_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        width_tiles * (operation_attributes.summed_experts_per_group - 1),
+        scores_data_format);
+    tt::tt_metal::create_cb(
+        group_scores_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"scores_cb_index", scores_cb_index},
@@ -134,6 +151,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"add_bias_cb_index", add_bias_cb_index},
         {"weights_cb_index", weights_cb_index},
         {"indices_cb_index", indices_cb_index},
+        {"group_indices_cb_index", group_indices_cb_index},
+        {"group_scores_cb_index", group_scores_cb_index},
+        {"summed_experts_cb_index", summed_experts_cb_index},
         {"width_tiles", width_tiles},
         {"scores_page_size", scores.buffer()->page_size()},
         {"bias_page_size", bias.buffer()->page_size()},
@@ -144,6 +164,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"topk_index_creation_cb_index", topk_index_creation_cb_index},
         {"group_size", experts / operation_attributes.n_groups},
         {"log_group_size", std::log2(experts / operation_attributes.n_groups)},
+        {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
+        {"topk_groups", operation_attributes.topk_groups},
+        {"log_topk_groups", std::log2(operation_attributes.topk_groups)},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -167,12 +190,14 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"weights_cb_index", weights_cb_index},
         {"indices_cb_index", indices_cb_index},
         {"topk_index_creation_cb_index", topk_index_creation_cb_index},
+        {"group_indices_cb_index", group_indices_cb_index},
         {"weights_page_size", output_weights.buffer()->page_size()},
         {"indices_page_size", output_indices.buffer()->page_size()},
         {"experts", experts},
         {"width_tiles", width_tiles},
         {"tile_width", tile_width},
         {"tokens", tokens},
+        {"topk_groups", operation_attributes.topk_groups},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
