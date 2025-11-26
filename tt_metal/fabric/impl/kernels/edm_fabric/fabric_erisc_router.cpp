@@ -1553,7 +1553,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
 
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
-                // skip_src_ch_id_update implies something like mux mode is disabled and there is only a single
+                // skip_src_ch_id_update implies something like mux mode is enabled and there is only a single
                 // sender channel so we don't dynamically fetch it off the packet header
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
