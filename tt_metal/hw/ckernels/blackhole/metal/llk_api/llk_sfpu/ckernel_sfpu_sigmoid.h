@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_sigmoid_appx.h"
 #include "ckernel_sfpu_recip.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
