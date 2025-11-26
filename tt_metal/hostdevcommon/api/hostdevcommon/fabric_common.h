@@ -215,6 +215,13 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+enum router_state : uint32_t {
+    ROUTER_STATE_INITIALIZED = 0,
+    ROUTER_STATE_ACTIVE = 1,
+    ROUTER_STATE_DRAINING = 3,
+    ROUTER_STATE_PAUSED = 2,
+};
+
 struct routing_l1_info_t {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
     //       these fabric node ids should be another struct as really commonly used data
@@ -228,8 +235,14 @@ struct routing_l1_info_t {
     intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-    uint8_t padding[12] = {};  // pad to 16-byte alignment
-} __attribute__((packed));
+#if (defined(KERNEL_BUILD) || defined(FW_BUILD)) && defined(COMPILE_FOR_ERISC)
+    uint8_t padding0[4] = {};
+    router_state state;
+    uint8_t padding1[4] = {};  // pad to 16-byte alignment
+#else
+    uint8_t padding0[12] = {};  // pad to 16-byte alignment
+#endif
+};
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
