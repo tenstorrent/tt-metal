@@ -81,7 +81,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    pytestmodels/demos/diffusion/stable_diffusion/blackhole/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
+    pytestmodels/demos/vision/generative/stable_diffusion/blackhole/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct
