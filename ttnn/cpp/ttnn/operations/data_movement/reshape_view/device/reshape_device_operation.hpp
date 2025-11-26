@@ -41,7 +41,8 @@ struct ReshapeDeviceOperation {
         const ttnn::Shape& logical_output_shape,
         const ttnn::Shape& padded_output_shape,
         const tt::tt_metal::MemoryConfig& output_mem_config,
-        bool recreate_mapping_tensor);
+        bool recreate_mapping_tensor,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::data_movement::reshape

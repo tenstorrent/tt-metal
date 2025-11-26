@@ -104,13 +104,15 @@ operation::ProgramWithCallbacks Reduce::create_program(
 
     switch (parallelization_strategy) {
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_h(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_w(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
         case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
             return reduce_single_core_hw(
-                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }
@@ -160,7 +162,8 @@ Tensor reduce(
     float scaler,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (reduce_math == ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
@@ -205,7 +208,8 @@ Tensor reduce(
                                              1.0,
                                              output_mem_config,
                                              output_dtype.value_or(input_tensor.dtype()),
-                                             config},
+                                             config,
+                                             sub_core_grids},
                                          {formatted_input_tensor})
                                          .at(0);
         return operation::run(
@@ -215,7 +219,8 @@ Tensor reduce(
                        scaler,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
-                       config},
+                       config,
+                       sub_core_grids},
                    {output_tensor})
             .at(0);
     } else {
@@ -226,7 +231,8 @@ Tensor reduce(
                        scaler,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
-                       config},
+                       config,
+                       sub_core_grids},
                    {input_tensor},
                    {},
                    {},
