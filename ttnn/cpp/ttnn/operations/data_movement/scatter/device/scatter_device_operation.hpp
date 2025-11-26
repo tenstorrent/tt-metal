@@ -7,7 +7,6 @@
 #include <variant>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/decorators.hpp"
@@ -46,7 +45,8 @@ struct ScatterDeviceOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
-        const std::optional<ScatterReductionType>& opt_reduction);
+        const ScatterReductionType& opt_reduction,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter

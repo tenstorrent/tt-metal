@@ -5,8 +5,6 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 namespace tt {
 
 using namespace constants;
@@ -40,6 +38,12 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
             output_shape[i]);
         // TT_FATAL(input_shape_wo_padding[i] == output_shape_wo_padding[i], "Error");
     }
+
+    // prod supports only bfloat16, per ttnn/cpp/ttnn/operations/reduction/prod/prod_pybind.hpp
+    TT_FATAL(
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Error - unsupported data type for prod, expected BFLOAT16 but got {}.",
+        input.dtype());
 }
 
 std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& inputs) const {

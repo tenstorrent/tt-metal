@@ -6,7 +6,6 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
-#include "device_pool.hpp"
 #include "llrt/hal.hpp"
 #include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
@@ -1629,19 +1628,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 TT_FATAL(
                     !start_marker_stack.empty(),
-                    "End marker {} found without a corresponding start marker",
-                    marker.marker_id);
+                    "End marker found without a corresponding start marker.\nEnd marker: {}",
+                    marker.to_string());
 
                 const auto& start_marker_it = start_marker_stack.top();
 
                 if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
                     TT_FATAL(
                         start_marker_it->marker_id == marker.marker_id,
-                        "Start {} and end {} markers do not match. The Profiler DRAM buffers may be full, in which "
-                        "case "
-                        "either decrease the number of ops being profiled or run read device profiler more often.",
-                        start_marker_it->marker_id,
-                        marker.marker_id);
+                        "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
+                        start_marker_it->to_string(),
+                        marker.to_string());
 
                     if (start_marker_it->marker_name != marker.marker_name) {
                         marker.marker_name = start_marker_it->marker_name;
@@ -1652,9 +1649,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 } else {
                     TT_FATAL(
                         start_marker_it->marker_name == marker.marker_name,
-                        "Start {} and end {} marker names do not match",
-                        start_marker_it->marker_name,
-                        marker.marker_name);
+                        "Start and end marker names do not match.\nStart marker: {}\nEnd marker: {}",
+                        start_marker_it->to_string(),
+                        marker.to_string());
                 }
                 start_marker_stack.pop();
             }
@@ -1731,8 +1728,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
     TT_FATAL(
         start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers",
-        start_marker_stack.size());
+        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+        start_marker_stack.size(),
+        start_marker_stack.top()->to_string());
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }

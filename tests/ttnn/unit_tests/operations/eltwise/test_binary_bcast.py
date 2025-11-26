@@ -935,7 +935,19 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
 )
-def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt):
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        None,
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    ),
+)
+def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_core_grids):
     torch.manual_seed(0)
     a_shape = torch.Size([2, 1, 1, 7 * 32])
     b_shape = torch.Size([1, 1, 2 * 32, 1])
@@ -982,14 +994,115 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt):
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+        out_tt_sharded = ttnn.add(
+            a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=sub_core_grids, use_legacy=None
+        )
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(a_tt, b_tt, sub_core_grids=sub_core_grids, use_legacy=None)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert_with_pcc(out_pt, out_tt_sharded)
+
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.float32, ttnn.float32],
+    ),
+)
+@pytest.mark.parametrize(
+    "nb, nc, nh, nw",
+    (
+        # binary shapes
+        (1, 1, 32, 128 * 1024),
+    ),
+)
+def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
+    """Test binary operations with sub_core_grids parameter"""
+    torch.manual_seed(10)
+    shape = [nb, nc, nh, nw]
+    inp_a = torch.rand(*shape).to(dtype_pt)
+    inp_b = torch.rand(*shape).to(dtype_pt)
+
+    a = ttnn.Tensor(
+        inp_a.flatten().tolist(),
+        shape,
+        dtype_tt,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+
+    b = ttnn.Tensor(
+        inp_b.flatten().tolist(),
+        shape,
+        dtype_tt,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    out_tt = ttnn.gt(
+        a,
+        1,
+        memory_config=out_mem_config,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    )
+    out = ttnn.to_torch(out_tt)
+    expected = torch.gt(inp_a, 1)
+    assert_with_pcc(out, expected)
+
+    out_tt = ttnn.div(
+        a,
+        2,
+        memory_config=out_mem_config,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    )
+    out = ttnn.to_torch(out_tt)
+    expected = torch.div(inp_a, 2)
+    assert_with_pcc(out, expected)
+
+    out_tt = ttnn.multiply(
+        a,
+        b,
+        memory_config=out_mem_config,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    )
+    out = ttnn.to_torch(out_tt)
+    expected = torch.multiply(inp_a, inp_b)
+    assert_with_pcc(out, expected)
+
+    out_tt = ttnn.add(
+        a,
+        b,
+        memory_config=out_mem_config,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            }
+        ),
+    )
+    out = ttnn.to_torch(out_tt)
+    expected = torch.add(inp_a, inp_b)
+    assert_with_pcc(out, expected)
 
 
 @pytest.mark.parametrize(

@@ -43,6 +43,7 @@ void ttnn_device(py::module& module) {
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("num_command_queues") = 1,
         py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         py::return_value_policy::reference,
@@ -53,8 +54,9 @@ void ttnn_device(py::module& module) {
                 device_id (int): The device ID to open.
                 l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
+                num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
+                dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
                 worker_l1_size (int, optional): The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.
-                dispatch_core_type (ttnn.device.DispatchCoreType, optional): The type of dispatch core to use. Defaults to `ttnn.device.DispatchCoreType.WORKER`.
 
             Returns:
                 ttnn.Device: The device with the given device_id.

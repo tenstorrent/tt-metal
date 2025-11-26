@@ -72,6 +72,7 @@ enum class EnvVarID {
     TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
     TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
     TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
+    TT_METAL_DISABLE_XIP_DUMP,           // Disable XIP dump
 
     // ========================================
     // HARDWARE CONFIGURATION
@@ -155,6 +156,10 @@ enum class EnvVarID {
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
 
+    // ========================================
+    // DEVICE MANAGER
+    // ========================================
+    TT_METAL_NUMA_BASED_AFFINITY,
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1020,6 +1025,27 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
+
+        // ========================================
+        // DEVICE MANAGER
+        // ========================================
+        // TT_METAL_NUMA_BASED_AFFINITY
+        // Specifies thread binding in DeviceManager
+        // Default: disabled
+        // Usage: export TT_METAL_NUMA_BASED_AFFINITY=1
+        case EnvVarID::TT_METAL_NUMA_BASED_AFFINITY: {
+            this->numa_based_affinity = is_env_enabled(value);
+            break;
+        }
+
+        // TT_METAL_DISABLE_XIP_DUMP
+        // Disable XIP dump
+        // Default: false
+        // Usage: export TT_METAL_DISABLE_XIP_DUMP=1
+        case EnvVarID::TT_METAL_DISABLE_XIP_DUMP: {
+            this->disable_xip_dump = is_env_enabled(value);
+            break;
+        }
     }
 }
 

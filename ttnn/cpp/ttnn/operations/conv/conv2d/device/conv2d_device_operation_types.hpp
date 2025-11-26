@@ -22,7 +22,7 @@ struct Conv2dConfig {
     // Fused activation function as UnaryWithParam
     std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
 
-    // If user tensor will be deallocated if it's on device.
+    // If user tensor will be deallocated if it's on device in L1 (will have no effect if input tensor is in DRAM).
     bool deallocate_activation = false;
 
     // If true && deallocate_activation is true, then after halo device op is done,

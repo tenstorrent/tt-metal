@@ -40,4 +40,11 @@ std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
     bool assert_on_connection_mismatch = true,
     bool log_output = true);
 
+// Generate cluster descriptor(s) from a factory system descriptor
+// For single-host systems, a single YAML file is generated with the cluster configuration.
+// For multi-host systems, one YAML file is generated per host
+// along with a mapping file that maps each rank to its corresponding cluster descriptor file.
+std::string generate_cluster_descriptor_from_fsd(
+    const std::string& fsd_filename, const std::string& output_dir, const std::string& base_filename);
+
 }  // namespace tt::scaleout_tools

@@ -1,1 +1,0 @@
-../../../../models/demos/yolov8s/tests/pcc/test_yolov8s.py

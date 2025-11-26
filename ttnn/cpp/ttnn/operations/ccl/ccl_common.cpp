@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -22,9 +22,7 @@ namespace ccl {
 bool is_fabric_2d() {
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    return (
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
 }
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
@@ -1788,7 +1786,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
         validate_fabric_2d_dynamic_config(topology);
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
@@ -1850,7 +1848,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
         validate_fabric_2d_dynamic_config(topology);
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
@@ -1864,7 +1862,7 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
                 auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
-                args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets - 1;
+                args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets;
             }
         };
         set_mcast_args(forward_args, forward_device_coord, num_targets_forward, mesh_device);

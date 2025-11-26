@@ -157,7 +157,7 @@ class Flux1Pipeline:
             model_name = os.path.basename(checkpoint_name)
             if not cache.initialize_from_cache(
                 tt_transformer,
-                torch_transformer,
+                torch_transformer.state_dict(),
                 model_name,
                 "transformer",
                 parallel_config,
@@ -238,7 +238,7 @@ class Flux1Pipeline:
 
                 if not cache.initialize_from_cache(
                     self._t5_text_encoder,
-                    torch_t5_text_encoder,
+                    torch_t5_text_encoder.state_dict(),
                     model_name,
                     "t5_text_encoder",
                     encoder_parallel_config,

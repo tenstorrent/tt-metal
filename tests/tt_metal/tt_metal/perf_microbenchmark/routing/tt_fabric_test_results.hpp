@@ -14,8 +14,8 @@
 
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using Topology = tt::tt_fabric::Topology;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -53,6 +53,11 @@ struct BandwidthResultSummary {
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
     std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
+
+    // Optional fields for database upload CSV
+    std::optional<std::string> file_name;
+    std::optional<std::string> machine_type;
+    std::optional<std::string> test_ts;
 };
 
 // Golden CSV comparison structures

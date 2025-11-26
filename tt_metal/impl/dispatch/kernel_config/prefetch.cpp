@@ -21,8 +21,8 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "fabric_edm_types.hpp"
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/inspector.hpp"
@@ -30,6 +30,8 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
@@ -244,11 +246,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         create_edm_connection_sems(edm_connection_attributes_);
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
         static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
-        static_config_.is_2d_fabric_dynamic =
-            static_config_.is_2d_fabric && fabric_context.is_dynamic_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
-        static_config_.is_2d_fabric_dynamic = false;
     }
 }
 
@@ -509,9 +508,6 @@ void PrefetchKernel::CreateKernel() {
         defines["FABRIC_RELAY"] = "1";
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
-        }
-        if (static_config_.is_2d_fabric_dynamic.value_or(false)) {
-            defines["FABRIC_2D_DYNAMIC"] = "1";
         }
     }
     // Compile at Os on IERISC to fit in code region.

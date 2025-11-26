@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
@@ -75,8 +75,9 @@ void validate_fabric_config_for_sockets(
     static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
-        tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
+        tt_fabric::FabricConfig::FABRIC_2D,
+        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
+                                           // physical device
     };
 
     bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;

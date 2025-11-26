@@ -284,14 +284,6 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
     fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
 
-    if (fabric_setup_yaml["routing_type"]) {
-        auto routing_type_str = parse_scalar<std::string>(fabric_setup_yaml["routing_type"]);
-        fabric_setup.routing_type = detail::routing_type_mapper.from_string(routing_type_str, "RoutingType");
-    } else {
-        log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
-        fabric_setup.routing_type = RoutingType::LowLatency;
-    }
-
     if (fabric_setup_yaml["fabric_tensix_config"]) {
         auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
         fabric_setup.fabric_tensix_config =
@@ -389,20 +381,6 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
                 return false;
             }
             return test_config.fabric_setup.topology == topo;
-        } else if (filter_type.value() == "routing_type" || filter_type.value() == "Routing_Type") {
-            auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
-            if (filter_value == "LowLatency") {
-                r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
-            } else if (filter_value == "Dynamic") {
-                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
-                    filter_value);
-                return false;
-            }
-            return test_config.fabric_setup.routing_type == r_type;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
                 return test_config.benchmark_mode;
@@ -640,7 +618,7 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
         } else {
             log_info(
                 tt::LogTest,
-                "Unsupported filter type: '{}'. Supported types are: name, topology, routing_type, benchmark_mode, "
+                "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
                 "sync, num_links, ntype, ftype, num_packets, size, pattern",
                 filter_type.value());
             return false;

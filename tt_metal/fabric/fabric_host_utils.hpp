@@ -5,9 +5,9 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -24,7 +24,7 @@ class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 void set_routing_mode(uint16_t routing_mode);
-void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension = 1);
+void set_routing_mode(Topology topology, uint32_t dimension = 1);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config);
 

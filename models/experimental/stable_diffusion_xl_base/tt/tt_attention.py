@@ -61,7 +61,13 @@ class TtAttention(LightweightModule):
 
         if self.is_self_attention == True:
             self.sdpa_program_config.q_chunk_size = 128
-            self.sdpa_program_config.k_chunk_size = 1024
+            if out_dim == 640 or out_dim == 1536:
+                self.sdpa_program_config.k_chunk_size = 512
+            # TODO: 512 should be possible, latents base optimizations regressed this
+            elif out_dim == 768:
+                self.sdpa_program_config.k_chunk_size = 256
+            else:
+                self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -97,40 +103,21 @@ class TtAttention(LightweightModule):
         B, C, H, W = list(hidden_states.shape)
 
         if self.is_self_attention:
-            if self.q_program_config is not None:
-                if hidden_states.shape[-1] == 640:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 512, 256),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-                else:
-                    memory_config = ttnn.create_sharded_memory_config(
-                        shape=(1, 1, 1024 // 8, 3840 // 8),
-                        core_grid=ttnn.CoreGrid(y=8, x=8),
-                        strategy=ttnn.ShardStrategy.BLOCK,
-                        use_height_and_width_as_shard_shape=True,
-                    )
-            else:
-                memory_config = None
-
             qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
-                memory_config=memory_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.q_compute_kernel_config,
                 program_config=self.q_program_config,
             )
-            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
             (
                 q_heads,
                 k_heads,
                 v_heads,
             ) = ttnn.experimental.nlp_create_qkv_heads(
-                qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             ttnn.deallocate(qkv_fused)
         else:
@@ -161,7 +148,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
             v_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -169,7 +156,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
             k_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -177,7 +164,7 @@ class TtAttention(LightweightModule):
                 num_heads=self.heads,
                 num_kv_heads=0,
                 transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
@@ -188,6 +175,7 @@ class TtAttention(LightweightModule):
             attn_mask=attention_mask,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 

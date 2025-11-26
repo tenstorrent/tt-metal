@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -20,7 +21,8 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -35,7 +37,13 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    CoreRange core({0, 0}, {0, 0});
+    CoreCoord selected_core_coord = {0, 0};
+    if (sub_core_grids.has_value() && !sub_core_grids->ranges().empty()) {
+        // Pick the start of the first range
+        const auto& r = sub_core_grids->ranges().front();
+        selected_core_coord = r.start_coord;
+    }
+    CoreRange core(selected_core_coord, selected_core_coord);
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
@@ -116,7 +124,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::SetRuntimeArgs(
         program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, selected_core_coord](
                                               const void* operation,
                                               const Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -126,7 +134,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
         auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-        CoreCoord core = {0, 0};
+        CoreCoord core = selected_core_coord;
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

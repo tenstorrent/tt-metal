@@ -5,6 +5,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
 #include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 void TestContext::wait_for_programs_with_progress() {
     if (!progress_config_.enabled) {
@@ -221,7 +222,7 @@ void TestContext::report_code_profiling_results() {
     for (const auto& entry : code_profiling_entries_) {
         log_info(
             tt::LogTest,
-            "  Device {} Core {}: {} - Total Cycles: {}, Instances: {}, Avg Cycles/Instance: {:.2f}",
+            "  Device {} Core {}: {} - Total Cycles: {}, Instances: {}, avg_cycles/Instance: {:.2f}",
             entry.coord,
             entry.eth_channel,
             get_timer_type_name(entry.timer_type),

@@ -183,9 +183,6 @@ Tests:
   - name: "MulticastHops"
     fabric_setup:
       topology: Mesh
-      # You can explicitly set the routing type. Options are "LowLatency" and "Dynamic".
-      # If not specified, it defaults to "LowLatency".
-      routing_type: "LowLatency"
 
     defaults:
       ntype: unicast_write
@@ -226,14 +223,12 @@ Tests:
       - type: all_to_all_multicast
 
   # ======================================================================================
-  # Test 9: Dynamic Routing and Custom Atomic Operations
-  # This shows how to enable dynamic routing for 2D mesh topologies and how to
-  # customize the behavior of atomic increment operations.
+  # Test 9: Custom Atomic Operations
+  # This shows how to customize the behavior of atomic increment operations.
   # ======================================================================================
-  - name: "DynamicRouting_CustomAtomics"
+  - name: "CustomAtomics"
     fabric_setup:
       topology: Mesh
-      routing_type: "Dynamic"
 
     senders:
       - device: 0
@@ -244,8 +239,6 @@ Tests:
               device: 1
             # Specify the value to increment by for each atomic operation.
             atomic_inc_val: 5
-            # Specify the value at which the remote atomic counter will wrap around.
-            atomic_inc_wrap: 100
 
   # ======================================================================================
   # Test 10: Advanced Destination and Test Control

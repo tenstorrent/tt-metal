@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.generation_utils import get_logits_processor
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.grayskull.t5.tt import ttnn_functional_t5, ttnn_optimized_functional_t5
 
 
@@ -357,8 +357,6 @@ def run_functional_t5_question_and_answering_inference_squadv2(
 def test_functional_t5_demo(
     device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
 ):
-    disable_persistent_kernel_cache()
-
     return run_functional_t5_question_and_answering_inference(
         device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
     )
@@ -369,8 +367,6 @@ def test_functional_t5_demo(
     ((8, 128, 5, "t5-small", True), (8, 128, 5, "google/flan-t5-small", True)),
 )
 def test_functional_t5_demo_squadv2(device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version):
-    disable_persistent_kernel_cache()
-
     return run_functional_t5_question_and_answering_inference_squadv2(
         device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version
     )

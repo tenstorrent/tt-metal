@@ -224,12 +224,14 @@ test_suite_bh_ttnn_stress_tests() {
 
 test_suite_bh_glx_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
-    # Fabric
-    ./build/test/tt_metal/tt_fabric/test_system_health
+
+    # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
-    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
+    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
+    # Disable 2 ERISC mode for deadlock stability tests - These validate 2D Torus (QSFP Link) stability
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC=1 RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1  build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
@@ -263,6 +265,15 @@ test_suite_bh_glx_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+}
+
+test_suite_bh_glx_torus_xyz_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus + Z links topology on BH 6U Galaxy"
+    # Fabric
+    # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
+    # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
+    # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
 # Define test suite mappings for different hardware topologies

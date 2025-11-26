@@ -3,12 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_device_operation.hpp"
+#include "create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+using namespace tt::tt_metal;
 
-void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+namespace ttnn::operations::experimental::create_qkv_heads {
+
+CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return ttnn::operations::experimental::create_qkv_heads::program::CreateQKVHeadsProgramFactory{};
+}
+
+void CreateQKVHeadsDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
@@ -37,10 +52,10 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
     TT_FATAL(
-        this->num_q_heads % this->num_kv_heads == 0,
+        args.num_q_heads % args.num_kv_heads == 0,
         "Number of q heads {} must fit evenly into number of kv heads {}",
-        this->num_q_heads,
-        this->num_kv_heads);
+        args.num_q_heads,
+        args.num_kv_heads);
     TT_FATAL(
         input_shape[3] % (num_w_cores * tt::constants::TILE_WIDTH) == 0,
         "Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core "
@@ -50,39 +65,32 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         tt::constants::TILE_WIDTH);
 
     TT_FATAL(
-        this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        args.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output memory config layout must be HEIGHT_SHARDED but got {}",
-        this->output_mem_config.memory_layout());
+        args.output_mem_config.memory_layout());
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 
-std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+spec_return_value_t CreateQKVHeadsDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_outputs.has_value()) {
+        const auto& [q_tensor, k_tensor, v_tensor] = tensor_args.preallocated_outputs.value();
+        return {q_tensor.tensor_spec(), k_tensor.tensor_spec(), v_tensor.tensor_spec()};
+    }
+
+    const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();
 
-    const auto q_shape = ttnn::Shape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const auto v_shape = ttnn::Shape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
-    const auto k_shape =
-        this->transpose_k_heads ? ttnn::Shape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]} : v_shape;
-
-    if (output_tensors.size() == 3) {
-        return {output_tensors[0]->tensor_spec(), output_tensors[1]->tensor_spec(), output_tensors[2]->tensor_spec()};
-    }
-    // no create_output_tensors variant that takes in optional input tensors?
+    const auto q_shape = ttnn::Shape{input_shape[0], args.num_q_heads, input_shape[2], args.head_dim};
+    const auto v_shape = ttnn::Shape{input_shape[0], args.num_kv_heads, input_shape[2], args.head_dim};
+    const auto k_shape = args.transpose_k_heads
+                             ? ttnn::Shape{input_shape[0], args.num_kv_heads, args.head_dim, input_shape[2]}
+                             : v_shape;
 
     CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
     auto bbox = all_cores.bounding_box();
-    // TODO: Do we need to know cores along row and col?
-    // bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    // uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
-    // uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
     uint32_t num_cores = bbox.size();
-
-    // TODO: Do we need?
-    // uint32_t num_kv_heads_per_shard = k_shape[1] / num_w_cores;
-    // uint32_t num_q_heads_per_shard = q_shape[1] / num_w_cores;
 
     uint32_t q_shard_h =
         q_shape[0] * q_shape[1] * q_shape[2] / num_cores;  // want the API to work for different sequence lengths
@@ -95,9 +103,9 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     auto k_spec = tt::tt_metal::ShardSpec(all_cores, {k_shard_h, k_shape[-1]}, shard_orientation);
     auto v_spec = tt::tt_metal::ShardSpec(all_cores, {v_shard_h, v_shape[-1]}, shard_orientation);
     // create sharded tensors
-    auto mem_config_q = this->output_mem_config.with_shard_spec(q_spec);
-    auto mem_config_k = this->output_mem_config.with_shard_spec(k_spec);
-    auto mem_config_v = this->output_mem_config.with_shard_spec(v_spec);
+    auto mem_config_q = args.output_mem_config.with_shard_spec(q_spec);
+    auto mem_config_k = args.output_mem_config.with_shard_spec(k_spec);
+    auto mem_config_v = args.output_mem_config.with_shard_spec(v_spec);
 
     TensorSpec out_tensor_q(
         q_shape,
@@ -111,29 +119,54 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 
-std::vector<Tensor> CreateQKVHeadsDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    auto specs = compute_output_specs(input_tensors, output_tensors);
+tensor_return_value_t CreateQKVHeadsDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_outputs.has_value()) {
+        return tensor_args.preallocated_outputs.value();
+    }
+
+    auto specs = compute_output_specs(args, tensor_args);
     return {
-        create_device_tensor(specs[0], input_tensors.at(0).device()),
-        create_device_tensor(specs[1], input_tensors.at(0).device()),
-        create_device_tensor(specs[2], input_tensors.at(0).device()),
+        create_device_tensor(std::get<0>(specs), tensor_args.input.device()),
+        create_device_tensor(std::get<1>(specs), tensor_args.input.device()),
+        create_device_tensor(std::get<2>(specs), tensor_args.input.device()),
     };
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks CreateQKVHeadsDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    return multi_core_create_qkv_heads_sharded(
+    operation::Hash hash = operation::hash_operation<CreateQKVHeadsDeviceOperation>(
+        args.num_q_heads,
+        args.num_kv_heads,
+        args.head_dim,
+        args.transpose_k_heads,
+        args.output_mem_config,
         input_tensor,
-        this->num_q_heads,
-        this->num_kv_heads,
-        this->head_dim,
-        this->transpose_k_heads,
-        output_tensors,
-        compute_with_storage_grid_size);
+        input_tensor.device()->compute_with_storage_grid_size());
+
+    return hash;
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+std::tuple<CreateQKVHeadsDeviceOperation::operation_attributes_t, CreateQKVHeadsDeviceOperation::tensor_args_t>
+CreateQKVHeadsDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    const uint32_t num_q_heads,
+    const uint32_t num_kv_heads,
+    const uint32_t head_dim,
+    const bool transpose_k_heads,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::tuple<Tensor, Tensor, Tensor>>& preallocated_outputs) {
+    return {
+        operation_attributes_t{
+            .num_q_heads = num_q_heads,
+            .num_kv_heads = num_kv_heads,
+            .head_dim = head_dim,
+            .transpose_k_heads = transpose_k_heads,
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+        },
+        tensor_args_t{.input = input_tensor, .preallocated_outputs = preallocated_outputs}};
+}
+
+}  // namespace ttnn::operations::experimental::create_qkv_heads
