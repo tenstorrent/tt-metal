@@ -14,6 +14,7 @@ struct AdamWFusedOptimizer {
         const ttnn::Tensor& grad,
         const ttnn::Tensor& exp_avg,
         const ttnn::Tensor& exp_avg_sq,
+        const std::optional<ttnn::Tensor>& max_exp_avg_sq,
         const float lr,
         const float beta1,
         const float beta2,
