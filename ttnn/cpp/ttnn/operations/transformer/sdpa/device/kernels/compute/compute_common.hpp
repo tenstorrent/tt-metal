@@ -74,6 +74,20 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         cb_wait_front(in0_cb, in0_wait_tiles);
         acquire_dst();
 
+        if (do_eltwise_max) {
+            /**
+             * Copy previous max values into the odd indices of the DST register.
+             */
+            sdpa_copy_tile_to_dst_init_short(prev_cb);
+            for (uint32_t i = 0; i < dst_tiles; i++) {
+                // Indices are set up like this because `max_tile` requires the second index to be `id0+1`, and it saves
+                // the result in `id0`.
+                const uint32_t cur_max_dst_idx = i * 2;
+                copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);
+                // max_tile(cur_max_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+            }
+        }
+
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
@@ -84,20 +98,21 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         }
         reduce_block_max_row_uninit();
 
-        if (do_eltwise_max) {
-            /**
-             * Copy previous max values into the odd indices of the DST register.
-             */
-            copy_tile_to_dst_init_short(prev_cb);
-            for (uint32_t i = 0; i < dst_tiles; i++) {
-                // Indices are set up like this because `max_tile` requires the second index to be `id0+1`, and it saves
-                // the result in `id0`.
-                const uint32_t cur_max_dst_idx = i * 2;
-                const uint32_t prev_max_dst_idx = i * 2 + 1;
-                copy_tile(prev_cb, (row_start_idx + i), prev_max_dst_idx);
-                max_tile(cur_max_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
-            }
-        }
+        // if (do_eltwise_max) {
+        //     /**
+        //      * Copy previous max values into the odd indices of the DST register.
+        //      */
+        //     copy_tile_to_dst_init_short(prev_cb);
+        //     for (uint32_t i = 0; i < dst_tiles; i++) {
+        //         // Indices are set up like this because `max_tile` requires the second index to be `id0+1`, and it
+        //         saves
+        //         // the result in `id0`.
+        //         const uint32_t cur_max_dst_idx = i * 2;
+        //         const uint32_t prev_max_dst_idx = i * 2 + 1;
+        //         copy_tile(prev_cb, (row_start_idx + i), prev_max_dst_idx);
+        //         max_tile(cur_max_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        //     }
+        // }
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i * 2;
             pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
