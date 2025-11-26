@@ -21,13 +21,13 @@
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/device.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::distributed::MeshDevice;
@@ -144,7 +144,7 @@ void test_shape_padding() {
     int device_id = 0;
     auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
-    ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
+    ttnn::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};

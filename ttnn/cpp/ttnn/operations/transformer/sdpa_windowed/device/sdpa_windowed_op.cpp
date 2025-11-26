@@ -10,7 +10,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/api.hpp"
-
+#include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer {
@@ -177,9 +177,8 @@ operation::OpPerformanceModel WindowedScaledDotProductAttention::create_op_perfo
 
     // calculate arch specific parameters
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE
-                    ? output_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "Windowed SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);

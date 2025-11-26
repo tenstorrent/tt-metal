@@ -575,6 +575,26 @@ ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_
     return ttnn::Shape(output_shape_vec);
 }
 
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
+    using namespace tt::constants;
+    auto rank = unpadded_shape.rank();
+    TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
+    SmallVector<uint32_t> padded_shape_vec(rank);
+
+    for (auto i = 0; i < rank; ++i) {
+        padded_shape_vec[i] = unpadded_shape[i];
+    }
+    if (rank >= 1) {
+        auto w = tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH);
+        padded_shape_vec[rank - 1] = w;
+    }
+    if (rank >= 2) {
+        auto h = tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT);
+        padded_shape_vec[rank - 2] = h;
+    }
+    return Shape(padded_shape_vec);
+}
+
 std::array<uint32_t, 2> compute_block_sharded_shard_shape(const std::array<uint32_t, 2>& squeezed_tensor_hw,
                                                           const tt::tt_metal::Layout& layout,
                                                           const tt::tt_metal::CoreCoord& grid_size,
