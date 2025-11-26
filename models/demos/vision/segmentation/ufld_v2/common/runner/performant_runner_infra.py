@@ -19,11 +19,11 @@ if is_blackhole():
     )
     from models.demos.blackhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 elif is_wormhole_b0():
-    from models.demos.wormhole.ufld_v2.tests.pcc.test_ttnn_ufld_v2 import (
+    from models.demos.vision.segmentation.ufld_v2.wormhole.tests.pcc.test_ttnn_ufld_v2 import (
         create_custom_mesh_preprocessor,
         get_mesh_mappers,
     )
-    from models.demos.wormhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+    from models.demos.vision.segmentation.ufld_v2.wormhole.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 else:
     raise RuntimeError("Unsupported device: Only Blackhole and Wormhole are currently supported.")
 

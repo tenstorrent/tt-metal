@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 dataset = "Tusimple"
-data_root = "models/demos/wormhole/ufld_v2/demo"  # Need to be modified before running
+data_root = "models/demos/vision/segmentation/ufld_v2/wormhole/demo"  # Need to be modified before running
 epoch = 100
 batch_size = 32
 optimizer = "SGD"

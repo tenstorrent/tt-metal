@@ -16,6 +16,6 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
 Find ufld_v2 instructions for the following devices:
 
-- Wormhole (n150, n300): [models/demos/wormhole/ufld_v2](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/ufld_v2)
+- Wormhole (n150, n300): [models/demos/vision/segmentation/ufld_v2/wormhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/ufld_v2/wormhole)
 
 - Blackhole (p150): [models/demos/blackhole/ufld_v2](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/ufld_v2)

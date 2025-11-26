@@ -24,7 +24,9 @@ def test_perf_device_bare_metal_ufld_v2(batch_size, expected_perf, test):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model"
+    command = (
+        f"pytest models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model"
+    )
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

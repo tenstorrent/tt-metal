@@ -12,7 +12,7 @@ import ttnn
 from models.demos.vision.segmentation.ufld_v2.common.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.vision.segmentation.ufld_v2.common.reference.ufld_v2_model import BasicBlock, TuSimple34
 from models.demos.vision.segmentation.ufld_v2.common.ttnn.ttnn_basic_block import TtnnBasicBlock
-from models.demos.wormhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.vision.segmentation.ufld_v2.wormhole.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

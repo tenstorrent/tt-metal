@@ -4,26 +4,24 @@
 
 import json
 import os
-import subprocess
 
 import numpy as np
 import pytest
 from loguru import logger
 
+from models.demos.vision.segmentation.ufld_v2.common.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.vision.segmentation.ufld_v2.common.reference.ufld_v2_model import TuSimple34
 from models.demos.vision.segmentation.ufld_v2.common.runner.performant_runner import UFLDPerformantRunner
 from models.demos.vision.segmentation.ufld_v2.common.runner.performant_runner_infra import load_torch_model
-from models.demos.wormhole.ufld_v2.demo import model_config as cfg
-from models.demos.wormhole.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
+from models.demos.vision.segmentation.ufld_v2.wormhole.demo import model_config as cfg
+from models.demos.vision.segmentation.ufld_v2.wormhole.demo.demo_utils import LaneEval, run_test_tusimple
 
 
-def run_ufld_v2_dataset_inference(
+def run_ufld_v2_demo(
     batch_size_per_device,
     input_channels,
     height,
     width,
-    num_of_images,
-    is_overlay,
     device,
     use_pretrained_weight,
     reset_seeds,
@@ -37,15 +35,9 @@ def run_ufld_v2_dataset_inference(
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
-        reference_model = load_torch_model(model_location_generator, use_pretrained_weight)
+        reference_model = load_torch_model(model_location_generator, use_pretrained_weight=True)
     else:
         logger.info(f"Demo Inference using Random Weights")
-    cfg.row_anchor = np.linspace(160, 710, cfg.num_row) / 720
-    cfg.col_anchor = np.linspace(0, 1, cfg.num_col)
-
-    dataset_path = "models/demos/wormhole/ufld_v2/demo/image_data"
-    if not os.path.exists(dataset_path):
-        subprocess.run(["python3", "models/demos/wormhole/ufld_v2/demo/data_download.py"], check=True)
     cfg.row_anchor = np.linspace(160, 710, cfg.num_row) / 720
     cfg.col_anchor = np.linspace(0, 1, cfg.num_col)
     run_test_tusimple(
@@ -61,9 +53,8 @@ def run_ufld_v2_dataset_inference(
         row_anchor=cfg.row_anchor,
         col_anchor=cfg.col_anchor,
         device=None,
-        n_images=num_of_images,
-        is_overlay=is_overlay,
-        is_eval=True,
+        is_overlay=True,
+        n_images=1,
         model_location_generator=model_location_generator,
     )
     run_test_tusimple(
@@ -79,28 +70,20 @@ def run_ufld_v2_dataset_inference(
         row_anchor=cfg.row_anchor,
         col_anchor=cfg.col_anchor,
         device=device,
-        n_images=num_of_images,
-        is_overlay=is_overlay,
-        is_eval=True,
+        is_overlay=True,
+        n_images=1,
         model_location_generator=model_location_generator,
     )
-    gt_file_path = "models/demos/wormhole/ufld_v2/demo/image_data/test_label_till_nimages.json"
-    os.makedirs(os.path.dirname(gt_file_path), exist_ok=True)
-    input_file = "models/demos/wormhole/ufld_v2/demo/image_data/test_label.json"
-    with open(input_file, "r") as infile, open(gt_file_path, "w") as outfile:
-        for i, line in enumerate(infile):
-            if i >= num_of_images:
-                break
-            outfile.write(line)
 
-    res = LaneEval.bench_one_submit(os.path.join(cfg.data_root, exp_name_1 + ".txt"), gt_file_path)
+    gt_file_path = os.path.join(cfg.data_root, "ground_truth_labels" + ".json")
+    res = LaneEval.bench_one_submit(os.path.join(cfg.data_root, "reference_model_results" + ".txt"), gt_file_path)
     res = json.loads(res)
     for r in res:
         if r["name"] == "F1":
             reference_f1 = r["value"]
             logger.info(f"F1 Score for Reference Model is {r['value']}")
 
-    res1 = LaneEval.bench_one_submit(os.path.join(cfg.data_root, exp_name_2 + ".txt"), gt_file_path)
+    res1 = LaneEval.bench_one_submit(os.path.join(cfg.data_root, "ttnn_model_results" + ".txt"), gt_file_path)
     res1 = json.loads(res1)
     for r in res1:
         if r["name"] == "F1":
@@ -113,9 +96,9 @@ def run_ufld_v2_dataset_inference(
 
 
 @pytest.mark.parametrize(
-    "batch_size,input_channels,height,width,num_of_images,is_overlay,exp_name_1,exp_name_2",
+    "batch_size,input_channels,height,width,exp_name_1,exp_name_2",
     [
-        (1, 3, 320, 800, 100, False, "reference_model_results_dataset", "ttnn_model_results_dataset"),
+        (1, 3, 320, 800, "reference_model_results", "ttnn_model_results"),
     ],
 )
 @pytest.mark.parametrize(
@@ -130,29 +113,27 @@ def run_ufld_v2_dataset_inference(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
-def test_ufld_v2_dataset_inference(
+def test_ufld_v2_demo(
+    device,
     batch_size,
     input_channels,
     height,
     width,
-    num_of_images,
-    is_overlay,
     use_pretrained_weight,
+    reset_seeds,
     exp_name_1,
     exp_name_2,
-    device,
-    reset_seeds,
     model_location_generator,
 ):
-    run_ufld_v2_dataset_inference(
+    run_ufld_v2_demo(
         batch_size,
         input_channels,
         height,
         width,
-        num_of_images,
-        is_overlay,
         device,
         use_pretrained_weight,
         reset_seeds,
@@ -163,9 +144,9 @@ def test_ufld_v2_dataset_inference(
 
 
 @pytest.mark.parametrize(
-    "batch_size_per_device,input_channels,height,width,num_of_images,is_overlay,exp_name_1,exp_name_2",
+    "batch_size,input_channels,height,width,exp_name_1,exp_name_2",
     [
-        (1, 3, 320, 800, 100, False, "reference_model_results_dataset_dp", "ttnn_model_results_dataset_dp"),
+        (1, 3, 320, 800, "reference_model_results_dp", "ttnn_model_results_dp"),
     ],
 )
 @pytest.mark.parametrize(
@@ -180,29 +161,27 @@ def test_ufld_v2_dataset_inference(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
-def test_ufld_v2_dataset_inference_dp(
-    batch_size_per_device,
+def test_ufld_v2_demo_dp(
+    mesh_device,
+    batch_size,
     input_channels,
     height,
     width,
-    num_of_images,
-    is_overlay,
     use_pretrained_weight,
+    reset_seeds,
     exp_name_1,
     exp_name_2,
-    mesh_device,
-    reset_seeds,
     model_location_generator,
 ):
-    run_ufld_v2_dataset_inference(
-        batch_size_per_device,
+    run_ufld_v2_demo(
+        batch_size,
         input_channels,
         height,
         width,
-        num_of_images,
-        is_overlay,
         mesh_device,
         use_pretrained_weight,
         reset_seeds,

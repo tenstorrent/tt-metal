@@ -15,7 +15,7 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 ## How to Run:
 Use the following command to run the model:
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model
   ```
 
 ### Performant Model with Trace+2CQ
@@ -23,12 +23,12 @@ Use the following command to run the model:
 #### Single Device (BS=1):
 - end-2-end perf is `365` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
   ```
 #### Multi Device (DP=2, N300):
 - end-2-end perf is `572` FPS
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
   ```
 
 ### Performant Demo with Trace+2CQ
@@ -37,20 +37,20 @@ Use the following command to run the model:
 - Use the following command to run the performant Demo with Trace+2CQs:
 
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/demo/demo.py::test_ufld_v2_demo
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py::test_ufld_v2_demo
   ```
 
 #### Multi Device (DP=2, N300):
 - Use the following command to run the DP performant Demo with Trace+2CQs:
 
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/demo/demo.py::test_ufld_v2_demo_dp
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py::test_ufld_v2_demo_dp
   ```
 
 ### To run the demo on your data:
 - Add your images to the `images` directory under `demo` folder.
 - Annotate the corresponding ground truth labels in `ground_truth_labels.json` using the required format.
-- The Demo outputs are saved inside this directories: `models/demos/wormhole/ufld_v2/demo/reference_model_results` and `models/demos/wormhole/ufld_v2/demo/ttnn_model_results`
+- The Demo outputs are saved inside this directories: `models/demos/vision/segmentation/ufld_v2/wormhole/demo/reference_model_results` and `models/demos/vision/segmentation/ufld_v2/wormhole/demo/ttnn_model_results`
 
 ## Testing
 ### Performant Data Evaluation with Trace+2CQ
@@ -62,7 +62,7 @@ Use the following command to run the model:
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference
   ```
 
 #### Multi Device (DP=2, N300):
@@ -70,7 +70,7 @@ Use the following command to run the model:
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest --disable-warnings models/demos/wormhole/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference_dp
+  pytest --disable-warnings models/demos/vision/segmentation/ufld_v2/wormhole/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference_dp
   ```
 
 ## Details
