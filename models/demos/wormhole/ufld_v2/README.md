@@ -74,7 +74,7 @@ Use the following command to run the model:
   ```
 
 ## Details
-- The entry point of the model is located at ```models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py```
+- The entry point of the model is located at ```models/demos/vision/segmentation/ufld_v2/common/ttnn/ttnn_ufld_v2.py```
 - Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution : `(320, 800)` - (Height, Width).
 - Dataset used for evaluation : [TuSimple](https://www.kaggle.com/datasets/manideep1108/tusimple)

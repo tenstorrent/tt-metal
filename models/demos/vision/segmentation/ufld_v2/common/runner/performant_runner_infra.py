@@ -9,7 +9,7 @@ from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_pa
 
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
-from models.demos.ufld_v2.common import load_torch_model
+from models.demos.vision.segmentation.ufld_v2.common.common import load_torch_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 if is_blackhole():

@@ -9,9 +9,9 @@ import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
-from models.demos.ufld_v2.reference.ufld_v2_model import BasicBlock, TuSimple34
-from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
+from models.demos.vision.segmentation.ufld_v2.common.common import UFLD_V2_L1_SMALL_SIZE
+from models.demos.vision.segmentation.ufld_v2.common.reference.ufld_v2_model import BasicBlock, TuSimple34
+from models.demos.vision.segmentation.ufld_v2.common.ttnn.ttnn_basic_block import TtnnBasicBlock
 from models.demos.wormhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -534,9 +534,9 @@ def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pr
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width), dtype=torch.bfloat16)
     torch_output = torch_model(torch_input_tensor)
     if use_pretrained_weight:
-        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
+        weights_path = "models/demos/vision/segmentation/ufld_v2/common/tusimple_res34.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/demos/ufld_v2/weights_download.sh")
+            os.system("bash models/demos/vision/segmentation/ufld_v2/common/weights_download.sh")
             state_dict = torch.load(weights_path)
             new_state_dict = {}
             for key, value in state_dict["model"].items():
