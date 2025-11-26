@@ -249,7 +249,7 @@ SECTIONS
     LONG(TEXT_SIZE
 #if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE)) \
     && !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_SUBORDINATE_AERISC) \
-    && !defined(COMPILE_FOR_MAIN_AERISC) && !defined(COMPILE_FOR_BRISC)
+    && !defined(COMPILE_FOR_MAIN_AERISC)
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
