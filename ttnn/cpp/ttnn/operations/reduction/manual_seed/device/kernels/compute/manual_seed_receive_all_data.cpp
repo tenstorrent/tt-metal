@@ -12,21 +12,15 @@
 
 namespace NAMESPACE {
 void MAIN {
-    // Compile time args
-    constexpr uint32_t user_ids_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t seeds_cb_index = get_compile_time_arg_val(1);
-
-    // Read seed from mailbox
-    bool is_core_id = 0;
-    UNPACK(is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-    MATH(is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-    PACK(is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+    // Read core ID from mailbox
+    bool is_core_id = false;
+    is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
     if (is_core_id) {
+        // Read seed from mailbox
         uint32_t seed = 0;
-        UNPACK(seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-        MATH(seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-        PACK(seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+        seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);
+
         // Set random generator with seed
         rand_tile_init(seed);
     }

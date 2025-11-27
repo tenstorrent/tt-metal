@@ -175,7 +175,7 @@ ManualSeedSingleSeedSetCoresProgramFactory::cached_program_t ManualSeedSingleSee
             .compile_args = reader_compile_time_args});
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {user_ids_cb_index, operation_attributes.seeds.value_or(0)};
+    std::vector<uint32_t> compute_compile_time_args = {operation_attributes.seeds.value_or(0)};
     tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -263,12 +263,7 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
             .compile_args = reader_compile_time_args});
 
     // Create compute kernel
-    std::vector<uint32_t> compute_compile_time_args = {user_ids_cb_index, seeds_cb_index};
-    tt::tt_metal::CreateKernel(
-        program,
-        compute_kernel_path,
-        core_grid,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+    tt::tt_metal::CreateKernel(program, compute_kernel_path, core_grid, tt::tt_metal::ComputeConfig{});
 
     for (uint32_t core_id = 0; core_id < cores.size(); ++core_id) {
         // Get core
