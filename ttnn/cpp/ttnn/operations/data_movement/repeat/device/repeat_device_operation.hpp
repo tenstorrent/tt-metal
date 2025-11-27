@@ -5,7 +5,13 @@
 #pragma once
 
 #include "ttnn/run_operation.hpp"
+#include "repeat_operation_types.hpp"
 namespace ttnn {
+
+using operation_attributes_t = operations::data_movement::repeat::operation_attributes_t;
+using tensor_args_t = operations::data_movement::repeat::tensor_args_t;
+using spec_return_value_t = operations::data_movement::repeat::spec_return_value_t;
+using tensor_return_value_t = operations::data_movement::repeat::tensor_return_value_t;
 
 struct RepeatDeviceOperation {
     const uint32_t m_num_repeats;
