@@ -56,6 +56,7 @@ target_sources(
         test_generic_op.cpp
         test_graph_add.cpp
         test_graph_basic.cpp
+        test_levelized_graph.cpp
         test_graph_capture_arguments_morehdot.cpp
         test_graph_capture_arguments_transpose.cpp
         test_graph_query_op_constraints.cpp
