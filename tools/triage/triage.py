@@ -34,6 +34,7 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
+import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -208,7 +209,7 @@ class TriageScript:
         except Exception as e:
             if log_error:
                 self.failed = True
-                self.failure_message = str(e)
+                self.failure_message = traceback.format_exc()
                 return None
             else:
                 raise
@@ -421,10 +422,12 @@ def serialize_result(script: TriageScript | None, result):
     failures = FAILURE_CHECKS
     FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return

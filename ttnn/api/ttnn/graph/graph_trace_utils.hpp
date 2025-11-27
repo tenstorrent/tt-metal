@@ -53,4 +53,6 @@ struct TensorInfo {
 
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace);
 
+nlohmann::json extract_levelized_graph(const nlohmann::json& trace, size_t max_level = 1);
+
 }  // namespace ttnn::graph
