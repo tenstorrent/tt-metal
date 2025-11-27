@@ -47,11 +47,12 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         shard_spec.shape[0],
         input_tensor.padded_shape()[-2]);
     auto num_cores = shard_spec.grid.num_cores();
-    TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     if (this->on_subcoregrids) {
         TT_FATAL(sub_core_grids.has_value(), "Subcoregrids must be provided if on_subcoregrids is true");
         TT_FATAL(
             sub_core_grids.value().num_cores() >= this->num_heads, "Subcoregrids must have at least num_heads cores");
+    } else {
+        TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     }
 }
 
