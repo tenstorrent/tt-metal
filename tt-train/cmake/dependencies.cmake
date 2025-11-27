@@ -169,8 +169,16 @@ find_package(
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
-    GIT_TAG v2.9.2
+    GIT_TAG
+        dbe8a3c075f628482cfdf0e9fac1d2939794a6ca # v2.9.2 + bug fixes and dlpack support
+    PATCHES
+        nanobind-bfloat.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
+    CUSTOM_CACHE_KEY "2_9_2_patched_bfloat"
 )
+if(nanobind_ADDED)
+    # sometimes this option isn't propagated for some reason
+    set(NB_USE_SUBMODULE_DEPS ON PARENT_SCOPE)
+endif()
