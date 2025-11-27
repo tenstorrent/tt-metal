@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script, log_check
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -143,26 +143,52 @@ def get_block_locations_to_check(block_type: BlockType, device: Device) -> list[
             return device.get_block_locations(block_type)
 
 
+def _convert_metal_device_ids_to_device_ids(
+    metal_device_ids: list[int],
+    metal_device_id_mapping: MetalDeviceIdMapping,
+    context: Context,
+) -> list[int]:
+    device_ids = []
+    for metal_device_id in metal_device_ids:
+        unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
+        found = False
+        for device_id, device in context.devices.items():
+            if device.unique_id == unique_id:
+                device_ids.append(int(device_id))
+                found = True
+                break
+        log_check(
+            found,
+            f"Device with unique_id {unique_id} (metal_device_id {metal_device_id}) not found in context.devices",
+        )
+    return device_ids
+
+
 def get_devices(
     devices: list[str],
     inspector_data: InspectorData | None,
+    metal_device_id_mapping: MetalDeviceIdMapping,
     context: Context,
 ) -> list[Device]:
     if len(devices) == 1 and devices[0].lower() == "in_use":
         if inspector_data is not None:
-            device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
-            if len(device_ids) == 0:
+            metal_device_ids = list(inspector_data.getDevicesInUse().metalDeviceIds)
+
+            if len(metal_device_ids) == 0:
                 print(
                     f"  {ORANGE}No devices in use found in inspector data. Switching to use all available devices. If you are using ttnn check if you have enabled program cache.{RST}"
                 )
                 device_ids = [int(id) for id in context.devices.keys()]
+            else:
+                device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
         else:
             print(f"  {ORANGE}Using all available devices.{RST}")
             device_ids = [int(id) for id in context.devices.keys()]
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
-        device_ids = [int(id) for id in devices]
+        metal_device_ids = [int(id) for id in devices]
+        device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
 
     return [context.devices[id] for id in device_ids]
 
@@ -293,7 +319,7 @@ def run(args, context: Context):
     devices_to_check = args["--dev"]
     inspector_data = get_inspector_data(args, context)
     metal_device_id_mapping = get_metal_device_id_mapping(args, context)
-    devices = get_devices(devices_to_check, inspector_data, context)
+    devices = get_devices(devices_to_check, inspector_data, metal_device_id_mapping, context)
     return RunChecks(devices, metal_device_id_mapping)
 
 

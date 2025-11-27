@@ -12,6 +12,7 @@
 #include "jit_build/build_env_manager.hpp"
 #include <tt-metalium/device_pool.hpp>
 #include <tt_stl/reflection.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::inspector {
 
