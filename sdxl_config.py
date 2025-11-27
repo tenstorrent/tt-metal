@@ -32,7 +32,7 @@ class SDXLConfig:
     # Pipeline settings
     num_inference_steps: int = 50
     guidance_scale: float = 5.0
-    capture_trace: bool = False  # Temporarily disabled to verify root cause
+    capture_trace: bool = True  # Re-enabled for full T3K testing
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False
