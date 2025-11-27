@@ -17,19 +17,17 @@ void kernel_main() {
 
     // DRAM NOC src address
     for (uint32_t i = 0; i < num_loops; i++) {
-        noc.async_read(src_dram, dst_l1, num_bytes, {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr});
+        noc.async_read(src_dram, dst_l1, num_bytes, {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr}, {});
         noc.async_read_barrier();
 
-        eth_send_bytes(
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            num_bytes);
+        eth_send_bytes(dst_l1.get_address(), dst_l1.get_address(), num_bytes);
         eth_wait_for_receiver_done();
         dram_buffer_src_addr += num_bytes;
     }
 
-    noc.async_read(src_dram, dst_l1, remaining_bytes, {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr});
+    noc.async_read(src_dram, dst_l1, remaining_bytes, {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr}, {});
     noc.async_read_barrier();
 
+    eth_send_bytes(dst_l1.get_address(), dst_l1.get_address(), remaining_bytes);
     eth_wait_for_receiver_done();
 }
