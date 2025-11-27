@@ -70,10 +70,19 @@ def load_attention_weights(
     # Pad BOTH dimensions of o_proj to padded_hidden_size
     if padded_hidden_size > hidden_size:
         padding_size = padded_hidden_size - hidden_size
+        assert padding_size % num_rows == 0, "Expert down_proj weight padding size must be divisible by number of rows"
+        local_padding_size = padding_size // num_rows  # (padded_hidden_size - hidden_size) / num_rows
+
+        assert hidden_size % num_rows == 0, "Hidden size must be divisible by number of rows"
+        local_hidden_size = hidden_size // num_rows
         # Pad both dimensions: [hidden_size, hidden_size] -> [padded_hidden_size, padded_hidden_size]
-        o_proj = torch.nn.functional.pad(o_proj, (0, padding_size, 0, 0), value=0.0)
+        o_proj_old = torch.nn.functional.pad(o_proj, (0, padding_size, 0, 0), value=0.0)
+        o_proj_sliced = [o_proj[:, i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
+        o_proj = torch.cat([torch.nn.functional.pad(o, (0, local_padding_size, 0, 0), value=0.0) for o in o_proj_sliced], dim=-1)
         # Pad bias: [hidden_size] -> [padded_hidden_size]
-        o_proj_bias = torch.nn.functional.pad(o_proj_bias, (0, padding_size), value=0.0)
+        o_proj_bias_old = torch.nn.functional.pad(o_proj_bias, (0, padding_size), value=0.0)
+        o_proj_bias_sliced = [o_proj_bias[i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
+        o_proj_bias = torch.cat([torch.nn.functional.pad(d, (0, local_padding_size), value=0.0) for d in o_proj_bias_sliced], dim=-1)
 
     print("o_proj_bias", o_proj.shape, o_proj_bias.shape)
     # Create fused QKV weight for 2D sharding
@@ -101,8 +110,15 @@ def load_attention_weights(
     # Pad input dimension (hidden_size) to padded_hidden_size for row-sharding
     if padded_hidden_size > hidden_size:
         padding_size = padded_hidden_size - hidden_size
+        qkv_cat_old = torch.nn.functional.pad(qkv_cat, (0, 0, 0, padding_size), value=0.0)
+        assert padding_size % num_rows == 0, "QKV weight padding size must be divisible by number of rows"
+        local_padding_size = padding_size // num_rows  # (padded_hidden_size - hidden_size) / num_rows
+
+        assert hidden_size % num_rows == 0, "Hidden size must be divisible by number of rows"
+        local_hidden_size = hidden_size // num_rows
+        qkv_cat_sliced = [qkv_cat[i*local_hidden_size:(i+1)*local_hidden_size, :] for i in range(num_rows)]
+        qkv_cat = torch.cat([torch.nn.functional.pad(d, (0, 0, 0, local_padding_size), value=0.0) for d in qkv_cat_sliced], dim=0)
         # Pad first dimension: [hidden_size, total_qkv_dim] -> [padded_hidden_size, total_qkv_dim]
-        qkv_cat = torch.nn.functional.pad(qkv_cat, (0, 0, 0, padding_size), value=0.0)
 
     # Add batch dimensions: [padded_hidden_size, total_qkv_dim] -> [1, 1, padded_hidden_size, total_qkv_dim]
     qkv_cat = qkv_cat.unsqueeze(0).unsqueeze(0)

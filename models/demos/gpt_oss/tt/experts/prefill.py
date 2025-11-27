@@ -253,10 +253,6 @@ def prefill_forward(
     # Concatenate all chunks
     next_states = ttnn.concat(next_states_list, dim=2)
 
-    # Expert parallel communication
-    if ep > 1:
-        next_states = apply_expert_parallel_allreduce(next_states, mesh_config, ccl_manager)
-
     # Tensor parallel communication
     if tp > 1:
         next_states = apply_tensor_parallel_allreduce(
@@ -268,6 +264,10 @@ def prefill_forward(
             seq_len_global,
             tp,
         )
+
+    # Expert parallel communication
+    if ep > 1:
+        next_states = apply_expert_parallel_allreduce(next_states, mesh_config, ccl_manager)
 
     # Sequence parallel all-gather
     print("before sp ag", next_states.shape)

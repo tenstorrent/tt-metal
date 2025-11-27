@@ -61,10 +61,18 @@ class MLP:
             weight_dtype=ttnn.bfloat4_b,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
         )
+        
+        # Storage for routing analysis (optional, only used if tracking enabled)
+        self.last_router_indices = None
 
     def __call__(self, hidden_states):
         """Forward pass: route -> experts"""
         router_scores, router_indices, router_logits = self.router(hidden_states)
+        
+        # Save router indices for analysis (convert to CPU before deallocation)
+        if hasattr(self, 'track_routing') and self.track_routing:
+            self.last_router_indices = ttnn.to_torch(router_indices).cpu()
+        
         router_logits.deallocate()
         router_indices.deallocate()
         expert_output = self.experts(hidden_states, router_scores)

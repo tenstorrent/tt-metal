@@ -121,11 +121,18 @@ def load_expert_weights(
     hidden_size = config.hidden_size
     if hidden_size % shard_chunk_size != 0:
         padded_hidden_size = ((hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
-        padding_size = 192  # padded_hidden_size - hidden_size
+        padding_size = 192
+        assert padding_size % num_rows == 0, "Expert down_proj weight padding size must be divisible by number of rows"
+        local_padding_size = padding_size // num_rows  # (padded_hidden_size - hidden_size) / num_rows
+
+        assert hidden_size % num_rows == 0, "Hidden size must be divisible by number of rows"
+        local_hidden_size = hidden_size // num_rows
         # Pad last dimension: [1, num_experts, intermediate_size, hidden_size] -> [1, num_experts, intermediate_size, padded_hidden_size]
-        down_proj = torch.nn.functional.pad(down_proj, (0, padding_size), value=0.0)
+        down_proj_sliced = [down_proj[:, :, :, i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
+        down_proj = torch.cat([torch.nn.functional.pad(d, (0, local_padding_size), value=0.0) for d in down_proj_sliced], dim=-1)
         # Pad last dimension: [1, num_experts, hidden_size] -> [1, num_experts, padded_hidden_size]
-        down_proj_bias = torch.nn.functional.pad(down_proj_bias, (0, padding_size), value=0.0)
+        down_proj_bias_sliced = [down_proj_bias[:, :, i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
+        down_proj_bias = torch.cat([torch.nn.functional.pad(d, (0, local_padding_size), value=0.0) for d in down_proj_bias_sliced], dim=-1)
 
     print("down proj", down_proj.shape, down_proj_bias.shape)
     down_proj_tt = ttnn.as_tensor(

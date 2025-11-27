@@ -28,13 +28,16 @@ from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, 
 # Helper Functions for Common Test Patterns
 def gather_sharded_output(tt_output, mesh_config, logical_shape):
     """
-    All-gather row-sharded output for comparison with reference.
-
+    All-gather row-sharded output and unpad (interleaved or standard) for comparison.
+    Returns a torch Tensor (on host).
+    
     Args:
         logical_shape: Tuple (batch_size, seq_len, hidden_size)
     """
     batch_size, seq_len, hidden_size = logical_shape
     num_rows = mesh_config.mesh_shape[0]
+    
+    # 1. Gather full tensor if distributed
     if num_rows > 1:
         tt_output = ttnn.all_gather(
             tt_output,
@@ -44,32 +47,43 @@ def gather_sharded_output(tt_output, mesh_config, logical_shape):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    current_shape = tuple(int(dim) for dim in tt_output.shape)
-    padded_seq_len = current_shape[-2]
+    # 2. Convert to torch (host)
+    # Use get_device_tensors and take the first one since it's replicated
+    device_tensors = ttnn.get_device_tensors(tt_output)
+    tt_output_torch = ttnn.to_torch(device_tensors[0])
+    
+    current_shape = tt_output_torch.shape
     padded_hidden_size = current_shape[-1]
-
+    padded_seq_len = current_shape[-2]
+    
+    # Handle reshaping if 4D -> 3D
     if len(current_shape) == 4:
-        tt_output = ttnn.reshape(tt_output, (current_shape[0], padded_seq_len, padded_hidden_size))
-        current_shape = (current_shape[0], padded_seq_len, padded_hidden_size)
-
-    def slice_seq(tensor, target_seq):
-        return ttnn.slice(tensor, (0, 0, 0), (tensor.shape[0], target_seq, tensor.shape[-1]))
-
-    def slice_hidden(tensor, target_hidden):
-        return ttnn.slice(tensor, (0, 0, 0), (tensor.shape[0], tensor.shape[-2], target_hidden))
-
+        tt_output_torch = tt_output_torch.reshape(batch_size, padded_seq_len, padded_hidden_size)
+    
+    # Slice sequence length if needed
     if padded_seq_len > seq_len:
-        tt_output = slice_seq(tt_output, seq_len)
-        padded_seq_len = seq_len
+        tt_output_torch = tt_output_torch[:, :seq_len, :]
 
-    if padded_hidden_size > hidden_size:
-        tt_output = slice_hidden(tt_output, hidden_size)
-        padded_hidden_size = hidden_size
+    # If no padding or single row, just slice hidden if needed (simple padding at end)
+    if num_rows <= 1 or padded_hidden_size == hidden_size:
+        if padded_hidden_size > hidden_size:
+            tt_output_torch = tt_output_torch[..., :hidden_size]
+        return tt_output_torch
 
-    if tt_output.shape[0] != batch_size or padded_seq_len != seq_len or padded_hidden_size != hidden_size:
-        tt_output = ttnn.reshape(tt_output, (batch_size, seq_len, hidden_size))
-
-    return tt_output
+    # 3. Unpad interleaved (for row-sharded outputs like attention)
+    local_hidden = hidden_size // num_rows
+    local_padded = padded_hidden_size // num_rows
+    
+    # Reshape: [batch, seq, num_rows, local_padded]
+    reshaped = tt_output_torch.view(batch_size, seq_len, num_rows, local_padded)
+    
+    # Slice: [batch, seq, num_rows, local_hidden]
+    sliced = reshaped[..., :local_hidden]
+    
+    # Flatten: [batch, seq, hidden]
+    final = sliced.reshape(batch_size, seq_len, hidden_size)
+    
+    return final
 
 
 def get_padded_hidden_size(hidden_size, mesh_config):
@@ -90,6 +104,33 @@ def pad_hidden_states(hidden_states, target_hidden_size):
         return hidden_states
     pad_size = target_hidden_size - current_hidden_size
     return F.pad(hidden_states, (0, pad_size))
+
+
+def pad_hidden_states_interleaved(hidden_states, mesh_config, padded_hidden_size):
+    """
+    Pad hidden states with interleaved padding for row-sharded weights.
+
+    Input: [batch, seq, hidden]
+    Output: [batch, seq, padded_hidden] with padding interleaved per row-shard.
+    """
+    batch, seq, hidden = hidden_states.shape
+    num_rows = mesh_config.mesh_shape[0]
+
+    if num_rows <= 1 or padded_hidden_size == hidden:
+        return pad_hidden_states(hidden_states, padded_hidden_size)
+
+    local_hidden = hidden // num_rows
+    local_padded = padded_hidden_size // num_rows
+    pad_size = local_padded - local_hidden
+
+    # Reshape to separate rows: [batch, seq, num_rows, local_hidden]
+    reshaped = hidden_states.view(batch, seq, num_rows, local_hidden)
+
+    # Pad inner dimension: [batch, seq, num_rows, local_padded]
+    padded = F.pad(reshaped, (0, pad_size))
+
+    # Flatten back: [batch, seq, padded_hidden]
+    return padded.view(batch, seq, padded_hidden_size)
 
 
 def initialize_decoder_layer(layer, config):
@@ -121,6 +162,9 @@ def initialize_decoder_layer(layer, config):
 
 def run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99):
     """Standard component output comparison"""
+    if isinstance(tt_output, torch.Tensor):
+        return compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
+
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 
     passing_final = True
@@ -154,7 +198,7 @@ def run_attention_component(
 
     # Create inputs for reference and hardware paths
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    padded_hidden_states = pad_hidden_states(hidden_states, padded_hidden_size)
+    padded_hidden_states = pad_hidden_states_interleaved(hidden_states, mesh_config, padded_hidden_size)
 
     input_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-1, None))
     tt_hidden_states = ttnn.from_torch(
@@ -180,6 +224,7 @@ def run_attention_component(
     tt_out_gathered = gather_sharded_output(tt_out, mesh_config, hidden_states.shape)
 
     passing, output = run_component_comparison(tt_out_gathered, reference_out, mesh_device, pcc_threshold=0.94)
+    logger.info(f"Attention test passed: {passing} with output: {output}")
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -191,7 +236,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
     padded_hidden_size = get_padded_hidden_size(hidden_size, mesh_config)
 
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    padded_hidden_states = pad_hidden_states(hidden_states, padded_hidden_size)
+    padded_hidden_states = pad_hidden_states_interleaved(hidden_states, mesh_config, padded_hidden_size)
 
     reference_rms_norm = reference_layer.input_layernorm
     with torch.no_grad():
@@ -212,6 +257,7 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
     tt_output_gathered = gather_sharded_output(tt_output, mesh_config, hidden_states.shape)
 
     passing, output = run_component_comparison(tt_output_gathered, ref_output, mesh_device, pcc_threshold=0.99)
+    logger.info(f"RMS norm test passed: {passing} with output: {output}")
     assert passing, f"RMS norm test failed. Output: {output}"
 
 
@@ -238,6 +284,7 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
     for tt_output, reference_output in zip(tt_router_scores, router_scores):
         passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.945)
+        logger.info(f"TopK router test passed: {passing} with output: {output}")
         assert passing, f"TopK router test failed. Output: {output}"
 
 
@@ -284,14 +331,16 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     tt_output = ttnn.typecast(tt_output, ttnn.bfloat16)
 
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
+    logger.info(f"Experts test passed: {passing} with output: {output}")
     assert passing, f"Experts test failed. Output: {output}"
 
 
 def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer, config, mesh_config):
     """Test complete MLP (router + experts) - essential MoE functionality"""
 
-    hidden_states = torch.randn(hidden_shape)
-
+    # hidden_states = torch.randn(hidden_shape)
+    # hidden_states = torch.load("gpt_oss_debug/tt_input_mlp.pt").squeeze()[0, :2880].reshape(1, 1, 2880)
+    hidden_states = torch.load("gpt_oss_debug/ref_input_mlp.pt").squeeze().reshape(1, 1, 2880)
     reference_model = reference_layer.mlp
     with torch.no_grad():
         reference_output, routing_scores = reference_model(hidden_states)
@@ -302,16 +351,17 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     tt_output, routing_scores = tt_mlp(tt_hidden_states)
     tt_output = ttnn.typecast(tt_output, ttnn.bfloat16)
     tt_output_gathered = gather_sharded_output(tt_output, mesh_config, hidden_states.shape)
-
+    torch.save(tt_output_gathered, "gpt_oss_debug/ref_input_mlp_output.pt")
     passing, output = run_component_comparison(tt_output_gathered, reference_output, mesh_device, pcc_threshold=0.88)
 
+    logger.info(f"MLP test passed: {passing} with output: {output}")
     assert passing, f"MLP test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        (1, 1),  # decode
+        (1, 128),  # decode
         # (1, 128),  # prefill
         # (1, 4096),  # prefill 4k
     ],
@@ -371,7 +421,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     )
 
     hidden_states_ref = torch.randn(batch_size, seq_len, hidden_size)
-    hidden_states = pad_hidden_states(hidden_states_ref.clone(), padded_hidden_size)
+    # Pad inputs for interleaved sharding (required for attention)
+    hidden_states = pad_hidden_states_interleaved(hidden_states_ref.clone(), setup["mesh_config"], padded_hidden_size)
 
     position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
