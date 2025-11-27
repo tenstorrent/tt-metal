@@ -17,9 +17,13 @@
 
 #define DEBUG_PRINT 0
 
-FORCE_INLINE void delay_in_cycles(uint32_t cycles) {
-    while (cycles--) {
-        asm volatile("nop");
+template <uint32_t base_matmul_stagger_cycles>
+FORCE_INLINE void delay_in_cycles(uint32_t multiplier) {
+    while (multiplier--) {
+#pragma GCC unroll(base_matmul_stagger_cycles)
+        for (uint32_t i = 0; i < base_matmul_stagger_cycles; i++) {
+            asm volatile("nop");
+        }
     }
 }
 
@@ -216,6 +220,7 @@ void MAIN {
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t base_matmul_stagger_cycles = get_compile_time_arg_val(40);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -249,7 +254,7 @@ void MAIN {
     // Skip dummy compute operations when possible to reduce di/dt issues, but allow dummy
     // tilize operations on cores without input data for code simplicity.
     bool skip_compute = false;
-    uint32_t skip_cycles = get_arg_val<uint32_t>(0);
+    uint32_t stagger_multiplier = get_arg_val<uint32_t>(0);
     if constexpr (check_skip_compute) {
         skip_compute = (bool)get_arg_val<uint32_t>(1);
     }
@@ -365,8 +370,8 @@ void MAIN {
                 }
 
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
-                if (skip_cycles > 0) {
-                    delay_in_cycles(skip_cycles);
+                if constexpr (base_matmul_stagger_cycles > 0) {
+                    delay_in_cycles<base_matmul_stagger_cycles>(stagger_multiplier);
                 }
 
                 if (last_inner_dim_block) {

@@ -187,7 +187,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    uint32_t base_matmul_stagger_cycles) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -986,6 +987,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
+    // Determine if stagger should be applied based on architecture and core count
+    // Only applies to block sharded configurations with sufficient cores to avoid di/dt issues
+    // Currently only enabled for Wormhole B0, not Blackhole (pending threshold determination)
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
+    const bool should_apply_stagger = block_sharded && (device->arch() == tt::ARCH::WORMHOLE_B0 &&
+                                                        output_cores.num_cores() > WH_B0_MM_MAX_CORES_NO_STAGGER);
+
+    // Only use base_matmul_stagger_cycles if conditions are met
+    const uint32_t effective_stagger_cycles = should_apply_stagger ? base_matmul_stagger_cycles : 0;
+    log_info(tt::LogOp, "Effective stagger cycles: {}", effective_stagger_cycles);
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
         act_num_subblocks,
@@ -1040,6 +1051,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
+    compute_kernel_args.push_back(effective_stagger_cycles);
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
@@ -1335,16 +1347,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
         uint32_t end_coord_x = bottom_right_core_out.x;
         uint32_t end_coord_y = bottom_right_core_out.y;
-        CoreCoord bottom_right_core_all = all_cores.bounding_box().end_coord;
-        uint32_t end_coord_y_all = bottom_right_core_all.y;
         for (const CoreRange range : all_cores.ranges()) {
             for (const CoreCoord core : range) {
                 bool skip_compute = transpose_mcast ? core.y > end_coord_y : core.x > end_coord_x;
+                // Only non-zero for block sharded with sufficient cores
+                uint32_t stagger_value = (end_coord_y - core.y);
                 SetRuntimeArgs(
                     program,
                     compute_kernel_id,
                     core,
-                    std::vector<uint32_t>{(end_coord_y_all - core.y) * 100, static_cast<uint32_t>(skip_compute)});
+                    std::vector<uint32_t>{stagger_value, static_cast<uint32_t>(skip_compute)});
             }
         }
 
