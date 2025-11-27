@@ -14,13 +14,13 @@ EXPECTED_HEADER="test_name,ftype,ntype,topology,num_devices,num_links,packet_siz
 validate_header() {
     local header="$1"
     local file="$2"
-    
+
     # Check for empty header
     if [[ -z "$header" ]]; then
         echo "❌ FAIL: $file - Header is empty"
         return 1
     fi
-    
+
     # Exact string match
     if [[ "$header" == "$EXPECTED_HEADER" ]]; then
         echo "✅ PASS: $file"
@@ -58,10 +58,10 @@ for csv_file in "${CSV_FILES[@]}"; do
         EXIT_CODE=1
         continue
     fi
-    
+
     # Read the first line of the CSV
     header=$(head -n 1 "$csv_file")
-    
+
     # Validate the header
     if ! validate_header "$header" "$csv_file"; then
         EXIT_CODE=1
