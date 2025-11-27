@@ -117,7 +117,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params, num_layers",
+    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, num_layers",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -139,7 +139,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            None
+            None,  # num_layers
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -150,7 +150,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
-            None
+            None,  # num_layers
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -227,9 +227,9 @@ def test_gpt_oss_demo(
     max_generated_tokens,
     page_params,
     sampling_params,
+    num_layers,
     is_ci_env,
     state_dict,
-    num_layers,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     is_ci_env = True
