@@ -173,15 +173,10 @@ void kernel_main() {
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
     uint32_t packet_idx = 0;  // page_idx_start / max_pages_per_packet_l;
 
-    const uint64_t sem_addr = get_noc_addr(core_noc_x, core_noc_y, receive_semaphore_addr);
-    DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sem_addr << "\n";
-    // wait for receiver to signal it is ready
-    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     DPRINT << "before waiting on receiver semaphore\n";
-    noc_semaphore_wait_min(local_semaphore_ptr, 1);
-    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
-    // in subsequent program cache hits
-    // noc_semaphore_set(local_semaphore_ptr, 0);
+    // wait for receiver to signal it is ready
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);
 
     DPRINT << "after waiting on receiver semaphore\n";
 
@@ -222,7 +217,7 @@ void kernel_main() {
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
+    const uint64_t receive_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receive_semaphore_addr);
 
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, dst_num_hops);

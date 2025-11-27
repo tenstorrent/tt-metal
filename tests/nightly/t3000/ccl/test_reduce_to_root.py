@@ -29,7 +29,7 @@ def test_reduce_to_root_basic(mesh_device):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 1)))
 
     # Shard spec: all tensors sharded on core (0,0)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
     shard_spec_l = ttnn.ShardSpec(
         shard_grid,
         shard_l_shape,
