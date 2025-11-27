@@ -23,7 +23,7 @@ struct RMSAllGatherSharedVariables {
     tt::tt_metal::CBHandle cb_stats{};
     tt::tt_metal::CBHandle cb_output{};
     tt::tt_metal::CBHandle cb_output_reshard{};
-    std::vector<tt::tt_metal::CoreCoord> cores{};
+    std::vector<tt::tt_metal::CoreCoord> cores;
 };
 
 struct RMSAllGatherMeshWorkloadFactory {
