@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sampling_device_operation.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
 
 #include <optional>
 
-#include "sampling_device_operation_types.hpp"
-#include "sampling_program_factory.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -113,9 +113,9 @@ std::tuple<SamplingDeviceOperation::operation_attributes_t, SamplingDeviceOperat
 SamplingDeviceOperation::invoke(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
-    const Tensor& k_tensor,
-    const Tensor& p_tensor,
-    const Tensor& temp_tensor,
+    const Tensor& k,
+    const Tensor& p,
+    const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output_tensor) {
@@ -124,9 +124,9 @@ SamplingDeviceOperation::invoke(
         tensor_args_t{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,
-            .k = k_tensor,
-            .p = p_tensor,
-            .temp = temp_tensor,
+            .k = k,
+            .p = p,
+            .temp = temp,
             .preallocated_output = preallocated_output_tensor}};
 }
 

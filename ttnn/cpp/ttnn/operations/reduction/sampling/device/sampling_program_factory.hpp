@@ -7,12 +7,12 @@
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
-#include "sampling_device_operation_types.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
 
 namespace ttnn::operations::reduction::sampling::program {
 
 struct SamplingSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<tt::tt_metal::CoreCoord> cores;
 };

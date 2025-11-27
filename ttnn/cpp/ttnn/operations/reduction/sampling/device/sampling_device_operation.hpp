@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-#include "sampling_device_operation_types.hpp"
-#include "sampling_program_factory.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 
 namespace ttnn::operations::reduction::sampling {
 
@@ -32,9 +32,9 @@ struct SamplingDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
-        const Tensor& k_tensor,
-        const Tensor& p_tensor,
-        const Tensor& temp_tensor,
+        const Tensor& k,
+        const Tensor& p,
+        const Tensor& temp,
         const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
         const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);

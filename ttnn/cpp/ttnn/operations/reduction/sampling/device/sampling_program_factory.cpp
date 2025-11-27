@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sampling_program_factory.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 
 #include <algorithm>
 

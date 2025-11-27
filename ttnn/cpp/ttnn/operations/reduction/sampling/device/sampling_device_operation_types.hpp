@@ -12,8 +12,8 @@
 namespace ttnn::operations::reduction::sampling {
 
 struct operation_attributes_t {
-    const std::optional<uint32_t> seed;
-    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    std::optional<uint32_t> seed;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 struct tensor_args_t {
