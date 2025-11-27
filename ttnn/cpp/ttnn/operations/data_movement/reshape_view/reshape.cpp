@@ -218,8 +218,7 @@ ttnn::Tensor reshape_tiled(
     auto rt_args_estimate = reshape::detail::estimate_reshape_rt_args(
         tensor3d, requested_shape_3d, requested_padded_shape_3d, memory_config);
 
-    if ((!rt_args_estimate.can_fit_in_rt_args()) &&
-        (on_device_mappings.has_value() && on_device_mappings.value() == false)) {
+    if ((!rt_args_estimate.can_fit_in_rt_args()) && (on_device_mappings.has_value() && !on_device_mappings.value())) {
         // run untilize + reshape + tilize
         bool typecast_back = false;
         if (tensor3d.dtype() == DataType::FLOAT32) {
