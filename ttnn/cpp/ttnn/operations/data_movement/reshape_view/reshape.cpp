@@ -221,14 +221,22 @@ ttnn::Tensor reshape_tiled(
     printf(
         "on_device_mappings: %s\n",
         on_device_mappings.has_value() ? (on_device_mappings.value() ? "true" : "false") : "nullopt");
-    if (!rt_args_estimate.can_fit_in_rt_args() &&
+    if ((!rt_args_estimate.can_fit_in_rt_args()) &&
         (on_device_mappings.has_value() && on_device_mappings.value() == false)) {
         // run untilize + reshape + tilize
+        bool typecast_back = false;
+        if (tensor3d.dtype() == DataType::FLOAT32) {
+            tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
+            typecast_back = true;
+        }
         auto untilize_tensor =
             ttnn::to_layout(tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config());
         auto reshaped_tensor = ttnn::reshape(untilize_tensor, requested_shape_3d);
         output_tensor_3d =
             ttnn::to_layout(reshaped_tensor, ttnn::TILE_LAYOUT, reshaped_tensor.dtype(), working_output_memory_config);
+        if (typecast_back) {
+            output_tensor_3d = ttnn::typecast(output_tensor_3d, DataType::FLOAT32);
+        }
         printf("composite path\n");
     } else {
         printf("direct path\n");
