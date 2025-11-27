@@ -468,7 +468,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet available_grid(default_cores);
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, nblocks);
+        ttnn::split_blocks_for_tilize(available_grid, nblocks);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -490,7 +490,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
                  has_cliff_col,
                  full_cores_per_row,
                  full_cores_per_col] =
-                    ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
                 return tilize_multi_core_block(a, output, sub_core_grids);
             }
@@ -559,7 +560,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
 
