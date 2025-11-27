@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 // Helper functions used by SliceTileProgramFactory
-namespace detail {
+namespace {
 
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
@@ -160,7 +160,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
         num_tiles_written += num_tiles_per_core;
     }
 }
-}  // namespace detail
+}  // namespace
 
 namespace slice::program {
 
@@ -217,7 +217,7 @@ SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    detail::set_slice_runtime_args_tile<true>(
+    set_slice_runtime_args_tile<true>(
         input,
         output,
         args.slice_start,
@@ -258,7 +258,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
             ? tt::tt_metal::split_work_to_cores(sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-    detail::set_slice_runtime_args_tile<false>(
+    set_slice_runtime_args_tile<false>(
         src_tensor,
         dst_tensor,
         slice_start,

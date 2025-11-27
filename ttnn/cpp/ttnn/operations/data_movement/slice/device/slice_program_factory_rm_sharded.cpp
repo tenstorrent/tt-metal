@@ -15,8 +15,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-// Helper functions used by SliceRmShardedProgramFactory
-namespace detail {
+namespace {
 
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
@@ -185,7 +184,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     return ret_val;
 }
 
-}  // namespace detail
+}  // namespace
 
 namespace slice::program {
 
@@ -271,7 +270,7 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
         all_cores_unpadded,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    auto all_runtime_args = detail::get_slice_runtime_args_rm_sharded(
+    auto all_runtime_args = get_slice_runtime_args_rm_sharded(
         input,
         output,
         args.slice_start,
