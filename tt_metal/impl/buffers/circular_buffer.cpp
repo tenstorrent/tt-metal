@@ -191,4 +191,10 @@ bool CircularBuffer::globally_allocated() const { return impl_->globally_allocat
 
 const std::unordered_set<uint8_t>& CircularBuffer::buffer_indices() const { return impl_->buffer_indices(); }
 
+uint32_t CircularBuffer::page_size(uint32_t buffer_index) const { return impl_->page_size(buffer_index); }
+
+uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const { return impl_->num_pages(buffer_index); }
+
+DataFormat CircularBuffer::data_format(uint32_t buffer_index) const { return impl_->data_format(buffer_index); }
+
 }  // namespace tt::tt_metal
