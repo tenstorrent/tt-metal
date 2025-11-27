@@ -79,14 +79,62 @@ CPMAddPackage(
 
 CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.8.0 OPTIONS "XTL_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtl
+    GITHUB_REPOSITORY xtensor-stack/xtl
+    GIT_TAG 0.8.0
+    PATCH_COMMAND
+    patch
+    --dry-run
+    -p1
+    -R
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtl.patch
+    ||
+    patch
+    -p1
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtl.patch
+    OPTIONS
+        "XTL_ENABLE_TESTS OFF"
+)
 
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.26.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.26.0
+    PATCH_COMMAND
+    patch
+    --dry-run
+    -p1
+    -R
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtensor.patch
+    ||
+    patch
+    -p1
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtensor.patch
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.22.0
+    PATCH_COMMAND
+    patch
+    --dry-run
+    -p1
+    -R
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtensor-blas.patch
+    ||
+    patch
+    -p1
+    <
+    ${CMAKE_CURRENT_LIST_DIR}/xtensor-blas.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
@@ -119,9 +167,10 @@ CPMAddPackage(
     GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
     GIT_TAG 55d53aa38dc8df7d9c8bd9ed50907e82ae83ce66
     PATCH_COMMAND
-        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch
+        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch && ${CMAKE_COMMAND} -E rm -f rust/Cargo.lock || true
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "CARGO_EXECUTABLE ${PROJECT_SOURCE_DIR}/cmake/cargo_wrapper.sh"
 )
 if(tokenizers-cpp_ADDED)
     target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
