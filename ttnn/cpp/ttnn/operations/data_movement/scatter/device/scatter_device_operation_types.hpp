@@ -19,8 +19,6 @@ struct operation_attributes_t {
     // reduction applied to source values coming from repeating indices
     const ScatterReductionType opt_reduction;
     const std::optional<CoreRangeSet> sub_core_grid;
-    // Amount of L1 memory (in bytes) already reserved by the model, subtracted from available L1 when calculating chunk sizes
-    const uint32_t l1_reserved_memory_bytes;
 };
 
 struct tensor_args_t {

@@ -27,8 +27,16 @@ uint64_t ceil32(const uint64_t& number) {
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device, uint32_t l1_reserved_memory_bytes) {
-    return ceil32((device->l1_size_per_core() - l1_reserved_memory_bytes) / 4 / 4 * 0.8 - 32);
+
+inline uint32_t get_max_l1_space(IDevice* device) {
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    return max_l1_space;
+}
+
+uint32_t calculate_optimal_chunk_size(IDevice* device) {
+    return ceil32(((((get_max_l1_space(device)) / 4) / 4) * 0.8) - 32);
 }
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
@@ -74,10 +82,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
     // ... minimized by ~20% to account for reserved memory
-    const uint32_t input_and_output_max_chunk_size =
-        calculate_optimal_chunk_size(input_tensor.device(), args.l1_reserved_memory_bytes);
-    const uint32_t index_and_source_max_chunk_size =
-        calculate_optimal_chunk_size(input_tensor.device(), args.l1_reserved_memory_bytes);
+    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
+    const uint32_t index_and_source_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
     const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);

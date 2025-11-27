@@ -318,8 +318,7 @@ Tensor ScatterOperation::invoke(
         transformed_source_tensor,
         final_memory_config,
         reduction,
-        sub_core_grid,
-        l1_reserved_memory_bytes);
+        sub_core_grid);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,
@@ -338,14 +337,7 @@ Tensor ScatterAddOperation::invoke(
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     return ScatterOperation::invoke(
-        input_tensor,
-        dim,
-        index_tensor,
-        source_tensor,
-        output_memory_config,
-        std::make_optional("add"),
-        sub_core_grid,
-        static_cast<uint32_t>(723 * 1088));
+        input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }
 
 }  // namespace ttnn::operations::data_movement
