@@ -26,43 +26,7 @@ namespace detail {
  * @param keepdim Whether to keep the reduced dimension.
  * @return The output shape.
  */
-inline ttnn::SmallVector<uint32_t> get_output_shape(
-    const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim) {
-    auto input_shape = input_tensor.logical_shape();
-    int rank = input_shape.size();
-    ttnn::SmallVector<uint32_t> output_shape;
-
-    // If no reduction dims are specified, we reduce all dimensions
-    auto all_dim_reduce = not dim.has_value();
-    auto red_dim = dim.value_or(0);
-    TT_FATAL(
-        (rank == 0) or ((red_dim >= -rank) and (red_dim < rank)),
-        "Invalid reduction dimension {} for input tensor with rank {}",
-        red_dim,
-        rank);
-
-    // Adjust negative reduction dimension to positive
-    red_dim = red_dim < 0 ? red_dim + rank : red_dim;
-
-    // Generate output shape
-    // Iterate over the input shape and adjust the output shape for keepdim
-    for (int d = 0; d < rank; ++d) {
-        // If this is in the reduction dims, keep it only if keepdim is true
-        bool is_reduction_dim = all_dim_reduce or (d == red_dim);
-
-        if (is_reduction_dim) {
-            TT_FATAL(input_shape[d] != 0, "Expected reduction dim {} to have non-zero size", d);
-            if (keepdim) {
-                output_shape.push_back(1);
-            }
-        } else {
-            // If this is not a reduction dim, we keep the original size
-            output_shape.push_back(input_shape[d]);
-        }
-    }
-
-    return output_shape;
-}
+ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim);
 
 }  // namespace detail
 
