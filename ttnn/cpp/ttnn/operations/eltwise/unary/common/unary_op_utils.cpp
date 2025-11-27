@@ -269,7 +269,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
-        case UnaryOpType::RDIV: op_init_and_name = {}; break;
+        case UnaryOpType::RDIV: {
+            uint32_t round_mode_value = params[1];
+            static constexpr const char* round_mode_strs[] = {
+                "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
+            op_init_and_name = {
+                "rdiv_tile_init();",
+                fmt::format(
+                    "rdiv_tile<{}>({}, {:#x}u);",
+                    round_mode_strs[round_mode_value],
+                    idst,
+                    std::bit_cast<uint32_t>(param0))};
+            break;
+        }
         case UnaryOpType::RSUB:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");

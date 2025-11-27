@@ -11,6 +11,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 

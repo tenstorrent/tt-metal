@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: "in-service"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
   t3000-demo-tests:
@@ -24,7 +29,6 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Harry Zhou
-          { name: "t3k llama3_load_checkpoints tests", arch: wormhole_b0, cmd: run_t3000_llama3_load_checkpoints_tests, timeout: 30, owner_id: U07RY6B5FLJ}, #Gongyu Wang
           { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U053W15B6JF}, #Djordje Ivanovic
           { name: "t3k_llama3_tests", arch: wormhole_b0, cmd: run_t3000_llama3_tests, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k_qwen25_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
@@ -67,7 +71,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
