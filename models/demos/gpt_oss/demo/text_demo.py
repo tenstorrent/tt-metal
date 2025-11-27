@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
@@ -51,6 +52,7 @@ def prepare_gpt_oss_generator_args(
     paged_attention,
     mesh_config=None,
     state_dict=None,
+    num_layers=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
     submesh_devices = create_submeshes(mesh_device, data_parallel)
@@ -80,6 +82,7 @@ def prepare_gpt_oss_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
+            num_layers=num_layers,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -114,7 +117,7 @@ def prepare_gpt_oss_generator_args(
 )
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params",
+    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params, num_layers",
     [
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -125,6 +128,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            None,  # num_layers
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
@@ -135,6 +139,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            None
         ),
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -145,6 +150,7 @@ def prepare_gpt_oss_generator_args(
             200,  # max_generated_tokens
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            None
         ),
         # (
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -223,6 +229,7 @@ def test_gpt_oss_demo(
     sampling_params,
     is_ci_env,
     state_dict,
+    num_layers,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     is_ci_env = True
@@ -277,6 +284,7 @@ def test_gpt_oss_demo(
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
         state_dict=state_dict,
+        num_layers=num_layers,
     )
 
     # Create generator (match tt-transformers pattern)
@@ -358,6 +366,7 @@ def test_gpt_oss_demo(
 
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
+        signpost("prefill")
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
@@ -392,6 +401,7 @@ def test_gpt_oss_demo(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Decode forward (matching tt_transformers call)
+            signpost("decode")
             logits = generator.decode_forward_text(
                 out_tok,
                 current_pos,

@@ -101,7 +101,7 @@ class MeshConfig:
 
     # Clean semantic helpers (all use unified shard_mapper)
     def column_parallel(self, mesh_device):
-        """Column-parallel weights (feature dimension sharding)"""
+        """Column-parallel weights (feature dimension sharding) - shard along TP axis"""
         return self.shard_mapper(mesh_device, tensor_dim=-1)
 
     def row_parallel(self, mesh_device):
@@ -111,6 +111,22 @@ class MeshConfig:
     def sequence_parallel(self, mesh_device):
         """Sequence sharding (for KV cache)"""
         return self.shard_mapper(mesh_device, tensor_dim=-3)
+
+    def attention_2d_qkv(self, mesh_device):
+        """
+        2D sharding for attention QKV weights on 4x8 mesh.
+        Input dim (hidden) across ROWS, output dim (qkv) across COLUMNS.
+        dims=(2, 3) means: dim 2 sharded on rows, dim 3 sharded on columns.
+        """
+        return ttnn.ShardTensor2dMesh(mesh_device, self.mesh_shape, dims=(2, 3))
+
+    def attention_2d_wo(self, mesh_device):
+        """
+        2D sharding for attention WO weights on 4x8 mesh.
+        Input dim (hidden) across COLUMNS, output dim (hidden) across ROWS.
+        dims=(3, 2) means: dim 2 sharded on columns, dim 3 sharded on rows.
+        """
+        return ttnn.ShardTensor2dMesh(mesh_device, self.mesh_shape, dims=(3, 2))
 
     def shard_size(self, total_size, mode: Mode = Mode.DECODE):
         """Size per device for tensor parallel sharding"""
@@ -125,48 +141,35 @@ class MeshConfig:
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
 
-        # Optional performance padding (caller specifies, no magic numbers)
-        padded = False
-        if pad_size and tensor.shape[-2] >= 32:
-            tensor_padded = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
-            tensor.deallocate(True)
-            tensor = tensor_padded
-            padded = True
-
+        print("rs", tensor.shape)
         # Reduce-scatter along TP axis
-        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+        scattered = ttnn.all_reduce(
             tensor,
-            dim=3,
-            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-            num_links=1,
+            # dim=3,
+            # multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
+            num_links=4,
             memory_config=memory_config,
             topology=ccl_manager.topology,
             cluster_axis=axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            # barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
 
         # All-gather back
-        gathered = ttnn.experimental.all_gather_async(
-            scattered,
-            dim=3,
-            cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        )
+        # gathered = ttnn.all_gather(
+        #     scattered,
+        #     dim=3,
+        #     cluster_axis=axis,
+        #     #mesh_device=ccl_manager.mesh_device,
+        #     topology=ccl_manager.topology,
+        #     #multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+        #     num_links=4,
+        #     memory_config=memory_config,
+        #     #barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        # )
 
-        # Remove padding if applied
-        if padded:
-            gathered_sliced = gathered[:, :, :, :-pad_size]
-            gathered.deallocate(True)
-            gathered = gathered_sliced
+        return scattered
 
-        return gathered
-
-    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3):
+    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, num_links=4):
         """
         All-gather operation for tensor parallel communication
 
@@ -174,15 +177,55 @@ class MeshConfig:
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
 
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             tensor,
             dim=dim,
             cluster_axis=axis,
-            mesh_device=ccl_manager.mesh_device,
-            topology=ccl_manager.topology,
-            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            # mesh_device=ccl_manager.mesh_device,
+            # topology=ccl_manager.topology,
+            # multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=num_links,
+            memory_config=memory_config,
+            # barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
+
+    def allreduce_rows(self, tensor, ccl_manager, memory_config=None):
+        """
+        All-reduce along row axis (cluster_axis=0) for 2D sharding.
+        Used after QKV projection to reduce partial results from row-sharded weights.
+        """
+        return self.allreduce(tensor, ccl_manager, memory_config, pad_size=0, axis=0)
+
+    def allreduce_cols(self, tensor, ccl_manager, memory_config=None):
+        """
+        All-reduce along column axis (cluster_axis=1) for 2D sharding.
+        Used after WO projection to reduce partial results from column-sharded weights.
+        """
+        return self.allreduce(tensor, ccl_manager, memory_config, pad_size=0, axis=1)
+
+    def allgather_rows(self, tensor, ccl_manager, memory_config=None):
+        """
+        All-gather along row axis to get full tensor across rows.
+        Used before MLP to provide full hidden states for MoE router.
+        """
+        return self.allgather(tensor, ccl_manager, memory_config, axis=0, dim=3)
+
+    def reduce_scatter_cols(self, tensor, ccl_manager, memory_config=None):
+        """
+        Reduce-scatter along column axis after MLP.
+        Optimization to keep column-sharded output for next layer.
+        """
+        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        # Reduce-scatter: reduce along columns, scatter result back on dim 3
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            dim=3,
+            multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
             num_links=1,
             memory_config=memory_config,
+            topology=ccl_manager.topology,
+            cluster_axis=1,  # column axis
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
 

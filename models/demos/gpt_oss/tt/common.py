@@ -43,7 +43,8 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # Note: num_layers parameter is intentionally not used to preserve full model architecture
+    if num_layers is not None:
+        gpt_oss_model_args.n_layers = num_layers
 
     # Avoid loading state_dict for every DP model
     if not state_dict:

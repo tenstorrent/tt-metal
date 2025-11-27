@@ -120,7 +120,12 @@ def parametrize_mesh_with_fabric():
         raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
         pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
+            {
+                # "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 30000000,
+            },
+            id="fabric_1d_ring",
         ),
     ]
 
@@ -136,7 +141,13 @@ def parametrize_mesh_with_fabric():
 def parametrize_batch_seq(configs=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
-    return pytest.mark.parametrize("batch_size, seq_len", configs)
+    ids = [
+        f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
+        if seq_len > 1
+        else "decode_mode"
+        for batch_size, seq_len in configs
+    ]
+    return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
 def parametrize_weights(use_real=False):
