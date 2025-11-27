@@ -54,6 +54,7 @@ synchronize_device = ttnn._ttnn.device.synchronize_device
 SetRootDir = ttnn._ttnn.device.SetRootDir
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
+ClearDefaultDevice = getattr(ttnn._ttnn.device, "ClearDefaultDevice", None)
 GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID
 GetNumPCIeDevices = ttnn._ttnn.device.GetNumPCIeDevices
 
@@ -239,6 +240,16 @@ def dump_device_memory_state(device, prefix=""):
 def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
+
+# afuller
+def SetDefaultDevice(device: Optional["ttnn.device.Device"]):
+    if device is None and ClearDefaultDevice is not None:
+        return ClearDefaultDevice()
+    return ttnn._ttnn.device.SetDefaultDevice(device)
+
+
+# afuller
+GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 
 format_input_tensor = ttnn._ttnn.device.format_input_tensor
 format_output_tensor = ttnn._ttnn.device.format_output_tensor
