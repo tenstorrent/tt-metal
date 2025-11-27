@@ -17,32 +17,27 @@ using namespace tt::constants;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
-    uint32_t src_page_size = 0;
-    uint32_t dst_page_size = 0;
+    TT_FATAL(
+        input.layout() == Layout::ROW_MAJOR || input.layout() == Layout::TILE,
+        "Only ROW_MAJOR and TILE layouts are supported for argmax single-core");
 
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        // Last dimension in input i.e. reduction dimension
         const uint32_t red_dim_units = input_shape[rank - 1];
-
         const uint32_t input_unit_size = input.element_size();
         const uint32_t output_unit_size = output.element_size();
+        const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-        // Last dimension in output i.e. the dim left after reduction
-        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
-        src_page_size = red_dim_units * input_unit_size;
-        dst_page_size = output_last_dim * output_unit_size;
-    } else {
-        TT_FATAL(
-            output.layout() == Layout::ROW_MAJOR,
-            "For input tensor with TILE layout only ROW_MAJOR output is supported");
-        src_page_size = input.tensor_spec().compute_page_size_bytes();
-        dst_page_size = output.tensor_spec().compute_page_size_bytes();
+        return {red_dim_units * input_unit_size, output_last_dim * output_unit_size};
     }
 
-    return {src_page_size, dst_page_size};
+    // TILE layout
+    TT_FATAL(
+        output.layout() == Layout::ROW_MAJOR, "For input tensor with TILE layout only ROW_MAJOR output is supported");
+
+    return {input.tensor_spec().compute_page_size_bytes(), output.tensor_spec().compute_page_size_bytes()};
 }
 
 static void create_circular_buffers_single_core(
@@ -55,19 +50,17 @@ static void create_circular_buffers_single_core(
     tt::DataFormat input_format,
     tt::DataFormat output_format) {
     // Create input CB
-    tt::tt_metal::CircularBufferConfig src_cb_config =
-        tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_index, input_format}})
-            .set_page_size(src_cb_index, src_page_size);
+    auto src_cb_config = tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_index, input_format}})
+                             .set_page_size(src_cb_index, src_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // Create output CB
-    const tt::tt_metal::CircularBufferConfig dst_cb_config =
-        tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_index, output_format}})
-            .set_page_size(dst_cb_index, dst_page_size);
+    auto dst_cb_config = tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_index, output_format}})
+                             .set_page_size(dst_cb_index, dst_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
 }
 
-static auto get_ctime_args_single_core(
+static std::vector<uint32_t> get_ctime_args_single_core(
     const Tensor& input,
     const Tensor& output,
     uint32_t src_page_size,
@@ -76,58 +69,54 @@ static auto get_ctime_args_single_core(
     uint32_t dst_cb_index,
     bool keepdim,
     bool reduce_all) {
-    std::vector<uint32_t> ctime_args;
+    TT_FATAL(
+        input.layout() == Layout::ROW_MAJOR || input.layout() == Layout::TILE,
+        "Only ROW_MAJOR and TILE layouts are supported for argmax single-core");
 
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
     if (input.layout() == Layout::ROW_MAJOR) {
         const uint32_t red_dim_units = input_shape[rank - 1];
-        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+        const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+        const uint32_t inner_dim_units = output_last_dim;
+        const uint32_t outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
-        const auto inner_dim_units = output_last_dim;
-        const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
-
-        ctime_args.insert(
-            ctime_args.end(),
-            {
-                src_cb_index,
-                dst_cb_index,
-                src_page_size,
-                dst_page_size,
-                outer_dim_units,
-                inner_dim_units,
-                red_dim_units,
-                (uint32_t)(reduce_all),
-            });
-    } else {
-        const uint32_t logical_rank = input.logical_shape().size();
-        const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
-        const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
-
-        const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
-        const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
-
-        // The initial dims combined (excluding the two trailing dims)
-        const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
-
-        ctime_args.insert(
-            ctime_args.end(),
-            {src_cb_index,
-             dst_cb_index,
-             src_page_size,
-             dst_page_size,
-             TILE_HEIGHT,
-             TILE_WIDTH,
-             h_tiles,
-             w_tiles,
-             h_logical,
-             w_logical,
-             outer_dim_units,
-             (uint32_t)(reduce_all),
-             (uint32_t)(keepdim)});
+        return {
+            src_cb_index,
+            dst_cb_index,
+            src_page_size,
+            dst_page_size,
+            outer_dim_units,
+            inner_dim_units,
+            red_dim_units,
+            (uint32_t)(reduce_all),
+        };
     }
-    return ctime_args;
+
+    // TILE layout
+    const uint32_t logical_rank = input.logical_shape().size();
+    const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
+    const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
+    const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
+    const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
+    const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
+
+    return {
+        src_cb_index,
+        dst_cb_index,
+        src_page_size,
+        dst_page_size,
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        h_tiles,
+        w_tiles,
+        h_logical,
+        w_logical,
+        outer_dim_units,
+        (uint32_t)(reduce_all),
+        (uint32_t)(keepdim),
+    };
 }
 
 ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory::create(
