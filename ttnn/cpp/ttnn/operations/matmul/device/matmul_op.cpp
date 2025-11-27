@@ -1915,19 +1915,6 @@ void Matmul::validate(
     auto chosen_program_config = bmm_op_utils::get_program_config(
         input_tensor_a, input_tensor_b, this->transpose_a, this->transpose_b, bias_single_tile_size, this);
 
-    // Transpose_a is only supported for MatmulMultiCoreReuseMultiCastProgramConfig
-    // andMatmulMultiCoreReuseMultiCast1DProgramConfig
-    if (!(std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config) ||
-          std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config)) &&
-        this->transpose_a) {
-        TT_FATAL(
-            !this->transpose_a,
-            "Transpose_a is not supported for this program config: {}, please use {} or {} ",
-            typeid(chosen_program_config).name(),
-            typeid(MatmulMultiCoreReuseMultiCastProgramConfig).name(),
-            typeid(MatmulMultiCoreReuseMultiCast1DProgramConfig).name());
-    }
-
     if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
         this->global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
         for (uint32_t i = 1; i < input_tensors.size(); ++i) {
