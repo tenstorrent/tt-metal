@@ -40,7 +40,7 @@ class ArcCheckData:
 
 def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     device = arc.location.device
-    device_id = device._id
+    device_id = device.device_id
     # Heartbeat must be increasing
     heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
     delay_seconds = 0.1
@@ -76,7 +76,7 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
 def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     device = arc.location.device
-    device_id = device._id
+    device_id = device.device_id
     # Heartbeat must be increasing
     heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
     delay_seconds = 0.2

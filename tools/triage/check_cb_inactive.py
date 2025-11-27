@@ -41,7 +41,7 @@ def check_cb_idle(location: OnChipCoordinate, noc_id: int):
         log_check_location(
             location,
             value == 0,
-            f"at {location.to_str(noc_str)}: {noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
+            f"{noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
         )
 
 

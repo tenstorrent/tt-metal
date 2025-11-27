@@ -423,7 +423,7 @@ def log_check_location(location: OnChipCoordinate, success: bool, message: str) 
     log_check_device(device, success, formatted_message)
 
 
-def log_check_core(location: OnChipCoordinate, risc_name: str, success: bool, message: str) -> None:
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
     formatted_message = f"{risc_name}: {message}"
     log_check_location(location, success, formatted_message)
 

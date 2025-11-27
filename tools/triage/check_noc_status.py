@@ -42,7 +42,7 @@ def check_noc_status(
     fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
     fw_elf = elfs_cache[fw_elf_path]
 
-    message = f"Device {location._device._id} at {location.to_user_str()} on {risc_name} for NOC {noc_id}\n"
+    message = f"{risc_name} NOC{noc_id}: "
     passed = True
 
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))

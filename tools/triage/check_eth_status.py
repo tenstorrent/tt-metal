@@ -80,7 +80,7 @@ class EthCore(ABC):
             if read_data != previous_data:
                 return True
             previous_data = read_data
-        log_check_location(self.location, False, f"No heartbeat detected for {self.location.to_user_str()}")
+        log_check_location(self.location, False, "No heartbeat detected")
         return False
 
     def get_results(self):
@@ -99,7 +99,7 @@ class EthCore(ABC):
                 output.port_status = "Unknown"
             else:
                 output.port_status = port_status_str
-            log_check_location(self.location, port_status_str != "Down", f"{self.location.to_user_str()} port is down")
+            log_check_location(self.location, port_status_str != "Down", "port is down")
 
         # RETRAIN COUNT
         output.retrain_count = int(
@@ -108,7 +108,7 @@ class EthCore(ABC):
         log_check_location(
             self.location,
             not output.retrain_count,
-            f"{self.location.to_user_str()} retrain count is {output.retrain_count}",
+            f"retrain count is {output.retrain_count}",
         )
 
         # RX LINK UP
@@ -120,7 +120,7 @@ class EthCore(ABC):
         log_check_location(
             self.location,
             output.rx_link_up == "Up",
-            f"{self.location.to_user_str()} rx link is not up: {output.rx_link_up}",
+            f"rx link is not up: {output.rx_link_up}",
         )
 
         # MAILBOX
@@ -138,7 +138,7 @@ class EthCore(ABC):
                 log_check_location(
                     self.location,
                     not any_pending_message,
-                    f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
+                    f"mailbox: {output.mailbox} (pending message)",
                 )
         else:
             output.mailbox = ["None"]
