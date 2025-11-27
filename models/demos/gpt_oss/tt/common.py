@@ -49,7 +49,6 @@ def create_tt_model(
     if not state_dict:
         state_dict = gpt_oss_model_args.load_state_dict(
             weights_path=gpt_oss_model_args.model_path,
-            head_dim=gpt_oss_model_args.hf_config.head_dim,
             dummy_weights=gpt_oss_model_args.dummy_weights,
             convert_to_meta_format=True,
         )
