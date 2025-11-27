@@ -87,7 +87,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -114,7 +114,8 @@ ALWI void log_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP):
+                                                                                                        // move out init
 }
 
 // clang-format off
