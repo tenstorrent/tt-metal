@@ -95,13 +95,13 @@ inline uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
 }
 
-inline uint32_t get_accurate_sender_channel_count(const Topology topology) {
+inline uint32_t get_num_used_sender_channel_count(const Topology topology) {
     switch (topology) {
+        case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
         case Topology::Linear: return builder_config::num_sender_channels_1d_linear;
         case Topology::Mesh: return builder_config::num_sender_channels_2d_mesh;
         case Topology::Ring: return builder_config::num_sender_channels_1d_ring;
         case Topology::Torus: return builder_config::num_sender_channels_2d_torus;
-        case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
         default: return builder_config::num_sender_channels;
     }
 }

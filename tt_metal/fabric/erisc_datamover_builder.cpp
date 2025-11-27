@@ -433,7 +433,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // Routers in NeighborExchange topology do not forward messages between non-adjacent devices. Instead, they only
     // send messages produced by local workers.
     if (topology == Topology::NeighborExchange) {
-        this->num_used_sender_channels = builder_config::get_accurate_sender_channel_count(topology);
+        this->num_used_sender_channels = builder_config::get_num_used_sender_channel_count(topology);
         this->num_used_receiver_channels = 1;
         this->num_fwd_paths = 0;
     }

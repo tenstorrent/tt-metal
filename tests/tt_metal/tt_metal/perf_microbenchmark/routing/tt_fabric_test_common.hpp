@@ -728,7 +728,7 @@ public:
         const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        // Ring topology is handled separately
+        // To support device meshes that do not have wraparound connections, Ring topology is handled separately
         if (topology_ != Topology::Ring) {
             // Handle mesh, torus, neighbor exchange and linear topologies with directional neighbors
             const std::vector<RoutingDirection> directions = {
@@ -766,7 +766,9 @@ public:
                 }
             }
         } else {
-            // Handle ring topology with logical ring neighbors
+            // If a Ring topology is used, only the devices on the perimeter of a mesh participate in the test.
+            // Instead of using physical wraparound connections, a large "ring" is formed with the perimeter devices, as
+            // is enforced by the get_wrap_around_mesh_ring_neighbors function.
             for (const auto& src_node : device_ids) {
                 auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
                 if (ring_neighbors.has_value()) {

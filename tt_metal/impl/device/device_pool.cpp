@@ -419,7 +419,7 @@ void DevicePool::initialize_active_devices() const {
         init_fabric(active_devices);
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else {
-        log_info(
+        log_warning(
             tt::LogMetal, "Provided FabricConfig is not a supported TT_Fabric Config, skipping fabric initialization");
     }
 

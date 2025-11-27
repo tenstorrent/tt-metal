@@ -357,30 +357,32 @@ void build_tt_fabric_program(
     };
 
     // Connect fabric routers on the same chip together, to enable forwarding of messages between adjacent chips
-    // Note: NeighborExchange topology does not support message forwarding
-    if (topology != tt::tt_fabric::Topology::NeighborExchange) {
-        if (is_2D_routing) {
-            // 2D Routing
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
-            connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
-            connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
-            connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
-        } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
-            // This edge case handles meshes that don't actually support wrap-around connections for Ring topologies.
-            // Instead, we connect orthogonal directions on the corner chips, to form a "wrap-around mesh"
-            // 1D Routing wrap the corner chips, fold the internal connections
-            auto it = chip_neighbors.begin();
-            auto dir1 = it->first;
-            it++;
-            auto dir2 = it->first;
-            connect_downstream_builders(dir1, dir2);
-        } else {
-            // 1D Routing
-            connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
-            connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
-        }
+    // NeighborExchange topology does not support message forwarding, so skip the connection logic
+    if (topology == tt::tt_fabric::Topology::NeighborExchange) {
+        return;
+    }
+
+    if (is_2D_routing) {
+        // 2D Routing
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::E);
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::W);
+        connect_downstream_builders(RoutingDirection::S, RoutingDirection::E);
+        connect_downstream_builders(RoutingDirection::S, RoutingDirection::W);
+    } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
+        // This edge case handles meshes that don't actually support wrap-around connections for Ring topologies.
+        // Instead, we connect orthogonal directions on the corner chips, to form a "wrap-around mesh"
+        // 1D Routing wrap the corner chips, fold the internal connections
+        auto it = chip_neighbors.begin();
+        auto dir1 = it->first;
+        it++;
+        auto dir2 = it->first;
+        connect_downstream_builders(dir1, dir2);
+    } else {
+        // 1D Routing
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }
 }
 

@@ -718,11 +718,9 @@ struct LineSyncConfig {
         }
     }
 
-    template <bool IS_2D_FABRIC, bool USE_UNICAST_SYNC_PACKETS>
+    template <bool IS_2D_FABRIC, ChipSendType CHIP_SEND_TYPE>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
         // setup header fields. 2 rt args for 1D
-        constexpr ChipSendType CHIP_SEND_TYPE =
-            USE_UNICAST_SYNC_PACKETS ? ChipSendType::CHIP_UNICAST : ChipSendType::CHIP_MULTICAST;
         ChipSendTypeHandler<CHIP_SEND_TYPE, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
@@ -2206,7 +2204,9 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_UNICAST_SYNC_PACKETS>(
+            constexpr ChipSendType CHIP_SEND_TYPE =
+                USE_UNICAST_SYNC_PACKETS ? ChipSendType::CHIP_UNICAST : ChipSendType::CHIP_MULTICAST;
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, CHIP_SEND_TYPE>(
                 local_args_idx, packet_header_address);
         }
 
