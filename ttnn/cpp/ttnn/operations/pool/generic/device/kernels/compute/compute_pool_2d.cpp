@@ -270,8 +270,8 @@ void MAIN {
                         //     pre_tilize_cb_id)));
                         tensix_sync();
                         UNPACK(tilizeA_B_uninit(pre_tilize_cb_id));
-                        // nops
-                        for (uint32_t i = 0; i < 4; i++) {
+                        // nops are used to avoid a race condition
+                        for (uint32_t i = 0; i < 10; i++) {
                             TTI_NOP;
                             asm volatile("nop");
                         }
