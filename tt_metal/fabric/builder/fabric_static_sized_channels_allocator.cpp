@@ -256,10 +256,6 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     switch (options.fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: {
             uint32_t num_sender_channels = this->num_sender_channels_with_tensix_config;
-            if (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus) {
-                // extra sender channel for vc1
-                num_sender_channels = this->num_sender_channels_with_tensix_config_deadlock_avoidance;
-            }
             uint32_t target_channel = get_worker_connected_sender_channel();
             size_t default_num_sender_buffer_slots;
             size_t default_num_receiver_buffer_slots;

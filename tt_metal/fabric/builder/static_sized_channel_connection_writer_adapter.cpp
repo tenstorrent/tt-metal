@@ -113,9 +113,9 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         }
     } else {
         // For VC1 or 1D: single downstream connection (backward compatible)
-        bool has_connection = this->downstream_edms_connected != 0
+        bool has_connection = this->downstream_edms_connected != 0;
 
-                              uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
+        uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
         auto rt_args = std::initializer_list<uint32_t>{
             has_connection,
