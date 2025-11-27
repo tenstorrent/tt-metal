@@ -17,6 +17,7 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(dst_args, dst_addr, page_size);
+    uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
 
     experimental::Noc noc;
 
@@ -29,7 +30,7 @@ void kernel_main() {
             noc.async_write(src_l1, s, page_size, {}, {.page_id = page_idx});
 
             page_idx++;
-            src_l1 += page_size;
+            src_l1 += elements_per_page;
             noc.async_write_barrier();
         }
         eth_receiver_done();
@@ -40,7 +41,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < remaining_pages; ++j) {
             noc.async_write(src_l1, s, page_size, {}, {.page_id = page_idx});
             page_idx++;
-            src_l1 += page_size;
+            src_l1 += elements_per_page;
             noc.async_write_barrier();
         }
         eth_receiver_done();
