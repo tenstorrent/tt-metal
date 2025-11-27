@@ -180,11 +180,12 @@ class LogProbsCalculator:
         )
 
         # Convert remainder_tensor to int32
-        remainder_tensor = ttnn.typecast(remainder_tensor, ttnn.uint32)
+        remainder_tensor = ttnn.reshape(ttnn.typecast(remainder_tensor, ttnn.uint32), (1, 1, 32, 1))
 
         # Get logits for each user on each chip based on local index
         selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor)
 
+        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, 32))
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
         ttnn.eq_(chip_ids_tensor, self.mask)
 
