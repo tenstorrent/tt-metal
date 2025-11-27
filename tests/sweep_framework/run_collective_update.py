@@ -316,8 +316,6 @@ def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly"
     # Set run_contents based on run type
     if run_type == "comprehensive":
         common_metadata["run_contents"] = "all sweeps (comprehensive)"
-    elif run_type == "model_traced":
-        common_metadata["run_contents"] = "all sweeps (model traced)"
     else:
         common_metadata["run_contents"] = "all sweeps (nightly)"
 
@@ -400,9 +398,9 @@ def main():
     parser.add_argument(
         "--run-type",
         type=str,
-        choices=["nightly", "comprehensive", "model_traced"],
+        choices=["nightly", "comprehensive"],
         default="nightly",
-        help="Type of run: 'nightly', 'comprehensive', or 'model_traced' (default: nightly)",
+        help="Type of run: 'nightly' or 'comprehensive' (default: nightly)",
     )
 
     args = parser.parse_args()
