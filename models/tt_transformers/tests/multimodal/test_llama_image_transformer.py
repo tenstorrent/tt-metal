@@ -9,8 +9,6 @@ from loguru import logger
 from transformers import MllamaForConditionalGeneration
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
@@ -59,7 +57,6 @@ def build_encoder_attention_mask(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     pcc_required = 0.75
     model_args = ModelArgs(mesh_device)
@@ -93,20 +90,8 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
 
-    # Since attention weights are permuted by load_checkpoints.py, the Q and K attention weights are assigned to HF model computational graph to match tensor output for increased similarity between hidden states of each layer. This is temporary till exclusion of vision branch is implemented in convert_hf_to_meta_llama_format() and all Llama reference models use HF's computational graph. Refer to https://github.com/tenstorrent/tt-metal/issues/32024 for more details.
-    prefix = "global_" if is_global else ""
-    for id_b, _ in enumerate(callable_reference.layers):
-        callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
-            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wq.weight".format(id_b)]
-        )
-        callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
-            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wk.weight".format(id_b)]
-        )
-
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix + ("transformer." if not is_global else "global_transformer."),
         weight_cache_path=model_args.weight_cache_path(dtype),

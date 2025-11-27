@@ -31,7 +31,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 def test_vision_attention_inference(
     mesh_device,

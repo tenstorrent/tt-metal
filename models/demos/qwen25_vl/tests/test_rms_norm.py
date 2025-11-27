@@ -11,7 +11,6 @@ import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
 
@@ -36,7 +35,6 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
         14308,  # from 3B test image
     ),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -54,7 +52,6 @@ def test_rms_norm_inference(
     state_dict = {f"norm1.{k}": v for k, v in state_dict.items()}
 
     # Create the inner RMSNorm
-    tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=model_args.dim,
@@ -67,7 +64,7 @@ def test_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy)
 
     input = torch.rand(1, 1, max_seq_len, model_args.dim)
     reference_output = reference_model(input)

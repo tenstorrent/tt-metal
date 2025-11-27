@@ -47,7 +47,6 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_chunked_prefill_single_user(
     seq_len,
     prefill_chunk_size,

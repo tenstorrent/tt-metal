@@ -34,8 +34,6 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
-            multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -133,7 +131,7 @@ jobs:
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            override-tt-config: "{\"data_parallel\": 16}",
             tt-llama-text-ver: tt_transformers,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic

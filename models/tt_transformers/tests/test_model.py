@@ -65,7 +65,6 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     weights,
     layers,

@@ -11,7 +11,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
@@ -50,7 +49,6 @@ from models.tt_transformers.tt.rope import RotarySetup
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
     batch_size,
@@ -123,10 +121,8 @@ def test_attention_inference(
             ),
         )
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = Attention(
         mesh_device,
-        tt_ccl,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,

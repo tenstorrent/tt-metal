@@ -9,8 +9,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
 
@@ -24,7 +22,6 @@ from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVis
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_encoder_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.88
@@ -51,10 +48,8 @@ def test_vision_encoder_inference(mesh_device, reset_seeds):
     )
     reference_model.load_state_dict(partial_state_dict, strict=True)
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaVisionEncoder(
         mesh_device,
-        tt_ccl,
         state_dict,
         first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

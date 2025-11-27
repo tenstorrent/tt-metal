@@ -7,8 +7,6 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
-from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -18,7 +16,6 @@ class TransformerBlock(LightweightModule):
         self,
         args,
         mesh_device,
-        tt_ccl,
         dtype,
         state_dict,
         layer_num,
@@ -31,7 +28,6 @@ class TransformerBlock(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
 
         self.num_devices = args.num_devices
         self.args = args
@@ -51,7 +47,6 @@ class TransformerBlock(LightweightModule):
 
         self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -61,39 +56,15 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-
-        if getattr(self.args, "is_mixture_of_experts", False):
-            self.feed_forward = TtMoeLayer(
-                mesh_device=mesh_device,
-                state_dict=state_dict,
-                experts=TtMixtralMLP(
-                    mesh_device=mesh_device,
-                    state_dict=state_dict,
-                    args=args,
-                    layer_num=layer_num,
-                    dtypes={
-                        "w1": dtype,
-                        "w2": dtype,
-                        "w3": dtype,
-                    },
-                ),
-                args=args,
-                layer_num=layer_num,
-                dtype=dtype,
-                tt_ccl=self.tt_ccl,
-            )
-        else:
-            self.feed_forward = MLP(
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=layer_num,
-                dtype=dtype,
-                model_config=self.model_config,
-            )
-
+        self.feed_forward = MLP(
+            mesh_device=mesh_device,
+            args=args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=layer_num,
+            dtype=dtype,
+            model_config=self.model_config,
+        )
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -109,10 +80,8 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
             ),
             args,
-            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -130,10 +99,8 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
             ),
             args,
-            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:

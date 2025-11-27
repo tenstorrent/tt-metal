@@ -9,12 +9,10 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.tt_sampling import TTSampling
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
+from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
@@ -44,21 +42,13 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
-        self.tt_ccl = TT_CCL(self.mesh_device)
-
-        embd_kwargs = {
-            "mesh_device": mesh_device,
-            "args": args,
-            "weight_cache_path": args.weight_cache_path(dtype),
-            "state_dict": state_dict,
-            "dtype": ttnn.bfloat16,  # Row major layout requires bfloat16
-        }
-        if self.args.embed_scale is not None:
-            embd_cls = ScaledEmbedding
-            embd_kwargs["embed_scale"] = self.args.embed_scale
-        else:
-            embd_cls = Embedding
-        self.embd = embd_cls(**embd_kwargs)
+        self.embd = Embedding(
+            mesh_device=mesh_device,
+            args=args,
+            weight_cache_path=args.weight_cache_path(dtype),
+            state_dict=state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
 
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
         self.rope_setup = ActualRopeSetupClass(
@@ -85,7 +75,6 @@ class Transformer(LightweightModule):
             TransformerBlock(
                 args=args,
                 mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 dtype=dtype,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
@@ -112,17 +101,14 @@ class Transformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
             ),
             args,
-            self.tt_ccl,
             args.is_galaxy,
         )
 
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
             dtype=dtype,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
@@ -432,23 +418,17 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            cluster_axis = 0 if self.args.is_galaxy else None
-            num_links = 2 if self.args.is_galaxy else 1
-            tt_logits = ttnn.experimental.all_gather_async(
-                tt_logits,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                num_links=num_links,
-                memory_config=tt_logits.memory_config(),
-                cluster_axis=cluster_axis,
-                topology=self.args.ccl_topology(),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-
+            if self.args.is_galaxy:
+                tt_logits = ttnn.all_gather(
+                    tt_logits,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.mesh_device,
+                    topology=self.args.ccl_topology(),
+                )
+            else:
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if not self.args.is_galaxy:

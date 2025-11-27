@@ -728,10 +728,8 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
-            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.num_devices == 8
-                and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                self.ccl_topology() == ttnn.Topology.Ring
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )
@@ -817,15 +815,12 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
-            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
                 else (
                     1024
-                    if self.num_devices == 8
-                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                    and 1024 % (self.dim / self.num_devices) == 0
+                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -1386,11 +1381,7 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        # Use ring on a T3K or 6U galaxy submesh
-        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-            ttnn.cluster.ClusterType.T3K,
-            ttnn.cluster.ClusterType.GALAXY,
-        ]:
+        if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
             return ttnn.Topology.Ring
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear

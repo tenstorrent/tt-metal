@@ -10,7 +10,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -50,11 +49,6 @@ from models.tt_transformers.tt.rope import RotarySetup
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize(
-    "generation_length",
-    (10,),  # For decode-only unit test, there's no need to run with large sequence lengths
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
@@ -129,11 +123,9 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
-        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,

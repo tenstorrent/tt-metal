@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -22,7 +21,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(mesh_device, reset_seeds):
     model_args = ModelArgs(mesh_device, cache_hf=True)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -40,7 +38,6 @@ def test_decoder_inference(mesh_device, reset_seeds):
     seqlen = 1
     batch = model_args.max_batch_size
 
-    tt_ccl = TT_CCL(mesh_device)
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
@@ -68,18 +65,8 @@ def test_decoder_inference(mesh_device, reset_seeds):
         )
 
         # Run TT model
-        tt_out = ttnn.experimental.all_gather_async(
-            decode_input,
-            persistent_output_buffer=None,
-            dim=3,
-            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-            num_links=1,
-            topology=model_args.ccl_topology(),
-            memory_config=mem_cfg,
-            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+        tt_out = ttnn.all_gather(
+            decode_input, dim=3, num_links=1, topology=model_args.ccl_topology(), memory_config=mem_cfg
         )
 
         debug_max = lambda t: ttnn.to_torch(

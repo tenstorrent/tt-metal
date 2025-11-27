@@ -6,14 +6,13 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import nearest_32
+from models.utility_functions import nearest_32
 
 
 class TtLlamaImageAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -23,7 +22,6 @@ class TtLlamaImageAttention(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
 
         self.hidden_size = configuration.vision_dim
@@ -289,18 +287,7 @@ class TtLlamaImageAttention(LightweightModule):
 
         # All reduce
         if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-            dense_out_gathered = ttnn.experimental.all_gather_async(
-                output_11SH,
-                persistent_output_buffer=None,
-                dim=1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )

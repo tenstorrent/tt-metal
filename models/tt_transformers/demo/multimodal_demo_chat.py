@@ -41,7 +41,6 @@ from models.tt_transformers.tt.generator import Generator
     "target",
     ("tt", "cpu"),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_multimodal_demo_chat(
     mesh_device,
     target,

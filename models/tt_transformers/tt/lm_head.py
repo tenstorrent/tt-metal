@@ -16,7 +16,6 @@ class LMHead(LightweightModule):
         self,
         args,
         mesh_device,
-        tt_ccl,
         dtype,
         state_dict,
         state_dict_prefix,
@@ -26,7 +25,6 @@ class LMHead(LightweightModule):
         super().__init__()
         self.args = args
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
@@ -171,8 +169,7 @@ class LMHead(LightweightModule):
 
         output = tt_all_reduce(
             output,
-            self.mesh_device,
-            self.tt_ccl,
+            mesh_device=self.mesh_device,
             cluster_axis=1,
             dim=3 if self.args.is_galaxy else 0,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,

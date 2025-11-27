@@ -13,7 +13,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -24,7 +23,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.hidden_size = configuration.vision_dim
         self.gated = gated
@@ -41,7 +39,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
         self.attn = TtLlamaImageAttention(
             mesh_device,
-            tt_ccl,
             state_dict,
             state_dict_prefix=f"{state_dict_prefix}attn.",
             weight_cache_path=weight_cache_path,
@@ -61,7 +58,6 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
         self.mlp = TtLlamaImageFeedForward(
             mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
             args=configuration,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}mlp.",

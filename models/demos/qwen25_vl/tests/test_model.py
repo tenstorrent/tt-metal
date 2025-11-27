@@ -34,22 +34,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
-@pytest.mark.parametrize(
-    # image_grid_thw: The temporal, height and width of feature shape of each image in LLM.
-    "seq_len, image_grid_thw",
-    [
-        (
-            42952,
-            torch.tensor([[1, 236, 182]]),
-        ),  # 300 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2550x3300
-        (
-            14308,
-            torch.tensor([[1, 98, 146]]),
-        ),  # 240 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2048x1300
-    ],
-    ids=["300dpi", "240dpi"],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
     reset_seeds,

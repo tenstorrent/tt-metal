@@ -229,7 +229,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"trace_region_size": 28467200, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
