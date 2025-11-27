@@ -39,9 +39,10 @@ class SamplingParams:
     temperature: float | list[float]
     top_k: int | list[int]
     top_p: float | list[float]
-    presence_penalty: float | list[float]
-    frequency_penalty: float | list[float]
-    repetition_penalty: float | list[float]
+    presence_penalty: float | list[float] = 0.0
+    frequency_penalty: float | list[float] = 0.0
+    repetition_penalty: float | list[float] = 1.0
+    seed: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -239,7 +240,6 @@ class Generator:
         model_id_warmup=None,
         **kwargs,
     ):
-        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -463,10 +463,10 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        reset_batch=True,
         prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
-        reset_inputs = self.mode == "prefill"
-        self.mode = "decode"
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
@@ -486,6 +486,11 @@ class Generator:
                 if prompt_tokens is not None
                 else [None] * self.data_parallel
             )
+            output_chunks = (
+                torch.chunk(output_tokens, self.data_parallel, 0)
+                if output_tokens is not None
+                else [None] * self.data_parallel
+            )
             sampling_params_list = [
                 SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
                 for i in range(self.data_parallel)
@@ -498,9 +503,10 @@ class Generator:
                 if sampling_module is None:
                     continue
                 sampling_module.reset_sampling_params(formatted_params)
-                if reset_inputs:
+                if reset_batch:
+                    sampling_module.reset_seed(formatted_params.seed)
                     sampling_module.reset_prompt_tokens(prompt_chunks[i])
-                    sampling_module.reset_output_state()
+                    sampling_module.reset_output_state(output_chunks[i])
 
         decode_kwargs = {
             "current_pos": start_pos,

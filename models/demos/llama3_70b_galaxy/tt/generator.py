@@ -405,7 +405,9 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        reset_batch=True,
         prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
         if sampling_params is None:
             return_logits = True
@@ -440,9 +442,10 @@ class Generator:
 
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
-
-            sampling_module.reset_prompt_tokens(prompt_tokens)
-            sampling_module.reset_output_state()
+            if reset_batch:
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
+                sampling_module.reset_seed(sampling_params.seed)
 
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved

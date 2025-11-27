@@ -2,6 +2,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import torch
+
 import ttnn
 
 from .tt_penalties import TTPenalties
@@ -45,6 +47,7 @@ class SamplingGenerator:
         self.mesh_device = mesh_device
         self.cq_id = cq_id
         self.args = args
+        self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.enable_internal_trace = enable_internal_trace
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
@@ -90,10 +93,10 @@ class SamplingGenerator:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens)
 
-    def reset_output_state(self):
+    def reset_output_state(self, tokens):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_output_tokens()
+        self.tt_penalties.reset_output_tokens(tokens)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
@@ -201,6 +204,7 @@ class SamplingGenerator:
         Convenience wrapper that either runs the sampling module directly or
         replays a captured trace.
         """
+
         penalties_on = self._penalties_active
         use_internal_trace = enable_trace and self.enable_internal_trace
 
@@ -226,6 +230,24 @@ class SamplingGenerator:
         if penalties_on and tt_out is not None:
             self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
+
+    def reset_seed(self, seed):
+        for i, s in enumerate(seed):
+            if s is None:
+                # set to default seed value which is 0
+                seed[i] = 0
+        seed = torch.tensor(seed)
+        user_ids = torch.arange(seed.shape[0])
+
+        user_ids_tt = ttnn.from_torch(
+            user_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        seeds_tt = ttnn.from_torch(seed, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # reset seed for each user_id
+        ttnn.manual_seed(seeds=seeds_tt, user_ids=user_ids_tt, sub_core_grids=self.sub_core_grids)
+        seeds_tt.deallocate()
+        user_ids_tt.deallocate()
 
 
 def format_sampling_params(*args, **kwargs):

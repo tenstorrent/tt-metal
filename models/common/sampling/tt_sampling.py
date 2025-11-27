@@ -117,7 +117,6 @@ class TTSampling(LightweightModule):
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
-        self.warmup_done = False
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -230,11 +229,6 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
-        # Warmup needed for this issue: https://github.com/tenstorrent/tt-metal/issues/30289
-        if self.warmup_done is False:
-            self.warmup_done = True
-            self.forward(x, seed=42, tt_out_tok=tt_out_tok)
-
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
 
@@ -388,6 +382,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
+        "seed": 0,
     }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
@@ -398,34 +393,33 @@ def format_sampling_params(sampling_params, max_batch_size):
         if current_len < target_len:
             tensor.extend([default_params[name]] * (target_len - current_len))
 
-    penalties = {}
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+    params = {}
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
         value = getattr(sampling_params, name, None)
         if value is None:
-            penalties[name] = [default_params[name]]
+            params[name] = [default_params[name]]
         elif isinstance(value, List):
-            penalties[name] = list(value)
+            params[name] = list(value)
         else:
-            penalties[name] = [value]
+            params[name] = [value]
 
     sampling_params = replace(
         sampling_params,
-        presence_penalty=penalties["presence_penalty"],
-        frequency_penalty=penalties["frequency_penalty"],
-        repetition_penalty=penalties["repetition_penalty"],
+        presence_penalty=params["presence_penalty"],
+        frequency_penalty=params["frequency_penalty"],
+        repetition_penalty=params["repetition_penalty"],
+        seed=params["seed"],
     )
 
-    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
         tensor = getattr(sampling_params, name)
         current_len = len(tensor)
         if current_len < target_len:
             tensor.extend([default_params[name]] * (target_len - current_len))
 
-    # We must clamp top-p in range [0.0, 1.0)
+    # We must clamp top-p in range [0.0, 1.0]
     # Cannot rely on external SamplingParams to be clamped
     TOP_P_MIN = 0.0
-    # TOP_P_MAX is 0.99 instead of 1.0 to ensure numerical stability in cumulative probability calculations
-    # A value of 1.0 can cause floating point precision issues when comparing cumulative probabilities
     TOP_P_MAX = 1.0
 
     for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):

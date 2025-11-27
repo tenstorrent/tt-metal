@@ -38,25 +38,33 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     # frequency
     freq_term = ttnn.multiply(context.output_counts, context.frequency_penalties, **op_kwargs)
     logits = ttnn.subtract(logits, freq_term, output_tensor=logits, **op_kwargs)
+    freq_term.deallocate()
 
     # presence
     presence_term = ttnn.multiply(context.output_mask, context.presence_penalties, **op_kwargs)
     logits = ttnn.subtract(logits, presence_term, output_tensor=logits, **op_kwargs)
+    presence_term.deallocate()
 
     # repetition
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
 
-    combined_mask = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
-    combined_mask = ttnn.typecast(combined_mask, ttnn.bfloat16, **op_kwargs)
+    combined_mask_int32 = ttnn.add(context.prompt_mask, context.output_mask, **op_kwargs)
+    combined_mask = ttnn.typecast(combined_mask_int32, ttnn.bfloat16, **op_kwargs)
+    combined_mask_int32.deallocate()
     penalties = ttnn.where(combined_mask, context.repetition_penalties, 1.0, **op_kwargs)
     inverse_penalties = ttnn.where(combined_mask, context.inverse_repetition_penalties, 1.0, **op_kwargs)
+    combined_mask.deallocate()
 
     # If logits are >1, divide by penalty, otherwise multiply by penalty.
-    logits = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
-    scaling = ttnn.where(ttnn.gt(logits, 1, **op_kwargs), penalties, inverse_penalties, **op_kwargs)
-
+    logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op_kwargs)
+    logits_gt1 = ttnn.gt(logits_bf16, 1, **op_kwargs)
+    scaling = ttnn.where(logits_gt1, penalties, inverse_penalties, **op_kwargs)
+    logits_gt1.deallocate()
+    penalties.deallocate()
+    inverse_penalties.deallocate()
     logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
+    scaling.deallocate()
 
     return logits
 
@@ -71,8 +79,7 @@ class TTPenalties(LightweightModule):
         self.mesh_device = mesh_device
         self.cluster_shape = mesh_device.shape
         self.max_batch_size = 32  # max_batch_size -- penalties and sampling only run for padded batch size
-
-        self.vocab_size = getattr(args, "padded_vocab_size", args.vocab_size)
+        self.vocab_size = getattr(args, "padded_vocab_size", args.vocab_size) or args.vocab_size
         num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
         self.num_devices = num_devices
         self.needs_padding = False
@@ -93,7 +100,10 @@ class TTPenalties(LightweightModule):
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=(None, None))
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
-
+        self.decode_src = self._alloc_int_buffer(
+            host=torch.zeros(self.max_batch_size, 1), shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.zeros = self._alloc_int_buffer(shard_dims=(None, None), layout=ttnn.ROW_MAJOR_LAYOUT)
         self.presence_penalties = self._alloc_bf16_buffer()
         self.frequency_penalties = self._alloc_bf16_buffer()
         self.repetition_penalties = self._alloc_bf16_buffer()
@@ -110,15 +120,16 @@ class TTPenalties(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape),
         )
 
-    def _alloc_int_buffer(self, shard_dims, host=None):
+    def _alloc_int_buffer(self, shard_dims, host=None, layout=ttnn.TILE_LAYOUT):
         if host is None:
             host = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
         return ttnn.from_torch(
             host,
             dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _alloc_bf16_buffer(self):
@@ -152,34 +163,45 @@ class TTPenalties(LightweightModule):
 
     def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
         prompt_tokens = self._alloc_int_buffer(
-            host=prompt_tokens.reshape(-1, prompt_tokens.shape[-1]), shard_dims=(None, None)
+            host=prompt_tokens.reshape(-1, prompt_tokens.shape[-1]),
+            shard_dims=(None, None),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.token_bin_counts_and_mask(new_tokens=prompt_tokens, mask=self.prompt_mask)
+        src = self._alloc_int_buffer(
+            host=torch.ones(self.max_batch_size, prompt_tokens.shape[-1]),
+            shard_dims=(None, None),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.token_bin_counts_and_mask(new_tokens=prompt_tokens, src=src, mask=self.prompt_mask)
 
-    def reset_output_tokens(self):
+    def reset_output_tokens(self, tokens):
+        tokens_tt = ttnn.from_torch(
+            tokens.reshape(-1, 1), device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
         self.output_mask = ttnn.mul(self.output_mask, 0, output_tensor=self.output_mask, **self._op_kwargs)
         self.output_counts = ttnn.mul(self.output_counts, 0, output_tensor=self.output_counts, **self._op_kwargs)
         self.output_counts_gathered = ttnn.mul(
             self.output_counts_gathered, 0, output_tensor=self.output_counts_gathered, **self._op_kwargs
         )
+        self.update_output_tokens(tokens_tt)
 
     def update_output_tokens(self, new_tokens):
-        new_tokens = ttnn.reshape(new_tokens, [32, 1])
+        # reshape decode token
+        if new_tokens.shape[-1] == 32 and new_tokens.shape[-2] == 1:
+            new_tokens = ttnn.reshape(new_tokens, [32, 1], **self._op_kwargs)
         self.token_bin_counts_and_mask(
             new_tokens=new_tokens,
             counts=self.output_counts_gathered,
+            src=self.decode_src,
             counts_sliced=self.output_counts,
             mask=self.output_mask,
         )
 
-    def token_bin_counts_and_mask(self, new_tokens, mask, counts=None, counts_sliced=None):
-        # counts_new = ttnn.scatter_add(1, new_tokens)
-        # fallback
-        new_tokens = ttnn.to_torch(ttnn.get_device_tensors(new_tokens)[0]).to(torch.int64)
-        counts_new = torch.zeros((self.max_batch_size, self.vocab_size), dtype=torch.int32)
-        updates = torch.ones_like(new_tokens, dtype=torch.int32)
-        counts_new = counts_new.scatter_add(dim=1, index=new_tokens, src=updates)
-        counts_new = ttnn.from_torch(counts_new, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+    def token_bin_counts_and_mask(self, new_tokens, src, counts=None, mask=None, counts_sliced=None):
+        counts_new = ttnn.scatter_add(self.zeros, 1, new_tokens, src, **self._op_kwargs)
+        new_tokens.deallocate()
+        counts_new = ttnn.to_layout(counts_new, ttnn.TILE_LAYOUT, **self._op_kwargs)
         if counts:
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **self._op_kwargs)
         else:
