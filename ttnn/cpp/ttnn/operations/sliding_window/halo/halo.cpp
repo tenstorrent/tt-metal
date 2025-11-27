@@ -5,7 +5,7 @@
 #include "halo.hpp"
 
 #include <utility>
-#include "device/halo_device_operation.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 namespace ttnn::operations::sliding_window::halo {
 Tensor HaloOperation::invoke(
     const Tensor& input_tensor,

@@ -11,8 +11,8 @@
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "halo_device_operation_types.hpp"
-#include "untilize_with_halo_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 
 namespace ttnn::operations::sliding_window::halo {
 

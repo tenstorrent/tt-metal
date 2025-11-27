@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "halo_device_operation_types.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 
 namespace ttnn::operations::data_movement::program {
 

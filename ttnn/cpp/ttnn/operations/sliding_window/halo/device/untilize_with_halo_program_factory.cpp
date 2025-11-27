@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_with_halo_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 
 #include <cstdint>
 #include <optional>
