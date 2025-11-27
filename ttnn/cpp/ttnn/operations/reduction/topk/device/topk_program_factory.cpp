@@ -2,36 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operation.hpp"
-#include "topk_utils.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/reduction/topk/device/topk_program_factory.hpp"
 
 #include <iostream>
 #include <cmath>
 
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+
 using namespace tt::tt_metal;
 using namespace std;
-namespace ttnn::operations::reduction::detail {
 
-operation::ProgramWithCallbacks topk_single_core_interleaved(
-    const Tensor& input_tensor,
-    const uint32_t k,
-    const int8_t dim,
-    const bool largest,
-    const bool sorted,
-    const bool uint16_output,
-    const CoreRangeSet& sub_core_grids,
-    Tensor& value_tensor,
-    Tensor& index_tensor) {
+namespace ttnn::operations::reduction::topk::program {
+
+TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::create(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     using namespace tt::constants;
+
+    const auto& input_tensor = tensor_args.input;
+    const auto& value_tensor = std::get<0>(output_tensors);
+    const auto& index_tensor = std::get<1>(output_tensors);
+
+    ttnn::Shape input_shape = input_tensor.padded_shape();
+    bool uint16_output = (input_shape[args.dim] < 65536);
+
     tt::tt_metal::Program program{};
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
     tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
-    auto core = corerange_to_cores(sub_core_grids, 1, true).at(0);
+    auto core = corerange_to_cores(args.sub_core_grids, 1, true).at(0);
 
     uint32_t input_tile_size = tile_size(input_cb_data_format);
     uint32_t value_tile_size = tile_size(output_val_cb_data_format);
@@ -41,11 +45,10 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     auto* values_buffer = value_tensor.buffer();
     auto* index_buffer = index_tensor.buffer();
 
-    auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
 
-    uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
+    uint32_t Ktiles = tt::div_up(args.k, tt::constants::TILE_WIDTH);
 
     // for streaming in input
     uint32_t num_cb_unit = 2;
@@ -170,7 +173,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         Ht,
         Wt,
         Ktiles,
-        (std::uint32_t)largest,
+        (std::uint32_t)args.largest,
     };
     tt::tt_metal::CreateKernel(
         program,
@@ -178,28 +181,33 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         core,
         tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = !uint16_output, .compile_args = compute_args});
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id, core](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* input_buffer = input_tensors.at(0).buffer();
+    return cached_program_t{std::move(program), {unary_reader_kernel_id, binary_writer_kernel_id, core}};
+}
 
-        auto* values_buffer = output_tensors.at(0).buffer();
-        auto* index_buffer = output_tensors.at(1).buffer();
+void TopKSingleCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+    auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
+    auto& binary_writer_kernel_id = shared_vars.binary_writer_kernel_id;
+    auto& core = shared_vars.core;
 
-        {
-            auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            reader_runtime_args[0] = input_buffer->address();
+    auto* input_buffer = tensor_args.input.buffer();
 
-            auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, core);
-            writer_runtime_args[0] = values_buffer->address();
-            writer_runtime_args[1] = index_buffer->address();
-        }
-    };
+    auto* values_buffer = std::get<0>(output_tensors).buffer();
+    auto* index_buffer = std::get<1>(output_tensors).buffer();
 
-    return {std::move(program), override_runtime_args_callback};
+    {
+        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+        reader_runtime_args[0] = input_buffer->address();
+
+        auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, core);
+        writer_runtime_args[0] = values_buffer->address();
+        writer_runtime_args[1] = index_buffer->address();
+    }
 }
 
 /**
@@ -220,7 +228,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
-    auto config_opt = ttnn::operations::reduction::topk_utils::find_topk_core_config(
+    auto config_opt = topk::utils::find_topk_core_config(
         width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
     if (config_opt.has_value()) {
         auto config = config_opt.value();
@@ -243,24 +251,22 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
  * Then gather the results of each split onto a single core, where the final topk values and indices are computed.
  *
  */
-operation::ProgramWithCallbacks topk_multicore_interleaved(
-    const Tensor& input_tensor,
-    const std::optional<Tensor>& input_indices_tensor,
-    const uint32_t k,
-    const int8_t dim,
-    const bool largest,
-    const bool sorted,
-    const CoreRangeSet& sub_core_grids,
-    Tensor& value_tensor,
-    Tensor& index_tensor) {
+TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::create(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
     using namespace tt::constants;
+
+    const auto& input_tensor = tensor_args.input;
+    const auto& input_indices_tensor = tensor_args.indices;
+    const auto& value_tensor = std::get<0>(output_tensors);
+    const auto& index_tensor = std::get<1>(output_tensors);
+
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
     tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
-    auto first_core_range = sub_core_grids.ranges().at(0);
+    auto first_core_range = args.sub_core_grids.ranges().at(0);
     auto first_core_range_set = CoreRangeSet(first_core_range);
 
     uint32_t input_tile_size = tile_size(input_cb_data_format);
@@ -277,10 +283,10 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
-        input_shape[dim],
+        input_shape[args.dim],
         64,
-        input_shape[dim] / 2,
-        k,
+        input_shape[args.dim] / 2,
+        args.k,
         first_core_range,
         device->l1_size_per_core(),
         value_tile_size,
@@ -303,7 +309,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;
     uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;
-    uint32_t Kt = k % TILE_WIDTH == 0 ? k / TILE_WIDTH : (k / TILE_WIDTH) + 1;
+    uint32_t Kt = args.k % TILE_WIDTH == 0 ? args.k / TILE_WIDTH : (args.k / TILE_WIDTH) + 1;
 
     // for streaming in input
     uint32_t num_cb_unit = 2;
@@ -433,7 +439,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         (std::uint32_t)final_cores_physical.x,
         (std::uint32_t)final_cores_physical.y,
         Ht,
-        k,
+        args.k,
         Kt,
     };
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -460,12 +466,12 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         output_ind_cb_index,
         Ht,
         Wt_local,
-        k,
+        args.k,
         Kt,
-        (std::uint32_t)std::log2(k),
+        (std::uint32_t)std::log2(args.k),
         (std::uint32_t)std::log2(Wt_local),
-        (std::uint32_t)largest,
-        (std::uint32_t)sorted,
+        (std::uint32_t)args.largest,
+        (std::uint32_t)args.sorted,
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -482,12 +488,12 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         output_ind_cb_index,
         Ht,
         Wt_final,
-        k,
+        args.k,
         Kt,
-        (std::uint32_t)std::log2(k),
+        (std::uint32_t)std::log2(args.k),
         (std::uint32_t)std::log2(Wt_final),
-        (std::uint32_t)largest,
-        (std::uint32_t)sorted,
+        (std::uint32_t)args.largest,
+        (std::uint32_t)args.sorted,
     };
 
     tt::tt_metal::CreateKernel(
@@ -496,8 +502,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         final_cores_range_set,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 
-    int core_w = 0;
-    bool ascending = !largest;
+    uint32_t core_w = 0;
+    bool ascending = !args.largest;
     for (auto core : local_cores) {
         if (input_indices_tensor.has_value()) {
             SetRuntimeArgs(
@@ -549,32 +555,39 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
             index_buffer->address(),
         });
 
-    auto override_runtime_args_callback =
-        [unary_reader_kernel_id, binary_writer_final_kernel_id, local_cores, final_core](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto* input_buffer = input_tensors.at(0).buffer();
-            auto* values_buffer = output_tensors.at(0).buffer();
-            auto* index_buffer = output_tensors.at(1).buffer();
-            auto* input_indices_buffer =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-
-            for (auto core : local_cores) {
-                auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                reader_runtime_args[0] = input_buffer->address();
-                if (optional_input_tensors.at(0).has_value()) {
-                    reader_runtime_args[1] = input_indices_buffer->address();
-                }
-            }
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_final_kernel_id, final_core);
-            writer_runtime_args[0] = values_buffer->address();
-            writer_runtime_args[1] = index_buffer->address();
-        };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program), {unary_reader_kernel_id, binary_writer_final_kernel_id, local_cores, final_core}};
 }
-}  // namespace ttnn::operations::reduction::detail
+
+void TopKMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+    auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
+    auto& binary_writer_final_kernel_id = shared_vars.binary_writer_final_kernel_id;
+    auto& local_cores = shared_vars.local_cores;
+    auto& final_core = shared_vars.final_core;
+
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* values_buffer = std::get<0>(output_tensors).buffer();
+    auto* index_buffer = std::get<1>(output_tensors).buffer();
+
+    auto* input_indices_buffer = tensor_args.indices.has_value() ? tensor_args.indices.value().buffer() : nullptr;
+
+    for (auto core : local_cores) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+        reader_runtime_args[0] = input_buffer->address();
+        if (tensor_args.indices.has_value()) {
+            reader_runtime_args[1] = input_indices_buffer->address();
+        }
+    }
+
+    auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_final_kernel_id, final_core);
+    writer_runtime_args[0] = values_buffer->address();
+    writer_runtime_args[1] = index_buffer->address();
+}
+
+}  // namespace ttnn::operations::reduction::topk::program
