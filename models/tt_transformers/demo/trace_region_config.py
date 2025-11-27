@@ -59,12 +59,9 @@ def get_mesh_device_name(num_devices, mesh_device_name):
 
 
 def base_model_name_from_env():
-    LLAMA_DIR = os.getenv("LLAMA_DIR")
     HF_MODEL = os.getenv("HF_MODEL")
 
-    if LLAMA_DIR:
-        model_name = LLAMA_DIR.strip("/").split("/")[-1]
-    elif HF_MODEL:
+    if HF_MODEL:
         model_name = HF_MODEL.strip("/").split("/")[-1]
     else:
         return None

@@ -328,13 +328,16 @@ void DevicePool::initialize(
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
-                tt::tt_fabric::FabricConfig::FABRIC_1D,
-                tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-                1);
+                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
+            log_info(
+                tt::LogMetal,
+                "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
+                "accordingly.",
+                fabric_config);
         } else {
             // Use the same mode
             tt::tt_fabric::SetFabricConfig(
@@ -927,8 +930,9 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
                 const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
                 for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                     auto [tensix_termination_address, tensix_signal] =
-                        tensix_config.get_termination_address_and_signal(dev->id(), eth_chan_id);
+                        tensix_config.get_termination_address_and_signal(core_id);
                     std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
                     auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 

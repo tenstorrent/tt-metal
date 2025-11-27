@@ -9,6 +9,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace {
 

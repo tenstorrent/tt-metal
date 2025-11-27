@@ -237,6 +237,9 @@ class RunTimeOptions {
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
+    // Disable XIP dump
+    bool disable_xip_dump = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -555,6 +558,8 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
