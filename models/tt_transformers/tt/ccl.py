@@ -80,6 +80,7 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    subdevice_id=None,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -112,6 +113,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -141,6 +143,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
         if sharded:
@@ -172,6 +175,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
@@ -187,6 +191,7 @@ def tt_all_reduce(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
 
     # Reshape the reduced tensor to the original shape
@@ -206,6 +211,7 @@ def tt_all_gather(
     sharded=False,
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
+    subdevice_id=None,
 ):
     # N150
     if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -234,6 +240,7 @@ def tt_all_gather(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
     else:
         gathered = ttnn.experimental.all_gather_async(
@@ -249,6 +256,7 @@ def tt_all_gather(
             chunks_per_sync=10,
             num_workers_per_link=2,
             num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
         )
     input_tensor.deallocate(True)
     return gathered

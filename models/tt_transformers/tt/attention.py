@@ -26,12 +26,14 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        prefetcher=None,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
+        self.prefetcher = prefetcher
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -301,20 +303,31 @@ class Attention(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
+        def get_wo_memory_config():
+            if self.use_fused_all_gather_matmul or self.TG:
+                if self.prefetcher is not None:
+                    return self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"]
+                else:
+                    return ttnn.DRAM_MEMORY_CONFIG
+            else:
+                return wo_mem_config
+
+        self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
+
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=self.wo_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
+            memory_config=get_wo_memory_config(),
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                dims=self.shard_wo_dims,
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
-            ),
+            # cache_file_name=(
+            #     cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            # ),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -324,6 +337,11 @@ class Attention(LightweightModule):
             self.scale = configuration.query_pre_attn_scalar**-0.5
         else:
             self.scale = self.head_dim**-0.5
+
+        # Insert the tensors into the prefetcher if it is used
+        if self.prefetcher is not None:
+            self.prefetcher.insert_tensor(self.wqkv)
+            self.prefetcher.insert_tensor(self.wo)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -392,15 +410,20 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
             # bias=self.wqkv_bias,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=self.model_config["XQKV_DECODE_PROGCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_SHARDED_QKV_OUT_RING_MEMCFG"],
+            program_config=self.model_config["XQKV_DECODE_PROGCFG"]
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -409,20 +432,26 @@ class Attention(LightweightModule):
             num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
+        breakpoint()
+
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
-            xqkv_fused_sharded,
+            xqkv_fused_sharded,  # input shape: [1, 1, 32, 3072]
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
-            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
+            memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1])
+            if self.prefetcher is None
+            else xqkv_fused_sharded.memory_config(),
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
+            subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
-
+        # output shape: [1, 1, 32, 3072]
+        breakpoint()
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
             xqkv_fused = ttnn.matmul(
@@ -433,33 +462,39 @@ class Attention(LightweightModule):
             )
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-
-        ttnn.deallocate(xqkv_fused_sharded)
-
+            if self.prefetcher is None:
+                xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+                ttnn.deallocate(xqkv_fused_sharded)
+            else:
+                xqkv_fused = xqkv_fused_sharded
+        breakpoint()
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
+        # xqkv_fused shape: [1, 1, 32, 768]
+
         ###
         # Reshape and rotary embeddings
         ###
         (
-            q_heads_pre_rot_1BQD,
-            k_heads_pre_rot_1BKD,
-            v_heads_1BKD,
+            q_heads_pre_rot_1BQD,  # shape: [1, 1, 4, 128]
+            k_heads_pre_rot_1BKD,  # shape: [1, 1, 1, 128]
+            v_heads_1BKD,  # shape: [1, 1, 1, 128]
         ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
+            memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"]
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_CREATE_HEAD_OUTPUT_MEMCFG"],
         )
-
+        breakpoint()
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
-
+        breakpoint()
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
@@ -471,10 +506,9 @@ class Attention(LightweightModule):
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
-
+        breakpoint()
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
-
         ###
         # KV update
         ###
@@ -484,17 +518,18 @@ class Attention(LightweightModule):
         else:
             keys = self.layer_past[0]
             values = self.layer_past[1]
+
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
+        breakpoint()
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
-
+        breakpoint()
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
-
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
@@ -508,7 +543,9 @@ class Attention(LightweightModule):
                 page_table_tensor=page_table,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -520,27 +557,38 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
                 sliding_window_size=self.sliding_window,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
-
+        breakpoint()
         ttnn.deallocate(q_heads_1BQD)
-
+        # Prefetcher + Attn working until here, still WIP
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
-            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
+            if self.prefetcher is None
+            else self.model_config["PREFETCHER_SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
         )
+        # attn_output_11BH shape: [1, 1, 16, 128]
+
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
+            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
         )
+        # attn_output_cat shape: [1, 1, 32, 2048]
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
         if self.use_fused_all_gather_matmul:
             attn_output_cat = ttnn.to_memory_config(
-                attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
+                attn_output_cat,
+                self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
             )
 
             # Fused AGMM only valid for ring topology
@@ -561,6 +609,7 @@ class Attention(LightweightModule):
                     chunks_per_sync=10,
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
             else:
                 all_gather_output = ttnn.experimental.all_gather_async(
@@ -570,27 +619,41 @@ class Attention(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=1,
                     topology=self.ccl_topology,
-                    memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
+                    if self.prefetcher is None
+                    else self.model_config["PREFETCHER_ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     chunks_per_sync=10,
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
-
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
                     self.wo,
-                    memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+                    memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                    if self.prefetcher is None
+                    else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"]
+                    if self.prefetcher is None
+                    else self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_PROGCFG"],
                     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                    global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                    sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
-
+                breakpoint()
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
-            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            dense_out_sharded = ttnn.to_memory_config(
+                dense_out_sharded,
+                self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"],
+            )
             return dense_out_sharded
 
         else:
+            breakpoint()
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
@@ -598,8 +661,11 @@ class Attention(LightweightModule):
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
-                memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
+                memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
+                if self.prefetcher is None
+                else self.model_config["PREFETCHER_ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 sharded=True,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
             if self.TG:
@@ -615,19 +681,45 @@ class Attention(LightweightModule):
                 )
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
+            def get_wo_program_config():
+                if self.prefetcher is None and not self.TG:
+                    return self.model_config["ATTN_OUTPUT_PROGCFG"]
+                else:
+                    return self.model_config["PREFETCHER_WO_DECODE_RING_PROGCFG"]
+
+            def get_wo_memory_config():
+                if self.prefetcher is None:
+                    return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+                else:
+                    return self.model_config["PREFETCHER_SHARDED_WO_OUT_RING_MEMCFG"]
+
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
-                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=get_wo_program_config(),
+                memory_config=get_wo_memory_config(),
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
-
+            breakpoint()
             ttnn.deallocate(attn_output_cat)
 
             # All reduce
+            def get_all_reduce_memory_config():
+                if self.TG:
+                    if self.hidden_size == 8192:
+                        return self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
+                    else:
+                        return self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
+                else:
+                    if self.prefetcher is None:
+                        return self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                    else:
+                        return self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
@@ -637,18 +729,11 @@ class Attention(LightweightModule):
                 num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,
-                memory_config=(
-                    (
-                        self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                        if self.hidden_size == 8192
-                        else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                    )
-                    if self.TG
-                    else self.model_config["DECODE_RESIDUAL_MEMCFG"]
-                ),
+                memory_config=get_all_reduce_memory_config(),
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
             if not self.TG:
