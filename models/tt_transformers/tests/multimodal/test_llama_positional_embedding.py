@@ -9,6 +9,12 @@ import pytest
 import torch
 import torch.nn as nn
 from loguru import logger
+from transformers import AutoModelForVision2Seq
+from transformers.models.mllama.image_processing_mllama import (
+    convert_aspect_ratios_to_ids,
+    get_all_supported_aspect_ratios,
+)
+from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPositionEmbedding
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -55,6 +61,18 @@ class PositionalEmbedding(nn.Module):
             _pos_embed = _pos_embed.reshape(arx[0] * arx[1], *_pos_embed.shape[2:])
             x[idx, : arx[0] * arx[1]] += _pos_embed * self.gated_positional_embedding_gate.tanh()
         return x
+
+
+def load_partial_weights(weights_path, embedding_layer_prefix):
+    partial_state_dict = {}
+    model = AutoModelForVision2Seq.from_pretrained(weights_path, torch_dtype="auto", local_files_only=True)
+    weights = model.state_dict()
+    keys = weights.keys()
+    for key in keys:
+        if embedding_layer_prefix in key:
+            key_name = key[len("model.vision_model.gated_positional_embedding.") :]
+            partial_state_dict.update({key_name: weights[key]})
+    return partial_state_dict
 
 
 @pytest.mark.parametrize(
@@ -139,6 +157,29 @@ def test_positional_embedding_inference(
     )
     reference_model.load_state_dict(partial_state_dict, strict=False)
     reference_output = reference_model(input_tensor, aspect_ratios)
+
+    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
+
+    class Config:
+        def __init__(
+            self,
+            max_num_tiles=max_num_tiles,
+            hidden_size=dim,
+            max_aspect_ratio_id=len(supported_aspect_ratios),
+            image_size=image_size[0],
+            patch_size=patch_size[0],
+        ):
+            self.max_num_tiles = max_num_tiles
+            self.hidden_size = hidden_size
+            self.max_aspect_ratio_id = max_aspect_ratio_id
+            self.image_size = image_size
+            self.patch_size = patch_size
+
+    reference_model = MllamaPrecomputedPositionEmbedding(Config())
+    partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), "gated_positional")
+    reference_model.load_state_dict(partial_state_dict)
+    aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))
+    reference_output1 = reference_model(input_tensor, aspect_ratios_id)
 
     ##### Perform the TT ops #####
     tt_model = TtLlamaPositionalEmbedding(
