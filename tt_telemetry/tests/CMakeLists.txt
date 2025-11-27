@@ -29,7 +29,6 @@ target_link_libraries(
         tt_metal # Need this for tt::umd::Cluster destructor
         telemetry_libs
         fmt::fmt-header-only
-        TT::ScaleoutTools # For protobuf dependencies
         protobuf::libprotobuf # For protobuf runtime
 )
 
