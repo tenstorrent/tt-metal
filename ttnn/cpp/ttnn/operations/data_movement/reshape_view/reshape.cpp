@@ -176,7 +176,8 @@ ttnn::Tensor reshape_tiled(
     const MemoryConfig& memory_config,
     const PadValue& pad_value,
     const bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     // squeeze input tensor and requested shape to 3D
 
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
@@ -217,7 +218,11 @@ ttnn::Tensor reshape_tiled(
     auto rt_args_estimate = reshape::detail::estimate_reshape_rt_args(
         tensor3d, requested_shape_3d, requested_padded_shape_3d, memory_config);
 
-    if (!rt_args_estimate.can_fit_in_rt_args()) {
+    printf(
+        "on_device_mappings: %s\n",
+        on_device_mappings.has_value() ? (on_device_mappings.value() ? "true" : "false") : "nullopt");
+    if (!rt_args_estimate.can_fit_in_rt_args() &&
+        (on_device_mappings.has_value() && on_device_mappings.value() == false)) {
         // run untilize + reshape + tilize
         auto untilize_tensor =
             ttnn::to_layout(tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config());
@@ -233,7 +238,8 @@ ttnn::Tensor reshape_tiled(
                             requested_padded_shape_3d,
                             working_output_memory_config,
                             recreate_mapping_tensor,
-                            sub_core_grid);
+                            sub_core_grid,
+                            on_device_mappings);
     }
 
     if (memory_config.is_sharded()) {
@@ -256,7 +262,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -340,7 +347,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             mem_config,
             pad_value.value_or(default_pad_value),
             reshape_map_mode == TileReshapeMapMode::RECREATE,
-            sub_core_grid);
+            sub_core_grid,
+            on_device_mappings);
     }
 }
 
@@ -350,8 +358,9 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
-    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid);
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
+    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, on_device_mappings);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
@@ -360,14 +369,16 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<bool>& on_device_mappings) {
     return invoke(
         tensor,
         tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
         memory_config,
         pad_value,
         reshape_map_mode,
-        sub_core_grid);
+        sub_core_grid,
+        on_device_mappings);
 }
 
 }  // namespace ttnn::operations::data_movement

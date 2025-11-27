@@ -29,8 +29,16 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
@@ -38,7 +46,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE,
-            py::arg("sub_core_grids") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -47,7 +56,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     logical_shape,
@@ -55,7 +65,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                     memory_config,
                     pad_value,
                     reshape_tile_mode,
-                    sub_core_grids);
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("logical_shape"),
@@ -64,7 +75,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE,
-            py::arg("sub_core_grids") = std::nullopt},
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -72,8 +84,16 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<PadValue>& pad_value,
                const ttnn::TileReshapeMapMode reshape_tile_mode,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const std::optional<bool>& on_device_mappings) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    shape,
+                    memory_config,
+                    pad_value,
+                    reshape_tile_mode,
+                    sub_core_grids,
+                    on_device_mappings);
             },
             py::arg("input_tensor"),
             py::arg("shape"),
@@ -81,7 +101,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::arg("memory_config") = std::nullopt,
             py::arg("pad_value") = std::nullopt,
             py::arg("recreate_mapping_tensor") = ttnn::TileReshapeMapMode::CACHE,
-            py::arg("sub_core_grids") = std::nullopt});
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("on_device_mappings") = true});
 }
 }  // namespace detail
 

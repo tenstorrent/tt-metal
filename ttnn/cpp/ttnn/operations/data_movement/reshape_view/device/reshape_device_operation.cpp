@@ -13,6 +13,10 @@ ReshapeDeviceOperation::program_factory_t ReshapeDeviceOperation::select_program
         return ReshapeRMProgramFactory{};
     } else {
         return ReshapeTiledProgramFactory{};
+        if (operation_attributes.on_device_mappings.has_value() && operation_attributes.on_device_mappings.value() == false) {
+            return ReshapeTiledWithoutDeviceMappingProgramFactory{};
+        }
+        return ReshapeTiledProgramFactory{};
     }
 }
 

@@ -22,10 +22,59 @@
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
 #include "reshape_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
+
+namespace detail {
+
+Tensor compute_reshape_mapping_host_tensor(
+    const uint32_t num_input_pages,
+    const uint32_t num_output_pages,
+    const Shape& input_shape,
+    const Shape& output_shape,
+    const std::array<uint32_t, 2>& tile_shape,
+    const std::array<uint32_t, 2>& face_shape) {
+    Dims tile_dims_input(input_shape, tile_shape), tile_dims_output(output_shape, tile_shape);
+
+    std::vector<std::vector<SegmentMapData>> mapping_vector;
+    mapping_vector.reserve(num_output_pages);
+
+    for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
+        mapping_vector.emplace_back(reshape_map_output_page(
+            output_page_idx, input_shape, output_shape, tile_dims_input, tile_dims_output, tile_shape, face_shape));
+    }
+
+    // flatten again
+    uint32_t max_input_segments =
+        std::max_element(mapping_vector.begin(), mapping_vector.end(), [](const auto& a, const auto& b) {
+            return a.size() < b.size();
+        })->size();
+
+    // Ensure that map data is always aligned
+    max_input_segments += max_input_segments % (tt::tt_metal::hal::get_l1_alignment());
+
+    // initialize to 0 because that will be checked by the kernel as a stopping condition
+    std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
+    auto it = flat_mapping_vector.begin();
+    for (const auto& v : mapping_vector) {
+        auto map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
+        std::copy(v.begin(), v.end(), map_ptr);
+
+        it += max_input_segments * SegmentMapData::size;
+    }
+
+    const std::array<uint32_t, 2> mapping_shape_vector = {num_output_pages, SegmentMapData::size * max_input_segments};
+    const Shape mapping_shape(mapping_shape_vector);
+    const tt::tt_metal::TensorLayout mapping_layout(
+        tt::tt_metal::convert_to_data_type<decltype(flat_mapping_vector)::value_type>(),
+        ttnn::ROW_MAJOR_LAYOUT,
+        MemoryConfig());
+
+    return Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout));
+}
+}  // namespace detail
 
 // Algorithm overview:
 // The host computes the mapping between input shape and the output shapes as a series of data segments that are
@@ -76,17 +125,32 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-    auto compressed_map = detail::compute_reshape_map(
-        num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape);
+    Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
+                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
+                                .to_device(device);
 
+    tt::tt_metal::Buffer* mapping_buffer = mapping_tensor.buffer();
     const auto grid = device->compute_with_storage_grid_size();
 
     uint32_t num_cores_x = grid.x;
     uint32_t num_cores_y = grid.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
+    // set up CB for mapping metadata
+
     // PCC fails when this is greater than 1. TODO figure out why.
     constexpr auto reader_cb_len = 1;
+
+    auto mapping_page_size = mapping_tensor.logical_shape()[-1];
+    auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
+    auto mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
+    constexpr auto mapping_cb_idx = tt::CBIndex::c_0;
+
+    const tt::tt_metal::CircularBufferConfig cb_mapping_config =
+        tt::tt_metal::CircularBufferConfig(
+            mapping_page_size_bytes * reader_cb_len, {{mapping_cb_idx, mapping_dataformat}})
+            .set_page_size(mapping_cb_idx, mapping_page_size_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
 
     // set up CB for input tiles
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -117,7 +181,9 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
 
     TT_ASSERT(num_cores <= num_output_pages);
 
-    std::vector<uint32_t> reader_compile_time_args = {input_tile_size_bytes, input_cb_idx};
+    std::vector<uint32_t> reader_compile_time_args = {
+        mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
+    tt::tt_metal::TensorAccessorArgs(*mapping_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -125,8 +191,14 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
     std::vector<uint32_t> writer_compile_time_args = {
-        input_tile_size_bytes, tt::datum_size(output_cb_data_format), input_cb_idx, output_cb_idx};
+        input_tile_size_bytes,
+        max_map_entries,
+        tt::datum_size(output_cb_data_format),
+        mapping_cb_idx,
+        input_cb_idx,
+        output_cb_idx};
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -137,7 +209,6 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
-
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -149,103 +220,14 @@ ReshapeTiledProgramFactory::cached_program_t ReshapeTiledProgramFactory::create(
         }
         page_idx_end += increment;
 
-        // Build per-core rt_args from compressed_map.page_pattern_runs
-        std::vector<uint32_t> core_rt_args;
-        size_t num_short_runs = 0, num_long_runs = 0;
-
-        // Count runs by type
-        std::set<uint32_t> used_template_indices;
-        for (const auto& run : compressed_map.page_pattern_runs) {
-            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
-                continue;
-            }
-            used_template_indices.insert(run.pattern_template_index);
-            if (run.run_length == 1) {
-                num_short_runs++;
-            } else {
-                num_long_runs++;
-            }
-        }
-        std::vector<uint32_t> global_to_local_template_map(compressed_map.pattern_templates.size(), UINT32_MAX);
-        std::vector<uint32_t> core_template_indices;
-        uint32_t local_idx = 0;
-        for (uint32_t global_idx : used_template_indices) {
-            global_to_local_template_map[global_idx] = local_idx++;
-            core_template_indices.push_back(global_idx);
-        }
-
-        // Pack short runs first, then long runs
-        for (const auto& run : compressed_map.page_pattern_runs) {
-            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
-                continue;
-            }
-            uint32_t start = std::max(run.output_page_index_start, page_idx_start);
-            uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
-
-            uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
-
-            if (run.run_length == 1) {
-                core_rt_args.push_back(detail::pack_rt_short(start, end));
-                core_rt_args.push_back(detail::pack_rt_short(run.input_page_index_start, local_template_idx));
-                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_start, run.output_offset_start));
-            }
-        }
-
-        for (const auto& run : compressed_map.page_pattern_runs) {
-            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
-                continue;
-            }
-            uint32_t start = std::max(run.output_page_index_start, page_idx_start);
-            uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
-            uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
-
-            if (run.run_length > 1) {
-                core_rt_args.push_back(detail::pack_rt_short(start, end));
-                core_rt_args.push_back(detail::pack_rt_short(run.input_page_index_start, local_template_idx));
-                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_start, run.output_offset_start));
-                core_rt_args.push_back(detail::pack_rt_short(run.run_length, run.input_page_index_stride));
-                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_stride, run.output_offset_stride));
-            }
-        }
-
-        // Build final RT args vector
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.push_back(used_template_indices.size());             // num_templates
-        reader_runtime_args.push_back(num_short_runs);                           // num_short_runs
-        reader_runtime_args.push_back(num_long_runs);                            // num_long_runs
-        reader_runtime_args.push_back(input_buffer->address());                  // buffer_addr
-
-        // Add pattern templates
-        for (uint32_t global_idx : core_template_indices) {
-            const auto& tmpl = compressed_map.pattern_templates[global_idx];
-            reader_runtime_args.push_back(tmpl.input_page_stride);
-            reader_runtime_args.push_back(tmpl.input_offset_stride);
-            reader_runtime_args.push_back(tmpl.output_offset_stride);
-            reader_runtime_args.push_back(tmpl.num_elements);
-        }
-        // Add run data
-        for (auto k : core_rt_args) {
-            reader_runtime_args.push_back(k);
-        }
+        const std::vector<uint32_t> reader_runtime_args = {
+            input_buffer->address(), mapping_buffer->address(), page_idx_start, page_idx_end};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
-        // Same for writer
-        std::vector<uint32_t> writer_runtime_args;
-        writer_runtime_args.push_back(used_template_indices.size());
-        writer_runtime_args.push_back(num_short_runs);
-        writer_runtime_args.push_back(num_long_runs);
-        writer_runtime_args.push_back(output_buffer->address());
-        for (uint32_t global_idx : core_template_indices) {
-            const auto& tmpl = compressed_map.pattern_templates[global_idx];
-            writer_runtime_args.push_back(tmpl.input_page_stride);
-            writer_runtime_args.push_back(tmpl.input_offset_stride);
-            writer_runtime_args.push_back(tmpl.output_offset_stride);
-            writer_runtime_args.push_back(tmpl.num_elements);
-        }
-        for (auto k : core_rt_args) {
-            writer_runtime_args.push_back(k);
-        }
+        const std::vector<uint32_t> writer_runtime_args = {output_buffer->address(), page_idx_start, page_idx_end};
+
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
+
         page_idx_start += increment;
         utilized_cores.push_back(c);
     }
