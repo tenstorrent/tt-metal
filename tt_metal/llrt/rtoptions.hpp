@@ -137,6 +137,7 @@ class RunTimeOptions {
     bool profiler_cpp_post_process = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
+    uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
 
     bool null_kernels = false;
@@ -443,6 +444,7 @@ public:
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
