@@ -379,10 +379,13 @@ static_assert(
 ///////////////////////////////////////////////
 // Telemetry
 constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
-constexpr PerfTelemetryRecorderType perf_telemetry_mode =
-    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
 
-constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 2;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
 
 
