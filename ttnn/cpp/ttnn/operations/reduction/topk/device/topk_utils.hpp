@@ -12,10 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/decorators.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace reduction {
-namespace topk_utils {
+namespace ttnn::operations::reduction::topk::utils {
 
 uint32_t largest_power_of_two(uint32_t x);
 
@@ -39,7 +36,6 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     uint32_t index_tile_size);
 
 bool verify_multi_core_cost(
-    const std::vector<ttnn::Tensor>& input_tensors,
     uint32_t width,
     uint32_t min_dim,
     uint32_t max_dim,
@@ -49,9 +45,6 @@ bool verify_multi_core_cost(
     uint32_t value_tile_size,
     uint32_t index_tile_size);
 
-bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uint32_t k, bool uint16_output);
+bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
 
-}  // namespace topk_utils
-}  // namespace reduction
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction::topk::utils
