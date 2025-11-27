@@ -413,10 +413,10 @@ void PrefetchKernel::InitializeRuntimeArgsValues() {
     static_config_.offsetof_to_dev_id = current_offset++;
     static_config_.offsetof_router_direction = current_offset++;
     // Initialize runtime args
-    runtime_args.reserve(current_offset);
-    runtime_args[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
-    runtime_args[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
-    runtime_args[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
+    runtime_args_.resize(current_offset);
+    runtime_args_[static_config_.offsetof_my_dev_id.value()] = dependent_config_.my_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_to_dev_id.value()] = dependent_config_.to_dev_id.value_or(0);
+    runtime_args_[static_config_.offsetof_router_direction.value()] = dependent_config_.router_direction.value_or(0);
 }
 
 void PrefetchKernel::CreateKernel() {

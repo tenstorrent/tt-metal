@@ -200,7 +200,7 @@ protected:
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
 
-    std::vector<uint32_t> runtime_args;
+    std::vector<uint32_t> runtime_args_;
 };
 
 }  // namespace tt_metal

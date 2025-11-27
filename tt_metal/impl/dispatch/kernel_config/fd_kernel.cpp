@@ -195,5 +195,7 @@ void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attri
 
 void FDKernel::SetRuntimeArgs() {
     TT_ASSERT(program_ != nullptr, "Program must be set before setting runtime args");
-    tt_metal::SetRuntimeArgs(*program_, kernel_handle_, logical_core_, runtime_args);
+    if (not runtime_args_.empty()) {
+        tt_metal::SetRuntimeArgs(*program_, kernel_handle_, logical_core_, runtime_args_);
+    }
 }
