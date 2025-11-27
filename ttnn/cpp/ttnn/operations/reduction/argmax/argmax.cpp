@@ -19,7 +19,7 @@ namespace ttnn::operations::reduction {
    The output tensor is filled with NAN values.
 */
 static Tensor zero_volume_argmax(
-    const Tensor& input_tensor, const std::optional<int> dim, const bool keepdim, const MemoryConfig& memory_config) {
+    const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim, const MemoryConfig& memory_config) {
     auto output_shape = detail::get_output_shape(input_tensor, dim, keepdim);
 
     return ttnn::full(
