@@ -56,4 +56,4 @@ This test suite now includes tests using the new device 2.0 experimental NOC API
 
 ### Device 2.0 Kernels:
 - `writer_unary_2_0.cpp`: Implements the writer functionality using the experimental NOC API
-- `reader_unary_2_0.cpp`: Implements the writer functionality using the experimental NOC API
+- `reader_unary_2_0.cpp`: Implements the reader functionality using the experimental NOC API
