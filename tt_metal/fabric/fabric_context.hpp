@@ -84,11 +84,6 @@ private:
     size_t max_payload_size_bytes_ = 0;
     size_t channel_buffer_size_bytes_ = 0;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
-    // these edm types will have different optimizations based on the number of devices along the axis.
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_router_config_ = {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
-        {};
 
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, eth_chan_directions::COUNT>
         router_with_mux_config_ = {};  // for E W N S.

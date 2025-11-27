@@ -82,7 +82,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 }
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
-    if (vc_idx == 0 && is_2D_routing) {
+    TT_FATAL(vc_idx == 0, "VC1 is not supported for static-sized channel connection writer adapter");
+    if (is_2D_routing) {
         // For VC0 in 2D: pack connection mask and data for 3 downstream EDMs
         args_out.push_back(this->downstream_edms_connected);  // 3-bit mask
 
@@ -112,9 +113,9 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         }
     } else {
         // For VC1 or 1D: single downstream connection (backward compatible)
-        bool has_connection = vc_idx == 0 ? (this->downstream_edms_connected != 0) : false;
+        bool has_connection = this->downstream_edms_connected != 0
 
-        uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
+                              uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
         auto rt_args = std::initializer_list<uint32_t>{
             has_connection,
@@ -160,8 +161,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     }
 }
 
-uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected(
-    bool /*is_2d_routing*/, bool /*is_vc1*/) const {
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected() const {
     return this->downstream_edms_connected;
 }
 

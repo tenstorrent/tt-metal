@@ -117,7 +117,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     // default router config don't care about the axis, since there's no optimization to it.
     this->router_config_ = get_edm_config_options();
 
-    // default router config with mux extension, for now no need to differentiate dateline, dateline-upstream, etc.
+    // default router config with mux extension
     // Initialize for all directions: EAST, WEST, NORTH, SOUTH
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         this->router_with_mux_config_[direction] =

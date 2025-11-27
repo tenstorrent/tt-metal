@@ -120,7 +120,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
 
-        // if ring topology set extra buffer on dateline edms.
         const auto src_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
         log_debug(
             tt::LogFabric,

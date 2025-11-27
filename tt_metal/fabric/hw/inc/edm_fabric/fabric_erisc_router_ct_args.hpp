@@ -223,7 +223,6 @@ constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFF
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
@@ -457,8 +456,6 @@ constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
 //////////////////////////////////////////////////////////////////////////////////////////
 ////                CT ARGS FETCHING DONE
 //////////////////////////////////////////////////////////////////////////////////////////
-
-constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
 constexpr size_t sender_channel_base_id = 0;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;

@@ -1085,7 +1085,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
-    // receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
 
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
