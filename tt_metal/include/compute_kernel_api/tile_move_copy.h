@@ -24,10 +24,11 @@ namespace ckernel {
  * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
  * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    |
  * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate tranpose is set   | False    |
- * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | bool     | True if transpose within 16x16 face is set        | False    |
+ * | transpose_within_16x16_face | Flag to perform transpose within 16x16 face | uint32_t | Any positive value will indicate transpose within 16x16 face is set        | False    |
  */
 // clang-format on
-ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0, bool transpose_within_16x16_face = false) {
+ALWI void copy_tile_to_dst_init_short(
+    uint32_t cbid, uint32_t transpose = 0, uint32_t transpose_within_16x16_face = false) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
