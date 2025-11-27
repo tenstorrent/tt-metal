@@ -72,6 +72,82 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
+    CoreCoord grid_size, CoreRangeSet grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    // Compute grid area and initial blocks-per-core using integer math.
+    const uint32_t grid_area = grid_size.x * grid_size.y;
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+
+    // Adjust nblocks_per_core and determine the optimal block size.
+    auto [adjusted_nblocks_per_core, single_block_size] =
+        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
+    nblocks_per_core = adjusted_nblocks_per_core;
+
+    // Helper lambda for ceiling division.
+    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
+    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    // Sets to hold different core ranges.
+    std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
+    std::set<CoreRange> all_cores;
+    const uint32_t full_cores_per_row = width_tiles / single_block_size;
+    const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
+    const uint32_t full_cores_per_col = height_tiles / single_block_size;
+    const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
+    const uint32_t single_block_size_cliff_row = width_tiles - (full_cores_per_row * single_block_size);
+    const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
+    // Coordinates for assigning cores sequentially.
+    uint32_t i_x = 0;
+    uint32_t i_y = 0;
+    auto addCore = [&](std::set<CoreRange>& targetSet) {
+        CoreRange range{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
+        targetSet.insert(range);
+        all_cores.insert(range);
+        // Update core coordinates in a cyclic row-wise manner.
+        if (i_x == grid_size.x - 1) {
+            i_x = 0;
+            i_y++;
+        } else {
+            i_x++;
+        }
+    };
+    // Distribute cores over full rows (each row may have an extra "cliff" block at the end).
+    for (uint32_t row = 0; row < full_cores_per_col; row++) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_row_core_range);
+        }
+    }
+    // Add the cliff column if present.
+    if (has_cliff_col) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(cliff_col_core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_col_row_core_range);
+        }
+    }
+    return BlockSplitWH{
+        ncores,
+        all_cores,
+        core_range,
+        cliff_row_core_range,
+        cliff_col_core_range,
+        cliff_col_row_core_range,
+        nblocks_per_core,
+        single_block_size,
+        single_block_size_cliff_row,
+        single_block_size_cliff_col,
+        has_cliff_row,
+        has_cliff_col,
+        full_cores_per_row,
+        full_cores_per_col};
+}
+
+inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid_size.x * grid_size.y;
