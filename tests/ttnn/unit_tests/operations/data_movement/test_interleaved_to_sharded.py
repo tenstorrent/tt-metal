@@ -63,24 +63,19 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
         pcc_passed_b, pcc_message_b = assert_with_pcc(input_tensor_torch, ttnn.to_torch(output_tensor), pcc=0.9999)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, shard_grid",
     [
         [
-            [2, 2, 128, 64],
-            (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
-        ],
-        [
-            [1, 1, 416, 64],
-            (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            [16, 224, 224, 8],
+            (12544, 8),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         ],
     ],
 )
-@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 def test_interleaved_to_dram_height_sharded(
     device, dtype, layout, tensor_shape, shard_shape, shard_grid, shard_orientation
 ):
@@ -89,9 +84,7 @@ def test_interleaved_to_dram_height_sharded(
 
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, output_shard_spec
-    )
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
     # Test
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)

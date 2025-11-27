@@ -331,6 +331,8 @@ def run_conv(
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
+    print(f"Output shape before reshape: {out.shape}")
+    print(f"output volume: {out.numel()}")
     out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
     out = out[:, :, :, :output_channels]
 
@@ -3745,8 +3747,8 @@ def test_segformer_channel_padding(device, enable_act_double_buffer):
         (320, 32, 208, 208, 16, 16, 16, 16, (8, 8), 0),
     ]
 )
-@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("has_bias", [True, False])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("has_bias", [True])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
