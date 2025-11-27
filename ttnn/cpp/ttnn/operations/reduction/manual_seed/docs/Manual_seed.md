@@ -94,13 +94,7 @@ This strategy sets the same seed value across all available compute cores on the
 
 #### Implementation Details:
 
-```cpp
-// Compute kernel: manual_seed_set_seed.cpp
-void MAIN {
-    constexpr uint32_t seed = get_compile_time_arg_val(0);
-    rand_tile_init(seed);
-}
-```
+The implementation uses a single compute kernel deployed across the entire core grid. The seed value is passed as a compile-time argument, and each core executes `rand_tile_init(seed)` to initialize its RNG state. No data movement or runtime arguments are required, making this the most efficient strategy.
 
 ---
 
@@ -130,14 +124,7 @@ This strategy sets a seed to one specific compute core, identified by a core ID 
 
 #### Implementation Details:
 
-```cpp
-// Core selection logic
-const auto& cores = corerange_to_cores(core_grid, num_cores, true);
-const auto& core_chosen = cores.at(operation_attributes.user_ids.value_or(0));
-
-// Same kernel as Single Seed to All Cores
-// Deployed to: core_chosen only
-```
+The program factory converts the scalar core ID into physical core coordinates by mapping it to the device's core grid. The same compute kernel used in "Single Seed to All Cores" is deployed, but only to the single selected core. The seed is passed as a compile-time argument, ensuring minimal overhead.
 
 ---
 
@@ -174,52 +161,22 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 
 #### Implementation Details:
 
-**Reader Kernel:**
-```cpp
-// reader_manual_seed_read_user_id.cpp
-void kernel_main() {
-    ...
+**Program Factory:**
 
-    // Read user_ids tile from DRAM to L1
-    cb_reserve_back(user_ids_cb_index, one_tile);
-    const uint32_t l1_write_addr_index = get_write_ptr(user_ids_cb_index);
-    noc_async_read_tile(0, user_ids_tensor_dram, l1_write_addr_index);
-    noc_async_read_barrier();
+The program factory creates a single reader kernel and a single compute kernel that are deployed across the entire core grid. This is more efficient than creating individual kernels per core. The seed value is passed as a compile-time argument to the compute kernel. Each core receives unique runtime arguments consisting of the user_ids tensor buffer address and its core ID.
 
-    // Process user_ids - check if this core matches
-    bool is_user_id = false;
-    volatile tt_l1_ptr uint32_t* ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_index);
-    for (uint32_t id = 0; id < number_of_ids; ++id) {
-        if (core_id == ptr[id]) {
-            is_user_id = true;
-            break;
-        }
-    }
+**Reader Kernel (`reader_manual_seed_read_user_id.cpp`):**
 
-    // Send result to compute kernel via mailbox
-    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
-}
-```
+Each core's reader kernel performs the following operations:
+1. Reads the user_ids tensor from DRAM into L1 memory using NoC operations
+2. Iterates through the user_ids array to check if its core ID (received as runtime argument) matches any entry
+3. Communicates the match result (boolean) to the compute kernel via mailbox writes to all compute threads
 
-**Compute Kernel:**
-```cpp
-// manual_seed_single_seed_receive_user_id.cpp
-void MAIN {
-    // Compile time args
-    constexpr uint32_t seed = get_compile_time_arg_val(0);
+The mailbox communication mechanism allows the reader kernel (running on the data movement processor) to pass information to the compute kernel threads without using circular buffers.
 
-    // Read match result from mailbox (sent by reader kernel)
-    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
+**Compute Kernel (`manual_seed_single_seed_receive_user_id.cpp`):**
 
-    // Initialize random generator if this core matched
-    if (is_core_id) {
-        rand_tile_init(seed);
-    }
-}
-```
+The compute kernel waits for the match result from the reader kernel via `mailbox_read()`. If the match is positive, it initializes the RNG by calling `rand_tile_init(seed)` with the seed value received as a compile-time argument. Non-matching cores skip initialization entirely.
 
 ---
 
@@ -260,69 +217,23 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
 
 #### Implementation Details:
 
-**Reader Kernel:**
-```cpp
-// reader_manual_seed_read_all_data.cpp
-void kernel_main() {
-    ...
+**Program Factory:**
 
-    // Read user_ids tile from DRAM to L1
-    cb_reserve_back(user_ids_cb_index, one_tile);
-    const uint32_t l1_write_addr_index = get_write_ptr(user_ids_cb_index);
-    noc_async_read_tile(0, user_ids_tensor_dram, l1_write_addr_index);
-    noc_async_read_barrier();
+Similar to the "Single Seed to Set of Cores" strategy, the factory creates one reader kernel and one compute kernel for the entire core grid. However, the compute kernel receives no compile-time arguments since the seed values vary per core. Each core receives runtime arguments containing both tensor buffer addresses (user_ids and seeds) along with its core ID.
 
-    // Read seeds tile from DRAM to L1
-    cb_reserve_back(seeds_cb_index, one_tile);
-    const uint32_t seeds_l1_write_addr_index = get_write_ptr(seeds_cb_index);
-    noc_async_read_tile(0, seeds_tensor_dram, seeds_l1_write_addr_index);
-    noc_async_read_barrier();
+**Reader Kernel (`reader_manual_seed_read_all_data.cpp`):**
 
-    // Process user_ids - check if this core matches and get seed
-    uint32_t seed = 0;
-    bool is_user_id = false;
-    volatile tt_l1_ptr uint32_t* user_id =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_index);
-    volatile tt_l1_ptr uint32_t* seeds =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seeds_l1_write_addr_index);
-    for (uint32_t id = 0; id < number_of_ids; ++id) {
-        if (core_id == user_id[id]) {
-            is_user_id = true;
-            seed = seeds[id];
-            break;
-        }
-    }
+Each core's reader kernel executes a more complex workflow:
+1. Reads both the user_ids tensor and seeds tensor from DRAM into separate L1 memory regions using NoC operations
+2. Iterates through the user_ids array to find if its core ID matches any entry
+3. If a match is found, retrieves the corresponding seed value from the seeds tensor at the same index
+4. Sends both the match result (boolean) and the seed value (if matched) to the compute kernel via mailbox writes
 
-    // Send match result to compute kernel via mailbox
-    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
-    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
+The dual-mailbox communication pattern allows passing both control information (whether to initialize) and data (the seed value) from the reader to the compute kernel.
 
-    // Send seed to compute kernel if matched
-    if (is_user_id) {
-        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, seed);
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, seed);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, seed);
-    }
-}
-```
+**Compute Kernel (`manual_seed_receive_all_data.cpp`):**
 
-**Compute Kernel:**
-```cpp
-// manual_seed_receive_all_data.cpp
-void MAIN {
-    // Read match result from mailbox (sent by reader kernel)
-    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
-
-    if (is_core_id) {
-        // Read seed from mailbox
-        uint32_t seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);
-
-        // Initialize RNG with matched seed
-        rand_tile_init(seed);
-    }
-}
-```
+The compute kernel reads the match result from the mailbox via `mailbox_read()`. If positive, it reads the seed value from a second mailbox message and calls `rand_tile_init(seed)` to initialize the RNG with the core-specific seed. This allows each core to receive a unique seed value while using the same kernel code.
 
 ---
 
