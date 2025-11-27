@@ -849,6 +849,39 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadFromNode7) {
     }
 }
 
+// Helper to generate all worker coordinate pairs in the compute grid (sender coord == receiver coord)
+std::vector<std::pair<CoreCoord, CoreCoord>> GetAllWorkerCoordPairs(CoreCoord grid_size) {
+    std::vector<std::pair<CoreCoord, CoreCoord>> pairs;
+    for (size_t x = 0; x < grid_size.x; x++) {
+        for (size_t y = 0; y < grid_size.y; y++) {
+            CoreCoord coord{x, y};
+            pairs.push_back({coord, coord});
+        }
+    }
+    return pairs;
+}
+
+// UDM Mode Worker Coordinate Tests - test fabric communication with all workers simultaneously
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteAllWorkerCoords) {
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for write operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastReadAllWorkerCoords) {
+    auto grid_size = get_devices()[0]->get_devices()[0]->compute_with_storage_grid_size();
+    auto all_worker_pairs = GetAllWorkerCoordPairs(grid_size);
+    log_info(tt::LogTest, "Testing {} worker pairs for read operations", all_worker_pairs.size());
+    for (uint32_t dst : {5u, 6u, 7u}) {
+        log_info(tt::LogTest, "  Sender at fabric node 0 and receiver at fabric node {}", dst);
+        UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(0u, dst), std::nullopt, all_worker_pairs);
+    }
+}
+
 // Mux-to-Mux Forwarding Tests - test the mux's ability to forward packets to the correct downstream mux
 // These tests intentionally send packets with a non-optimal initial direction to verify mux forwarding works
 // Test cases cover scenarios where the worker sends a packet to a mux in a different direction,

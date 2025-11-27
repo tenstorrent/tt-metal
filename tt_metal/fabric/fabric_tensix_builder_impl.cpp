@@ -404,6 +404,11 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
         current_address = downstream_mux_buffer_index_semaphore_regions_[i].get_end_address();
     }
 
+    // Allocate channel storage region for storing channel arrays in L1 (4KB)
+    constexpr size_t channel_storage_size = 4 * 1024;  // 4KB for channel storage
+    channel_storage_region_ = MemoryRegion(current_address, channel_storage_size, 1);
+    current_address = channel_storage_region_.get_end_address();
+
     memory_map_end_address_ = current_address;
 
     TT_FATAL(
@@ -457,7 +462,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     for (uint32_t i = 0; i < downstream_dirs.size(); i++) {
         auto downstream_dir = downstream_dirs[i];
         auto downstream_mux_noc_coord =
-            tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, downstream_dir);
+            tensix_config.get_tensix_noc_coords(fabric_node_id, routing_plane_id, downstream_dir);
 
         // Calculate which channel on the downstream mux this mux should connect to
         uint32_t downstream_mux_channel = get_downstream_mux_channel_id(direction, downstream_dir);
@@ -678,7 +683,7 @@ FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
 
     for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
         auto target_dir = target_mux_dirs[i];
-        auto mux_noc_coord = tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, target_dir);
+        auto mux_noc_coord = tensix_config.get_tensix_noc_coords(fabric_node_id, routing_plane_id, target_dir);
 
         // Determine which channel on the target mux we connect to
         uint32_t mux_channel_id;
@@ -860,7 +865,8 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     uint32_t noc_x,
     uint32_t noc_y,
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
-    eth_chan_directions direction) :
+    eth_chan_directions direction,
+    bool has_fabric_router) :
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
@@ -870,7 +876,8 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     noc_x_(noc_x),
     noc_y_(noc_y),
     config_(std::move(config)),
-    direction_(direction) {
+    direction_(direction),
+    has_fabric_router_(has_fabric_router) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(config_ != nullptr, "Config cannot be null");
 }
@@ -1009,8 +1016,11 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             // Relay-to-Mux channels: check if relays exist in perpendicular directions (UDM mode only)
             TT_FATAL(num_channels == 3, "RELAY_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
-            // Channel 0: Local relay (always persistent)
-            is_persistent_channels[static_cast<uint32_t>(UdmMuxRelayToMuxChannelId::LOCAL_RELAY_CHANNEL)] = 1;
+            // Channel 0: Local relay (not persistent for non-active tensix core)
+            auto noc_coords = tensix_config.get_active_tensix_noc_coords(local_fabric_node_id_, link_idx_, direction_);
+            if (noc_coords) {
+                is_persistent_channels[static_cast<uint32_t>(UdmMuxRelayToMuxChannelId::LOCAL_RELAY_CHANNEL)] = 1;
+            }
 
             // Channels 1-2: Upstream relays (perpendicular directions)
             auto [upstream_relay_dir1, upstream_relay_dir2] = get_perpendicular_directions(direction_);
@@ -1020,8 +1030,10 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
                 UdmMuxRelayToMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL};
 
             for (size_t i = 0; i < upstream_relay_dirs.size(); i++) {
-                auto noc_coords =
-                    tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
+                // for relay to mux channel, we need to check only the active tensix cores, since there are no relay
+                // kernel in the non-active tensix cores
+                auto noc_coords = tensix_config.get_active_tensix_noc_coords(
+                    local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
                 if (noc_coords) {
                     is_persistent_channels[static_cast<uint32_t>(upstream_relay_channels[i])] = 1;
                 }
@@ -1033,8 +1045,10 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             TT_FATAL(num_channels == 3, "MUX_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
             auto upstream_mux_dirs = get_all_other_directions(direction_);
+            // for mux to mux channel, we need to check all the tensix cores, since there are mux kernel in the
+            // non-active tensix cores as well
             for (auto upstream_dir : upstream_mux_dirs) {
-                auto noc_coords = tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
+                auto noc_coords = tensix_config.get_tensix_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
                 if (noc_coords) {
                     uint32_t channel_id = get_upstream_mux_channel_id(direction_, upstream_dir);
                     is_persistent_channels[channel_id] = 1;
@@ -1084,8 +1098,16 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
     }
 
-    // Add direction as the last argument
+    // Add direction
     ct_args.push_back(static_cast<uint32_t>(direction_));
+
+    // Only needed in UDM mode
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // Add has_fabric_router flag (1 = has router, 0 = no router / missing direction)
+        ct_args.push_back(static_cast<uint32_t>(has_fabric_router_ ? 1 : 0));
+        // Add channel storage address (L1 address for storing worker channel arrays)
+        ct_args.push_back(config_->get_channel_storage_base_address());
+    }
 
     return ct_args;
 }
@@ -1122,7 +1144,8 @@ FabricTensixDatamoverRelayBuilder::FabricTensixDatamoverRelayBuilder(
     uint32_t noc_x,
     uint32_t noc_y,
     std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
-    eth_chan_directions direction) :
+    eth_chan_directions direction,
+    bool /*has_fabric_router*/) :
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
