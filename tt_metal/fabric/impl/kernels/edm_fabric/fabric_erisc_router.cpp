@@ -680,7 +680,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     using eth_chan_directions::NORTH;
     using eth_chan_directions::SOUTH;
     using eth_chan_directions::WEST;
-    // auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
 
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
@@ -963,7 +962,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             return downstream_edm_interfaces_vc0[edm_index];
         }
     };
-    auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
 
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
@@ -1036,21 +1034,12 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     local_relay_interface, packet_start, payload_size_bytes, transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                dump[11] = 0xBBBB0000 | edm_index;
-                auto downstream_interface = get_downstream_interface.template operator()<edm_index>();
-                // while (true) {}
-                // if (packet_start->mcast_params_64 != 0) {
-                //     if (cached_routing_fields.hop_index == 0) {
-                // while (true) {}
-                //     }
-                // }
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
                     get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id,
-                    true);
+                    transaction_id);
             }
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
@@ -1365,7 +1354,6 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             }
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                dump[11] = 0xBBBB0000 | edm_index;
                 forward_payload_to_downstream_edm<
                     enable_deadlock_avoidance,
                     vc1_has_different_downstream_dest,
@@ -1640,18 +1628,6 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
-        // auto dump = reinterpret_cast<tt_l1_ptr uint32_t*>(ROUTING_PATH_BASE_1D);
-#ifdef FABRIC_2D
-        // if (pkt_header->mcast_params_64 != 0 && pkt_header->route_buffer[0] ==
-        // LowLatencyMeshRoutingFields::FORWARD_SOUTH) {
-        //     dump[0] = pkt_header->route_buffer[0];
-        //     dump[1] = pkt_header->route_buffer[1];
-        //     dump[2] = pkt_header->route_buffer[2];
-        //     dump[3] = pkt_header->route_buffer[3];
-        //     dump[15] = 0xFFFFFFFF;
-        //     while (true) {}
-        // }
-#endif
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,

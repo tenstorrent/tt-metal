@@ -31,29 +31,21 @@ TEST_F(IntermeshSplit2x2FabricFixture, RandomizedInterMeshUnicast) {
 TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_0) {
     std::vector<FabricNodeId> mcast_req_nodes = {
         FabricNodeId(MeshId{0}, 1), FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 3), FabricNodeId(MeshId{0}, 2)};
-    // std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 2)};
     std::vector<FabricNodeId> mcast_start_nodes = {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{1}, 0)};
     std::vector<McastRoutingInfo> routing_info = {
         McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1}};
     std::vector<std::vector<FabricNodeId>> mcast_group_node_ids = {
-        // {FabricNodeId(MeshId{1}, 1)}, {FabricNodeId(MeshId{1}, 3)}};
-        {FabricNodeId(MeshId{1}, 3)},
-        {FabricNodeId(MeshId{1}, 1)}};
+        {FabricNodeId(MeshId{1}, 3)}, {FabricNodeId(MeshId{1}, 1)}};
 
     const uint32_t num_mcast_reqs = mcast_req_nodes.size();
     const uint32_t num_mcast_groups = mcast_start_nodes.size();
 
     for (uint32_t i = 0; i < 100; i++) {
-        // for (uint32_t i = 1; i < 2; i++) {
-        // for (uint32_t i = 2; i < 3; i++) {
-        fprintf(stderr, "-> %d\n", i);
         multihost_utils::InterMeshLineMcast(
             this,
             mcast_req_nodes[i % num_mcast_reqs],
-            // mcast_start_nodes[(i / num_mcast_groups) % num_mcast_groups],
             mcast_start_nodes[i % num_mcast_groups],
             routing_info,
-            // mcast_group_node_ids[(i / num_mcast_groups) % num_mcast_groups]);
             mcast_group_node_ids[i % num_mcast_groups]);
     }
 }

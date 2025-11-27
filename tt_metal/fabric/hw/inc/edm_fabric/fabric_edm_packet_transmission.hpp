@@ -322,8 +322,7 @@ FORCE_INLINE
         uint16_t payload_size_bytes,
         ROUTING_FIELDS_TYPE cached_routing_fields,
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
-        uint8_t transaction_id,
-        bool debug = false) {
+        uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
 
@@ -338,10 +337,7 @@ FORCE_INLINE
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(
-        reinterpret_cast<size_t>(packet_header),
-        payload_size_bytes + sizeof(PACKET_HEADER_TYPE),
-        transaction_id,
-        debug);
+        reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
     if constexpr (!increment_pointers) {
         update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value);
     }

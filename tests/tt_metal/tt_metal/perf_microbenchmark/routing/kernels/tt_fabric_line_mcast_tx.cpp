@@ -68,7 +68,6 @@ void kernel_main() {
     uint32_t num_hops_n = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_hops_s = get_arg_val<uint32_t>(rt_args_idx++);
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
-    DPRINT << "kernel: E:" << num_hops_e << " W:" << num_hops_w << " N:" << num_hops_n << " S:" << num_hops_s << "\n";
     tt::tt_fabric::WorkerToFabricEdmSender fwd_fabric_connection;
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;

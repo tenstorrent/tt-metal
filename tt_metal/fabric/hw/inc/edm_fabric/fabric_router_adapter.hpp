@@ -179,13 +179,13 @@ public:
         bool stateful_api,
         bool increment_pointers>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
-        uint32_t source_address, size_t size_bytes, uint8_t trid, bool debug = false) {
+        uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             enable_deadlock_avoidance,
             vc1_has_different_downstream_dest,
             EDM_TO_DOWNSTREAM_NOC,
             stateful_api,
-            increment_pointers>(source_address, size_bytes, trid, debug);
+            increment_pointers>(source_address, size_bytes, trid);
     }
 
     template <bool inc_pointers = true>
@@ -262,7 +262,7 @@ private:
         bool stateful_api = false,
         bool enable_deadlock_avoidance = false,
         bool vc1_has_different_downstream_dest = false>
-    FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index, bool debug = false) {
+    FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 if constexpr (vc1_has_different_downstream_dest) {
@@ -286,10 +286,7 @@ private:
             auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);  // <- hang
-            // if (debug) {
-            //     while (true) {}
-            // }
+            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
         }
         // Write to the atomic increment stream register (write of -1 will subtract 1)
         increment_local_update_ptr_val(worker_credits_stream_id, -1);
@@ -305,10 +302,10 @@ private:
         bool stateful_api = false,
         bool enable_deadlock_avoidance = false,
         bool vc1_has_different_downstream_dest = false>
-    FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index, bool debug = false) {
+    FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_write_index();
         this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance, vc1_has_different_downstream_dest>(
-            noc, debug);
+            noc);
     }
 
     template <
@@ -318,7 +315,7 @@ private:
         bool stateful_api,
         bool increment_pointers>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
-        uint32_t source_address, size_t size_bytes, uint8_t trid, bool debug = false) {
+        uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
@@ -337,7 +334,7 @@ private:
             post_send_payload_increment_pointers<
                 stateful_api,
                 enable_deadlock_avoidance,
-                vc1_has_different_downstream_dest>(EDM_TO_DOWNSTREAM_NOC, debug);
+                vc1_has_different_downstream_dest>(EDM_TO_DOWNSTREAM_NOC);
         }
     }
 };
