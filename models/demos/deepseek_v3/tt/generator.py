@@ -449,28 +449,28 @@ class DeepseekGenerator:
             lengths[i] = len(seq)
         return out, lengths
 
-        def generate(
-            self,
-            prompts: Iterable[str],
-            max_new_tokens: int = 32,
-            sampling: SamplingParams | None = None,
-            teacher_forcing=None,
-            early_print_first_user: bool = True,
-            repeat_batches: int = 1,
-        ) -> Tuple[List[List[int]], dict]:
-            """Generate tokens for the given prompts using greedy decode by default.
+    def generate(
+        self,
+        prompts: Iterable[str],
+        max_new_tokens: int = 32,
+        sampling: SamplingParams | None = None,
+        teacher_forcing=None,
+        early_print_first_user: bool = True,
+        repeat_batches: int = 1,
+    ) -> Tuple[List[List[int]], dict]:
+        """Generate tokens for the given prompts using greedy decode by default.
 
-            early_print_first_user: If True, prints generated tokens for the first user
-                                    at each step. Better for demo visibility.
+        early_print_first_user: If True, prints generated tokens for the first user
+                                at each step. Better for demo visibility.
 
-            repeat_batches: Number of times to repeat the prefill+decode pass. Only the
-                            last pass's tokens are returned; timings aggregate.
+        repeat_batches: Number of times to repeat the prefill+decode pass. Only the
+                        last pass's tokens are returned; timings aggregate.
 
-            Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
-            """
-            # Initialize profiler
-            profiler = BenchmarkProfiler()
-            profiler.start("run")
+        Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
+        """
+        # Initialize profiler
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
 
             prompts = list(prompts)
             num_of_prompts = len(prompts)
