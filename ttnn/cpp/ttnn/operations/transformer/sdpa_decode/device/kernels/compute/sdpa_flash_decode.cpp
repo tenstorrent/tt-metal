@@ -23,6 +23,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.h"
+#include "ttnn/kernel_lib/untilize_helpers.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -548,23 +549,16 @@ void MAIN {
                 // Conditionally use pack_untilize or untilize
                 if constexpr (use_pack_untilize) {
                     pack_untilize_init<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-                } else {
-                    untilize_init(cb_out_accumulate_im);
-                }
-                cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_reserve_back(cb_out_final, out_chunk_tiles);
-                if constexpr (use_pack_untilize) {
+                    cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
+                    cb_reserve_back(cb_out_final, out_chunk_tiles);
                     pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
-                } else {
-                    untilize_block(cb_out_accumulate_im, out_chunk_tiles, cb_out_final);
-                }
-                if constexpr (use_pack_untilize) {
                     pack_untilize_uninit(cb_out_final);
+                    cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
+                    cb_push_back(cb_out_final, out_chunk_tiles);
                 } else {
-                    untilize_uninit(cb_out_final);
+                    compute_kernel_lib::untilize<true, true>(
+                        cb_out_accumulate_im, out_chunk_tiles, cb_out_final, 1, out_chunk_tiles);
                 }
-                cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-                cb_push_back(cb_out_final, out_chunk_tiles);
             } else {
                 // Move output to buffer for the writer
                 move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
