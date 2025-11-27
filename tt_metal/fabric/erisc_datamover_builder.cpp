@@ -76,7 +76,7 @@ namespace {
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
 bool is_fabric_two_erisc_enabled() {
-    auto &mc = tt::tt_metal::MetalContext::instance();
+    auto& mc = tt::tt_metal::MetalContext::instance();
     // Force-disable if the override is present
     bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
     if (force_disable_2_erisc) {
@@ -84,7 +84,7 @@ bool is_fabric_two_erisc_enabled() {
         return false;
     }
 
-    const auto &hal = mc.hal();
+    const auto& hal = mc.hal();
     // by default, enable only single erisc mode for future architectures as well to simplify bringup
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
@@ -248,7 +248,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() ||
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_bw_telemetry() ||
         tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
@@ -757,6 +757,9 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     uint32_t telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
     ct_args.push_back(telemetry_mode);
+
+    uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
+    ct_args.push_back(bw_telemetry_mode);
 
     // Add telemetry buffer address (16B aligned)
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
@@ -1346,11 +1349,10 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         eth_chan_directions::EAST};
 }
 
-
 // Internal implementation for connect_to_downstream_edm
 // Note: this can be deleted after fabric latency tests are ported to new test infrastructure
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
-    FabricDatamoverBuilderBase *downstream_builder, FabricDatamoverBuilderBase *vc1_edm_builder) {
+    FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder) {
     TT_FATAL(
         !this->build_in_worker_connection_mode, "Tried to connect EDM to downstream builder in worker connection mode");
 
@@ -1368,8 +1370,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
         downstream_builder->get_noc_y(),
         ds_dir);
 
-    const auto& fabric_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     // Setup VC0 connection
@@ -1401,12 +1402,12 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
     this->setup_downstream_vc_connection(vc1_edm_builder, ds_index, vc1_send_chan, true);
 }
 
-void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuilderBase *downstream_builder) {
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder) {
     connect_to_downstream_edm_impl(downstream_builder, downstream_builder);
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(
-    FabricDatamoverBuilderBase *downstream_builder, FabricDatamoverBuilderBase *vc1_edm_builder) {
+    FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder) {
     connect_to_downstream_edm_impl(downstream_builder, vc1_edm_builder);
 }
 

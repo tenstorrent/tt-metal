@@ -15,6 +15,11 @@ class IDevice;
 
 namespace tt::tt_metal {
 
+GraphTracker& GraphTracker::instance() {
+    static GraphTracker tracker;
+    return tracker;
+}
+
 bool GraphTracker::is_enabled() const { return (not processors.empty()); }
 
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {

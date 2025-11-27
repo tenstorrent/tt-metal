@@ -252,6 +252,76 @@ void bind_unary_operation(
 }
 
 template <typename unary_operation_t>
+void bind_unary_operation_subcoregrids(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& math,
+    const std::string& range = "",
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "",
+    const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {2}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor. {3}
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
+
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        math,
+        range,
+        supported_dtype,
+        note,
+        example_tensor);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(input_tensor, memory_config, output_tensor, sub_core_grids);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_sqrt_operation(
     py::module& module,
     const unary_operation_t& operation,
@@ -1875,13 +1945,13 @@ void py_module(py::module& module) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_operation(
+    bind_unary_operation_subcoregrids(
         module,
         ttnn::floor,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
+    bind_unary_operation_subcoregrids(
         module,
         ttnn::trunc,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|trunc|(\mathrm{{input\_tensor}}_i))doc",
@@ -1984,7 +2054,7 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
-    bind_unary_operation(
+    bind_unary_operation_subcoregrids(
         module,
         ttnn::ltz,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
