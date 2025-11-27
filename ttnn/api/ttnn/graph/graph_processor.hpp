@@ -84,7 +84,7 @@ private:
     RunMode run_mode = RunMode::NORMAL;
     std::stack<int> current_op_id;
     std::unordered_map<std::int64_t, int> buffer_id_to_counter;
-    std::unordered_map<std::int64_t, int> tensor_id_to_counter;
+    std::unordered_map<std::uint64_t, int> tensor_id_to_counter;
     int last_finished_op_id = -1;
     std::vector<Vertex> graph;
 
