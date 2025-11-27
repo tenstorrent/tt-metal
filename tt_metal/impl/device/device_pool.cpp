@@ -363,8 +363,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
 
-    this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
+    this->wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -635,6 +634,19 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     if (using_fast_dispatch_) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
+}
+
+uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
+    // Return user-configured timeout or default value
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_simulator_enabled()) {
+        return 15000;  // Keep simulator timeout unchanged
+    }
+
+    auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
+
+    // Return user override if set, otherwise use fabric default
+    return timeout.value_or(10000);
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

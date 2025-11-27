@@ -73,3 +73,11 @@ repos:
       files: ^ttnn/.*\.hpp$
       pass_filenames: true
       require_serial: true
+- repo: local
+  hooks:
+    - id: validate-golden-csv-columns
+      name: Validate golden bandwidth CSV column headers
+      entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
+      language: system
+      pass_filenames: false
+      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$

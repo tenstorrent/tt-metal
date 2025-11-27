@@ -6,8 +6,8 @@
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -251,9 +251,17 @@ Tensor concat_impl(
     const unsigned int groups,
     const MemoryConfig& output_mem_config) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
+    for (const auto& input_tensor : input_tensors) {
+        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
+    }
     if (input_tensors.size() == 1) {
-        return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
-            input_tensors[0], output_mem_config)};
+        // Single tensor case - just ensure it has the correct memory config
+        const auto& input = input_tensors[0];
+        if (input.memory_config() != output_mem_config) {
+            return ttnn::clone(input, std::nullopt, output_mem_config, std::nullopt);
+        } else {
+            return input;
+        }
     }
 
     // Handle large number of tensors by splitting into batches
@@ -309,12 +317,14 @@ Tensor concat_impl(
                     "Current concat implementation requires aligned last dim when concatting on last dim");
             }
         }
-        // row major should default to row major and tilized to tilized implementations, but the below loop
-        // turned RM to tilized when possible
-        Layout target_layout = input_tensors[0].layout();
-        // this should be dead code when instantiating layout to match the input
-        for (const auto& input_tensor : input_tensors) {
-            if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        // Determine target layout based on whether all inputs can be tiled
+        // Note: validate() ensures all inputs have the same layout
+        Layout input_layout = input_tensors[0].layout();
+        Layout target_layout = input_layout;
+
+        // If inputs are ROW_MAJOR, check if they can all be converted to TILE
+        if (input_layout == Layout::ROW_MAJOR) {
+            for (const auto& input_tensor : input_tensors) {
                 const auto& input_shape = input_tensor.padded_shape();
                 if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
                     target_layout = Layout::ROW_MAJOR;
@@ -322,25 +332,27 @@ Tensor concat_impl(
                 }
             }
         }
-        std::vector<ttnn::operations::experimental::auto_format::FormatParams> input_format_params;
-        input_format_params.reserve(input_tensors.size());
-        for (const auto& input_tensor : input_tensors) {
-            if (target_layout == Layout::ROW_MAJOR) {
-                input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                    .pad_shape = input_tensor.padded_shape(), .pad_value = 0.0, .target_layout = target_layout});
-            } else {
-                ttnn::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                    input_tensor.padded_shape());
-                input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                    .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
-            }
-        }
 
-        return operation::run_with_autoformat(
-                   ConcatDeviceOperation{normalized_dim, groups, output_mem_config},
-                   {input_tensors},
-                   {input_format_params},
-                   {target_layout})
+        // Format inputs if layout conversion is needed
+        std::vector<Tensor> formatted_tensors = [&]() {
+            if (input_layout == target_layout) {
+                // No formatting needed - inputs already in target layout
+                return input_tensors;
+            } else {
+                // Must be ROW_MAJOR → TILE conversion
+                std::vector<Tensor> formatted_tensors;
+                formatted_tensors.reserve(input_tensors.size());
+                for (const auto& input_tensor : input_tensors) {
+                    auto pad_value = is_floating_point(input_tensor.dtype()) ? PadValue(0.0f) : PadValue(0u);
+                    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+                    formatted_tensors.push_back(ttnn::tilize_with_val_padding(
+                        input_tensor, padded_shape, pad_value, input_tensor.memory_config()));
+                }
+                return formatted_tensors;
+            }
+        }();
+
+        return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {formatted_tensors})
             .at(0);
     }
 }

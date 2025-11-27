@@ -76,6 +76,7 @@ target_sources(
         core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
+        core/graph/levelized_graph.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
@@ -483,6 +484,7 @@ target_sources(
             api/ttnn/graph/graph_query_op_constraints.hpp
             api/ttnn/graph/graph_query_op_runtime.hpp
             api/ttnn/graph/graph_trace_utils.hpp
+            api/ttnn/graph/levelized_graph.hpp
             api/ttnn/mesh_device_operation_adapter.hpp
             api/ttnn/mesh_device_operation_utils.hpp
             api/ttnn/old_infra_device_operation.hpp
@@ -579,7 +581,6 @@ target_link_libraries(
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
         TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::AutoFormat
         TTNN::Ops::Experimental::BcastTo
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
@@ -752,7 +753,6 @@ add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
-add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
