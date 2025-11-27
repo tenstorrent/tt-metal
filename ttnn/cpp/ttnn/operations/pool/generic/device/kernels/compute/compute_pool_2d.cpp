@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -172,12 +172,9 @@ void MAIN {
                 }
             }
             tile_regs_acquire();
-            // starting here check below
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
-                    DPRINT_UNPACK(DPRINT << "A1" << ENDL());
-
                     reconfig_data_format_srca(curr_in_cb_id);
                     copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
@@ -187,7 +184,6 @@ void MAIN {
                     reconfig_data_format_srca(in_idx_cb_id);
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
                     if (last_c_block) {
-                        DPRINT_UNPACK(DPRINT << "B1" << ENDL());
                         cb_pop_front(in_idx_cb_id, 1);
 
                         // update the current index column
@@ -207,7 +203,6 @@ void MAIN {
                             current_idx_col += stride_w;
                             copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                         }
-                        // copy_tile() is being called no matter what in b1
 
                         // we allow overflow here for negative values as this only occurs in padding regions
                         add_int_tile_init();
@@ -225,7 +220,6 @@ void MAIN {
                     max_reduce_with_indices<max_mpwi_kernel_size, ckernel::DataLayout::ROW_MAJOR>(
                         data_dst_idx, index_dst_idx);
                 } else {
-                    // DPRINT_UNPACK(DPRINT << "A2" << ENDL());
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         curr_in_cb_id,
                         curr_scalar_cb_id,
@@ -235,7 +229,6 @@ void MAIN {
                         face_r_dim);
                     for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
-                        // DPRINT_UNPACK(DPRINT << "C1" << ENDL());
                     }
                 }
                 cb_pop_front(curr_in_cb_id, 1);
@@ -265,7 +258,7 @@ void MAIN {
                         // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
                         // to unpack_A_hw_configure.
                         // tensix_sync();
-                        // UNPACK((llk_unpack_A_hw_configure_disaggregated_copy<DST_ACCUM_MODE, StochRndType::None,
+                        // UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None,
                         // false>(
                         //     pre_tilize_cb_id)));
                         tensix_sync();
@@ -275,7 +268,6 @@ void MAIN {
                             TTI_NOP;
                             asm volatile("nop");
                         }
-                        // DPRINT_UNPACK(DPRINT << "nops done" << ENDL());
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
