@@ -57,12 +57,11 @@ class ChannelConnectionWriterAdapter {
 public:
     // Adds downstream noc x/y
     virtual void add_downstream_connection(
-        SenderWorkerAdapterSpec const& adapter_spec,
+        const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
-        bool is_2D_routing,
-        bool is_vc1) = 0;
+        bool is_2D_routing) = 0;
 
     virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
     virtual void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const = 0;
@@ -97,8 +96,7 @@ public:
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
-        bool is_2D_routing,
-        bool is_vc1) override;
+        bool is_2D_routing) override;
 
     void add_local_tensix_connection(
         const SenderWorkerAdapterSpec& adapter_spec,

@@ -28,8 +28,7 @@ public:
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
-        bool is_galaxy = false,
-        const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{});
+        bool is_galaxy = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)

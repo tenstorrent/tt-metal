@@ -22,8 +22,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     uint32_t inbound_vc_idx,
     eth_chan_directions downstream_direction,
     CoreCoord downstream_noc_xy,
-    bool is_2D_routing,
-    bool /*is_vc1*/) {
+    bool is_2D_routing) {
     downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
         {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 

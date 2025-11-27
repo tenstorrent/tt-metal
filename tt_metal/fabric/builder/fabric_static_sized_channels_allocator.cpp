@@ -149,8 +149,8 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         // for fabric with tensix extension, only check the vc1 sender channel and worker channel, other
         // channels are skipped
         uint32_t target_channel = get_worker_connected_sender_channel();
-        uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
-        return (idx != target_channel && idx != vc1_target_channel && has_tensix_extension);
+        // uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
+        return (idx != target_channel && /*idx != vc1_target_channel &&*/ has_tensix_extension);
     };
 
     for (uint32_t i = 0; i < num_used_sender_channels; i++) {
@@ -265,7 +265,6 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 num_sender_channels = this->num_sender_channels_with_tensix_config_deadlock_avoidance;
             }
             uint32_t target_channel = get_worker_connected_sender_channel();
-            uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
             size_t default_num_sender_buffer_slots;
             size_t default_num_receiver_buffer_slots;
             // get the default buffer slots
@@ -277,9 +276,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 default_num_receiver_buffer_slots);
             // set default buffer slots.
             num_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
-            num_sender_buffer_slots[vc1_target_channel] = default_num_sender_buffer_slots;
             num_remote_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
-            num_remote_sender_buffer_slots[vc1_target_channel] = default_num_sender_buffer_slots;
             num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
             num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
             return;
