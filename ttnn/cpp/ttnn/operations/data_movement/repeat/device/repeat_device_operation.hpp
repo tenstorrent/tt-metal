@@ -38,5 +38,12 @@ struct RepeatDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
+    // the compiler will take care of invoke
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        const ttnn::SmallVector<uint32_t>& repetition_vector,
+        const uint32_t m_num_repeats,
+        const bool m_is_last_dim,
+        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
 }  // namespace ttnn

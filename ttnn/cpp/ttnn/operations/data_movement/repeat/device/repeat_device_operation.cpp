@@ -111,4 +111,16 @@ tt::tt_metal::operation::ProgramWithCallbacks RepeatDeviceOperation::create_prog
     return operations::data_movement::repeat::rm_repeat_program_factory(
         input_tensors.at(0), m_num_repeats, output_tensors.at(0), m_is_last_dim);
 }
+
+std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
+    const Tensor& input,
+    const ttnn::SmallVector<uint32_t>& repetition_vector,
+    const uint32_t m_num_repeats,
+    const bool m_is_last_dim,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    return {
+        operation_attributes_t{
+            .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
+        tensor_args_t{.input = input, .repetition_vector = repetition_vector}};
+}
 }  // namespace ttnn
