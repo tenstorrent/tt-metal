@@ -384,4 +384,75 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead) 
     }
 }
 
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteDirectedIdeal) {
+    // Test ID
+    uint32_t test_id = 611;
+
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+
+    // Furthest cores from master
+    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+
+    // Parameters
+    // Test config
+    unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .sub0_core_coord = sub0_core_coord,
+        .sub1_core_coord = sub1_core_coord,
+        .num_of_trids = 15,
+        .pages_per_transaction = 1024,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        // .read_after_write = false,
+    };
+
+    // Run
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadDirectedIdeal) {
+    // Test ID
+    uint32_t test_id = 612;
+
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+
+    // Furthest cores from master
+    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+
+    // Parameters
+    // Test config
+    unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .sub0_core_coord = sub0_core_coord,
+        .sub1_core_coord = sub1_core_coord,
+        .num_of_trids = 15,
+        .pages_per_transaction = 1024,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .read_after_write = false,
+    };
+
+    // Run
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
 }  // namespace tt::tt_metal
