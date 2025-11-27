@@ -6,6 +6,7 @@ from typing import Tuple, List
 import pytest
 import cv2
 import torch
+import numpy as np
 from loguru import logger
 import ttnn
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
@@ -30,6 +31,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     save_predictions,
     preprocess_input_params,
 )
+from models.experimental.panoptic_deeplab.tt.tt_visualization import TtDeeplabV3PlusVisualization
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
 )
@@ -141,6 +143,8 @@ def run_panoptic_deeplab_demo_pipeline(
     target_size: Tuple[int, int] = (512, 1024),
     center_threshold: float = 0.05,
     model_category=DEEPLAB_V3_PLUS,
+    use_ttnn_visualization: bool = False,
+    use_softmax_alternative: bool = False,
 ):
     """
     Run Panoptic DeepLab inference on multiple images using pipeline with TracedModelExecutor.
@@ -481,16 +485,100 @@ def run_panoptic_deeplab_demo_pipeline(
                 nms_kernel=11,
             )
         else:
-            import time
+            if use_ttnn_visualization:
+                # Use TTNN-accelerated visualization module
+                import time
 
-            start_time = time.time()
-            panoptic_vis_ttnn, panoptic_info_ttnn = create_deeplab_v3plus_visualization(
-                semantic_np_ttnn,
-                original_image=original_image,
-            )
-            end_time = time.time()
-            visualization_duration_us = (end_time - start_time) * 1e6
-            logger.info(f"create_deeplab_v3plus_visualization() duration: {visualization_duration_us:.2f} μs")
+                start_time = time.time()
+
+                # Initialize visualization module if not already done
+                cache_key = f"_viz_module_{use_softmax_alternative}"
+                if not hasattr(run_panoptic_deeplab_demo_pipeline, cache_key):
+                    setattr(
+                        run_panoptic_deeplab_demo_pipeline,
+                        cache_key,
+                        TtDeeplabV3PlusVisualization(
+                            device=device,
+                            num_classes=19,
+                            alpha=0.6,
+                            dtype=ttnn.bfloat16,
+                            use_softmax_alternative=use_softmax_alternative,
+                        ),
+                    )
+                viz_module = getattr(run_panoptic_deeplab_demo_pipeline, cache_key)
+
+                # Convert semantic logits back to TTNN tensor (NHWC format)
+                # semantic_np_ttnn is [H, W, C], we need [1, H, W, C] in NHWC
+                h, w, c = semantic_np_ttnn.shape
+                semantic_pred_ttnn = ttnn.from_torch(
+                    torch.from_numpy(semantic_np_ttnn).unsqueeze(0).permute(0, 3, 1, 2),  # [1, C, H, W]
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                # Convert to NHWC: [1, C, H, W] -> [1, H, W, C]
+                semantic_pred_ttnn = ttnn.permute(semantic_pred_ttnn, (0, 2, 3, 1))
+
+                # Convert original image to TTNN tensor if provided
+                original_image_ttnn = None
+                if original_image is not None:
+                    # original_image is [H, W, 3] in uint8, normalize to [0, 1] and convert to [1, H, W, 3]
+                    original_image_normalized = original_image.astype(np.float32) / 255.0
+                    original_image_ttnn = ttnn.from_torch(
+                        torch.from_numpy(original_image_normalized).unsqueeze(0).permute(0, 3, 1, 2),  # [1, 3, H, W]
+                        device=device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    # Convert to NHWC: [1, 3, H, W] -> [1, H, W, 3]
+                    original_image_ttnn = ttnn.permute(original_image_ttnn, (0, 2, 3, 1))
+
+                # Run visualization with softmax alternative if requested
+                vis_image_ttnn, panoptic_info_ttnn = viz_module.forward(
+                    semantic_pred=semantic_pred_ttnn,
+                    original_image=original_image_ttnn,
+                )
+
+                # Convert visualization output back to numpy
+                vis_image_torch = ttnn.to_torch(vis_image_ttnn).float().cpu().numpy()
+                # vis_image_torch is [1, H, W, 3], convert to [H, W, 3] and scale to [0, 255]
+                vis_image_np = (vis_image_torch.squeeze(0) * 255.0).astype(np.uint8)
+                panoptic_vis_ttnn = vis_image_np
+
+                # Convert panoptic_info format if needed
+                if isinstance(panoptic_info_ttnn, dict):
+                    panoptic_info_ttnn = panoptic_info_ttnn
+                else:
+                    panoptic_info_ttnn = {
+                        "mode": DEEPLAB_V3_PLUS,
+                        "num_classes": len(np.unique(vis_image_np)),
+                        "class_distribution": {},
+                    }
+
+                end_time = time.time()
+                visualization_duration_us = (end_time - start_time) * 1e6
+                logger.info(
+                    f"TTNN visualization (softmax_alternative={use_softmax_alternative}) duration: {visualization_duration_us:.2f} μs"
+                )
+
+                # Cleanup
+                ttnn.deallocate(semantic_pred_ttnn)
+                if original_image_ttnn is not None:
+                    ttnn.deallocate(original_image_ttnn)
+                ttnn.deallocate(vis_image_ttnn)
+            else:
+                import time
+
+                start_time = time.time()
+                panoptic_vis_ttnn, panoptic_info_ttnn = create_deeplab_v3plus_visualization(
+                    semantic_np_ttnn,
+                    original_image=original_image,
+                )
+                end_time = time.time()
+                visualization_duration_us = (end_time - start_time) * 1e6
+                logger.info(f"create_deeplab_v3plus_visualization() duration: {visualization_duration_us:.2f} μs")
 
         # Save results
         image_name = os.path.basename(image_path)
@@ -513,10 +601,22 @@ def run_panoptic_deeplab_demo_pipeline(
     ],
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
-def test_panoptic_deeplab_demo_pipeline(device, output_dir, model_category, model_location_generator):
+@pytest.mark.parametrize("use_ttnn_visualization", [True])
+@pytest.mark.parametrize("use_softmax_alternative", [True])
+def test_panoptic_deeplab_demo_pipeline(
+    device, output_dir, model_category, use_ttnn_visualization, use_softmax_alternative, model_location_generator
+):
     skip_if_not_blackhole_20_cores(device)
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )
     # Process all images using pipeline
-    run_panoptic_deeplab_demo_pipeline(device, images, weights_path, output_dir, model_category=model_category)
+    run_panoptic_deeplab_demo_pipeline(
+        device,
+        images,
+        weights_path,
+        output_dir,
+        model_category=model_category,
+        use_ttnn_visualization=use_ttnn_visualization,
+        use_softmax_alternative=use_softmax_alternative,
+    )
