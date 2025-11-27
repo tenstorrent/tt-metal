@@ -28,7 +28,12 @@ Address a specific PR review comment, make code changes, and update the tracking
 4. **Update the tracking file**
    - Change status from `📝 TODO` to `⚠️ ADDRESSED, TO MERGE AND LEAVE COMMENT`
    - Update the context to show the fixed code
-   - Add `**My comment:** {lowercase description of what was done}`
+   - Add `**My comment:**` with the GitHub reply text using this format:
+     - `fixed: {lowercase description}` - for straightforward fixes
+     - `fixed with *:` followed by bullet list - when additional context/explanation is needed
+     - Use `IIUC` (If I Understand Correctly) when clarifying understanding or politely disagreeing
+     - Use bullet lists for multiple items
+     - Keep descriptions lowercase and concise
 
 5. **Commit when approved**
    - Use `fix:` prefix for the commit message
