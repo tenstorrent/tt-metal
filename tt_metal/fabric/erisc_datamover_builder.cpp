@@ -911,20 +911,14 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-        0,  // DELETEME: #33360 vc1_has_different_downstream_dest
         this->has_tensix_extension,
         this->enable_first_level_ack};
 
     const std::vector<uint32_t> main_args_part2 = {
-        true,  // DELETEME: #33360 config.skip_receiver_channel_1_connection,
-        true,  // DELETEME: #33360 config.skip_sender_channel_1_connection,
-        true,  // DELETEME: #33360 config.skip_sender_vc1_channel_connection,
-
         config.sender_channels_worker_conn_info_base_address[0],
         config.sender_channels_worker_conn_info_base_address[1],
         config.sender_channels_worker_conn_info_base_address[2],
         config.sender_channels_worker_conn_info_base_address[3],
-        0,  // DELETEME: #33360 config.sender_channels_worker_conn_info_base_address[4],
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,

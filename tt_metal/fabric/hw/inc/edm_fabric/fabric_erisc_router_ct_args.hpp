@@ -129,13 +129,12 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // This should be renamed to channel_slot_size_bytes to avoid confusion/ambiguity:
 //   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
-constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
+constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
 constexpr uint32_t remote_vc1_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 constexpr size_t remote_worker_sender_channel =
@@ -240,20 +239,14 @@ static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_2_IDX) == ANOTHER_SPECIAL_TAG_2,
     "ANOTHER_SPECIAL_TAG_2 not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
 
-constexpr size_t SKIP_CHANNEL_IDX = ANOTHER_SPECIAL_TAG_2_IDX + 1;
-constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
-constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
-constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
-
-constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
+constexpr size_t MAIN_CT_ARGS_IDX_1 = ANOTHER_SPECIAL_TAG_2_IDX + 1;
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 0);
 constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
 constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
 constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
-constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 5;
+constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 4;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
