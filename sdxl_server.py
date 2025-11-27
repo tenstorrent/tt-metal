@@ -2,8 +2,11 @@
 #
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+import os
+import sys
 import uuid
 import time
+import argparse
 import multiprocessing as mp
 from contextlib import asynccontextmanager
 from typing import Optional, List
@@ -13,6 +16,22 @@ from sdxl_config import SDXLConfig
 from sdxl_worker import device_worker_process
 from utils.logger import setup_logger
 from utils.image_utils import pil_to_base64
+from utils.cache_utils import validate_cache, log_cache_info
+
+
+def parse_args():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(description="SDXL Inference Server")
+    parser.add_argument("--dev", action="store_true", help="Enable dev mode (1 worker, fast warmup)")
+    parser.add_argument("--workers", type=int, help="Override number of workers")
+    parser.add_argument("--steps", type=int, help="Override inference steps for warmup")
+    return parser.parse_args()
+
+
+# Parse arguments and set environment variables before config creation
+args = parse_args()
+if args.dev:
+    os.environ["SDXL_DEV_MODE"] = "true"
 
 
 # Request/Response models
@@ -35,7 +54,16 @@ class ImageResponse(BaseModel):
 
 # Global state
 config = SDXLConfig()
+
+# Apply CLI overrides
+if args.workers is not None:
+    config.num_workers = args.workers
+if args.steps is not None:
+    config.num_inference_steps = args.steps
+
 logger = setup_logger("SDXLServer")
+if config.dev_mode:
+    logger.info("DEV MODE ENABLED: Single worker, reduced warmup steps")
 task_queue = None
 result_queue = None
 error_queue = None
@@ -53,46 +81,85 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting SDXL server...")
 
+    # Log cache information
+    log_cache_info(logger)
+
+    # Validate cache integrity
+    is_valid, issues = validate_cache()
+    if not is_valid:
+        logger.warning("Cache integrity issues detected:")
+        for issue in issues:
+            logger.warning(f"  - {issue}")
+        logger.warning("If startup fails, consider running with --clear-cache")
+    else:
+        logger.info("Cache validation passed")
+
     # Create queues
     task_queue = mp.Queue(maxsize=config.max_queue_size)
     result_queue = mp.Queue()
     warmup_signal_queue = mp.Queue()
+    kernel_ready_queue = mp.Queue()  # Signal for kernel compilation complete (allows overlapped startup)
     error_queue = mp.Queue()
 
-    # Start workers ONE AT A TIME to avoid JIT cache corruption
-    # All workers compile to the same cache directory, so concurrent compilation causes errors
-    logger.info(f"Starting {config.num_workers} worker(s) sequentially...")
+    # Start workers with OVERLAPPED initialization
+    # Kernel compilation must be sequential (writes to shared cache)
+    # But program cache warmup can overlap (per-device, no shared writes)
+    # This reduces startup from ~18-20 min to ~10-12 min for 4 workers
+    logger.info(f"Starting {config.num_workers} worker(s) with overlapped initialization...")
 
     for i in range(config.num_workers):
         logger.info(f"Starting worker {i}...")
         worker = mp.Process(
             target=device_worker_process,
-            args=(i, task_queue, result_queue, warmup_signal_queue, error_queue, config),
+            args=(i, task_queue, result_queue, warmup_signal_queue, kernel_ready_queue, error_queue, config),
             daemon=False,
         )
         worker.start()
         workers.append(worker)
 
-        # Wait for THIS worker to complete warmup before starting next
-        logger.info(f"Waiting for worker {i} to complete warmup (this may take 5-10 minutes for first worker)...")
-        timeout = time.time() + 600  # 10 minute timeout per worker
-        warmup_received = False
+        # Wait for kernel compilation (not full warmup) before starting next worker
+        # This allows overlapping program cache warmup between workers
+        if i < config.num_workers - 1:  # Don't wait after last worker
+            logger.info(f"Waiting for worker {i} kernel compilation (next worker can start after)...")
+            timeout = time.time() + 300  # 5 minute timeout for kernel compilation
+            kernel_ready_received = False
 
-        while time.time() < timeout:
-            try:
-                worker_id = warmup_signal_queue.get(timeout=1)
-                logger.info(f"Worker {worker_id} warmup complete ({i + 1}/{config.num_workers})")
-                warmup_received = True
-                break
-            except:
-                # Check if worker crashed
-                if not worker.is_alive():
-                    logger.error(f"Worker {i} died during warmup")
-                    raise RuntimeError(f"Worker {i} died during warmup")
+            while time.time() < timeout:
+                try:
+                    worker_id = kernel_ready_queue.get(timeout=1)
+                    logger.info(f"Worker {worker_id} kernel compilation complete, starting next worker...")
+                    kernel_ready_received = True
+                    break
+                except:
+                    # Check if worker crashed
+                    if not worker.is_alive():
+                        logger.error(f"Worker {i} died during kernel compilation")
+                        raise RuntimeError(f"Worker {i} died during kernel compilation")
 
-        if not warmup_received:
-            logger.error(f"Worker {i} warmup timeout!")
-            raise RuntimeError(f"Worker {i} warmup timeout")
+            if not kernel_ready_received:
+                logger.error(f"Worker {i} kernel compilation timeout!")
+                raise RuntimeError(f"Worker {i} kernel compilation timeout")
+
+    # Now wait for ALL workers to complete full warmup
+    logger.info("All workers started. Waiting for warmup completion...")
+    warmups_received = 0
+    timeout = time.time() + 600  # 10 minute timeout for remaining warmups
+
+    while warmups_received < config.num_workers and time.time() < timeout:
+        try:
+            worker_id = warmup_signal_queue.get(timeout=1)
+            warmups_received += 1
+            logger.info(f"Worker {worker_id} warmup complete ({warmups_received}/{config.num_workers})")
+        except:
+            # Check if any worker crashed
+            for idx, w in enumerate(workers):
+                if not w.is_alive():
+                    logger.error(f"Worker {idx} died during warmup")
+                    raise RuntimeError(f"Worker {idx} died during warmup")
+
+    if warmups_received < config.num_workers:
+        logger.error(f"Warmup timeout! Only {warmups_received}/{config.num_workers} workers ready")
+        raise RuntimeError(f"Warmup timeout")
 
     logger.info("All workers ready. Server is accepting requests.")
 

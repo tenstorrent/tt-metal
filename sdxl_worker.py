@@ -38,6 +38,7 @@ def device_worker_process(
     task_queue: mp.Queue,
     result_queue: mp.Queue,
     warmup_signal_queue: mp.Queue,
+    kernel_ready_queue: mp.Queue,
     error_queue: mp.Queue,
     config: SDXLConfig,
 ):
@@ -49,6 +50,7 @@ def device_worker_process(
         task_queue: Queue for incoming tasks (task_id, request dict)
         result_queue: Queue for results (task_id, images, inference_time)
         warmup_signal_queue: Queue to signal warmup completion
+        kernel_ready_queue: Queue to signal kernel compilation complete (for overlapped startup)
         error_queue: Queue for error reporting
         config: SDXL configuration
 
@@ -64,7 +66,7 @@ def device_worker_process(
         # Initialize runner
         runner = SDXLRunner(worker_id, config)
         runner.initialize_device()
-        runner.load_model()
+        runner.load_model(kernel_ready_queue=kernel_ready_queue)
 
         # Signal warmup complete
         warmup_signal_queue.put(worker_id)
@@ -97,7 +99,10 @@ def device_worker_process(
                 # Normal timeout - no task available, just try again
                 continue
             except Exception as e:
+                import traceback
+
                 logger.error(f"Error processing task: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 error_queue.put({"worker_id": worker_id, "error": str(e)})
 
         # Cleanup

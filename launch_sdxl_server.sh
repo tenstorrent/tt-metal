@@ -46,6 +46,10 @@ export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7"
 # Using local cache instead of /mnt/MLPerf which requires special permissions
 export HF_HOME="${HOME}/.cache/huggingface"
 
+# Enable persistent caching for faster subsequent startups
+export TT_METAL_CACHE="${HOME}/.cache/tt_metal_sdxl"
+export TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true, "model_cache_path": "'${HOME}'/.cache/ttnn/models"}'
+
 # Performance settings
 export TT_MM_THROTTLE_PERF=5
 
@@ -95,12 +99,51 @@ except Exception as e:
     deactivate
 fi
 
+# Parse --clear-cache flag (must happen before server starts)
+for arg in "$@"; do
+    if [ "$arg" = "--clear-cache" ]; then
+        echo ""
+        echo "Clearing caches..."
+        rm -rf "${HOME}/.cache/tt_metal_sdxl"
+        rm -rf "${HOME}/.cache/ttnn/models"
+        echo "✓ Caches cleared"
+        break
+    fi
+done
+
+# Parse --dev flag
+DEV_MODE=false
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        DEV_MODE=true
+        export SDXL_DEV_MODE=true
+        export TT_VISIBLE_DEVICES="0"
+        export TT_METAL_VISIBLE_DEVICES="0"
+        echo ""
+        echo "*** DEV MODE: Single worker, fast startup ***"
+        break
+    fi
+done
+
+# Filter out --clear-cache from arguments (handled by this script)
+PYTHON_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" != "--clear-cache" ]; then
+        PYTHON_ARGS+=("$arg")
+    fi
+done
+
 # Start server
 echo ""
-echo "Starting SDXL server..."
-echo "This will take 5-10 minutes for initial warmup."
+if [ "$DEV_MODE" = "true" ]; then
+    echo "Starting SDXL server in DEV MODE..."
+    echo "This will take 5-8 minutes for initial warmup."
+else
+    echo "Starting SDXL server..."
+    echo "This will take 5-10 minutes for initial warmup."
+fi
 echo "Server will be ready when you see: 'All workers ready. Server is accepting requests.'"
 echo "Press Ctrl+C to stop the server."
 echo ""
 
-python "${TT_METAL_HOME}/sdxl_server.py"
+"${TT_METAL_HOME}/python_env/bin/python" "${TT_METAL_HOME}/sdxl_server.py" "${PYTHON_ARGS[@]}"

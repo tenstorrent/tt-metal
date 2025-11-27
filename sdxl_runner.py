@@ -68,8 +68,13 @@ class SDXLRunner:
         self.logger.info(f"Device initialized with mesh shape {self.config.device_mesh_shape}")
         return self.ttnn_device
 
-    def load_model(self):
-        """Load HuggingFace pipeline and create TtSDXLPipeline with warmup"""
+    def load_model(self, kernel_ready_queue=None):
+        """Load HuggingFace pipeline and create TtSDXLPipeline with warmup
+
+        Args:
+            kernel_ready_queue: Optional queue to signal when kernel compilation is complete
+                               (allows next worker to start before program cache warmup finishes)
+        """
         self.logger.info("Loading SDXL model...")
 
         # Load torch pipeline (auto-downloads if not cached)
@@ -100,6 +105,12 @@ class SDXLRunner:
         # Compile text encoders
         self.logger.info("Compiling text encoders...")
         self.tt_sdxl.compile_text_encoding()
+
+        # Signal that kernel compilation is complete - next worker can start
+        # Program cache warmup below can run in parallel with other workers
+        if kernel_ready_queue is not None:
+            self.logger.info(f"Worker {self.worker_id} kernel compilation complete, signaling...")
+            kernel_ready_queue.put(self.worker_id)
 
         # Warmup inference (1 step)
         self.logger.info("Performing warmup inference...")
@@ -138,8 +149,13 @@ class SDXLRunner:
         # Encode prompts
         prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(prompts, negative_prompts)
 
-        # Generate tensors
-        tt_latents, tt_prompts, tt_texts = self.tt_sdxl.generate_input_tensors(prompt_embeds, text_embeds)
+        # Extract seed from request for reproducibility
+        seed = requests[0].get("seed")
+
+        # Generate tensors with seed
+        tt_latents, tt_prompts, tt_texts = self.tt_sdxl.generate_input_tensors(
+            prompt_embeds, text_embeds, start_latent_seed=seed
+        )
 
         # Process batch
         images = []
@@ -155,6 +171,11 @@ class SDXLRunner:
 
     def close_device(self):
         """Close device and cleanup"""
+        # Release traces BEFORE closing device to prevent segfault
+        if self.tt_sdxl:
+            self.logger.info("Releasing traces before device closure")
+            self.tt_sdxl.release_traces()
+
         if self.ttnn_device:
             self.logger.info("Closing mesh device")
             ttnn.close_mesh_device(self.ttnn_device)

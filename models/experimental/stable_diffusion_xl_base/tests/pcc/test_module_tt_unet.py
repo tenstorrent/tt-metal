@@ -136,6 +136,7 @@ def run_unet_model(
         encoder_hidden_states=ttnn_encoder_tensor,
         time_ids=ttnn_added_cond_kwargs["time_ids"],
         text_embeds=ttnn_added_cond_kwargs["text_embeds"],
+        batch_size=B,
     )
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor.cpu())
@@ -171,6 +172,7 @@ def run_unet_model(
             encoder_hidden_states=ttnn_encoder_tensor,
             time_ids=ttnn_added_cond_kwargs["time_ids"],
             text_embeds=ttnn_added_cond_kwargs["text_embeds"],
+            batch_size=B,
         )
         ttnn.deallocate(ttnn_input_tensor)
         ttnn.deallocate(ttnn_output_tensor)

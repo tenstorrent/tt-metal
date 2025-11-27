@@ -483,6 +483,7 @@ def run_tt_iteration(
         encoder_hidden_states=ttnn_prompt_embeds,
         time_ids=time_ids,
         text_embeds=text_embeds,
+        batch_size=B,
     )
 
     return ttnn_noise_pred, output_shape
@@ -526,6 +527,14 @@ def run_tt_image_gen(
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
             for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
+                # Extract and reshape text_embeds for this slice
+                if not use_cfg_parallel:
+                    text_embeds_slice = tt_text_embeds[unet_slice]
+                    # Ensure correct shape [1, 1280] by reshaping
+                    text_embeds_slice = ttnn.reshape(text_embeds_slice, (1, 1280))
+                else:
+                    text_embeds_slice = tt_text_embeds
+
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
                     tt_scheduler,
@@ -533,7 +542,7 @@ def run_tt_image_gen(
                     input_shape,
                     tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
                     tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
-                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
+                    text_embeds_slice,
                 )
 
                 unet_outputs.append(noise_pred)

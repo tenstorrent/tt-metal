@@ -56,7 +56,7 @@ class TtSDXLPipeline(LightweightModule):
         ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
 
         self.ttnn_device = ttnn_device
-        self.cpu_device = "cpu"
+        self.cpu_device = torch.device("cpu")
         self.batch_size = (
             list(self.ttnn_device.shape)[1] if pipeline_config.use_cfg_parallel else ttnn_device.get_num_devices()
         )
@@ -67,6 +67,7 @@ class TtSDXLPipeline(LightweightModule):
         self.image_processing_compiled = False
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
+        self._traces_released = False  # Track if traces have been released for safe cleanup
 
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
@@ -281,10 +282,10 @@ class TtSDXLPipeline(LightweightModule):
         prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
         all_prompt_embeds_torch = torch.cat(
-            [torch.stack(negative_prompt_embeds, dim=0), torch.stack(prompt_embeds, dim=0)], dim=1
+            [torch.cat(negative_prompt_embeds, dim=0), torch.cat(prompt_embeds, dim=0)], dim=0
         )
         torch_add_text_embeds = torch.cat(
-            [torch.stack(negative_pooled_prompt_embeds, dim=0), torch.stack(pooled_prompt_embeds, dim=0)], dim=1
+            [torch.cat(negative_pooled_prompt_embeds, dim=0), torch.cat(pooled_prompt_embeds, dim=0)], dim=0
         )
 
         profiler.end("encode_prompts")
@@ -298,6 +299,7 @@ class TtSDXLPipeline(LightweightModule):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
+        start_latent_seed: int = None,
     ):
         # Generate user input tensors for the TT model.
 
@@ -309,6 +311,12 @@ class TtSDXLPipeline(LightweightModule):
         height = width = 1024
         assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
 
+        # Create generator from seed if provided for reproducibility
+        generator = None
+        if start_latent_seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(start_latent_seed)
+
         latents = self.torch_pipeline.prepare_latents(
             1,
             num_channels_latents,
@@ -316,7 +324,7 @@ class TtSDXLPipeline(LightweightModule):
             width,
             all_prompt_embeds_torch.dtype,
             self.cpu_device,
-            None,
+            generator,
             None,
         )
 
@@ -355,6 +363,8 @@ class TtSDXLPipeline(LightweightModule):
             tt_prompt_embeds=tt_prompt_embeds,
             tt_text_embeds=tt_add_text_embeds,
             tt_time_ids=torch_add_time_ids,
+            all_prompt_embeds_torch=all_prompt_embeds_torch,
+            torch_add_text_embeds=torch_add_text_embeds,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_latents")
@@ -370,10 +380,8 @@ class TtSDXLPipeline(LightweightModule):
 
         logger.info("Preparing input tensors for TT model...")
         profiler.start("prepare_input_tensors")
-        device_tensors = [self.tt_latents_device, self.tt_prompt_embeds_device, self.tt_text_embeds_device]
-
-        for host_tensor, device_tensor in zip(host_tensors, device_tensors):
-            ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+        # Only copy latents, prompt/text embeds are already on device
+        ttnn.copy_host_to_device_tensor(host_tensors[0], self.tt_latents_device)
 
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
@@ -465,7 +473,9 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("load_tt_componenets")
 
-    def __allocate_device_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
+    def __allocate_device_tensors(
+        self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids, all_prompt_embeds_torch, torch_add_text_embeds
+    ):
         # Allocation of device tensors for the input data.
         if not self.allocated_device_tensors:
             profiler.start("allocate_input_tensors")
@@ -478,20 +488,24 @@ class TtSDXLPipeline(LightweightModule):
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.tt_prompt_embeds_device = ttnn.allocate_tensor_on_device(
-                tt_prompt_embeds[0].shape,
-                tt_prompt_embeds[0].dtype,
-                tt_prompt_embeds[0].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
+            # Create device tensor with mesh mapper (like tt_time_ids)
+            self.tt_prompt_embeds_device = ttnn.from_torch(
+                all_prompt_embeds_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
             )
 
-            self.tt_text_embeds_device = ttnn.allocate_tensor_on_device(
-                tt_text_embeds[0].shape,
-                tt_text_embeds[0].dtype,
-                tt_text_embeds[0].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
+            # Create device tensor with mesh mapper (like tt_time_ids)
+            self.tt_text_embeds_device = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
             )
 
             self.tt_time_ids_device = ttnn.from_torch(
@@ -517,6 +531,26 @@ class TtSDXLPipeline(LightweightModule):
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
             for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+
+            # Update prompt_embeds
+            tt_prompt_embeds_host = ttnn.from_torch(
+                all_prompt_embeds_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
+            for host_tensor, device_tensor in zip(tt_prompt_embeds_host, self.tt_prompt_embeds_device):
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+
+            # Update text_embeds
+            tt_add_text_embeds_host = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
+            for host_tensor, device_tensor in zip(tt_add_text_embeds_host, self.tt_text_embeds_device):
                 ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
@@ -567,7 +601,7 @@ class TtSDXLPipeline(LightweightModule):
     def __trace_image_processing(self):
         # Helper method for image processing trace capture.
 
-        self.__release_trace()
+        self.release_traces()  # Release any existing traces before capturing new ones
 
         logger.info("Capturing model trace...")
         profiler.start("capture_model_trace")
@@ -594,9 +628,17 @@ class TtSDXLPipeline(LightweightModule):
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
+        self._traces_released = False  # New traces captured, reset flag
 
-    def __release_trace(self):
-        # Helper method for trace release.
+    def release_traces(self):
+        """Release captured traces before device cleanup.
+
+        This method is safe to call multiple times - it tracks release state
+        to prevent double-release errors and segfaults during shutdown.
+        """
+        if self._traces_released:
+            return  # Already released, skip to prevent segfault
+
         if self.pipeline_config.capture_trace and hasattr(self, "tid") and self.tid is not None:
             ttnn.release_trace(self.ttnn_device, self.tid)
             delattr(self, "tid")
@@ -605,8 +647,15 @@ class TtSDXLPipeline(LightweightModule):
             ttnn.release_trace(self.ttnn_device, self.tid_vae)
             delattr(self, "tid_vae")
 
+        self._traces_released = True
+
     def forward(self, *args, **kwargs):
         raise NotImplementedError("Use individual methods for text encoding and image generation.")
 
     def __del__(self):
-        self.__release_trace()
+        # Safety fallback - release_traces() should be called explicitly before device closure
+        # This is a last-resort cleanup that may fail if device is already closed
+        try:
+            self.release_traces()
+        except Exception:
+            pass  # Ignore errors during destruction - device may already be closed
