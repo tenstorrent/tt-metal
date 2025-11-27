@@ -2,13 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/buffer.hpp>
-
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
-
-#include "impl/buffers/circular_buffer_config.hpp"
 
 namespace tt::tt_metal {
 
@@ -63,30 +59,30 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     // Optional shadow buffer for dynamically allocated CBs.
     auto& ctx = LightMetalCaptureContext::get();
     auto shadow_buf_global_id_offset =
-        config.impl()->shadow_global_buffer
-            ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(config.impl()->shadow_global_buffer))
+        config.shadow_global_buffer
+            ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(config.shadow_global_buffer))
             : 0;
 
     auto globally_allocated_address =
-        config.impl()->globally_allocated_address()
-            ? flatbuffer::CreateUint32Optional(builder, *config.impl()->globally_allocated_address())
+        config.globally_allocated_address()
+            ? flatbuffer::CreateUint32Optional(builder, *config.globally_allocated_address())
             : 0;
 
     // Create the FlatBuffer object
     return flatbuffer::CreateCircularBufferConfig(
         builder,
-        config.impl()->total_size(),
+        config.total_size(),
         globally_allocated_address,
-        create_fb_vec_of_structs(config.impl()->data_formats(), flatbuffer::CBConfigDataFormat{}),
-        create_fb_vec_of_structs(config.impl()->page_sizes(), flatbuffer::CBConfigPageSize{}),
-        create_fb_vec_of_structs(config.impl()->tiles(), flatbuffer::CBConfigTile{}),
+        create_fb_vec_of_structs(config.data_formats(), flatbuffer::CBConfigDataFormat{}),
+        create_fb_vec_of_structs(config.page_sizes(), flatbuffer::CBConfigPageSize{}),
+        create_fb_vec_of_structs(config.tiles(), flatbuffer::CBConfigTile{}),
         shadow_buf_global_id_offset,
-        create_fb_vec_of_uint8(config.impl()->buffer_indices()),
-        create_fb_vec_of_uint8(config.impl()->local_buffer_indices()),
-        create_fb_vec_of_uint8(config.impl()->remote_buffer_indices()),
-        config.impl()->dynamic_cb(),
-        config.impl()->max_size(),
-        config.impl()->buffer_size());
+        create_fb_vec_of_uint8(config.buffer_indices()),
+        create_fb_vec_of_uint8(config.local_buffer_indices()),
+        create_fb_vec_of_uint8(config.remote_buffer_indices()),
+        config.dynamic_cb(),
+        config.max_size(),
+        config.buffer_size());
 }
 
 // TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp

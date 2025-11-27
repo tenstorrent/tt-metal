@@ -23,6 +23,7 @@ ALLOWED_PREFIXES = {
     "fmt",
     "enchantum",
     "nlohmann",
+    "tt-logger",
 }
 
 STD_HEADERS = {
