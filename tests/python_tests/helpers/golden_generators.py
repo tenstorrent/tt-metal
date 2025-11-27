@@ -1317,12 +1317,12 @@ class ReduceGolden:
         return result.view(1024)
 
     def _reduce_row(self, faces, pool_type, data_format):
-        left_half = torch.cat((faces[0], faces[2]), 1)
-        right_half = torch.cat((faces[1], faces[3]), 1)
+        upper_half = torch.cat((faces[0], faces[1]), 1)
+        lower_half = torch.cat((faces[2], faces[3]), 1)
 
         result = torch.zeros(32, 32, dtype=format_dict[data_format])
-        result[0:16, 0] = self._apply_pooling(left_half, pool_type, dim=1).view(16)
-        result[16:32, 0] = self._apply_pooling(right_half, pool_type, dim=1).view(16)
+        result[0:16, 0] = self._apply_pooling(upper_half, pool_type, dim=1).view(16)
+        result[16:32, 0] = self._apply_pooling(lower_half, pool_type, dim=1).view(16)
 
         return result.view(1024)
 
