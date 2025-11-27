@@ -44,6 +44,27 @@ Start a PR fix session by creating a `.fix` branch and collecting all review com
      ---
      ```
 
+5. **Add conventions reminder section** (before "## General PR Comments")
+   ```markdown
+   ## Conventions Reminder (check when editing files)
+
+   ### Copyright Header
+   - Use `© 2025 Tenstorrent AI ULC.` (not "Tenstorrent Inc.")
+   - C++: `// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.`
+   - Python: `# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.`
+   - No empty line between copyright and license
+
+   ### Include Sorting (C++)
+   - Order: local → project → std
+   - Remove unused includes
+
+   ### Const Correctness (C++)
+   - Objects: use `const&` (e.g., `const std::optional<int>& dim`)
+   - Simple types: no `const` for pass-by-value (e.g., `bool keepdim`)
+
+   ---
+   ```
+
 ## Notes
 - The `.fix` branch allows dirty work without triggering CI on every commit
 - `LOCAL:` prefixed commits should NOT be cherry-picked to the PR branch
