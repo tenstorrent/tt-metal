@@ -309,6 +309,7 @@ def prepare_generator_args(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "log_probs": [True] * 32,
             },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
@@ -316,7 +317,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             False,  # enable_trace
-            1,  # num_layers, if None -> defaults to all layers
+            None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
@@ -336,7 +337,7 @@ def prepare_generator_args(
             False,  # stress_test
             True,  # enable_trace
             None,  # num_layers, if None -> defaults to all layers
-            "full",  # performs both prefill and decode
+            "full",  # performs both prefill and decode,
         ),
         (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -997,6 +998,9 @@ def test_demo_text(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
+                log_probs=sampling_params["log_probs"]
+                if "log_probs" in sampling_params
+                else [False] * len(sampling_params["temperature"]),
             )
             if model[0]._supports_on_device_sampling
             else None
@@ -1005,7 +1009,7 @@ def test_demo_text(
             # host sampling only supports single sample param for all users in a batch
             sampling_params["temperature"] = sampling_params["temperature"][0]
             sampling_params["top_p"] = sampling_params["top_p"][0]
-
+            sampling_params["log_probs"] = sampling_params["log_probs"][0]
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
 
@@ -1039,7 +1043,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward_text(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,

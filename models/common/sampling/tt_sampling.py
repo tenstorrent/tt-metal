@@ -55,7 +55,6 @@ class TTSampling(LightweightModule):
         k=None,
         p=None,
         temp=None,
-        calculate_log_probs=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -123,8 +122,8 @@ class TTSampling(LightweightModule):
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(self.vocab_size, self.mesh_device)
 
-    def set_log_probs_mode(self, calculate_log_probs: bool = False):
-        self.calculate_log_probs = calculate_log_probs
+    def set_log_probs_mode(self, enable_log_probs: bool = False):
+        self.log_probs_calculator.enable_log_probs = enable_log_probs
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -191,7 +190,7 @@ class TTSampling(LightweightModule):
             )
             return tt_logits
 
-    def reset_params(self, k, p, temp, calculate_log_probs: bool = None):
+    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -216,8 +215,14 @@ class TTSampling(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
         ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
-        if calculate_log_probs is not None:
-            self.calculate_log_probs.set_log_probs_mode(calculate_log_probs)
+        if enable_log_probs is not None:
+            if isinstance(enable_log_probs, list):
+                # If any of the users in the batch have log_probs enabled,
+                # then whole batch will run log-probs calculation
+                enable_log_probs_result = any(enable_log_probs)
+            else:
+                enable_log_probs_result = enable_log_probs
+            self.log_probs_calculator.set_log_probs_mode(enable_log_probs_result)
 
     def forward(
         self,
@@ -370,7 +375,7 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        if self.calculate_log_probs.do_calculate_log_probs:
+        if self.log_probs_calculator.enable_log_probs:
             self.log_probs_calculator.compute_global_stats(x)
             relevant_logits = self.log_probs_calculator.prepare_relevant_logits(x, tt_out_tok)
             self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(relevant_logits)

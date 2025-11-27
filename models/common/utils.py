@@ -63,6 +63,7 @@ class LogProbsCalculator:
         self.global_exp_sum = None
         self.vocab_size = vocab_size
         self.mesh_device = mesh_device
+        self.enable_log_probs = False  # default to False
 
         # Create mask for each user on each chip.
         batch_size = 32
@@ -101,10 +102,8 @@ class LogProbsCalculator:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        self.calculate_log_probs = False
-
-    def set_log_probs_mode(self, calculate_log_probs: bool = False):
-        self.calculate_log_probs = calculate_log_probs
+    def set_log_probs_mode(self, enable_log_probs: bool = False):
+        self.enable_log_probs = enable_log_probs
 
     def compute_global_stats(
         self,
@@ -158,6 +157,10 @@ class LogProbsCalculator:
         if self.mesh_device.get_num_devices() == 32:
             # TODO: Implement method for Llama 3.70b Galaxy with sub_core_grid support for all the ops
             return None
+
+        if not self.enable_log_probs:
+            return logits_tensor
+
         size_per_device = logits_tensor.shape[-1]
 
         # convert global_idx_tensor to ttnn.TILE_LAYOUT
@@ -209,6 +212,10 @@ class LogProbsCalculator:
         if self.mesh_device.get_num_devices() == 32:
             # TODO: Currently not implemented for 32 devices due sub_core_grid not supported for all the ops
             return self.output_tensor
+
+        if not self.enable_log_probs:
+            return self.output_tensor
+
         if self.global_max is None or self.global_exp_sum is None:
             raise ValueError("Global max or global exp sum is not calculated yet. Call compute_global_stats first.")
 
