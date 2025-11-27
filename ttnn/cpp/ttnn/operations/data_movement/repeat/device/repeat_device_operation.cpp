@@ -10,6 +10,16 @@
 
 namespace ttnn {
 
+program_factory_t RepeatDeviceOperation::select_program_factory(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool is_last_dim = operation_attributes.m_is_last_dim;
+    if (is_last_dim) {
+        return operations::data_movement::repeat::RepeatProgramFactoryLastDim{};
+    } else {
+        return operations::data_movement::repeat::RepeatProgramFactorySecondDim{};
+    }
+}
+
 void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     // Validate the input tensor
     const Tensor& input_tensor_a = input_tensors.at(0);

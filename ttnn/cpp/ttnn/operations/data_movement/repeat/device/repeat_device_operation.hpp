@@ -6,17 +6,24 @@
 
 #include "ttnn/run_operation.hpp"
 #include "repeat_operation_types.hpp"
+#include "host/repeat_program_factory.hpp"
 namespace ttnn {
 
 using operation_attributes_t = operations::data_movement::repeat::operation_attributes_t;
 using tensor_args_t = operations::data_movement::repeat::tensor_args_t;
 using spec_return_value_t = operations::data_movement::repeat::spec_return_value_t;
 using tensor_return_value_t = operations::data_movement::repeat::tensor_return_value_t;
+using program_factory_t = std::variant<
+    ttnn::operations::data_movement::repeat::RepeatProgramFactorySecondDim,
+    ttnn::operations::data_movement::repeat::RepeatProgramFactoryLastDim>;
 
 struct RepeatDeviceOperation {
     const uint32_t m_num_repeats;
     const bool m_is_last_dim;
     tt::tt_metal::MemoryConfig m_output_mem_config;
+
+    static program_factory_t select_program_factory(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     // Required functions to all tensor op functions
     // use for cache hit, reuse for miss
