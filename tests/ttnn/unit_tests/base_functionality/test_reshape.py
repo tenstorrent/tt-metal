@@ -370,7 +370,9 @@ def test_reshape_tile_layout_only_change_shape(device):
 )
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32)])
+@pytest.mark.parametrize(
+    "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
+)
 def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
     if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
         pytest.xfail("Test case is too big for L1")
