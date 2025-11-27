@@ -121,11 +121,12 @@ constexpr std::array<size_t, NUM_MUX_CONNECTIONS> mux_free_slots_stream_id =
 constexpr size_t LOCAL_MUX_STATUS_ADDRESS_IDX = MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_MUX_CONNECTIONS;
 constexpr size_t mux_status_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX);
 constexpr size_t udm_memory_pool_base_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 1);
-constexpr size_t udm_memory_pool_size = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 2);
-constexpr size_t direction = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 3);
-constexpr size_t router_noc_x = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 4);
-constexpr size_t router_noc_y = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 5);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 6);
+constexpr size_t udm_memory_pool_slot_size = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 2);
+constexpr size_t udm_memory_pool_num_slots = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 3);
+constexpr size_t direction = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 4);
+constexpr size_t router_noc_x = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 5);
+constexpr size_t router_noc_y = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 6);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(LOCAL_MUX_STATUS_ADDRESS_IDX + 7);
 
 // Mux connection array indices: [0]=local, [1]=downstream_en, [2]=downstream_ws
 constexpr uint32_t LOCAL_MUX_IDX = 0;
@@ -183,10 +184,11 @@ void setup_channel(
     channel_connection_established = false;
 }
 
-template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections>
+template <uint32_t Direction, typename RelayToMuxSenderType, size_t NumMuxConnections, typename UDMMemoryPoolType>
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
     std::array<RelayToMuxSenderType, NumMuxConnections>& mux_connections,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header,
+    UDMMemoryPoolType& memory_pool) {
     const auto& header = *packet_header;
     uint16_t payload_size_bytes = header.payload_size_bytes;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_header) + sizeof(PACKET_HEADER_TYPE);
@@ -260,16 +262,17 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
         case tt::tt_fabric::NocSendType::NOC_UNICAST_READ: {
             const auto noc_addr = header.command_fields.unicast_read.noc_address;
             const auto size_bytes = header.udm_control.read.size_bytes;
-            // allocate a chunk of memory for storing read response
-            uint32_t read_response_memory_pool_addr = tt::tt_fabric::udm::UDMMemoryPool::allocate_memory(size_bytes);
-            noc_async_read(noc_addr, read_response_memory_pool_addr, size_bytes);
+            const auto num_slots = memory_pool.slots_needed(size_bytes);
+            // wait for space, allocate slots, and fill with noc_async_read (handles wrap)
+            while (!memory_pool.cb_has_enough_slots(num_slots)) {
+            }
+            memory_pool.cb_allocate_and_fill_slots(noc_addr, size_bytes);
             // temporarily place here until we have txn id support
             noc_async_read_barrier();
-            // reads done, send ack back
-            tt::tt_fabric::udm::fabric_fast_read_any_len_ack<Direction>(
-                mux_connections, packet_header, read_response_memory_pool_addr);
-            // free memory chunk
-            tt::tt_fabric::udm::UDMMemoryPool::deallocate_memory(size_bytes);
+            // reads done, send ack back (reads slot by slot from memory pool)
+            tt::tt_fabric::udm::fabric_fast_read_any_len_ack<Direction>(mux_connections, packet_header, memory_pool);
+            // free slots (FIFO)
+            memory_pool.cb_deallocate_slots(num_slots);
         } break;
         default: {
             ASSERT(false);
@@ -277,20 +280,21 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_lo
     };
 }
 
-template <uint32_t Direction, uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS>
+template <uint32_t Direction, uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS, typename UDMMemoryPoolType>
 void forward_data(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>& channel,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     std::array<tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>, NUM_MUX_CONNECTIONS>& mux_connections,
     bool& channel_connection_established,
-    StreamId my_channel_free_slots_stream_id) {
+    StreamId my_channel_free_slots_stream_id,
+    UDMMemoryPoolType& memory_pool) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        execute_noc_txn_to_local_chip<Direction>(mux_connections, packet_header);
+        execute_noc_txn_to_local_chip<Direction>(mux_connections, packet_header, memory_pool);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
@@ -309,7 +313,9 @@ void kernel_main() {
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::STARTED;
 
     // Initialize UDM memory pool for read response data
-    tt::tt_fabric::udm::UDMMemoryPool::init(udm_memory_pool_base_address, udm_memory_pool_size);
+    tt::tt_fabric::udm::
+        UDMMemoryPool<udm_memory_pool_base_address, udm_memory_pool_slot_size, udm_memory_pool_num_slots>
+            memory_pool;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -410,7 +416,8 @@ void kernel_main() {
                 worker_interface,
                 mux_connections,
                 channel_connection_established,
-                StreamId{channel_stream_id});
+                StreamId{channel_stream_id},
+                memory_pool);
         }
     }
 
