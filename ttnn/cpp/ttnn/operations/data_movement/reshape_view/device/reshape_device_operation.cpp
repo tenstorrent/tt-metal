@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(
         return operations::data_movement::reshape::rm_reshape_preparer(
             input_tensors.at(0), output_tensors.at(0), this->sub_core_grid);
     } else {
-        if (this->on_device_mappings.has_value() && this->on_device_mappings.value() == false) {
+        if (this->on_device_mappings.has_value() && !this->on_device_mappings.value()) {
             return operations::data_movement::reshape::reshape_tiled_program_factory_without_device_mapping(
                 input_tensors.at(0), output_tensors.at(0), this->sub_core_grid);
         }
