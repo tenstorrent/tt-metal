@@ -98,7 +98,11 @@ struct ToMemoryConfig {
                     preallocated_output = optional_output_tensors[0].value();
                 }
                 return ttnn::prim::sharded_to_interleaved(
-                    tensor, memory_config, dtype.value_or(tensor.dtype()), preallocated_output);
+                    tensor,
+                    memory_config,
+                    dtype.value_or(tensor.dtype()),
+                    /*is_l1_aligned=*/false,
+                    preallocated_output);
             } else {
                 // L1 to DRAM or DRAM to L1
                 return tt::tt_metal::operation::run(

@@ -16,7 +16,8 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
         return input_tensor;
     }
 
-    return ttnn::prim::sharded_to_interleaved(input_tensor, memory_config, output_dtype.value_or(input_tensor.dtype()));
+    return ttnn::prim::sharded_to_interleaved(
+        input_tensor, memory_config, output_dtype.value_or(input_tensor.dtype()), is_l1_aligned.value_or(false));
 }
 
 }  // namespace ttnn::operations::data_movement
