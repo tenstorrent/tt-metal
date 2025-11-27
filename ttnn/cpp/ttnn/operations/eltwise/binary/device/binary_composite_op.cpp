@@ -271,7 +271,7 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = round_mode.has_value() or output_dtype.has_value() or accurate_mode;
+    const auto has_legacy_only_args = output_dtype.has_value() or accurate_mode;
 
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
@@ -283,23 +283,51 @@ Tensor ExecuteDiv::invoke(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode, accurate_mode, optional output_dtype are not valid when passing use_legacy parameter as false "
-            "in div");
-        Tensor a =
-            is_int32 ? typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_a;
-        Tensor b =
-            is_int32 ? typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_b;
-        return BinaryOperation<BinaryOpType::DIV>::invoke(
-            a,
-            b,
-            std::nullopt,
-            output_mem_config,
-            output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            sub_core_grids);
+            "accurate_mode, optional output_dtype are not valid when passing use_legacy parameter as false in div");
+        TT_FATAL(
+            (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
+            "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+        if (round_mode == "floor") {
+            return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
+                input_a,
+                input_b,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                use_legacy,
+                sub_core_grids);
+        } else if (round_mode == "trunc") {
+            return BinaryOperation<BinaryOpType::DIV_TRUNC>::invoke(
+                input_a,
+                input_b,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                use_legacy,
+                sub_core_grids);
+        } else {
+            Tensor a =
+                is_int32 ? typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_a;
+            Tensor b =
+                is_int32 ? typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids) : input_b;
+            return BinaryOperation<BinaryOpType::DIV>::invoke(
+                a,
+                b,
+                std::nullopt,
+                output_mem_config,
+                output_tensor,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                use_legacy,
+                sub_core_grids);
+        }
     }
 
     TT_FATAL(
