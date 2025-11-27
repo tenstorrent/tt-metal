@@ -32,6 +32,10 @@ Finish the PR fix session by cherry-picking commits to the PR branch and leaving
 
 5. **Leave comments on GitHub**
    - For each addressed comment, use GitHub MCP to reply with the `**My comment:**` text
+   - Comment format:
+     - `fixed: {description}` - for straightforward fixes
+     - `fixed with *:` followed by bullet list - when explanation needed
+   - For self-review items, add a general PR comment: `Also fixed during review:` with bullet list
    - Consider using `pull_request_review_comment_create` or similar
 
 6. **Update tracking file**
