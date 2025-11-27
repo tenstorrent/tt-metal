@@ -69,6 +69,8 @@ public:
     void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
     [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
 
+    void synchronize_device();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
