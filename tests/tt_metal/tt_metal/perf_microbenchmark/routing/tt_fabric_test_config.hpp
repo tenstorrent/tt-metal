@@ -1200,12 +1200,12 @@ private:
 
         sync_val = multi_directional_sync_val;
 
-        // Split multi-directional hops into single-direction patterns
+        // Split multi-directional hops into single-directional patterns
         auto split_hops_vec = this->route_manager_.split_multicast_hops(multi_directional_hops);
 
         log_debug(
             LogTest,
-            "Splitting sync pattern for device {} from 1 multi-directional to {} single-direction patterns",
+            "Splitting sync pattern for device {} from 1 multi-directional to {} single-directional patterns",
             src_device.chip_id,
             split_hops_vec.size());
         // Create separate sync pattern for each mcast direction. This is required since test infra only handle

@@ -258,7 +258,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     // To prevent overflow of num_buffers_per_channel_ (which is uint8_t), we max number of buffers per channel to 128
     if (number_of_buffers_per_channel > 128) {
         log_warning(
-            tt::LogMetal, "Number of buffers per channel is greater than 128, setting to 128 to prevent bit overflow");
+            tt::LogMetal, "Number of buffers per channel is greater than 128, setting to 128 to prevent byte overflow");
         num_buffers_per_channel_ = 128;
     } else {
         num_buffers_per_channel_ = static_cast<uint8_t>(number_of_buffers_per_channel);

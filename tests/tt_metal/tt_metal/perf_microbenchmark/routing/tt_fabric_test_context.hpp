@@ -221,10 +221,10 @@ public:
             this->set_performance_test_mode(config.performance_test_mode);
 
             log_debug(tt::LogTest, "Enabled sync");
-            log_debug(tt::LogTest, "Performance test mode: {}, ", performance_test_mode_);
+            log_debug(tt::LogTest, "Performance test mode: {}", performance_test_mode_);
 
             for (const auto& sync_config : config.sync_configs) {
-                // currently initializing our sync configs to be on senders local to the current hos
+                // currently initializing our sync configs to be on senders local to the current host
                 const auto& sync_sender = sync_config.sender_config;
                 if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
                     CoreCoord sync_core = sync_sender.core.value();
@@ -273,7 +273,7 @@ public:
                         // for 2d mcast case
                         sync_traffic_sender_config.dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
-                        // for 2d, we need to spcify the mcast start node id
+                        // for 2d, we need to specify the mcast start node id
                         if (fixture_->is_2D_routing_enabled() &&
                             sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
                             sync_traffic_sender_config.mcast_start_node_id =
@@ -286,7 +286,6 @@ public:
                         TestTrafficSyncConfig sync_traffic_sync_config = {
                             .sync_val = sync_config.sync_val, .sender_config = std::move(sync_traffic_sender_config)};
 
-                        // Add sync config to the master sender on this device
                         this->test_devices_.at(device_coord)
                             .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
                     }
@@ -789,7 +788,7 @@ private:
             }
         }
 
-        // for 2d, we need to spcify the mcast start node id
+        // for 2d, we need to specify the mcast start node id
         // TODO: in future, we should be able to specify the mcast start node id in the traffic config
         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
         if (fixture_->is_2D_routing_enabled() &&

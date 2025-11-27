@@ -783,7 +783,7 @@ void TestDevice::create_sync_kernel() {
     // Push in sync val first before pushing in rest of sync args
     // All sync configs for a device have been assigned the same sync val in
     // tt_fabric_test_context.hpp:process_traffic_config So we can just use the first sync config to get the sync val
-    TT_FATAL(sync_worker.configs_.size() > 0, "No sync configs found for core {}", sync_core.str());
+    TT_FATAL(!sync_worker.configs_.empty(), "No sync configs found for core {}", sync_core.str());
     const auto& sync_val = sync_worker.configs_.front().first.sync_val;
     local_args.push_back(sync_val);
 

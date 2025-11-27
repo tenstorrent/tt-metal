@@ -1123,7 +1123,7 @@ public:
             direction);
 
         // Case 2: No neighbor chips found.
-        if (neighbors.begin() == neighbors.end()) {
+        if (neighbors.empty()) {
             // If hard exit is enabled, we throw an error.
             if (hard_exit) {
                 TT_FATAL(false, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
@@ -1204,7 +1204,7 @@ public:
                 break;
             }
             // for torus, the handling should be same as mesh since we need to sync with all the devices
-            // it doesnt matter if we use torus links or internal links to get the sync pacekts across
+            // it doesnt matter if we use torus links or internal links to get the sync packets across
             case tt::tt_fabric::Topology::Torus:
             case tt::tt_fabric::Topology::Mesh: {
                 multi_directional_hops = this->get_full_mcast_hops(src_device);
