@@ -70,6 +70,7 @@ def load_partial_weights(weights_path, embedding_layer_prefix):
     keys = weights.keys()
     for key in keys:
         if embedding_layer_prefix in key:
+            # Caution it may cause potential failures. In future versions and different formats the below prefix may change
             key_name = key[len("model.vision_model.gated_positional_embedding.") :]
             partial_state_dict.update({key_name: weights[key]})
     return partial_state_dict
@@ -160,6 +161,8 @@ def test_positional_embedding_inference(
 
     supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
 
+    # subclass MllamaPrecomputedPositionEmbedding expects parameters in the following format
+    # Note that the layer assumes square image and patches
     class Config:
         def __init__(
             self,
@@ -176,8 +179,10 @@ def test_positional_embedding_inference(
             self.patch_size = patch_size
 
     reference_model = MllamaPrecomputedPositionEmbedding(Config())
+    # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), "gated_positional")
     reference_model.load_state_dict(partial_state_dict)
+    # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector
     aspect_ratios_id = torch.from_numpy(convert_aspect_ratios_to_ids(aspect_ratios.unsqueeze(0), max_num_tiles))
     reference_output1 = reference_model(input_tensor, aspect_ratios_id)
 
