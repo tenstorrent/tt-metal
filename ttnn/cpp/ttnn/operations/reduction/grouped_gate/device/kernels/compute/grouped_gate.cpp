@@ -17,7 +17,13 @@
 namespace NAMESPACE {
 
 void print_tile(
-    uint32_t cb_idx, uint32_t tile_idx, bool untilize = true, uint16_t start_row = 0, uint16_t end_row = 32) {
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = true,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
     for (uint16_t r = start_row; r < end_row; ++r) {
@@ -29,8 +35,8 @@ void print_tile(
                           .h0 = (uint8_t)r,
                           .h1 = (uint8_t)(r + 1),
                           .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
                           .ws = (uint8_t)1},
                       true,
                       untilize)
@@ -40,6 +46,29 @@ void print_tile(
 }
 
 namespace blocks {
+void add_bias_and_pack(
+    uint32_t sigmoid_input_cb_index, uint32_t bias_cb_index, uint32_t add_bias_cb_index, uint32_t width_tiles) {
+    // Perform add bias on sigmoid input – should I do full or partial init here?
+    add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        cb_wait_front(sigmoid_input_cb_index, 1);
+        cb_wait_front(bias_cb_index, 1);
+
+        tile_regs_acquire();
+        add_tiles(sigmoid_input_cb_index, bias_cb_index, 0, 0, 0);
+        tile_regs_commit();
+
+        cb_reserve_back(add_bias_cb_index, 1);
+        tile_regs_wait();
+        pack_tile(0, add_bias_cb_index, 0);
+        tile_regs_release();
+        cb_push_back(add_bias_cb_index, 1);
+
+        cb_pop_front(sigmoid_input_cb_index, 1);  // need to actually re-use this for unbiased sigmoid scores
+        cb_pop_front(bias_cb_index, 1);
+    }
+}
+
 void process_and_sort_tiles(
     uint32_t input_cb_index,
     uint32_t index_cb_index,
@@ -93,6 +122,65 @@ void process_and_sort_tiles(
     cb_push_back(input_transposed_cb_index, Wt);
     cb_push_back(index_transposed_cb_index, Wt);
 }
+
+void sum_top_experts_per_group(
+    const uint32_t summed_experts_cb_index, const uint32_t group_scores_cb_index, uint32_t summed_experts_per_group) {
+    // sum the top experts_per_group rows for each group
+    add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, false);
+    cb_wait_front(summed_experts_cb_index, summed_experts_per_group);
+    UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16));
+    UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16));
+    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
+        tile_regs_acquire();
+        add_tiles(summed_experts_cb_index, summed_experts_cb_index, i, i + 1, 0);
+        tile_regs_commit();
+
+        cb_reserve_back(group_scores_cb_index, 1);
+        tile_regs_wait();
+        pack_tile(0, group_scores_cb_index);
+        tile_regs_release();
+        cb_push_back(group_scores_cb_index, 1);
+    }
+    cb_pop_front(summed_experts_cb_index, summed_experts_per_group);
+}
+
+void topk_group_scores(
+    const uint32_t group_scores_cb_index,
+    const uint32_t group_indices_cb_index,
+    const uint32_t sorted_group_indices_cb_index,
+    bool switch_dir,
+    bool& ascending,
+    int log_topk_groups) {
+    cb_reserve_back(sorted_group_scores_cb_index, 1);
+
+    // Sort single input and index tile that have already ben transposed.
+    acquire_dst();
+    // local sort into k groups
+    cb_wait_front(group_scores_cb_index, 1);
+    cb_wait_front(group_indices_cb_index, 1);
+
+    // copy scores tile to dest reg 0
+    copy_tile_to_dst_init_short(group_scores_cb_index);
+    copy_tile(group_scores_cb_index, 0, 0);
+
+    // copy indices tile to dest reg 2
+    copy_tile_to_dst_init_short(group_indices_cb_index);
+    copy_tile(group_indices_cb_index, 0, 2);
+
+    // llk_topk_sort -> inplace
+    ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
+
+    // pack index tile into sorted_group_indices_cb_index
+    pack_reconfig_data_format(sorted_group_indices_cb_index);
+    pack_tile(2, sorted_group_indices_cb_index);
+
+    cb_pop_front(group_scores_cb_index, 1);
+    cb_pop_front(group_indices_cb_index, 1);
+    release_dst();
+
+    cb_push_back(sorted_group_indices_cb_index, 1);
+}
+
 }  // namespace blocks
 
 void MAIN {
@@ -109,8 +197,20 @@ void MAIN {
     constexpr uint32_t topk_input_cb_index = get_named_compile_time_arg_val("topk_input_cb_index");
     constexpr uint32_t topk_index_cb_index = get_named_compile_time_arg_val("topk_index_cb_index");
     constexpr uint32_t topk_index_creation_cb_index = get_named_compile_time_arg_val("topk_index_creation_cb_index");
+
     constexpr uint32_t log_group_size = get_named_compile_time_arg_val("log_group_size");
     constexpr uint32_t group_size = get_named_compile_time_arg_val("group_size");
+    constexpr uint32_t log_topk_groups = get_named_compile_time_arg_val("log_topk_groups");
+    constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
+
+    constexpr uint32_t group_indices_cb_index = get_named_compile_time_arg_val("group_indices_cb_index");
+    constexpr uint32_t summed_experts_cb_index = get_named_compile_time_arg_val("summed_experts_cb_index");
+    constexpr uint32_t group_scores_cb_index = get_named_compile_time_arg_val("group_scores_cb_index");
+    constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
+    constexpr uint32_t sorted_group_indices_cb_index = get_named_compile_time_arg_val("sorted_group_indices_cb_index");
+
+    constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+
     constexpr uint32_t end_phase = log_group_size - 1;
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
@@ -143,24 +243,7 @@ void MAIN {
         }
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
-        add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
-        for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-            cb_wait_front(sigmoid_input_cb_index, 1);
-            cb_wait_front(bias_cb_index, 1);  // this one is messed up
-
-            tile_regs_acquire();
-            add_tiles(sigmoid_input_cb_index, bias_cb_index, 0, 0, 0);
-            tile_regs_commit();
-
-            cb_reserve_back(add_bias_cb_index, 1);
-            tile_regs_wait();
-            pack_tile(0, add_bias_cb_index, 0);
-            tile_regs_release();
-            cb_push_back(add_bias_cb_index, 1);
-
-            cb_pop_front(sigmoid_input_cb_index, 1);
-            cb_pop_front(bias_cb_index, 1);
-        }
+        blocks::add_bias_and_pack(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
 
         // Transpose tiles into dest and then perform topk_local_sort
         bool ascending = false;
@@ -182,11 +265,16 @@ void MAIN {
             ascending,
             end_phase);
 
-        cb_wait_front(topk_input_cb_index, width_tiles);
         cb_wait_front(topk_index_cb_index, width_tiles);
 
-        // UNPACK(print_tile(topk_input_cb_index, 1, true));
-        // UNPACK(print_tile(topk_index_cb_index, w, true));
+        blocks::sum_top_experts_per_group(summed_experts_cb_index, group_scores_cb_index, summed_experts_per_group);
+        blocks::topk_group_scores(
+            group_scores_cb_index,
+            group_indices_cb_index,
+            sorted_group_indices_cb_index,
+            switch_dir,
+            ascending,
+            log_topk_groups);
     }
 }
 }  // namespace NAMESPACE

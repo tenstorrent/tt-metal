@@ -91,7 +91,8 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     seq_len = 1
     total_experts = 256
-    scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
+    # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
+    scores = torch.randn(1, 1, seq_len, total_experts, dtype=torch.bfloat16)
     bias = 2 * torch.ones(1, 1, seq_len, total_experts, dtype=torch.bfloat16)  # no bias for simplicity
     n_groups = 8
     summed_experts_per_group = 2  # number of experts to sum per group

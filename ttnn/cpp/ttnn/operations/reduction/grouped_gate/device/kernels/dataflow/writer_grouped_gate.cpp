@@ -124,10 +124,78 @@ FORCE_INLINE void generate_group_indices_tiles(
         tile_write_addr += tile_size_bytes;
     }
     noc_async_read_barrier();
-    for (uint32_t tile_index = 0; tile_index < width_tiles; tile_index++) {
-        print_tile(group_indices_cb_index, tile_index, true, 0, n_groups + 1);
-    }
     cb_push_back(group_indices_cb_index, width_tiles);
+}
+
+FORCE_INLINE void generate_summed_experts_tiles(
+    const uint32_t summed_experts_cb_index,
+    const uint32_t topk_input_cb_index,
+    uint32_t width_tiles,
+    uint32_t summed_experts_per_group) {
+    // copy 0,...,summed_experts_per_group-1 rows from topk_input_cb_index to 0,...,summed_experts_per_group-1 tile in
+    // summed_experts_cb_index for each width_tile
+    constexpr uint32_t tokens_per_tile = 32;  // only 1 for decode but let's just do this for now
+    constexpr uint32_t face_line_bytes = 32;
+    constexpr uint32_t tile_size_bytes = 2048;
+    constexpr uint32_t face_size_bytes = 512;
+
+    // for each group, copy the top experts_per_group rows to the summed_experts_cb_index
+    // summed_experts_per_group has experts_per_group tiles, each tile is 32x32 bf16 values, divided into 16x16 faces
+    // in our case, for now, width_tiles = n_groups
+
+    // for each group, copy the top experts_per_group rows to the summed_experts_cb_index
+    cb_reserve_back(summed_experts_cb_index, summed_experts_per_group);
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        // get one width tile
+        cb_wait_front(topk_input_cb_index, 1);
+        // offset to relevant tile in topk_input_cb_index
+        uint64_t group_sorted_tile_ptr = get_noc_addr(get_read_ptr(topk_input_cb_index));
+        if (width_tile % 2 == 0) {
+            // even width tiles are in the first face lines
+            for (uint32_t i = 0; i < summed_experts_per_group; i++) {
+                // read first face line to summed_experts_cb_index
+                noc_async_read(
+                    group_sorted_tile_ptr + i * face_line_bytes,
+                    get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
+                    face_line_bytes);
+                if constexpr (tokens_per_tile > 16) {
+                    noc_async_read(
+                        group_sorted_tile_ptr + face_size_bytes + i * face_line_bytes,
+                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
+                        face_line_bytes);
+                }
+            }
+        } else {
+            // odd width tiles are in the last face lines
+            // offset to face 3
+            group_sorted_tile_ptr += face_size_bytes * 2;
+            for (uint32_t i = 0; i < summed_experts_per_group; i++) {
+                noc_async_read(
+                    group_sorted_tile_ptr + (15 - i) * face_line_bytes,
+                    get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
+                    face_line_bytes);
+                if constexpr (tokens_per_tile > 16) {
+                    noc_async_read(
+                        group_sorted_tile_ptr + face_size_bytes + (15 - i) * face_line_bytes,
+                        get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
+                        face_line_bytes);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        // if (width_tile % 2 == 1) {
+        //     DPRINT << ENDL() << "++++++" << ENDL();
+        //     uint32_t start_row = width_tile % 2 == 0 ? 0 : 32 - summed_experts_per_group;
+        //     uint32_t end_row = width_tile % 2 == 0 ? summed_experts_per_group : 32;
+        //     print_tile(topk_input_cb_index, 0, true, start_row, end_row);
+        //     for (uint32_t i = 0; i < summed_experts_per_group; i++) {
+        //         print_tile(summed_experts_cb_index, i, true, width_tile, width_tile+1);
+        //     }
+        //     DPRINT << "++++++" << ENDL();
+        // }
+        cb_pop_front(topk_input_cb_index, 1);
+    }
+    cb_push_back(summed_experts_cb_index, summed_experts_per_group);
 }
 
 void kernel_main() {
@@ -137,15 +205,21 @@ void kernel_main() {
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t topk_index_creation_cb_index = get_named_compile_time_arg_val("topk_index_creation_cb_index");
     constexpr uint32_t group_indices_cb_index = get_named_compile_time_arg_val("group_indices_cb_index");
+    constexpr uint32_t summed_experts_cb_index = get_named_compile_time_arg_val("summed_experts_cb_index");
+    constexpr uint32_t topk_input_cb_index = get_named_compile_time_arg_val("topk_input_cb_index");
+
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("tile_width");
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
+    const uint32_t start_height_tile = get_arg_val<uint32_t>(2);
+    const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
 
     constexpr auto weights_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -156,6 +230,12 @@ void kernel_main() {
     constexpr uint32_t tokens_per_tile = 32;  // hardcoded for now, but this is std::min(tokens, tile_width)
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
+    // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
+
+    for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
+        generate_summed_experts_tiles(
+            summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group);
+    }
 }
