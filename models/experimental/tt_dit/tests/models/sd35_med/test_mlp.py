@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+import torch.nn as nn
 from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, comp_allclose
@@ -13,14 +14,16 @@ from models.experimental.tt_dit.models.transformers.mlp_sd35_medium import SD35M
 class Mlp(torch.nn.Module):
     """Reference PyTorch MLP matching MM-DiT implementation"""
 
-    def __init__(self, in_features, hidden_features=None, out_features=None, bias=True):
+    def __init__(
+        self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, bias=True, dtype=torch.bfloat16
+    ):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
 
         # Add dtype=torch.bfloat16 to match input dtype
         self.fc1 = torch.nn.Linear(in_features, hidden_features, bias=bias, dtype=torch.bfloat16)
-        self.act = torch.nn.GELU(approximate="tanh")
+        self.act = act_layer
         self.fc2 = torch.nn.Linear(hidden_features, out_features, bias=bias, dtype=torch.bfloat16)
 
     def forward(self, x):

@@ -377,21 +377,21 @@ def test_sd35_medium_dismantled_block(
 
     # Reference forward
     with torch.no_grad():
-        ref_output = reference_model(x_input.squeeze(0), c_input.squeeze(0))
+        x_ref = x_input.squeeze(0)
+        c_ref = c_input.squeeze(0)
+        ref_output = reference_model(x_ref, c_ref)
 
     # TTNN forward
     tt_x_input = ttnn.from_torch(x_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_c_input = ttnn.from_torch(c_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
     tt_output = tt_model(tt_x_input, tt_c_input)
-
-    # Convert back and compare
     tt_output_torch = ttnn.to_torch(tt_output)[0, :batch_size, :seq_len, :hidden_size]
 
+    # Compare final outputs
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc_required)
+    print(f"Final output PCC: {pcc_message}")
 
-    logger.info(f"DismantledBlock PCC: {pcc_message}")
     assert passing, f"Block output does not meet PCC requirement {pcc_required}."
 
     logger.info("SD3.5 Medium DismantledBlock test passed!")

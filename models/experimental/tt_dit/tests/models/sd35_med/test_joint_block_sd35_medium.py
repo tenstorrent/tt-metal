@@ -134,6 +134,7 @@ def test_sd35_medium_joint_block(
         x_block_self_attn=x_block_self_attn,
     )
     reference_model.eval()
+    print(reference_model)
 
     # Create parallel config for N150
     parallel_config = DiTParallelConfig(

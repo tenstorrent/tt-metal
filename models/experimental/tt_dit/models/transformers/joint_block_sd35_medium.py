@@ -3,7 +3,7 @@
 
 """
 SD3.5 Medium Joint Block Implementation
-Joint attention block combining context and x inputs.
+Combines context and x inputs through joint attention processing.
 """
 
 import ttnn
@@ -11,7 +11,7 @@ from .dismantled_block_sd35_medium import SD35MediumDismantledBlock
 
 
 class SD35MediumJointBlock:
-    """Joint attention block for SD3.5 Medium combining context and x inputs."""
+    """Joint block for SD3.5 Medium with context and x processing."""
 
     def __init__(
         self,
@@ -72,8 +72,6 @@ class SD35MediumJointBlock:
             packer_l1_acc=True,
         )
 
-        self.core_grid = mesh_device.compute_with_storage_grid_size()
-
     def __call__(self, context, x, c):
         """
         Forward pass for joint block.
@@ -89,40 +87,38 @@ class SD35MediumJointBlock:
         context_seq_len = context.shape[2]
         x_seq_len = x.shape[2]
 
-        # Get QKV projections from both blocks
-        context_qkv, context_intermediates = self.context_block.pre_attention(context, c)
+        # Get QKV projections from both blocks using pre_attention_qkv
+        context_qkv, context_intermediates = self.context_block.pre_attention_qkv(context, c)
 
         if self.x_block.x_block_self_attn:
             x_qkv, x_qkv2, x_intermediates = self.x_block.pre_attention_x(x, c)
         else:
-            x_qkv, x_intermediates = self.x_block.pre_attention(x, c)
+            x_qkv, x_intermediates = self.x_block.pre_attention_qkv(x, c)
 
-        # Concatenate Q, K, V from context and x
-        # context_qkv and x_qkv are tuples of (q, k, v)
-        joint_q = ttnn.concat((context_qkv[0], x_qkv[0]), dim=2)
-        joint_k = ttnn.concat((context_qkv[1], x_qkv[1]), dim=2)
-        joint_v = ttnn.concat((context_qkv[2], x_qkv[2]), dim=2)
-
-        # Joint scaled dot-product attention
+        # Joint scaled dot-product attention using TTNN's optimized operation
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.core_grid,
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=64,
             k_chunk_size=64,
         )
 
-        joint_attn_out = ttnn.transformer.scaled_dot_product_attention(
-            joint_q,
-            joint_k,
-            joint_v,
-            is_causal=False,
-            scale=self.x_block.attn.scale,
+        # Use TTNN's joint attention operation
+        context_attn, x_attn = ttnn.transformer.joint_scaled_dot_product_attention(
+            context_qkv[0],
+            context_qkv[1],
+            context_qkv[2],  # context Q, K, V
+            x_qkv[0],
+            x_qkv[1],
+            x_qkv[2],  # x Q, K, V
+            joint_strategy="rear",
             program_config=program_config,
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Split attention output back to context and x
-        context_attn = joint_attn_out[:, :, :context_seq_len, :]
-        x_attn = joint_attn_out[:, :, context_seq_len:, :]
+        # Reshape attention outputs from [B, num_heads, seq_len, head_dim] to [1, B, seq_len, hidden_size]
+        # for post_attention processing
+        context_attn = ttnn.transformer.concatenate_heads(context_attn)
+        x_attn = ttnn.transformer.concatenate_heads(x_attn)
 
         # Apply post-attention processing
         if not self.context_block.pre_only:
@@ -141,6 +137,8 @@ class SD35MediumJointBlock:
                 program_config=program_config,
                 compute_kernel_config=self.compute_kernel_config,
             )
+            # Reshape second attention output as well
+            x_attn2 = ttnn.transformer.concatenate_heads(x_attn2)
             x_output = self.x_block.post_attention_x(x_attn, x_attn2, *x_intermediates)
         else:
             x_output = self.x_block.post_attention(x_attn, *x_intermediates)

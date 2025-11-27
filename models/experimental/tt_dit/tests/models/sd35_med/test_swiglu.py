@@ -13,7 +13,7 @@ from models.experimental.tt_dit.models.transformers.swiglu_sd35_medium import SD
 class SwiGLUFeedForward(torch.nn.Module):
     """Reference PyTorch SwiGLU matching the reference implementation"""
 
-    def __init__(self, dim, hidden_dim, multiple_of, ffn_dim_multiplier=None, bias=False):
+    def __init__(self, dim, hidden_dim, multiple_of, ffn_dim_multiplier=None, bias=False, dtype=torch.bfloat16):
         super().__init__()
 
         # Same hidden dim calculation as reference
