@@ -5,7 +5,6 @@
 #include "rotary_embedding_llama.hpp"
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
-#include "ttnn/device.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

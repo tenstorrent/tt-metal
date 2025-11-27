@@ -5,7 +5,7 @@
 #include "rotary_embedding_llama_device_operation.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::transformer::rotary_embedding_llama {
@@ -197,9 +197,8 @@ RotaryEmbeddingLlamaDeviceOperation::invoke(
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
