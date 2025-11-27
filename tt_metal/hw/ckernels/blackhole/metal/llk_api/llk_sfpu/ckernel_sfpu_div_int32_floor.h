@@ -56,7 +56,6 @@ sfpi_inline void calculate_div_int32_body(
         q = q << exp;
     }
     v_endif;
-    sfpi::vInt q0 = q;
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -80,12 +79,8 @@ sfpi_inline void calculate_div_int32_body(
     // This is qb.
     lo += q1 << 23;
 
-    // Compute remainder.  Note that since our initial approximation has ~23
-    // bits of precision, we don't expect the remainder to be larger than ~8
-    // bits.
+    // Compute remainder.
     sfpi::vInt r = a - lo;
-
-    // Conversion to float is lossless as r should be ~8 bits.
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
 
     // Compute correction value in float32.
@@ -120,17 +115,16 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    v_if(r >= b) { q += 1; }
+    v_if(r >= b) {
+        q += 1;
+        r -= b;
+    }
     v_endif;
-    v_if(r < 0) { q -= 1; }
+    v_if(r < 0) {
+        q -= 1;
+        r += b;
+    }
     v_endif;
-
-    // The correction value could be negative.
-    // v_if(r < 0) { correction = -correction; }
-    // v_endif;
-
-    // Apply correction.
-    // q += correction;
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -140,9 +134,9 @@ sfpi_inline void calculate_div_int32_body(
     v_if(sign < 0) {
         q = -q;
 
-        // Optionally, if we want "floor" rounding, check if rounding was
-        // applied and subtract one for negative numbers, to round towards
-        // negative infinity.
+        // Optionally, if we want "floor" rounding, check for a remainder
+        // and subtract one for negative numbers, to round towards negative
+        // infinity.
 
         if constexpr (floor) {
             v_if(r != 0) { q -= 1; }
