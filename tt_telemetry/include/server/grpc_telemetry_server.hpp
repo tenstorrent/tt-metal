@@ -23,12 +23,9 @@ namespace grpc {
 class Service;
 }
 
-// UNIX domain socket path for the gRPC server
-constexpr const char* GRPC_TELEMETRY_SOCKET_PATH = "/tmp/tt_telemetry.sock";
-
 class GrpcTelemetryServer : public TelemetrySubscriber {
 public:
-    GrpcTelemetryServer();
+    explicit GrpcTelemetryServer(const std::string& socket_path);
     ~GrpcTelemetryServer() override;
 
     // Start the gRPC server (non-blocking)
@@ -42,6 +39,9 @@ protected:
     void on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) override;
 
 private:
+    // UNIX domain socket path
+    std::string socket_path_;
+
     // gRPC server instance
     std::unique_ptr<grpc::Server> server_;
 

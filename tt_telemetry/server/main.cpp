@@ -191,7 +191,10 @@ int main(int argc, char* argv[]) {
         "failure-exposure-duration",
         "Duration in seconds to expose failure metrics before exiting when initialization fails (default: 30). "
         "This allows Prometheus time to scrape the failure state before the process exits.",
-        cxxopts::value<int>()->default_value("30"));
+        cxxopts::value<int>()->default_value("30"))(
+        "grpc-socket",
+        "Path to UNIX domain socket for gRPC telemetry server",
+        cxxopts::value<std::string>()->default_value("/tmp/tt_telemetry.sock"));
 
     auto result = options.parse(argc, argv);
 
@@ -204,6 +207,7 @@ int main(int argc, char* argv[]) {
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
     int collector_port = result["collector-port"].as<int>();
+    std::string grpc_socket_path = result["grpc-socket"].as<std::string>();
     std::string metal_src_dir = "";
     if (result.contains("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
@@ -283,8 +287,8 @@ int main(int argc, char* argv[]) {
     // gRPC server (only in collector mode, not in aggregator mode)
     std::shared_ptr<GrpcTelemetryServer> grpc_server;
     if (!aggregator_mode) {
-        log_info(tt::LogAlways, "Starting gRPC telemetry server on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
-        grpc_server = std::make_shared<GrpcTelemetryServer>();
+        log_info(tt::LogAlways, "Starting gRPC telemetry server on UNIX socket: {}", grpc_socket_path);
+        grpc_server = std::make_shared<GrpcTelemetryServer>(grpc_socket_path);
         grpc_server->start();
         subscribers.push_back(grpc_server);
     }
