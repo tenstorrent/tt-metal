@@ -70,7 +70,8 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt hi;
 
     // Despite the name, SFPMUL24 multiplies two 23-bit integers, giving the
-    // low or high 23 bits of the product (last argument: 0=lo, 1=hi).
+    // low or high 23 bits of the product (last argument: 0=lo, 1=hi).  Inputs
+    // do not need to be masked as this is done internally.
     q1.get() = __builtin_rvtt_bh_sfpmul24(b.get(), q1.get(), 0);
     b1.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b1.get(), 0);
     lo.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
