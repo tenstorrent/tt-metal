@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import logging
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, fields, replace
+from typing import List, Optional
 
 import torch
 
@@ -8,7 +12,6 @@ import ttnn
 
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
-from .tt_sampling import format_sampling_params as _format_sampling_params
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +253,83 @@ class SamplingGenerator:
         user_ids_tt.deallocate()
 
 
-def format_sampling_params(*args, **kwargs):
+def clamp(value, min_value, max_value):
+    if value < min_value:
+        return min_value
+    elif value > max_value:
+        return max_value
+    return value
+
+
+def format_sampling_params(sampling_params, max_batch_size):
     """
-    Re-export helper so callers can import params formatting from the same module.
+    Format sampling parameters to a dictionary.
     """
-    return _format_sampling_params(*args, **kwargs)
+    if not isinstance(sampling_params.temperature, List):
+        # convert all sampling_params to lists
+        update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
+        sampling_params = replace(sampling_params, **update_dict)
+
+    # Must pad sampling_params to max_batch_size
+    default_params = {
+        "temp": 0.0,
+        "p": 1.0,
+        "k": 1,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "seed": 0,
+    }
+    target_len = max_batch_size
+    assert target_len == 32, "Sampling only support batch_size=32"
+    for name, tensor in zip(
+        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+    ):
+        current_len = len(tensor)
+        if current_len < target_len:
+            tensor.extend([default_params[name]] * (target_len - current_len))
+
+    params = {}
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+        value = getattr(sampling_params, name, None)
+        if value is None:
+            params[name] = [default_params[name]]
+        elif isinstance(value, List):
+            params[name] = list(value)
+        else:
+            params[name] = [value]
+
+    sampling_params = replace(
+        sampling_params,
+        presence_penalty=params["presence_penalty"],
+        frequency_penalty=params["frequency_penalty"],
+        repetition_penalty=params["repetition_penalty"],
+        seed=params["seed"],
+    )
+
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty", "seed"):
+        tensor = getattr(sampling_params, name)
+        current_len = len(tensor)
+        if current_len < target_len:
+            tensor.extend([default_params[name]] * (target_len - current_len))
+
+    # We must clamp top-p in range [0.0, 1.0]
+    # Cannot rely on external SamplingParams to be clamped
+    TOP_P_MIN = 0.0
+    TOP_P_MAX = 1.0
+
+    for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
+        # Clamp top-p
+        clamped_top_p = clamp(top_p, TOP_P_MIN, TOP_P_MAX)
+        if clamped_top_p != top_p:
+            sampling_params.top_p[i] = clamped_top_p
+
+        # Process temperature
+        if temp == 0:
+            sampling_params.temperature[i] = 1.0
+            sampling_params.top_k[i] = 1
+        else:
+            sampling_params.temperature[i] = 1 / temp
+        if sampling_params.repetition_penalty[i] == 0:
+            sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
+    return sampling_params

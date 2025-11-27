@@ -1,11 +1,11 @@
 # Sampling Module Overview
 
 The `models.common.sampling` package bundles everything needed to run on-device
-sampling (top-k / top-p / temperature) plus presence/frequency/repetition
+sampling (top-k / top-p / temperature/ seed) plus presence/frequency/repetition
 penalties with optional trace capture.
 
 ## Key Components
-- `SamplingGenerator`: high-level façade that owns both `TTSampling` and
+- `SamplingGenerator`: high-level class that owns both `TTSampling` and
   `TTPenalties`, exposes helper methods to reset sampling parameters, penalties,
   prompt/output state, and to run sampling with or without trace capture.
 - `format_sampling_params`: utility that pads/clamps sampling parameters to the
@@ -21,7 +21,7 @@ params = format_sampling_params(user_params, max_batch_size=32)
 sampling.reset_sampling_params(params)
 
 sampling.reset_prompt_tokens(prompt_tokens)   # torch tensor shaped [B, S]
-sampling.reset_output_state()
+sampling.reset_output_state(output_tokens)
 
 tt_tokens = sampling.sample(
     tt_logits,
