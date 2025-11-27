@@ -250,7 +250,8 @@ void py_bind_conv2d(py::module& module) {
             bool,
             std::optional<bool>,
             bool,
-            std::optional<bool>>(),
+            std::optional<bool>,
+            bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -271,7 +272,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
-        py::arg("force_split_reader") = std::nullopt);
+        py::arg("force_split_reader") = std::nullopt,
+        py::arg("override_output_sharding_config") = false);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -335,7 +337,7 @@ void py_bind_conv2d(py::module& module) {
         )doc");
     py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid, R"doc(
         Core Grid to be used for sharding the input tensor.
-        This flag is only used when override_sharding_config is set to true. )doc");
+        This flag is only used when override_sharding_config or override_output_sharding_config is set to true. )doc");
 
     py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards, R"doc(
         Determines if the Shard Orientation should be Row Major or Column Major.
@@ -437,6 +439,16 @@ void py_bind_conv2d(py::module& module) {
         This is useful when the input tensor is large, and the activation reader is a bottleneck.
         This is only supported for Height Sharded Conv2D.
         Setting this overrides the split reader heuristic.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite(
+        "override_output_sharding_config", &Conv2dConfig::override_output_sharding_config, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        override_output_sharding_config enables the user to specify the memory config of the output tensor
+        This impacts the core grid that executes matmul part of conv2d
 
         ===============================================================
     )doc");
