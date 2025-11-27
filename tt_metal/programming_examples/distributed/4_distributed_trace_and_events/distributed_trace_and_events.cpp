@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

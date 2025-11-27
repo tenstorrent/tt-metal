@@ -13,6 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/constants.hpp>
 
 using std::vector;
 using namespace tt;

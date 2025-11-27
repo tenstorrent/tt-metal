@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:
