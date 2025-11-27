@@ -466,61 +466,27 @@ Result conv_transpose2d_DRAM(
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     if (mm_conv) {
-        const uint32_t input_channels_alignment = get_input_channels_alignment(
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.layout(), true, mm_conv, std::nullopt);
-        // Configure weight and bias preparation parameters
-        Conv2dWeightsBiasPrepConfig params(
-            input_channels_alignment,
-            conv_config.weights_dtype,
-            1,  // Set to 1 as it doesn't matter in Interleaved MM.
-            1,  // Set to 1 as it doesn't matter in Interleaved MM.
-            std::nullopt,
-            std::nullopt,
-            groups,
-            1,  // Set to 1 as it doesn't matter in Interleaved MM.
+        return conv_transpose2d_L1(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
             input_width,
-            true,  // DRAM MM Convs are always interleaved
-            bias_tensor.has_value(),
-            true,  // parameters_on_device
-            conv_config.enable_kernel_stride_folding.value(),
-            conv_config.full_inner_dim,
-            conv_config.enable_activation_reuse,
             kernel_size,
             stride,
-            padding_n4);
-
-        // Prepare weights and move to device if necessary
-        if (!is_device_tensor(weight_tensor)) {
-            log_debug(tt::LogOp, "conv2d: Preprocessing weights for MM DRAM Interleaved.");
-            std::tie(weight_tensor_on_device, bias_tensor_on_device) =
-                prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
-        } else {
-            weight_tensor_on_device = weight_tensor;
-            if (bias_tensor.has_value()) {
-                bias_tensor_on_device = bias_tensor.value();
-            }
-        }
-        // run conv as matmul
-        std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
-        std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
-
-        // Matmul expects inputs to be in Tile Layout
-        tilize_with_optional_deallocation(input_tensor_on_device, conv_config.deallocate_activation);
-        Tensor matmul_output = ttnn::linear(
-            input_tensor_on_device,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
-            false,
-            false,
-            mm_output_memory_config,
-            output_dtype,
-            program_config,
-            conv_config.activation,
-            compute_config);
-        if (conv_config.deallocate_activation) {
-            input_tensor_on_device.deallocate(true);
-        }
-        return {matmul_output, input_height, input_width, weight_tensor_on_device, bias_tensor_on_device};
+            padding,
+            output_padding,
+            dilation,
+            groups,
+            dtype,
+            bias_tensor,
+            conv_config_,
+            compute_config_,
+            memory_config_,
+            mirror_kernel);
     }
     if (memory_config_.has_value()) {
         log_warning(
