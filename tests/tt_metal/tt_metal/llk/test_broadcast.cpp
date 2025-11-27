@@ -157,7 +157,7 @@ std::vector<bfloat16> gold_broadcast(
             bfloat16 broadcast_value{};
             switch (dim) {
                 case BroadcastDim::ROW: {
-                    broadcast_value = src_b[row_idx * num_cols + j];
+                    broadcast_value = src_b[(row_idx * num_cols) + j];
                     break;
                 }
                 case BroadcastDim::COL: {
