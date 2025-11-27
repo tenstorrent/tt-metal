@@ -1055,8 +1055,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             // page_idx_start += increment;
             sender_cores.push_back(c);
             printf("after setting runtime args for core (%zu, %zu)\n", c.x, c.y);
+            worker_id++;
         }  // end of loop
-        worker_id++;
     }
 
     return {
