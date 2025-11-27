@@ -649,8 +649,8 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     message = f"Max ULP Delta: {ulp_delta}"
     if not within_threshold:
         ulp_index = torch.argmax(ulp_tensor)
-        ulp_index_tuple = torch.unravel_index(ulp_index, golden.shape)
-        message += f" @ {[int(x) for x in ulp_index_tuple]} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+        ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
+        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
     return (within_threshold, message)
 
 
