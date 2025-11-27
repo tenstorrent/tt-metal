@@ -2,10 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import json
 import os
+from typing import TYPE_CHECKING
 
 from loguru import logger
+
+from ..layers.module import Module
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 CACHE_DICT_FILE = "cache_dict.json"
 
@@ -81,3 +89,40 @@ def initialize_from_cache(
             return False
         return True
     return False
+
+
+def load_model(
+    tt_model: Module,
+    *,
+    model_name: str,
+    subfolder: str,
+    parallel_config,
+    mesh_shape: Sequence[int],
+    dtype: str,
+    get_torch_state_dict: Callable[[], dict],
+) -> None:
+    if not cache_dir_is_set():
+        logger.info(
+            "Loading transformer weights from PyTorch state dict. "
+            "To use cache, set TT_DIT_CACHE_DIR environment variable."
+        )
+        tt_model.load_torch_state_dict(get_torch_state_dict())
+        return
+
+    cache_path = get_and_create_cache_path(
+        model_name=model_name,
+        subfolder=subfolder,
+        parallel_config=parallel_config,
+        mesh_shape=mesh_shape,
+        dtype=dtype,
+    )
+
+    if cache_dict_exists(cache_path):
+        logger.info(f"loading cache at '{cache_path}'.")
+        tt_model.from_cached_state_dict(load_cache_dict(cache_path))
+        return
+
+    logger.info("Cache does not exist. Creating cache and loading PyTorch state dict.")
+    tt_model.load_torch_state_dict(get_torch_state_dict())
+    logger.info(f"Writing cache to '{cache_path}'.")
+    save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
