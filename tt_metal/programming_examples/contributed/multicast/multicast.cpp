@@ -19,7 +19,6 @@
 #include <memory>
 #include <iostream>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
 
 // Optional: For verbose host-side tile verification prints.
 #include <optional>
