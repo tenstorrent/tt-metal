@@ -1,0 +1,14 @@
+import os
+
+import pytest
+
+from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+
+@pytest.fixture(scope="session")
+def state_dict():
+    model_path = os.getenv("HF_MODEL", None)
+    if model_path is None:
+        return None
+    else:
+        return ModelArgs.load_state_dict(model_path, dummy_weights=False)

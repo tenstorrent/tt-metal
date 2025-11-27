@@ -1,0 +1,36 @@
+{
+    "targets": {
+        "TTFT": {
+            "T3K_gpt-oss-20b": 43,
+            "T3K_gpt-oss-120b": 43,
+            "GLX_gpt-oss-20b": 43,
+            "GLX_gpt-oss-120b": 43
+        },
+        "decode_tok_s_u": {
+            "T3K_gpt-oss-20b": 9,
+            "T3K_gpt-oss-120b": 9,
+            "GLX_gpt-oss-20b": 9,
+            "GLX_gpt-oss-120b": 9
+        },
+        "decode_tok_s": {
+            "T3K_gpt-oss-20b": 2200,
+            "T3K_gpt-oss-120b": 2200,
+            "GLX_gpt-oss-20b": 2200,
+            "GLX_gpt-oss-120b": 2200
+        }
+    },
+    "ci": {
+        "TTFT": {
+            "T3K_gpt-oss-20b": [700, 1.2],
+            "GLX_gpt-oss-20b": [450, 1.2],
+            "T3K_gpt-oss-120b": [3600, 1.2],
+            "GLX_gpt-oss-120b": [1600, 1.2]
+        },
+        "decode_tok_s": {
+            "T3K_gpt-oss-20b": 13,
+            "GLX_gpt-oss-20b": 13,
+            "T3K_gpt-oss-120b": 8,
+            "GLX_gpt-oss-120b": 8
+        }
+    }
+}
