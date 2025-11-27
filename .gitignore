@@ -145,3 +145,6 @@ Testing
 .auto_triage/data
 .auto_triage/output
 .github/actions/*/node_modules/
+
+# Local temporary files for PR fixes
+_local/
