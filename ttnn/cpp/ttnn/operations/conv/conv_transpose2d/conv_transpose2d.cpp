@@ -118,8 +118,6 @@ ResultWithOptions conv_transpose2d(
                 return_weights_and_bias);
         }
     } else {
-        // bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
-        // if (input_is_on_device && input_tensor.memory_config().is_l1()) {
         log_trace(tt::LogOp, "Conv2d L1 without slice config");
         return result_to_result_with_options(
             conv_transpose2d_L1(
@@ -145,33 +143,6 @@ ResultWithOptions conv_transpose2d(
                 mirror_kernel),
             return_output_dim,
             return_weights_and_bias);
-        // }
-        // log_trace(tt::LogOp, "Conv2d DRAM without slice config");
-        // return result_to_result_with_options(
-        //     conv_transpose2d_DRAM(
-        //         input_tensor,
-        //         weight_tensor,
-        //         device,
-        //         in_channels,
-        //         out_channels,
-        //         batch_size,
-        //         input_height,
-        //         input_width,
-        //         kernel_size,
-        //         stride,
-        //         padding,
-        //         output_padding,
-        //         dilation,
-        //         groups,
-        //         dtype,
-        //         bias_tensor,
-        //         conv_config_,
-        //         compute_config_,
-        //         memory_config_,
-        //         std::nullopt,
-        //         mirror_kernel),
-        //     return_output_dim,
-        //     return_weights_and_bias);
     }
 }
 
@@ -341,32 +312,7 @@ Result conv_transpose2d_DRAM(
     }
     TT_FATAL(dram_slice_config_.has_value(), "DRAM Auto Slicing not supported for conv_transpose2d.");
     Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
-    // std::tie(dram_slice_config, conv_config) = determine_conv2d_slice_config(
-    //     dram_slice_config_,
-    //     ConvDRAMParamters{
-    //         .in_channels = in_channels,
-    //         .out_channels = out_channels,
-    //         .batch_size = batch_size,
-    //         .input_height = input_height,
-    //         .input_width = input_width,
-    //         .output_height = output_height,
-    //         .output_width = output_width,
-    //         .kernel_size = kernel_size,
-    //         .stride = stride,
-    //         .padding_n4 = padding_n4,
-    //         .dilation = dilation,
-    //         .groups = groups,
-    //         .conv_config = conv_config,
-    //         .compute_kernel_config = compute_config,
-    //         .compute_grid = compute_grid_size,
-    //         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
-    //         .input_datatype = input_tensor.dtype(),
-    //         .output_datatype = output_dtype,
-    //         .input_layout = input_tensor.layout(),
-    //         .enable_bias = bias_tensor.has_value(),
-    //         .mm_conv = mm_conv,
-    //     },
-    //     device);
+
     log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
