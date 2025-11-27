@@ -1249,10 +1249,16 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                     this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
                 uint32_t num_intersections = 0;
                 uint32_t num_cores = 0;
+                std::string debug_details;
                 for (const auto& kg : program_kgs) {
+                    debug_details += "KG core_ranges: " + kg->core_ranges.str() + "\n";
                     for (size_t i = 0; i < device->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
+                        debug_details += "  sub_device " + std::to_string(i) +
+                                         " worker_cores: " + sub_device_cores.str() +
+                                         " | intersection: " + intersection.str() + " (#" +
+                                         std::to_string(intersection.num_cores()) + ")\n";
                         if (!intersection.empty()) {
                             used_sub_device_ids.insert(SubDeviceId{i});
                             num_intersections += intersection.num_cores();
@@ -1262,8 +1268,12 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 }
                 TT_FATAL(
                     num_intersections == num_cores,
-                    "Kernel group cores do not match sub device cores for programmable core type {}",
-                    enchantum::to_string(core_type));
+                    "Kernel group cores do not match sub device cores for programmable core type {}. Num "
+                    "intersections: {}, Num cores: {}.\n{}",
+                    enchantum::to_string(core_type),
+                    num_intersections,
+                    num_cores,
+                    debug_details);
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);

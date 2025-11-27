@@ -1804,7 +1804,10 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
     in0_block_w = Kt_pad / num_cores;
 
-    uint32_t num_blocks = Kt_pad / in0_block_w;
+    // Take num_blocks in K dimension and divide by number of in1 subblocks
+    //
+    uint32_t num_blocks = (Kt_pad / in0_block_w);
+
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -1821,12 +1824,12 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    /* in0 */
-    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    /* in0  full shape: [32 , 128 x 32] shard shape: [32, 128] on 32 cores */
+    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];  //
     uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    /* in1 */
+    /* in1  full shape: [4096, 7168] shard shape: [4096, 896] on 8 DRAM cores */
     uint32_t in1_shard_height_in_tiles = 0;
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
@@ -2203,6 +2206,7 @@ process_gather_in0_program_and_create_override_variables(
     /* Runtime args */
     std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
     std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
+    uint32_t dram_boundary = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 6;
     if (in1_is_dram_sharded) {
         if (device->arch() == tt::ARCH::WORMHOLE_B0) {
             worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
@@ -2220,7 +2224,15 @@ process_gather_in0_program_and_create_override_variables(
             worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
 
         } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
+            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
+            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
+            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
+            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
+            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
+            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
+            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
+            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
+
         } else {
             TT_THROW("ring gather MM currently not supporting this device arch");
         }
@@ -2265,7 +2277,7 @@ process_gather_in0_program_and_create_override_variables(
             i,                      // ring_idx
         };
         if (in1_is_dram_sharded) {
-            if (core.x <= 3) {
+            if (core.x <= dram_boundary) {
                 bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
             } else {
                 bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
@@ -3111,8 +3123,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;  // 8
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;  // 4
     uint32_t num_cores_available = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512

@@ -37,16 +37,34 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tensor_addrs_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(addrs_cb_id));
 
+    DPRINT << "prefetcher reader bank_id: " << bank_id << ENDL();
+    DPRINT << "prefetcher reader bank_vc: " << vc << ENDL();
+    DPRINT << "prefetcher reader total_num_blocks_in_buffer: " << total_num_blocks_in_buffer << ENDL();
+    DPRINT << "prefetcher reader num_tensors: " << num_tensors << ENDL();
+    DPRINT << "prefetcher reader num_blocks: " << num_blocks << ENDL();
+    DPRINT << "prefetcher reader read_cb_size: " << read_cb_size << ENDL();
+    DPRINT << "prefetcher reader max_block_num_tiles: " << max_block_num_tiles << ENDL();
+    DPRINT << "prefetcher reader max_block_size: " << max_block_size << ENDL();
+
     for (uint32_t layer = 0; layer < num_layers; layer++) {
+        DPRINT << "prefetcher reader current layer: " << layer << ENDL();
+
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_page_size = page_sizes[t];
             uint32_t curr_block_num_pages = block_num_pages[t];
             uint32_t curr_block_num_tiles = block_num_tiles[t];
 
+            DPRINT << "prefetcher reader current tensor: " << t << ENDL();
+            DPRINT << "prefetcher reader curr_page_size: " << curr_page_size << ENDL();
+            DPRINT << "prefetcher reader curr_block_num_pages: " << curr_block_num_pages << ENDL();
+            DPRINT << "prefetcher reader curr_block_num_tiles: " << curr_block_num_tiles << ENDL();
+
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
+            DPRINT << "prefetcher reader tensor_base_address: " << tensor_base_address << ENDL();
             uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, tensor_base_address);
             noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc);
+            DPRINT << "prefetcher reader called noc_async_read_one_packet_set_state" << ENDL();
 
             uint32_t src_read_addr = 0;
 
@@ -63,24 +81,35 @@ void kernel_main() {
                 l1_write_addr_start = l1_buffer_start_addr;
             }
             uint32_t l1_write_addr = l1_write_addr_start;
-
+            // loop 32 times
             for (uint32_t block = 0; block < num_blocks; block++) {
                 // Set trid for current block
                 noc_async_read_set_trid(curr_block_trid);
 
                 // Issue noc async read commands for current block
                 uint32_t temp_l1_write_addr = l1_write_addr;
+                DPRINT << "prefetcher reader current block num pages: " << curr_block_num_pages << ENDL();
+                // loop 16 times
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
                     noc_async_read_one_packet_with_state_with_trid<skip_ptr_update>(
                         src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
+                    DPRINT << "prefetcher reader called noc_async_read_tile_dram_sharded_with_state_with_trid"
+                           << ENDL();
                     src_read_addr += curr_page_size;
+                    DPRINT << "prefetcher reader incremented src_read_addr" << ENDL();
                     temp_l1_write_addr += curr_page_size;
+                    DPRINT << "prefetcher reader incremented temp_l1_write_addr" << ENDL();
                 }
 
                 if (num_free_blocks_in_buffer == 3) {  // After first block we don't block but continue issuing reads
+                    DPRINT << "prefetcher decrementing num_free_blocks_in_buffer" << ENDL();
+                    DPRINT << "num_free_blocks_in_buffer: " << num_free_blocks_in_buffer << ENDL();
                     num_free_blocks_in_buffer -= 1;
                 } else {
                     noc_async_read_barrier_with_trid(block_trid_to_wait);
+                    DPRINT << "prefetcher pushing back block" << ENDL();
+                    DPRINT << "block_trid_to_wait: " << block_trid_to_wait << ENDL();
+                    DPRINT << "total_num_blocks_in_buffer: " << total_num_blocks_in_buffer << ENDL();
                     cb_push_back(cb_id, max_block_num_tiles);
                     block_trid_to_wait =
                         block_trid_to_wait == total_num_blocks_in_buffer ? 1 : (block_trid_to_wait + 1);
@@ -88,6 +117,9 @@ void kernel_main() {
 
                 // We still have blocks to read
                 if (block != num_blocks - 1) {
+                    DPRINT << "prefetcher incrementing block_trid" << ENDL();
+                    DPRINT << "curr_block_trid: " << curr_block_trid << ENDL();
+                    DPRINT << "total_num_blocks_in_buffer: " << total_num_blocks_in_buffer << ENDL();
                     // Increment block_trid, wrap around to 1 if it reaches total_num_blocks_in_buffer
                     curr_block_trid = curr_block_trid == total_num_blocks_in_buffer ? 1 : (curr_block_trid + 1);
 
@@ -97,6 +129,7 @@ void kernel_main() {
                         l1_write_addr = l1_buffer_start_addr;
                     }
 
+                    DPRINT << "prefetcher reader calling cb_reserve_back" << ENDL();
                     cb_reserve_back(
                         cb_id,
                         max_block_num_tiles *
