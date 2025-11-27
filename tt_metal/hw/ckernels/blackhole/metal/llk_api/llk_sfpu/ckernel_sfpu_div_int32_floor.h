@@ -11,7 +11,8 @@
 namespace ckernel::sfpu {
 
 template <bool floor>
-inline void calculate_div_int32_body(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+sfpi_inline void calculate_div_int32_body(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
@@ -71,7 +72,7 @@ inline void calculate_div_int32_body(const uint dst_index_in0, const uint dst_in
 
     lo += q1 << 23;
     sfpi::vInt r = a - lo;
-    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r));
+    sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
     sfpi::vFloat correction_f = r_f * inv_b_f;
 
     sfpi::vInt correction = 0;
@@ -90,9 +91,9 @@ inline void calculate_div_int32_body(const uint dst_index_in0, const uint dst_in
         q = -q;
         v_if(r != 0) {
             if constexpr (floor) {
-                q += 1;
-            } else {
                 q -= 1;
+            } else {
+                q += 1;
             }
         }
         v_endif;
