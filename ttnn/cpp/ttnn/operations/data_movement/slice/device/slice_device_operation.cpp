@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "slice_program_factory.hpp"
+
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 

@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optional"
-#include "ttnn/operations/math.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory.hpp"
+
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "slice_device_operation.hpp"
-#include "slice_program_factory.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 

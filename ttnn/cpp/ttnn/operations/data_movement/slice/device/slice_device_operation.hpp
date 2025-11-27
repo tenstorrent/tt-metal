@@ -4,13 +4,14 @@
 
 #pragma once
 
-#include <optional>
-#include <variant>
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
-#include "slice_device_operation_types.hpp"
-#include "slice_program_factory.hpp"
+
+#include <optional>
+#include <variant>
 
 namespace ttnn::operations::data_movement {
 
