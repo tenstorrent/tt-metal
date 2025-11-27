@@ -210,17 +210,11 @@ class TracedModelExecutor(Executor):
 
     def _prepare_l1_input(self, host_input):
         """
-        Transfers host input to device DRAM and converts to L1 memory.
-        Uses to_memory_config if DRAM is interleaved, otherwise uses reshard.
+        Transfers host input to device DRAM and reshards to L1 memory.
         """
         self._validate_dram_input_tensor()
         ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.cq_id)
-        # If DRAM is interleaved, use to_memory_config to convert to sharded L1
-        # Otherwise, use reshard for sharded-to-sharded conversion
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            return ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            return ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        return ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
 
     def _validate_dram_input_tensor(self):
         if self.dram_input_tensor is None:
@@ -234,19 +228,11 @@ class TracedModelExecutor(Executor):
         """
         Executes the traced model for a single input tensor.
         """
-        # Transfer input to device and convert to L1
+        # Transfer input to device and reshard to L1
         ttnn.copy_host_to_device_tensor(input_tensor, self.dram_input_tensor, cq_id=self.cq_id)
 
-        # Reuse persistent L1 tensor by converting in-place
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            self.l1_input_tensor = ttnn.to_memory_config(
-                self.dram_input_tensor, self.l1_input_memory_config, output_tensor=self.l1_input_tensor
-            )
-        else:
-            self.l1_input_tensor = ttnn.reshard(
-                self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor
-            )
+        # Reuse persistent L1 tensor by resharding in-place
+        self.l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor)
 
         # Validate address consistency with captured trace
         actual_addr = self.l1_input_tensor.buffer_address()
@@ -354,13 +340,9 @@ class MultiCQModelOverlappedInputExecutor(Executor):
         ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.CQ_INPUT_WRITE)
         write_event = ttnn.record_event(self.device, self.CQ_INPUT_WRITE)
 
-        # Convert to L1 and run model
+        # Reshard to L1 and run model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         output_tensor = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         if l1_input_tensor.is_allocated():
@@ -379,11 +361,7 @@ class MultiCQModelOverlappedInputExecutor(Executor):
 
         # Execute model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         output_tensor = self.model(l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         if l1_input_tensor.is_allocated():
@@ -489,13 +467,9 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.CQ_INPUT_WRITE)
         write_event = ttnn.record_event(self.device, self.CQ_INPUT_WRITE)
 
-        # Convert to L1 and run model
+        # Reshard to L1 and run model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
         self._compilation_output_tensor = self.model(l1_input_tensor)
@@ -515,11 +489,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
 
         # Prepare L1 input for trace
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
         # Record tensor details for validation
@@ -559,15 +529,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
 
         # Execute traced model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            self.l1_input_tensor = ttnn.to_memory_config(
-                self.dram_input_tensor, self.l1_input_memory_config, output_tensor=self.l1_input_tensor
-            )
-        else:
-            self.l1_input_tensor = ttnn.reshard(
-                self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor
-            )
+        self.l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ, blocking=False)
 
@@ -691,11 +653,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
 
         # Execute model and get output shape/dtype
         ttnn.wait_for_event(self.CQ_OPS, self.write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
         self._compilation_output_tensor = self.model(l1_input_tensor)
 
@@ -715,16 +673,12 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         Captures a trace of the model execution for efficient repeated runs.
         Sets up persistent L1 input tensor and validates memory addresses.
         """
-        # Transfer input to DRAM and then convert to L1
+        # Transfer input to DRAM and then reshard to L1
         ttnn.wait_for_event(self.CQ_IO, self.first_op_event)
         ttnn.copy_host_to_device_tensor(host_input, self.dram_input_tensor, cq_id=self.CQ_IO)
         self.write_event = ttnn.record_event(self.device, self.CQ_IO)
         ttnn.wait_for_event(self.CQ_OPS, self.write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
-        else:
-            l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
+        l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
 
         input_trace_addr = l1_input_tensor.buffer_address()
         spec = l1_input_tensor.spec
@@ -754,15 +708,7 @@ class MultiCQTracedModelPipelinedIOExecutor(Executor):
         This is the core execution step that gets pipelined with I/O operations.
         """
         ttnn.wait_for_event(self.CQ_OPS, self.write_event)
-        # If DRAM is interleaved, use to_memory_config, otherwise use reshard
-        if not self.dram_input_tensor.memory_config().is_sharded():
-            self.l1_input_tensor = ttnn.to_memory_config(
-                self.dram_input_tensor, self.l1_input_memory_config, output_tensor=self.l1_input_tensor
-            )
-        else:
-            self.l1_input_tensor = ttnn.reshard(
-                self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor
-            )
+        self.l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor)
         self.first_op_event = ttnn.record_event(self.device, self.CQ_OPS)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.CQ_OPS, blocking=False)
 
