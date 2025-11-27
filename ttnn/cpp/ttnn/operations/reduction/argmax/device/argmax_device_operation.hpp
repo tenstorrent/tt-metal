@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <functional>
-#include <optional>
-
 #include "argmax_device_operation_types.hpp"
 #include "argmax_program_factory.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+#include <optional>
 
 namespace ttnn::operations::reduction {
 
