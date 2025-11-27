@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/dataflow/dataflow_api.h"
-#include "../scatter_common.hpp"
-#include "api/debug/dprint.h"
+#include "dataflow_api.h"
+#include "../scatter_bf16_reduction_common.hpp"
+#include "dprint.h"
 
 #include <array>
 
@@ -67,11 +67,7 @@ std::array<uint32_t, N> from_id(int32_t id, const std::array<uint32_t, N>& dims)
 // this function is supposed to load either a whole stick or part of it
 template <typename AddrGen>
 FORCE_INLINE void load_to_cb(
-    const uint32_t& cb,
-    const AddrGen& addr_gtor,
-    const uint32_t& offset_bytes,
-    const uint32_t& chunk_size_bytes,
-    const uint32_t& stick_id) {
+    uint32_t cb, const AddrGen& addr_gtor, uint32_t offset_bytes, uint32_t chunk_size_bytes, uint32_t stick_id) {
     cb_reserve_back(cb, ONE_PAGE);
     const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
     const uint32_t l1_write_address = get_write_ptr(cb);
@@ -82,55 +78,56 @@ FORCE_INLINE void load_to_cb(
     cb_push_back(cb, ONE_PAGE);
 }
 
-// copies source stick to destination stick (first phase of scatter)
-template <typename number_type>
-FORCE_INLINE void copy_input_to_output(
-    const uint32_t& input_cb, const uint32_t& output_cb, const uint32_t& input_chunk_size) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
-    volatile tt_l1_ptr number_type* input_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
-    volatile tt_l1_ptr number_type* output_l1_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr number_type*>(output_l1_write_addr);
-    for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
-        output_l1_write_ptr[index_in_input_chunk] = input_l1_read_ptr[index_in_input_chunk];
-    }
+FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
+    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
+    float f;
+    std::memcpy(&f, &uint32_data, sizeof(f));
+    return f;
 }
 
-template <typename number_type>
-FORCE_INLINE number_type perform_reduction(
-    number_type input, number_type source_value, ScatterReductionType scatter_reduction_type, DataFormat data_format) {
+FORCE_INLINE static uint16_t float_to_bfloat16(float val) {
+    union {
+        float f;
+        uint32_t u;
+    } ret;
+    ret.f = val;
+    return uint16_t(ret.u >> 16);
+}
+
+FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
+    float fp32_source_value = bfloat16_to_float(source_value);
     switch (scatter_reduction_type) {
         case ScatterReductionType::ADD: {
-            return input + source_value;
+            return input + fp32_source_value;
         }
         case ScatterReductionType::MULTIPLY: {
-            return input * source_value;
+            return input * fp32_source_value;
         }
         case ScatterReductionType::AMAX: {
-            return std::max(input, source_value);
+            return std::max(input, fp32_source_value);
         }
         case ScatterReductionType::AMIN: {
-            return std::min(input, source_value);
+            return std::min(input, fp32_source_value);
         }
         case ScatterReductionType::INVALID: {
-            return source_value;
+            return fp32_source_value;
         }
         default: {
-            return source_value;
+            return fp32_source_value;
         }
     }
 }
 
 // performs scatter on data loaded to cb with load_to_cb
-template <typename number_type, typename index_type>
+template <typename index_type>
 FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_cb,
     const uint32_t& index_cb,
     const uint32_t& source_cb,
     const uint32_t& output_cb,
+    const uint32_t& fp32_temp_cb,
     const uint32_t& input_stick_size,
-    const uint32_t& input_offset,
+    const index_type& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
@@ -138,14 +135,16 @@ FORCE_INLINE void scatter_along_chunk(
     const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
     const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
     const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
-    volatile tt_l1_ptr number_type* input_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr number_type*>(input_l1_read_addr);
+    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+    volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
-    volatile tt_l1_ptr number_type* source_l1_read_ptr =
-        reinterpret_cast<volatile tt_l1_ptr number_type*>(source_l1_read_addr);
-    volatile tt_l1_ptr number_type* output_l1_write_ptr =
-        reinterpret_cast<volatile tt_l1_ptr number_type*>(output_l1_write_addr);
+    volatile tt_l1_ptr uint16_t* source_l1_read_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_l1_read_addr);
+    volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
+    volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
 
     // each index from the index chunk is checked whether it points
     // to any of the elements in the current output range (defined by
@@ -158,10 +157,35 @@ FORCE_INLINE void scatter_along_chunk(
         if (index_value >= input_stick_size) {
             continue;
         }
-        volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
-        const uint32_t& output_index = index_value - input_offset;
-        output_l1_write_ptr[output_index] = perform_reduction<number_type>(
-            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
+        volatile uint16_t& source_value = source_l1_read_ptr[index_in_index_chunk];
+        const index_type& output_index = index_value - input_offset;
+        fp32_temp_l1_write_ptr[output_index] =
+            perform_reduction(fp32_temp_l1_write_ptr[output_index], source_value, scatter_reduction_type);
+    }
+}
+
+// copies source stick to destination stick (first phase of scatter)
+FORCE_INLINE void copy_input_to_fp32_temp(uint32_t input_cb, uint32_t fp32_temp_cb, uint32_t input_chunk_size) {
+    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
+    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+    volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
+    volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
+    for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
+        fp32_temp_l1_write_ptr[index_in_input_chunk] = bfloat16_to_float(input_l1_read_ptr[index_in_input_chunk]);
+    }
+}
+
+FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t output_cb, uint32_t chunk_size) {
+    const uint32_t fp32_temp_l1_read_addr = get_read_ptr(fp32_temp_cb);
+    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+    volatile tt_l1_ptr float* fp32_temp_l1_read_ptr =
+        reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_read_addr);
+    volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
+
+    for (uint32_t copy_i = 0; copy_i < chunk_size; ++copy_i) {
+        output_l1_write_ptr[copy_i] = float_to_bfloat16(fp32_temp_l1_read_ptr[copy_i]);
     }
 }
 
@@ -215,9 +239,9 @@ void kernel_main() {
                 input_chunk_length * sizeof(input_std_type),
                 input_stick_id);
             cb_wait_front(ctas.input_cb, ONE_PAGE);
-            cb_reserve_back(ctas.output_cb, ONE_PAGE);
+            cb_reserve_back(ctas.fp32_temp_cb, ONE_PAGE);
 
-            copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
+            copy_input_to_fp32_temp(ctas.input_cb, ctas.fp32_temp_cb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -247,11 +271,12 @@ void kernel_main() {
                         index_stick_id);
                     cb_wait_front(ctas.index_cb, ONE_PAGE);
                     cb_wait_front(ctas.source_cb, ONE_PAGE);
-                    scatter_along_chunk<input_std_type, index_std_type>(
+                    scatter_along_chunk<index_std_type>(
                         ctas.input_cb,
                         ctas.index_cb,
                         ctas.source_cb,
                         ctas.output_cb,
+                        ctas.fp32_temp_cb,
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
@@ -262,9 +287,15 @@ void kernel_main() {
                 }
             }
 
-                // third phase: push to the output cb
-                cb_push_back(ctas.output_cb, ONE_PAGE);
-                cb_pop_front(ctas.input_cb, ONE_PAGE);
+            cb_pop_front(ctas.input_cb, ONE_PAGE);
+            cb_push_back(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_wait_front(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_reserve_back(ctas.output_cb, ONE_PAGE);
+
+            // third phase: push to the output cb with fp32->bf16 conversion
+            copy_fp32_temp_to_output(ctas.fp32_temp_cb, ctas.output_cb, input_chunk_length);
+            cb_pop_front(ctas.fp32_temp_cb, ONE_PAGE);
+            cb_push_back(ctas.output_cb, ONE_PAGE);
         }
         next_inplace<N>(coord, input_dims);
     }

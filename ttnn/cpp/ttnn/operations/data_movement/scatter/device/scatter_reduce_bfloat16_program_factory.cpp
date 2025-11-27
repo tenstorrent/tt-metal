@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "scatter_program_factory.hpp"
+#include "scatter_reduce_bfloat16_program_factory.hpp"
 
 #include "scatter_device_operation_types.hpp"
-#include "tt-metalium/allocator.hpp"
 #include "tt-metalium/device.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -33,18 +32,18 @@ inline uint32_t get_max_l1_space(IDevice* device) {
 
 // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
 // BH available L1 mem size of nearly 1.5 MB...
-// ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+// ... divided by 5 to be able to allocate five equally long row chunks (coming from input/index/source/output
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~10% to account for reserved memory
 inline uint32_t calculate_optimal_chunk_size(IDevice* device) {
-    return ceil32(((((get_max_l1_space(device)) / 4) / 4) * 0.9) - 32);
+    return ceil32(((((get_max_l1_space(device)) / 5) / 4) * 0.9) - 32);
 }
 
-CBHandle create_cb(
+static CBHandle create_cb(
     Program& program,
     const DataType& dtype,
-    const ScatterCB& scatter_cb,
+    const ScatterReduceBfloat16CB& scatter_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& page_size_bytes) {
     const uint32_t cb_id{static_cast<uint32_t>(scatter_cb)};
@@ -54,7 +53,7 @@ CBHandle create_cb(
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
-KernelHandle create_kernel(
+static KernelHandle create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
@@ -69,7 +68,7 @@ KernelHandle create_kernel(
     return kernel_id;
 }
 
-ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
+ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16ProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     using namespace tt::tt_metal;
 
@@ -98,49 +97,53 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& index_datum_size = index_tensor.element_size();
     const uint32_t& source_datum_size = src_tensor.element_size();
     const uint32_t& output_datum_size = output_tensor.element_size();
+    const uint32_t& fp32_temp_datum_size = sizeof(float);
 
     // input row byte sizes
     const uint32_t& input_stick_size_bytes = input_stick_size * input_datum_size;
     const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
+    const uint32_t& fp32_temp_stick_size_bytes = output_stick_size * fp32_temp_datum_size;
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
-    // ... minimized by the amount of memory reserved by a model...
-    // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
+    // ... divided by 5 to be able to allocate five equally long row chunks (coming from input/index/source/output
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
-    // ... minimized by ~10% to account for reserved memory
+    // ... minimized by ~20% to account for reserved memory
     const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
-    const uint32_t index_and_source_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
+    const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
     const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
     const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
     const uint32_t index_chunk_size_bytes = index_chunk_size * index_datum_size;
     const uint32_t source_chunk_size_bytes = source_chunk_size * source_datum_size;
+    const uint32_t fp32_temp_chunk_size_bytes = input_and_output_chunk_size * fp32_temp_stick_size_bytes;
 
     // pad pages to 32
     const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
     const uint32_t index_page_size_bytes = ceil32(index_chunk_size_bytes);
     const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
     const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
+    const uint32_t fp32_temp_page_size_bytes = ceil32(fp32_temp_chunk_size_bytes);
 
     constexpr const char* reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_bf16_reduction_scatter.cpp";
     constexpr const char* writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_bf16_reduction_scatter.cpp";
 
     std::vector<uint32_t> compile_time_args{
         input_tensor.buffer()->address(),
         index_tensor.buffer()->address(),
         src_tensor.buffer()->address(),
         output_tensor.buffer()->address(),
-        static_cast<uint32_t>(ScatterCB::INPUT),
-        static_cast<uint32_t>(ScatterCB::INDEX),
-        static_cast<uint32_t>(ScatterCB::SRC),
-        static_cast<uint32_t>(ScatterCB::DST),
+        static_cast<uint32_t>(ScatterReduceBfloat16CB::INPUT),
+        static_cast<uint32_t>(ScatterReduceBfloat16CB::INDEX),
+        static_cast<uint32_t>(ScatterReduceBfloat16CB::SRC),
+        static_cast<uint32_t>(ScatterReduceBfloat16CB::DST),
+        static_cast<uint32_t>(ScatterReduceBfloat16CB::FP32_TEMP),
         input_stick_size,
         index_stick_size,
         source_stick_size,
@@ -164,13 +167,15 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
                 ? tt::tt_metal::split_work_to_cores(*args.sub_core_grid, work_units)
                 : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units);
 
+    const auto fp32_temp_dtype = DataType::FLOAT32;
     const auto farthest_x_y =
         args.sub_core_grid.has_value() ? args.sub_core_grid->bounding_box().end_coord : compute_with_storage_grid_size;
     const uint32_t all_cores_in_bounding_box = (farthest_x_y.x + 1) * (farthest_x_y.y + 1);
-    create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
-    create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
-    create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
-    create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
+    create_cb(program, input_tensor.dtype(), ScatterReduceBfloat16CB::INPUT, all_cores, input_page_size_bytes);
+    create_cb(program, index_tensor.dtype(), ScatterReduceBfloat16CB::INDEX, all_cores, index_page_size_bytes);
+    create_cb(program, src_tensor.dtype(), ScatterReduceBfloat16CB::SRC, all_cores, source_page_size_bytes);
+    create_cb(program, output_tensor.dtype(), ScatterReduceBfloat16CB::DST, all_cores, output_page_size_bytes);
+    create_cb(program, fp32_temp_dtype, ScatterReduceBfloat16CB::FP32_TEMP, all_cores, fp32_temp_page_size_bytes);
 
     auto reader_kernel =
         create_kernel(program, reader_kernel_path, all_cores, ReaderDataMovementConfig{compile_time_args});
@@ -178,6 +183,7 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
 
     std::vector<CoreCoord> cores{};
+
     uint32_t stick_offset = 0;
     for (uint32_t i = 0; i < all_cores_in_bounding_box; ++i) {
         const CoreCoord core{i / (farthest_x_y.y + 1), i % (farthest_x_y.y + 1)};
@@ -221,8 +227,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     return {std::move(program), {reader_kernel, writer_kernel, cores}};
 }
 
-void ScatterProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+void ScatterReduceBfloat16ProgramFactory::override_runtime_arguments(
+    ScatterReduceBfloat16ProgramFactory::cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
