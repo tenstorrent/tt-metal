@@ -16,11 +16,10 @@ void MAIN {
     constexpr uint32_t seed = get_compile_time_arg_val(0);
 
     // Read core ID from mailbox
-    bool is_core_id = false;
-    is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
+    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
     // Initialize random generator if core_id matched
-    if (is_core_id != 0) {
+    if (is_core_id) {
         rand_tile_init(seed);
     }
 }

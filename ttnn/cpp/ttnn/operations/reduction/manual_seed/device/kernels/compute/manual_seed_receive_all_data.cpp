@@ -13,13 +13,11 @@
 namespace NAMESPACE {
 void MAIN {
     // Read core ID from mailbox
-    bool is_core_id = false;
-    is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
+    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
     if (is_core_id) {
         // Read seed from mailbox
-        uint32_t seed = 0;
-        seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);
+        uint32_t seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
         // Set random generator with seed
         rand_tile_init(seed);
