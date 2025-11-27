@@ -289,6 +289,19 @@ void fabric_socket_notify_sender(
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+
+FORCE_INLINE void fabric_socket_notify_sender_stateful(
+    const SocketReceiverInterface& socket,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr,
+    uint64_t upstream_bytes_acked_noc_addr) {
+    fabric_header_addr->to_noc_unicast_inline_write(
+        NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
+    fabric_connection.wait_for_empty_write_slot();
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+}
+
 #endif
 
 void update_socket_config(const SocketReceiverInterface& socket) {

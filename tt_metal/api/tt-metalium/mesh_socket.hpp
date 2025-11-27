@@ -14,8 +14,9 @@ namespace tt::tt_metal::distributed {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
 struct MeshCoreCoord {
-    MeshCoordinate device_coord;
-    CoreCoord core_coord;
+    MeshCoordinate device_coord = MeshCoordinate(0);
+    CoreCoord core_coord = CoreCoord(0, 0);
+
     bool operator==(const MeshCoreCoord& other) const {
         return device_coord == other.device_coord && core_coord == other.core_coord;
     }
@@ -25,8 +26,8 @@ struct MeshCoreCoord {
 // Used to determine which cores the socket config must be written to and the sender to receiver mapping.
 // Cannot reuse senders and receivers in a single socket context. Each socket connection is 1:1.
 struct SocketConnection {
-    MeshCoreCoord sender_core;
-    MeshCoreCoord receiver_core;
+    MeshCoreCoord sender_core = {};
+    MeshCoreCoord receiver_core = {};
 
     bool operator==(const SocketConnection& other) const {
         return sender_core == other.sender_core && receiver_core == other.receiver_core;
@@ -85,6 +86,8 @@ public:
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
 
     tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
+
+    MeshDevice* get_device() const { return config_buffer_->device(); }
 
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
