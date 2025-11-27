@@ -222,4 +222,11 @@ protected:
             Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
 };
 
+class MeshDevice4x8Fabric2DFixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice4x8Fabric2DFixture() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{4, 8}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D}) {}
+};
+
 }  // namespace tt::tt_metal

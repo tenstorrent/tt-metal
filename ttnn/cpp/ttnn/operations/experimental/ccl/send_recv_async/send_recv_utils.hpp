@@ -58,7 +58,8 @@ MeshCoordinateRangeSet get_workload_coords(
     return workload_coords;
 }
 
-SendRecvVersion select_version(const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+inline SendRecvVersion select_version(
+    const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     uint32_t optimized_page_size = 14 * 1024;
     auto tensor_page_size = input_tensor.buffer()->aligned_page_size();
     uint32_t num_socket_connections = mesh_socket.get_config().socket_connection_config.size();
