@@ -1892,21 +1892,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
-            if constexpr (!dateline_connection) {
-                rx_progress |= run_receiver_channel_step<
-                    0,
-                    DownstreamSenderVC0T,
-                    decltype(local_relay_interface)>(
-                    local_receiver_channels,
-                    downstream_edm_noc_interfaces_vc0,
-                    local_relay_interface,
-                    receiver_channel_pointers_ch0,
-                    receiver_channel_0_trid_tracker,
-                    port_direction_table,
-                    receiver_channel_response_credit_senders,
-                    routing_table,
-                    local_fabric_telemetry);
-            }
+            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
+                local_receiver_channels,
+                downstream_edm_noc_interfaces_vc0,
+                local_relay_interface,
+                receiver_channel_pointers_ch0,
+                receiver_channel_0_trid_tracker,
+                port_direction_table,
+                receiver_channel_response_credit_senders,
+                routing_table,
+                local_fabric_telemetry);
             if constexpr (is_sender_channel_serviced[1]) {
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
                     local_sender_channels,

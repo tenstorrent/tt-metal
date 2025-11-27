@@ -105,19 +105,13 @@ constexpr uint32_t SWITCH_INTERVAL =
 #endif
 constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
 constexpr bool enable_deadlock_avoidance = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
-constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
-constexpr bool is_intermesh_router = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
-constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5) != 0;
-constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
+constexpr bool is_intermesh_router = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
+constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4) != 0;
+constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5);
 
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 
-constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
-// On a dateline connection, we would never forward through the dateline on VC1
-
-// VC1/dateline vc is the last of available sender channels.
-// For 1D, its 2, For 2D its 4.
-constexpr size_t VC1_SENDER_CHANNEL = NUM_SENDER_CHANNELS - 1;
+constexpr size_t VC0_RECEIVER_CHANNEL = 0;
 
 // Doesn't REALLY matter but for consistency I picked the next available ID
 constexpr size_t worker_info_offset_past_connection_semaphore = 32;
@@ -128,13 +122,13 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // This `channel_buffer_size` includes packet headers in the size.
 // This should be renamed to channel_slot_size_bytes to avoid confusion/ambiguity:
 //   "is it the payload size or does it include the packet header size?"
-constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
-constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
+constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 9;
 constexpr uint32_t remote_vc1_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 constexpr size_t remote_worker_sender_channel =
