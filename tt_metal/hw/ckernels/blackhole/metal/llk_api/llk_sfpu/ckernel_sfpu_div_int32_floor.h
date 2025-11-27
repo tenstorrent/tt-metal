@@ -89,14 +89,10 @@ sfpi_inline void calculate_div_int32_body(
 
     v_if(sign < 0) {
         q = -q;
-        v_if(r != 0) {
-            if constexpr (floor) {
-                q -= 1;
-            } else {
-                q += 1;
-            }
+        if constexpr (floor) {
+            v_if(r != 0) { q -= 1; }
+            v_endif;
         }
-        v_endif;
     }
     v_endif;
 
