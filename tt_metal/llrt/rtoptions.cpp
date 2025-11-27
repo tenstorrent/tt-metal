@@ -162,6 +162,11 @@ enum class EnvVarID {
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
+
+    // ========================================
+    // FABRIC CONFIGURATION
+    // ========================================
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1068,6 +1073,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // ========================================
+        // FABRIC CONFIGURATION
+        // ========================================
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS
+        // Timeout in milliseconds for fabric router sync
+        // Default: 5000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=8000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS:
+            try {
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS must be non-negative: {}", value);
+                }
+                this->fabric_router_sync_timeout_ms = static_cast<uint32_t>(parsed_value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
+            }
+            break;
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false

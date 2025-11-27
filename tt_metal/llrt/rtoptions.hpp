@@ -241,6 +241,10 @@ class RunTimeOptions {
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
+    // Fabric router sync timeout configuration (in milliseconds)
+    // If not set, fabric code will use its own default
+    std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
     // Disable XIP dump
     bool disable_xip_dump = false;
 
@@ -566,6 +570,8 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
