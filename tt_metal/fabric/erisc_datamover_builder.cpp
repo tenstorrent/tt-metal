@@ -1077,17 +1077,15 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->sender_channels_connection_semaphore_id[1],
         this->sender_channels_connection_semaphore_id[2],
         this->sender_channels_connection_semaphore_id[3],
-        0,  // DELETEME: #33360 this->sender_channels_connection_semaphore_id[4],
 
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3],
-        0  // DELETEME: #33360 this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4]};
     };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
-    receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
+    // receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
 
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
     // Only the first NUM_DOWNSTREAM_CHANNELS values are used based on topology
@@ -1257,10 +1255,9 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     if (this->has_tensix_extension) {
         sender_channels_num_buffer = static_channel_allocator->get_sender_channel_number_of_slots(ds_edm);
     } else {
-        // for all edm types except for dateline upstream will have non zero buffer slots for channel 1,
-        static constexpr std::size_t none_zero_buffer_slot_idx = 1;
+        static constexpr std::size_t non_zero_buffer_slot_idx = 1;
         sender_channels_num_buffer =
-            static_channel_allocator->get_sender_channel_number_of_slots(none_zero_buffer_slot_idx);
+            static_channel_allocator->get_sender_channel_number_of_slots(non_zero_buffer_slot_idx);
     }
 
     TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");

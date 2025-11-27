@@ -2267,12 +2267,10 @@ void kernel_main() {
     const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2315,14 +2313,14 @@ void kernel_main() {
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
     // downstream EDM semaphore location
-    [[maybe_unused]] const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    [[maybe_unused]] const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    // [[maybe_unused]] const auto downstream_edm_vc1_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
