@@ -32,6 +32,8 @@
 #include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
+#include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
@@ -1774,6 +1776,45 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
     return 0;
 }
 
+void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const {
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
+
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+
+    auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
+    auto telemetry_view = telemetry.view();
+    auto static_view = telemetry_view.static_info();
+    static_view.mesh_id() = static_cast<std::uint16_t>(*fabric_node_id.mesh_id);
+    static_view.device_id() = static_cast<std::uint8_t>(fabric_node_id.chip_id);
+    static_view.direction() = 0;  // TODO: populate from routing direction when available.
+    static_view.fabric_config() =
+        static_cast<std::uint32_t>(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    static_view.supported_stats() = ::tt::tt_fabric::fabric_telemetry::DynamicStatistics::NONE;
+
+    for (const auto& active_ethernet_core : active_ethernet_cores) {
+        auto chan_id = tt::tt_metal::MetalContext::instance()
+                           .get_cluster()
+                           .get_soc_desc(physical_chip_id)
+                           .logical_eth_core_to_chan_map.at(active_ethernet_core);
+
+        // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
+        // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
+
+        CoreCoord virtual_eth_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                physical_chip_id, chan_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            telemetry.data(),
+            telemetry.size(),
+            tt_cxy_pair(physical_chip_id, virtual_eth_core),
+            hal.get_dev_addr(
+                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY));
+    }
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_chip_id);
+}
+
 void ControlPlane::write_routing_tables_to_all_chips() const {
     // Configure the routing tables on the chips
     TT_ASSERT(
@@ -1790,6 +1831,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
                 "Intra mesh routing tables keys mismatch with inter mesh routing tables");
             this->write_routing_info_to_devices(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+            this->write_fabric_telemetry_to_all_chips(fabric_node_id);
         }
     }
 }

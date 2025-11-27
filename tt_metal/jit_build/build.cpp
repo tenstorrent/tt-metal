@@ -185,6 +185,11 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
+    if (rtoptions.get_profiler_perf_counter_mode() != 0) {
+        // force profiler on if perf counters are being captured
+        TT_ASSERT(tt::tt_metal::getDeviceProfilerState());
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+    }
 
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
@@ -248,8 +253,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/hw/inc/debug",
-        root_ + "tt_metal/api/",
-        root_ + "tt_metal/api/tt-metalium/"};
+        root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
