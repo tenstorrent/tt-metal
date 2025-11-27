@@ -14,10 +14,15 @@ from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import RotarySetup
 
 
 @torch.no_grad()
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    (True, False),
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -58,12 +63,17 @@ def test_attention_inference(
     page_params,
     mesh_device,
     reset_seeds,
+    use_prefetcher,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    prefetcher = Prefetcher(mesh_device, num_tensors=2, num_layers=1) if use_prefetcher else None
+
+    model_args = ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
+    )
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
@@ -91,6 +101,7 @@ def test_attention_inference(
         model_args.max_seq_len,
         model_args.rope_theta,
         model_args.rope_scaling,
+        rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -134,6 +145,7 @@ def test_attention_inference(
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
 
     cos, sin = precompute_freqs(
@@ -165,17 +177,20 @@ def test_attention_inference(
             batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
-        tt_attention_input = pt_attention_input.clone()
+        if prefetcher is not None:
+            prefetcher.run()
 
+        tt_attention_input = pt_attention_input.clone()
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"]
+            if prefetcher is not None
+            else model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
-
+        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher)
         tt_out = tt_model(
             attention_input,
             current_pos_tensor,
