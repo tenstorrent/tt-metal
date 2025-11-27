@@ -80,11 +80,11 @@ inline void calculate_div_int32_body(const uint dst_index_in0, const uint dst_in
         correction = sfpi::exman8(correction_f);
         exp = exp - 23;
         correction = correction << exp;
-        v_if(r < 0) { correction = ~correction; }
-        v_endif;
-        q += correction;
     }
     v_endif;
+    v_if(r < 0) { correction = ~correction; }
+    v_endif;
+    q += correction;
 
     v_if(sign < 0) {
         q = -q;
