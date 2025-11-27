@@ -1,120 +1,175 @@
 {
-    "version": 3,
-    "configurePresets": [
-      {
-        "name": "default",
-        "displayName": "Default Config",
-        "description": "Default build of all the code using Ninja",
-        "generator": "Ninja Multi-Config",
-        "binaryDir": "${sourceDir}/.build/default",
-        "cacheVariables": {
-          "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
-          "TTNN_BUILD_TESTS": {"value": "TRUE"},
-          "EXPERIMENTAL_NANOBIND_BINDINGS": {"value": "TRUE"},
-          "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
-          "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
-          "BUILD_TT_TRAIN": {"value": "TRUE"},
-          "ENABLE_CCACHE": {"value": "TRUE"},
-          "TT_UNITY_BUILDS": {"value": "FALSE"}
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Config",
+      "description": "Default build of all the code using Ninja",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/.build/default",
+      "cacheVariables": {
+        "TT_METAL_BUILD_TESTS": {
+          "value": "TRUE"
         },
-        "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-      },
-      {
-        "name": "clang-tidy",
-        "inherits": "default",
-        "description": "Run Clang Tidy",
-        "binaryDir": "${sourceDir}/.build/clang-tidy",
-        "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--warnings-as-errors=*"},
-          "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
-          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
-          "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"}
+        "TTNN_BUILD_TESTS": {
+          "value": "TRUE"
+        },
+        "EXPERIMENTAL_NANOBIND_BINDINGS": {
+          "value": "TRUE"
+        },
+        "TT_UMD_BUILD_TESTS": {
+          "value": "FALSE"
+        },
+        "BUILD_PROGRAMMING_EXAMPLES": {
+          "value": "TRUE"
+        },
+        "BUILD_TT_TRAIN": {
+          "value": "TRUE"
+        },
+        "ENABLE_CCACHE": {
+          "value": "TRUE"
+        },
+        "TT_UNITY_BUILDS": {
+          "value": "FALSE"
         }
       },
-      {
-        "name": "clang-tidy-fix",
-        "inherits": "clang-tidy",
-        "description": "Run Clang Tidy and apply fixes",
-        "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
-        "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix"}
-        }
-      },
-      {
-        "name": "clang-tidy-fix-parallel",
-        "inherits": "clang-tidy",
-        "description": "Run Clang Tidy in parallel and export fixes to YAML files (apply with clang-apply-replacements)",
-        "binaryDir": "${sourceDir}/.build/clang-tidy-fix-parallel",
-        "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-fix-parallel/fixes"}
-        }
-      },
-      {
-        "name": "gcc",
-        "inherits": "default",
-        "description": "Build with GCC",
-        "binaryDir": "${sourceDir}/.build/gcc",
-        "cacheVariables": {
-          "BUILD_TT_TRAIN": {"value": "OFF"}
+      "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+    },
+    {
+      "name": "clang-tidy",
+      "inherits": "default",
+      "description": "Run Clang Tidy",
+      "binaryDir": "${sourceDir}/.build/clang-tidy",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": {
+          "value": "clang-tidy-20;--warnings-as-errors=*"
         },
-        "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-      },
-      {
-        "name": "libcpp",
-        "inherits": "default",
-        "description": "Build using libc++",
-        "binaryDir": "${sourceDir}/.build/libcpp",
-        "cacheVariables": {
-          "BUILD_TT_TRAIN": {"value": "OFF"}
+        "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {
+          "value": "TRUE"
         },
-        "toolchainFile": "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": {
+          "value": "TRUE"
+        },
+        "CMAKE_DISABLE_PRECOMPILE_HEADERS": {
+          "value": "TRUE"
+        }
       }
-    ],
-    "buildPresets": [
-      {
-        "name": "dev",
-        "configurePreset": "default",
-        "configuration": "RelWithDebInfo",
-        "targets": ["all"]
-      },
-      {
-        "name": "dev-gcc",
-        "configurePreset": "gcc",
-        "configuration": "Release",
-        "targets": ["all"]
-      },
-      {
-        "name": "dev-libcpp",
-        "configurePreset": "libcpp",
-        "configuration": "Release",
-        "targets": ["all"]
-      },
-      {
-        "name": "debug",
-        "configurePreset": "default",
-        "configuration": "Debug",
-        "targets": ["all"]
-      },
-      {
-        "name": "clang-tidy",
-        "configurePreset": "clang-tidy",
-        "configuration": "RelWithDebInfo",
-        "targets": ["all", "all_verify_interface_header_sets"],
-        "nativeToolOptions": ["-k0"]
-      },
-      {
-        "name": "clang-tidy-fix",
-        "configurePreset": "clang-tidy-fix",
-        "configuration": "RelWithDebInfo",
-        "targets": ["all", "all_verify_interface_header_sets"],
-        "nativeToolOptions": ["-k0"]
-      },
-      {
-        "name": "clang-tidy-fix-parallel",
-        "configurePreset": "clang-tidy-fix-parallel",
-        "configuration": "RelWithDebInfo",
-        "targets": ["all", "all_verify_interface_header_sets"],
-        "nativeToolOptions": ["-k0"]
+    },
+    {
+      "name": "clang-tidy-fix",
+      "inherits": "clang-tidy",
+      "description": "Run Clang Tidy and apply fixes",
+      "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": {
+          "value": "clang-tidy-20;--fix"
+        }
       }
-    ]
-  }
+    },
+    {
+      "name": "clang-tidy-fix-parallel",
+      "inherits": "clang-tidy",
+      "description": "Run Clang Tidy in parallel and export fixes to YAML files (apply with clang-apply-replacements)",
+      "binaryDir": "${sourceDir}/.build/clang-tidy-fix-parallel",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": {
+          "value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-fix-parallel/fixes"
+        }
+      }
+    },
+    {
+      "name": "gcc",
+      "inherits": "default",
+      "description": "Build with GCC",
+      "binaryDir": "${sourceDir}/.build/gcc",
+      "cacheVariables": {
+        "BUILD_TT_TRAIN": {
+          "value": "OFF"
+        }
+      },
+      "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+    },
+    {
+      "name": "libcpp",
+      "inherits": "default",
+      "description": "Build using libc++",
+      "binaryDir": "${sourceDir}/.build/libcpp",
+      "cacheVariables": {
+        "BUILD_TT_TRAIN": {
+          "value": "OFF"
+        }
+      },
+      "toolchainFile": "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "default",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "all"
+      ]
+    },
+    {
+      "name": "dev-gcc",
+      "configurePreset": "gcc",
+      "configuration": "Release",
+      "targets": [
+        "all"
+      ]
+    },
+    {
+      "name": "dev-libcpp",
+      "configurePreset": "libcpp",
+      "configuration": "Release",
+      "targets": [
+        "all"
+      ]
+    },
+    {
+      "name": "debug",
+      "configurePreset": "default",
+      "configuration": "Debug",
+      "targets": [
+        "all"
+      ]
+    },
+    {
+      "name": "clang-tidy",
+      "configurePreset": "clang-tidy",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "all",
+        "all_verify_interface_header_sets"
+      ],
+      "nativeToolOptions": [
+        "-k0"
+      ]
+    },
+    {
+      "name": "clang-tidy-fix",
+      "configurePreset": "clang-tidy-fix",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "all",
+        "all_verify_interface_header_sets"
+      ],
+      "nativeToolOptions": [
+        "-k0"
+      ]
+    },
+    {
+      "name": "clang-tidy-fix-parallel",
+      "configurePreset": "clang-tidy-fix-parallel",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "all",
+        "all_verify_interface_header_sets"
+      ],
+      "nativeToolOptions": [
+        "-k0"
+      ]
+    }
+  ]
+}
