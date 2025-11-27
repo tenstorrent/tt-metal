@@ -106,8 +106,8 @@ def main():
         default=False,
     )
     parser.add_option(
-        "--disable-device-data-dump-to-tracy",
-        dest="disable_device_data_dump_to_tracy",
+        "--disable-device-data-push-to-tracy",
+        dest="disable_device_data_push_to_tracy",
         action="store_true",
         help="Disable pushing collected device data to Tracy GUI",
         default=False,
@@ -204,7 +204,7 @@ def main():
     if options.disable_device_data_dump_to_files:
         os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
 
-    if options.disable_device_data_dump_to_tracy:
+    if options.disable_device_data_push_to_tracy:
         os.environ["TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY"] = "1"
 
     if options.sync_host_device:
