@@ -11,11 +11,11 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_boltz {
 
 struct NLPConcatHeadsBoltzSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
     std::vector<CoreCoord> cores;
-    tt::tt_metal::CBHandle cb_src0;
-    tt::tt_metal::CBHandle cb_out;
+    tt::tt_metal::CBHandle cb_src0{};
+    tt::tt_metal::CBHandle cb_out{};
 };
 
 struct NLPConcatHeadsBoltzProgramFactory {
