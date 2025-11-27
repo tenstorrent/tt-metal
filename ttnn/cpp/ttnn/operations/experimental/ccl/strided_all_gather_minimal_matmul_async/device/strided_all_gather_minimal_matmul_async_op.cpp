@@ -103,7 +103,6 @@ std::
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<bool> read_local_slice_from_input) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -114,7 +113,7 @@ std::
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     strided_all_gather_async::operation_attributes_t strided_all_gather_async_struct =
         strided_all_gather_async::operation_attributes_t(
-            devices,
+            {}, // not used downstream, so pass empty vector
             dim,
             num_links,
             num_devices,
@@ -145,7 +144,7 @@ std::
             matmul_struct,
             strided_all_gather_core_grid_offset,
             read_local_from_input,
-            devices,
+            {}, // not used downstream, so pass empty vector
             ag_op},
         tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias}};
 }

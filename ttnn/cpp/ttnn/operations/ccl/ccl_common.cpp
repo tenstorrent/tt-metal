@@ -355,6 +355,15 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
+std::vector<tt::tt_fabric::FabricNodeId> get_active_fabric_node_ids(const Tensor& tensor) {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    fabric_node_ids.reserve(tensor.device_storage().coords.size());
+    for (const auto& coord : tensor.device_storage().coords) {
+        fabric_node_ids.push_back(tensor.device()->get_fabric_node_id(coord));
+    }
+    return fabric_node_ids;
+}
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,

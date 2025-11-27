@@ -21,7 +21,7 @@ struct operation_attributes_t {
 
     const CoreCoord all_gather_core_grid_offset;
     const bool read_local_slice_from_input;
-    const std::vector<IDevice*> devices;
+    const std::vector<IDevice*> devices; // not used, could be deleted?
     const strided_all_gather_async::StridedAllGatherAsync ag_op;
 };
 

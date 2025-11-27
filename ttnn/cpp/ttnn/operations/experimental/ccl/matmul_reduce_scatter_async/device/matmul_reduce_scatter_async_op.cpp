@@ -207,7 +207,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const ttnn::CoreGrid> core_grid) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = ttnn::ccl::get_active_fabric_node_ids(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -255,7 +255,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
+        .ring_size = static_cast<uint32_t>(fabric_node_ids.size()),
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,
@@ -277,7 +277,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             matmul_struct,
             /* Fusion params */
             reduce_scatter_core_grid_offset,
-            devices),
+            {} /* devices, not used */),
         {input_tensor, weight_tensor},
         optional_input_tensors,
         optional_output_tensors);

@@ -42,7 +42,7 @@ struct MatmulReduceScatterAsync {
     const CoreCoord reduce_scatter_core_grid_offset;
 
     /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
+    std::vector<IDevice*> devices;  // not used, could be removed?
 
     /* General */
     void validate_with_output_tensors(
