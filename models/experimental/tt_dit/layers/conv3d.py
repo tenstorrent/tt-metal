@@ -162,8 +162,6 @@ class ContextParallelConv3d:
         logger.warning("Setting up conv3d config")
         conv_config = get_conv3d_config(
             self.in_channels,
-            self.out_channels,
-            self.kernel_size,
             self.grid_size,
         )
         self.conv_config = conv_config
