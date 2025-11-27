@@ -18,7 +18,7 @@ def test_matmul(device, tile_height):
 
     # Hardcoded matrix dimensions
     m = tile_height  # set to minimum tile height for b1
-    k = 32 * 128
+    k = 32 * 224  # 224
 
     # Core grid: 48 cores (6x8 grid)
     # n = 1536
