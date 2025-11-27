@@ -131,19 +131,14 @@ void sum_top_experts_per_group(
     add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, true);
     cb_wait_front(summed_experts_cb_index, summed_experts_per_group);
 
-    // UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16));
-    // UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16));
+    // UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16)); // always good
+    // UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16)); // always good
 
     cb_reserve_back(group_scores_cb_index, 1);
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        add_tiles(
-            summed_experts_cb_index,
-            summed_experts_cb_index,
-            i,
-            i + 1,
-            0);  // with full init, good, without full init, bad
-        dprint_tensix_dest_reg(0);
+        add_tiles(summed_experts_cb_index, summed_experts_cb_index, i, i + 1, 0);
+        dprint_tensix_dest_reg(0);  // with full init, good, without full init, bad
     }
     tile_regs_commit();
     tile_regs_wait();
