@@ -26,7 +26,7 @@
             "T3K_gpt-oss-120b": [3600, 1.2],
             "GLX_gpt-oss-120b": [1600, 1.2]
         },
-        "decode_tok_s": {
+        "decode_tok_s_u": {
             "T3K_gpt-oss-20b": 13,
             "GLX_gpt-oss-20b": 13,
             "T3K_gpt-oss-120b": 8,

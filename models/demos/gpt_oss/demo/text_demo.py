@@ -562,7 +562,7 @@ def test_gpt_oss_demo(
         ci_targets = {}
         if model_device_key in perf_targets["ci"]["TTFT"]:
             current_ttft_target = perf_targets["ci"]["TTFT"][model_device_key]
-            if isinstance(current_ttft_target, tuple):
+            if isinstance(current_ttft_target, list):
                 high_tol_percentage = current_ttft_target[1]
                 current_ttft_target = current_ttft_target[0]
             else:
