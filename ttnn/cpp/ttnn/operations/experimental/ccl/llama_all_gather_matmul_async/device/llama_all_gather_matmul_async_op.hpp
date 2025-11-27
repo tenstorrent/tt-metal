@@ -64,9 +64,6 @@ struct LlamaAllGatherMatmulAsync {
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
 
-    /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
-
     /* General */
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors,
@@ -93,8 +90,8 @@ struct LlamaAllGatherMatmulAsync {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "devices");
-    auto attribute_values() const { return std::forward_as_tuple(this->matmul_struct, this->devices); }
+    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct");
+    auto attribute_values() const { return std::forward_as_tuple(this->matmul_struct); }
 };
 
 // llama All Gather MM Variants
