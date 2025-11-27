@@ -143,7 +143,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     // fill implicit padding, if any
     padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
-    auto& output_tensor_tuple = ttnn::prim::topk(
+    auto [output_value_tensor, output_index_tensor] = ttnn::prim::topk(
         padded_tensor,
         adjusted_k,
         -1,
@@ -154,7 +154,6 @@ std::vector<Tensor> ExecuteTopK::invoke(
         indices_tensor,
         preallocated_output_tensors);
 
-    auto [output_value_tensor, output_index_tensor] = std::move(output_tensor_tuple);
     std::vector<Tensor> output_tensor_vec;
     output_tensor_vec.reserve(2);
     output_tensor_vec.push_back(std::move(output_value_tensor));
