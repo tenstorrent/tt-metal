@@ -107,8 +107,8 @@ void mask_src_b_for_broadcast(
 
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
-            if (((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && i != row_idx) ||
-                ((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && j != 0)) {
+            if ((dim == BroadcastDim::ROW && i != row_idx) ||
+                (dim == BroadcastDim::SCALAR && (i != row_idx || j != 0))) {
                 tile[(i * num_cols) + j] = 0.0f;
             }
         }
