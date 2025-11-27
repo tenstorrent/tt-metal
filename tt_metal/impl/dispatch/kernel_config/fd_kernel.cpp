@@ -190,3 +190,8 @@ void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attri
     attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 }
+
+void FDKernel::SetRuntimeArgs() {
+    TT_ASSERT(program_ != nullptr, "Program must be set before setting runtime args");
+    tt_metal::SetRuntimeArgs(*program_, kernel_handle_, logical_core_, runtime_args);
+}
