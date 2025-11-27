@@ -180,7 +180,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             parallel_config=self.vae_parallel_config,
         )
 
-        self.tt_vae.load_state_dict(self.vae.state_dict())
+        cache.load_model(
+            self.tt_vae,
+            model_name=checkpoint_name.rsplit("/", 1)[-1],
+            subfolder="vae",
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            dtype="bf16",
+            get_torch_state_dict=lambda: self.vae.state_dict(),
+        )
 
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)

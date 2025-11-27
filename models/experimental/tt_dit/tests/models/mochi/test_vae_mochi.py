@@ -62,8 +62,8 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
         in_channels=in_channels,
         out_channels=out_channels,
         bias=bias,
-        torch_ref=reference_model,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -184,11 +184,13 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
 
     # Create TT model
     tt_model = TtResBlock(
+        reference_model.in_channels,
+        reference_model.out_channels,
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        torch_ref=reference_model,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -351,7 +353,6 @@ def create_random_causalupsampleblock_models(
         mesh_device=mesh_device,
         in_channels=in_channels,
         out_channels=out_channels,
-        torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         num_res_blocks=num_layers,
@@ -359,6 +360,7 @@ def create_random_causalupsampleblock_models(
         spatial_expansion=spatial_expansion,
         temporal_offset=temporal_offset,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 
@@ -605,7 +607,6 @@ def create_decoder_models(
     # Create TT model with same weights
     tt_model = TtDecoder(
         mesh_device=mesh_device,
-        torch_ref=reference_model,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         out_channels=out_channels,
@@ -618,6 +619,7 @@ def create_decoder_models(
         nonlinearity=nonlinearity,
         output_nonlinearity=output_nonlinearity,
     )
+    tt_model.load_torch_state_dict(reference_model.state_dict())
 
     return reference_model, tt_model
 

@@ -19,6 +19,7 @@ from ....utils.cache import get_and_create_cache_path, get_cache_path, load_cach
 from ....utils.check import assert_quality
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ....utils import cache
 
 
 def stack_cos_sin(cos, sin):
@@ -354,19 +355,20 @@ def test_mochi_transformer_model(
         is_fsdp=True,
     )
     if load_cache:
-        cache_path = get_cache_path(
-            model_name="mochi-1-preview",
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            dtype="bf16",
-        )
-        assert os.path.exists(cache_path), (
-            "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-        )
         start = time.time()
-        cache_dict = load_cache_dict(cache_path)
-        tt_model.from_cached_state_dict(cache_dict)
+
+        try:
+            cache.load_model(
+                tt_model,
+                model_name="mochi-1-preview",
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(mesh_device.shape),
+            )
+        except cache.MissingCacheError as err:
+            msg = "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+            raise RuntimeError(msg) from err
+
         end = time.time()
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
@@ -467,15 +469,14 @@ def test_mochi_transformer_model_caching(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
     )
 
-    cache_path = get_and_create_cache_path(
+    cache_dir = cache.model_cache_dir(
         model_name="mochi-1-preview",
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
     )
 
-    logger.info(f"Cache path {cache_path}")
+    logger.info(f"Cache path {cache_dir}")
 
     # Create TT model
     tt_model = MochiTransformer3DModel(
@@ -499,8 +500,7 @@ def test_mochi_transformer_model_caching(
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     start = time.time()
-    cache_dict = tt_model.to_cached_state_dict(cache_path)
-    save_cache_dict(cache_dict, cache_path)
+    tt_model.save(cache_dir)
     end = time.time()
     logger.info(f"Time taken to cache state dict: {end - start} seconds")
 
@@ -522,7 +522,6 @@ def test_mochi_transformer_model_caching(
         parallel_config=parallel_config,
         is_fsdp=True,
     )
-    loaded_cache_dict = load_cache_dict(cache_path)
-    cache_model.from_cached_state_dict(loaded_cache_dict)
+    cache_model.load(cache_dir)
     end = time.time()
     logger.info(f"Time taken to load cached state dict: {end - start} seconds")

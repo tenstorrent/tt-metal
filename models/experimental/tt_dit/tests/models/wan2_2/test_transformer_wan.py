@@ -15,7 +15,7 @@ from ....models.transformers.wan2_2.transformer_wan import WanTransformerBlock, 
 from ....parallel.manager import CCLManager
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
+from ....utils import cache
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.test import ring_params, line_params
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
@@ -113,7 +113,7 @@ def test_wan_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Initialize weights randomly for testing
     torch.manual_seed(0)
@@ -313,19 +313,20 @@ def test_wan_transformer_model(
     )
 
     if load_cache:
-        cache_path = get_cache_path(
-            model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-            subfolder="transformer",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            dtype="bf16",
-        )
-        assert os.path.exists(
-            cache_path
-        ), "Cache path does not exist. Run test_wan_transformer_model_caching first with the desired parallel config."
         start = time.time()
-        cache_dict = load_cache_dict(cache_path)
-        tt_model.from_cached_state_dict(cache_dict)
+
+        try:
+            cache.load_model(
+                tt_model,
+                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                mesh_shape=tuple(mesh_device.shape),
+            )
+        except cache.MissingCacheError as err:
+            msg = "Cache path does not exist. Run test_wan_transformer_model_caching first with the desired parallel config."
+            raise RuntimeError(msg) from err
+
         end = time.time()
         logger.info(f"Time taken to load cached state dict: {end - start} seconds")
     else:
@@ -431,12 +432,11 @@ def test_wan_transformer_model_caching(
         cfg_parallel=None,
     )
 
-    cache_path = get_and_create_cache_path(
+    cache_dir = cache.model_cache_dir(
         model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         subfolder=subfolder,
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
-        dtype="bf16",
     )
 
     # Create TT model
@@ -463,8 +463,7 @@ def test_wan_transformer_model_caching(
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     start = time.time()
-    cache_dict = tt_model.to_cached_state_dict(cache_path)
-    save_cache_dict(cache_dict, cache_path)
+    tt_model.save(cache_dir)
     end = time.time()
     logger.info(f"Time taken to cache state dict: {end - start} seconds")
 
@@ -488,7 +487,6 @@ def test_wan_transformer_model_caching(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    loaded_cache_dict = load_cache_dict(cache_path)
-    cache_model.from_cached_state_dict(loaded_cache_dict)
+    cache_model.load(cache_dir)
     end = time.time()
     logger.info(f"Time taken to load cached state dict: {end - start} seconds")
