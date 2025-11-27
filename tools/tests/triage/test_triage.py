@@ -48,6 +48,13 @@ def cause_hang_with_app(request):
 
         # Check if the process has exited
         if proc.returncode != 0:
+            # Print process output for debugging
+            print("The application did not hang as expected.")
+            stdout, stderr = proc.communicate(input=None, timeout=0)
+            print("\n=== Process stdout ===")
+            print(stdout.decode("utf-8") if stdout else "(empty)")
+            print("\n=== Process stderr ===")
+            print(stderr.decode("utf-8") if stderr else "(empty)")
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
@@ -63,8 +70,9 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
 
-        # TODO: Reset the device state after the hang
-        # subprocess.run(["tt-smi", "-r"], check=True)
+        # Reset the device state after the hang if set in environment
+        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+            subprocess.run(["tt-smi", "-r"], check=True)
 
 
 @pytest.mark.parametrize(
@@ -88,7 +96,7 @@ def cause_hang_with_app(request):
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
                 },
             },
-            5,
+            20,
         ),
     ],
     indirect=True,
@@ -139,6 +147,22 @@ class TestTriage:
             len(FAILURE_CHECKS) == 0
         ), f"Binary integrity check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
+    def test_dump_fast_dispatch(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
+            args=None,
+            context=None,
+            argv=[],
+            return_result=True,
+        )
+        assert (
+            len(FAILURE_CHECKS) == 0
+        ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
     def test_check_arc(self):
         global triage_home
         global FAILURE_CHECKS
@@ -151,8 +175,8 @@ class TestTriage:
             argv=[],
             return_result=True,
         )
-        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
+        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
         for check in result:
-            assert check.location == check.device.arc_block.location
-            assert check.clock_mhz > 0
+            assert check.location == check.device.arc_block.location, f"Incorrect ARC location: {check.location}"
+            assert 0 < check.clock_mhz < 10000, f"Invalid ARC clock: {check.clock_mhz}"

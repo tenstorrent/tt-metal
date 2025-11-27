@@ -77,8 +77,8 @@ FORCE_INLINE bool fabric_write_set_unicast_route_impl(
     udm_write_fields& udm,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
 
     // First call the original API by casting to base type
     bool result = fabric_set_unicast_route(
@@ -141,8 +141,8 @@ FORCE_INLINE bool fabric_read_set_unicast_route_impl(
     udm_read_fields& udm,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    tt_l1_ptr routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
 
     // First call the original API by casting to base type
     bool result = fabric_set_unicast_route(

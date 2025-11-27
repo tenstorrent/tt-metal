@@ -5,8 +5,6 @@
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
@@ -15,7 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 

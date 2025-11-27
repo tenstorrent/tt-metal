@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"

@@ -13,7 +13,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <sstream>
 #include <type_traits>
@@ -21,8 +20,6 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-
-using namespace tt::constants;
 
 namespace ttnn {
 

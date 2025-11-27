@@ -67,7 +67,7 @@ Tests:
   # ======================================================================================
   # Test 1: A simple, fully specified unicast test for multi-host.
   # This demonstrates the most basic configuration using ChipIds.
-  # Fabric must be 2D Dynamic.
+  # Fabric must be 2D.
   # ======================================================================================
   - name: MultiMeshRandomPairing
     fabric_setup:

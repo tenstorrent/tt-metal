@@ -7,7 +7,6 @@
 #include <optional>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/constants.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"

@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <limits>
 #include <algorithm>
 

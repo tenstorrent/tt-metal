@@ -292,11 +292,14 @@ private:
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
+    bool supports_64_bit_pcie_addressing_{};
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
+    size_t max_pinned_memory_count_{};
+    size_t total_pinned_memory_size_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -311,6 +314,7 @@ private:
     IramRelocateFunc erisc_iram_relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
+    NOCXYEncodingFunc noc_xy_pcie64_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
     NOCAddrFunc noc_mcast_addr_start_x_func_;
     NOCAddrFunc noc_mcast_addr_start_y_func_;
@@ -361,6 +365,8 @@ public:
         return noc_index == 0 ? coord : (noc_size - 1 - coord);
     }
 
+    // Returns the NOC addr to be used with 64 bit PCIe address space.
+    uint32_t noc_xy_pcie64_encoding(uint32_t x, uint32_t y) const { return noc_xy_pcie64_encoding_func_(x, y); }
     uint32_t noc_xy_encoding(uint32_t x, uint32_t y) const { return noc_xy_encoding_func_(x, y); }
     uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) const {
         return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
@@ -488,12 +494,16 @@ public:
     uint64_t get_pcie_addr_lower_bound() const;
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
+    bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.
     bool verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
         return this->verify_eth_fw_version_func_(eth_fw_version);
     }
+
+    size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
+    size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

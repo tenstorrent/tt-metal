@@ -22,6 +22,7 @@
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <variant>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;  // test only
 

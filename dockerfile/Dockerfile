@@ -132,13 +132,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU could be useful to developers
-RUN mkdir -p /tmp/iwyu \
-    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
-    && cmake --build /tmp/iwyu/build --parallel \
-    && cmake --install /tmp/iwyu/build \
-    && rm -rf /tmp/iwyu
+# Not currently building, and unclear whether this is used; can put it back in if needed
+# RUN mkdir -p /tmp/iwyu \
+#     && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
+#     && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
+#     && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+#     && cmake --build /tmp/iwyu/build --parallel \
+#     && cmake --install /tmp/iwyu/build \
+#     && rm -rf /tmp/iwyu
 
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something

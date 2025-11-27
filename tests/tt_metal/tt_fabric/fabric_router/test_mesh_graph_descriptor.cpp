@@ -11,7 +11,7 @@
 #include <set>
 #include <unordered_set>
 
-#include <tt-metalium/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
 using namespace tt::tt_fabric;
 

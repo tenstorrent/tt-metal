@@ -169,6 +169,13 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
         return result;
     }
     const auto& host_range = mapping_->host_ranges[range_index_];
+    if (device_page_offset_ < host_range.device_page_offset) {
+        if (host_range.device_page_offset >= end_device_page_offset) {
+            device_page_offset_ = end_device_page_offset;
+            return result;
+        }
+        device_page_offset_ = host_range.device_page_offset;
+    }
     uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
     uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
     result = Range{

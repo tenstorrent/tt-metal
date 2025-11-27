@@ -25,14 +25,19 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/impl/dispatch/data_collector.hpp"
+
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -223,6 +228,22 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    auto all_devices = cluster_->all_chip_ids();
+    // If simulator is enabled, force a teardown of active ethernet cores for WH
+    if (rtoptions_.get_simulator_enabled()) {
+        if (hal_->get_eth_fw_is_cooperative()) {
+            for (ChipId device_id : all_devices) {
+                for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                    CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core, CoreType::ETH);
+                    erisc_send_exit_signal(device_id, virtual_core, false);
+                    while (erisc_app_still_running(device_id, virtual_core)) {
+                    }
+                }
+            }
+        }
+    }
+
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
 
@@ -237,7 +258,6 @@ void MetalContext::teardown() {
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    auto all_devices = cluster_->all_chip_ids();
     watcher_server_->detach_devices();
     watcher_server_.reset();
     for (ChipId device_id : all_devices) {

@@ -42,7 +42,7 @@ def profile_command(test_command, output_folder, name_append, collect_noc_traces
 @click.option("--collect-noc-traces", is_flag=True, default=False)
 def main(command, output_folder, name_append, collect_noc_traces):
     logger.warning(
-        "profile_this.py is getting deprecated soon. Please use the tracy.py module with -r option to obtain op reports."
+        "Note: profile_this.py is a simple wrapper and is going to be phased out in the future in favor of using tracy.py with the -r option directly."
     )
     if command:
         logger.info(f"profile_this.py is running {command}")

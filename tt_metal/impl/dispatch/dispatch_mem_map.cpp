@@ -9,7 +9,7 @@
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch_settings.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"

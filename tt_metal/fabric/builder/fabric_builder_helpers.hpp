@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -79,7 +80,7 @@ inline uint32_t get_downstream_edm_sender_channel(
     //         NORTH → channel 3
 
     size_t downstream_compact_index_for_upstream;
-    if (downstream_direction == 0) {
+    if (downstream_direction == eth_chan_directions::EAST) {
         // EAST downstream: WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
         downstream_compact_index_for_upstream = receiver_direction - 1;
     } else {
