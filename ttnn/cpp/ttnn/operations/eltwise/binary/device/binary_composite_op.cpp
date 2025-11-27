@@ -329,32 +329,18 @@ Tensor ExecuteDiv::invoke(
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
         Tensor b = typecast(input_b, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
-        if (is_int32) {
-            result = ttnn::divide(
-                a,
-                b,
-                std::nullopt,
-                output_mem_config,
-                output_tensor,
-                post_activations,
-                lhs_activations,
-                rhs_activations,
-                use_legacy,
-                std::nullopt,
-                sub_core_grids);
-        } else {
-            result = ttnn::multiply(
-                a,
-                ttnn::reciprocal(b, output_mem_config, std::nullopt, sub_core_grids),
-                std::nullopt,
-                output_mem_config,
-                output_tensor,
-                post_activations,
-                lhs_activations,
-                rhs_activations,
-                use_legacy,
-                sub_core_grids);
-        }
+        result = ttnn::divide(
+            a,
+            b,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            use_legacy,
+            std::nullopt,
+            sub_core_grids);
     }
 
     if (round_mode == "trunc") {
