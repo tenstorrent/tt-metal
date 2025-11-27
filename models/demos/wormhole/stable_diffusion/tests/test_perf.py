@@ -450,7 +450,7 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((1.55) if is_wormhole_b0() else (1.0),),
+    ((1.45) if is_wormhole_b0() else (2.05),),
 )
 def test_stable_diffusion_vae_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion_vae"
@@ -463,7 +463,7 @@ def test_stable_diffusion_vae_device_perf(expected_kernel_samples_per_second):
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
 
-    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=False)
+    post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
         model_name=f"stable_diffusion_vae_{batch}batch",
