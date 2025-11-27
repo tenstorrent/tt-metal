@@ -5,7 +5,11 @@
 #pragma once
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
