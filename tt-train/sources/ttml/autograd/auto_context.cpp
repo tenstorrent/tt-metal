@@ -5,6 +5,8 @@
 #include "auto_context.hpp"
 
 #include <optional>
+#include <tt-metalium/distributed.hpp>
+#include <vector>
 
 #include "core/tt_profiler.hpp"
 
@@ -79,6 +81,11 @@ ttnn::distributed::MeshDevice& AutoContext::get_device() {
     }
 
     return m_device->get_device_ptr();
+}
+
+void AutoContext::synchronize_device() {
+    auto& mesh_device = get_device();
+    tt::tt_metal::distributed::Synchronize(&mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 }
 
 AutoContext::AutoContext() : m_generator(m_seed) {

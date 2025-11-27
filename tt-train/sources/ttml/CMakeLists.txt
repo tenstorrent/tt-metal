@@ -327,7 +327,7 @@ if(NOT TARGET TT::Metalium)
         message(STATUS "Metalium not found, attempting to locate")
 
         # Define the path to look for the library
-        set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/build/lib")
+        set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/install/lib")
 
         # Try to find the library
         find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
