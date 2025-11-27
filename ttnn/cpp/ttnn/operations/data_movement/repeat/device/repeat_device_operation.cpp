@@ -31,6 +31,33 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         "Output tensor must have the same memory layout as input tensor");
 }
 
+void RepeatDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Validate the input tensor
+    const Tensor& input_tensor_a = tensor_args.input;
+    TT_FATAL(
+        input_tensor_a.storage_type() == tt::tt_metal::StorageType::DEVICE,
+        "Operands to reshape need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
+    TT_FATAL(
+        input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
+    // is this relevant?
+    TT_FATAL(
+        operation_attributes.m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
+        "Output tensor must have the same memory layout as input tensor");
+}
+
+void RepeatDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_hit(operation_attributes, tensor_args);
+}
+
 std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto output_shape = input_tensor_a.logical_shape();

@@ -21,6 +21,11 @@ struct RepeatDeviceOperation {
     // Required functions to all tensor op functions
     // use for cache hit, reuse for miss
     void validate(const std::vector<Tensor>& input_tensors) const;
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     // use this one, skip the input
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     // need to implement a program factory
