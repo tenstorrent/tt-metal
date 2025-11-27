@@ -6,11 +6,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>

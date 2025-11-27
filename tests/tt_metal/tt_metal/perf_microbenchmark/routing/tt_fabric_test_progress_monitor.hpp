@@ -13,8 +13,8 @@
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common.hpp"                // For MeshCoordinate
-#include <tt-metalium/routing_table_generator.hpp>  // For FabricNodeId
-#include <tt-metalium/mesh_graph.hpp>               // For MeshId
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // For FabricNodeId
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // For MeshId
 
 // Forward declarations
 class TestContext;

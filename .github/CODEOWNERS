@@ -39,14 +39,15 @@ tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tens
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass # fabric experimental APIs
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/codeowner-bypass # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeowner-bypass
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass
-tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass
+tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/graph/ @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/codeowner-bypass # this should go away
@@ -78,8 +79,8 @@ tt_metal/impl/sub_device/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorre
 tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
-tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @tenstorrent/codeowner-bypass
-tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT @tenstorrent/codeowner-bypass
+tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/kernels/ @abhullar-tt @tenstorrent/codeowner-bypass # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners @marty1885 @tenstorrent/codeowner-bypass
@@ -117,7 +118,7 @@ tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT @Sean
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @tenstorrent/codeowner-bypass
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
-tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass
 tests/tt_metal/multihost/ @tt-asaigal @tt-aho @aliuTT @tenstorrent/codeowner-bypass
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
 
@@ -257,7 +258,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 /models/ @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT @tenstorrent/codeowner-bypass
-models/common @yieldthought @mtairum @uaydonat @tenstorrent/codeowner-bypass
+models/common @yieldthought @mtairum @uaydonat @gwangTT @tenstorrent/codeowner-bypass
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @tenstorrent/codeowner-bypass
@@ -324,6 +325,7 @@ models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorren
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tracy

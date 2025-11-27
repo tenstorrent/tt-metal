@@ -36,6 +36,13 @@ jobs:
             timeout: 120,
             owner_id: U08FXFFH7L0
           }, # Abhishek Agarwal
+          {
+            name: "models_common_unit_tests",
+            arch: wormhole_b0,
+            cmd: pytest --tb=short models/common/tests,
+            timeout: 5,
+            owner_id: U07RY6B5FLJ,  #Gongyu Wang
+          },
         ]
 
     name: ${{ matrix.test-group.name }}

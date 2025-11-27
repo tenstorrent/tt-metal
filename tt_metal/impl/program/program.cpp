@@ -75,6 +75,8 @@
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
 #include "tt_stl/reflection.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 class tt_hlk_desc;
