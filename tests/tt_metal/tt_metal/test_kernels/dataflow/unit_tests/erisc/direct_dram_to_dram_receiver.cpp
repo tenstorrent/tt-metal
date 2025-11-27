@@ -19,7 +19,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_loops; i++) {
         eth_wait_for_bytes(num_bytes);
 
-        noc.async_write(dst_dram, dst_dram, num_bytes, {}, {.bank_id = dram_bank_id, .addr = dram_buffer_dst_addr});
+        noc.async_write(src_l1, dst_dram, num_bytes, {}, {.bank_id = dram_bank_id, .addr = dram_buffer_dst_addr});
         noc.async_write_barrier();
 
         eth_receiver_done();
