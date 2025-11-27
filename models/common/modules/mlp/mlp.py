@@ -256,9 +256,21 @@ class MLPOptimizationConfig:
     li_ff2_compute_kernel_cfg: Any = None
 
 
-def ccl_topology_linear():
-    """Default CCL topology - Linear"""
-    return ttnn.Topology.Linear
+# def ccl_topology_linear():
+#     """Default CCL topology - Linear"""
+#     return ttnn.Topology.Linear
+
+
+def ccl_topology(num_devices):
+    # Use ring on a T3K or 6U galaxy submesh
+    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.GALAXY,
+    ]:
+        return ttnn.Topology.Ring
+    elif num_devices > 1:  # All other multi chip devices
+        return ttnn.Topology.Linear
+    return None
 
 
 class MLP(LightweightModule):
@@ -287,7 +299,7 @@ class MLP(LightweightModule):
         layer_num,
         dtype,
         state_dict_prefix: Optional[str] = None,
-        ccl_topology: Callable[[], Any] = ccl_topology_linear,
+        ccl_topology: Callable[[int], Any] | Any = ccl_topology,
     ):
         super().__init__()
 
@@ -297,7 +309,7 @@ class MLP(LightweightModule):
         self.program_configs = program_configs
         self.optimization_config = optimization_config
         self.layer_num = layer_num
-        self.ccl_topology = ccl_topology
+        self.ccl_topology = ccl_topology(config.num_devices) if callable(ccl_topology) else ccl_topology
 
         # Convenience aliases
         self.dim = config.dim
@@ -432,7 +444,7 @@ class MLP(LightweightModule):
             layer_num=layer_num,
             dtype=dtype,
             state_dict_prefix=state_dict_prefix,
-            ccl_topology=args.ccl_topology,
+            ccl_topology=args.ccl_topology(),
         )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -535,7 +547,7 @@ class MLP(LightweightModule):
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
-                    topology=self.ccl_topology(),
+                    topology=self.ccl_topology,
                     memory_config=self.program_configs.ff1_out_gathered_memcfg if mode == "decode" else None,
                 )
                 w3_out = tt_all_reduce(
@@ -545,7 +557,7 @@ class MLP(LightweightModule):
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
-                    topology=self.ccl_topology(),
+                    topology=self.ccl_topology,
                     memory_config=self.program_configs.ff1_out_gathered_memcfg if mode == "decode" else None,
                 )
 
@@ -611,7 +623,7 @@ class MLP(LightweightModule):
             ),
             dtype=self.config.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
-            topology=self.ccl_topology(),
+            topology=self.ccl_topology,
         )
 
         # Ensure dim 0 and 1 are 1

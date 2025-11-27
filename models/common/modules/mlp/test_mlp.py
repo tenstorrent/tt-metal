@@ -108,9 +108,9 @@ def test_mlp_optimization_config_creation():
 
 def test_ccl_topology_linear():
     """Test the default CCL topology function."""
-    from models.common.modules.mlp.mlp import ccl_topology_linear
+    from models.common.modules.mlp.mlp import ccl_topology
 
-    topology = ccl_topology_linear()
+    topology = ccl_topology(2)
     assert topology == ttnn.Topology.Linear
 
 
@@ -190,8 +190,7 @@ def test_mlp_config_galaxy_detection():
     "batch_size",
     (1,),
 )
-# [INFO] somehow the following config gets passed into conftest.py and breaks the test; ttt's test_mlp.py works fine because somehow its fabric_config=True is not passed in...
-# @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_backward_compat(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     """
     Test that MLP.from_model_args() produces identical outputs to the original MLP.
@@ -325,7 +324,7 @@ def test_mlp_backward_compat(seq_len, batch_size, mesh_device, reset_seeds, ensu
     "seq_len",
     (512, 32),
 )
-# @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_vs_reference(seq_len, mesh_device, reset_seeds, ensure_gc):
     """
     Test that modular MLP matches the HuggingFace/Meta reference model.
@@ -429,7 +428,7 @@ def test_mlp_vs_reference(seq_len, mesh_device, reset_seeds, ensure_gc):
     ],
     indirect=True,
 )
-# @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_explicit_config(mesh_device, reset_seeds, ensure_gc):
     """
     Test MLP instantiation with explicit config objects (not using from_model_args).
@@ -517,7 +516,7 @@ def test_mlp_explicit_config(mesh_device, reset_seeds, ensure_gc):
         layer_num=0,
         dtype=dtype,
         state_dict_prefix=state_dict_prefix,
-        ccl_topology=model_args.ccl_topology,
+        ccl_topology=model_args.ccl_topology(),
     )
 
     # Verify against reference
