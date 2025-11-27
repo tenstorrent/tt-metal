@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics.hpp"
-#include "board/board.hpp"
+#include <board/board.hpp>
 #include <factory_system_descriptor/utils.hpp>
 
 namespace tt::scaleout_tools {
@@ -69,6 +69,20 @@ bool generate_link_metrics(
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
+tt_metal::AsicTopology build_reset_topology(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor);
+
+void perform_link_reset(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor);
+
 tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
     PhysicalSystemDescriptor& physical_system_descriptor);
@@ -77,7 +91,8 @@ std::string get_factory_system_descriptor_path(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
     const std::optional<std::string>& fsd_path,
-    const std::string& output_path);
+    const std::string& output_path,
+    const std::vector<std::string>& hostnames);
 
 tt_metal::AsicTopology validate_connectivity(
     const std::string& fsd_path,
