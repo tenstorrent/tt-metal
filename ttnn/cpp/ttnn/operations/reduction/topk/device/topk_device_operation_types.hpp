@@ -14,10 +14,10 @@
 namespace ttnn::operations::reduction::topk {
 
 struct operation_attributes_t {
-    uint32_t k;
-    int8_t dim;
-    bool largest;
-    bool sorted;
+    uint32_t k{};
+    int8_t dim{};
+    bool largest{};
+    bool sorted{};
     tt::tt_metal::MemoryConfig output_memory_config;
     tt::tt_metal::CoreRangeSet sub_core_grids;
 };
