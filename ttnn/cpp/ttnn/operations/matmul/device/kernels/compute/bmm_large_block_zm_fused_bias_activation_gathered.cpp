@@ -12,6 +12,9 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
+#include "debug/dprint.h"
+#include "debug/dprint_tile.h"
+
 namespace NAMESPACE {
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
@@ -170,6 +173,17 @@ void MAIN {
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
 
+    DPRINT << "in0_block_w: " << in0_block_w << ENDL();
+    DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL();
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+    DPRINT << "in0_subblock_num_tiles: " << in0_subblock_num_tiles << ENDL();
+    DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+    DPRINT << "in1_block_size_bytes: " << in1_block_size_bytes << ENDL();
+    DPRINT << "in1_tensor_size_bytes: " << in1_tensor_size_bytes << ENDL();
+    DPRINT << "in1_is_dram_interleaved: " << static_cast<int>(in1_is_dram_interleaved) << ENDL();
+    DPRINT << "in1_is_dram_sharded: " << static_cast<int>(in1_is_dram_sharded) << ENDL();
+
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
@@ -210,10 +224,16 @@ void MAIN {
         UNPACK((curr_in1_block_index = ring_idx));
         UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
         UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
+
+        DPRINT << "in1_rd_ptr_start_addr: " << in1_rd_ptr_start_addr << ENDL();
+        DPRINT << "curr_in1_block_index: " << curr_in1_block_index << ENDL();
+        DPRINT << "in1_tensor_split: " << static_cast<int>(in1_tensor_split) << ENDL();
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
 
+        DPRINT << "mm_out_cb_id: " << mm_out_cb_id << ENDL();
+        DPRINT << "mm_partials_cb_id: " << mm_partials_cb_id << ENDL();
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -227,14 +247,18 @@ void MAIN {
         if constexpr (batch > 1) {
             PACK((pack_reconfig_data_format(mm_partials_cb_id)));
         }
-
+        DPRINT << "Waiting to receive in1 block" << ENDL();
         // Wait to receive in1
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
-
+        DPRINT << "Received in1 block in compute" << ENDL();
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
+
+            DPRINT << "Waiting for in1 block in compute" << ENDL();
+            DPRINT << "curr_ring_idx: " << curr_ring_idx << ENDL();
+            DPRINT << "unpadded_in0_block_w: " << unpadded_in0_block_w << ENDL();
 
             // Wait for in1 block
             if constexpr (in1_is_dram) {
@@ -251,10 +275,17 @@ void MAIN {
             }
 #endif
 
+            DPRINT << "Waiting for in0 block in compute" << ENDL();
+            DPRINT << "block: " << block << ENDL();
+            DPRINT << "input0_cb_id: " << input0_cb_id << ENDL();
+            DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+
             // Wait to receive in0 block
             if (block == 0) {
+                DPRINT << "Reserving and pushing in0 block in compute" << ENDL();
                 cb_reserve_back(input0_cb_id, in0_block_num_tiles);
                 cb_push_back(input0_cb_id, in0_block_num_tiles);
+                DPRINT << "Pushed in0 block in compute" << ENDL();
             }
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
@@ -269,6 +300,8 @@ void MAIN {
                 in1_tensor_split,
                 &next_in1_block_index,
                 &next_in1_rd_ptr_addr)));
+            DPRINT << "next_in1_block_index: " << next_in1_block_index << ENDL();
+            DPRINT << "next_in1_rd_ptr_addr: " << next_in1_rd_ptr_addr << ENDL();
 #endif
 
             int in0_index_subblock_offset = 0;

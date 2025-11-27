@@ -167,7 +167,9 @@ void CircularBuffer::assign_global_address() { globally_allocated_address_ = con
 void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
         global_circular_buffer.all_cores().contains(this->core_ranges_),
-        "Specified cores are not contained in associated GlobalCircularBuffer");
+        "Specified cores are not contained in associated GlobalCircularBuffer. Global cores: {}. CB cores: {}.",
+        global_circular_buffer.all_cores(),
+        this->core_ranges_);
     this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
     this->globally_allocated_address_ = global_circular_buffer.buffer_address();
