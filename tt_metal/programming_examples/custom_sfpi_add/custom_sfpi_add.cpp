@@ -15,8 +15,7 @@
 #include <random>
 #include <string_view>
 #include <vector>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/constants.hpp>
+#include "tt-metalium/base_types.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX

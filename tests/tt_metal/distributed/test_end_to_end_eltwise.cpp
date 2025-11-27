@@ -7,7 +7,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 
