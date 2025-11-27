@@ -10,6 +10,9 @@
 
 namespace ckernel::sfpu {
 
+// 32-bit integer division.
+// Template parameter `floor` indicates whether "floor" (true) or "trunc"
+// (false) rounding mode should be used.
 template <bool floor>
 sfpi_inline void calculate_div_int32_body(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -18,10 +21,19 @@ sfpi_inline void calculate_div_int32_body(
 
     sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+    // If a ^ b >= 0, then the result will be positive, otherwise negative.
     sfpi::vInt sign = a ^ b;
+
+    // When converting to float, the integers are treated as sign-magnitude.
+    // Convert inputs to positive values to avoid conversion problems, as the
+    // original inputs are two's complement integers.  Note that
+    // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
+    // converted to float via sfpi::int32_to_float.
     a = sfpi::abs(a);
     b = sfpi::abs(b);
 
+    // Convert to floats, but check for the edge case mentioned above.
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
     v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
     v_endif;
@@ -29,10 +41,16 @@ sfpi_inline void calculate_div_int32_body(
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
-    sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);  // accurate to ~23 bits
+    // This is accurate to ~23 bits of precision.  Since the inputs can be as
+    // large as 2**31-1, so this only gives us an initial approximation.
+    sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);
 
-    // initial approximation q = a * 1/b
+    // Initial approximation q = a * 1/b.
     sfpi::vFloat q_f = a_f * inv_b_f;
+
+    // Convert from float to int32, truncating any fractional parts.  No sign
+    // check is necessary as q will always be positive, due to using abs(a) and
+    // abs(b).
     sfpi::vInt q = 0;
     sfpi::vInt exp = sfpi::exexp(q_f);
     v_if(exp >= 0) {
@@ -41,8 +59,10 @@ sfpi_inline void calculate_div_int32_body(
         q = q << exp;
     }
     v_endif;
+    sfpi::vInt q0 = q;
 
-    // compute qb = q * b
+    // Compute qb = q * b.  This tells us how close our approximation `q` is to
+    // the target `a`.  We split into 23-bit chunks.
 
     sfpi::vInt q1 = q >> 23;
     sfpi::vInt b1 = b >> 23;
@@ -57,13 +77,21 @@ sfpi_inline void calculate_div_int32_body(
     q1 += b1;
     q1 += hi;
 
+    // This is qb.
     lo += q1 << 23;
 
+    // Compute remainder.  Note that since our initial approximation has ~23
+    // bits of precision, we don't expect the remainder to be larger than ~8
+    // bits.
     sfpi::vInt r = a - lo;
+
+    // Conversion to float is lossless as r should be ~8 bits.
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
+
+    // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
 
-    // convert to integer, with round to zero
+    // Convert to integer, truncating the fractional part.
     sfpi::vInt correction = 0;
     exp = sfpi::exexp(correction_f);
     v_if(exp >= 0) {
@@ -72,12 +100,22 @@ sfpi_inline void calculate_div_int32_body(
         correction = correction << exp;
     }
     v_endif;
+
+    // The correction value could be negative.
     v_if(r < 0) { correction = ~correction; }
     v_endif;
+
+    // Apply correction.
     q += correction;
 
+    // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
         q = -q;
+
+        // Optionally, if we want "floor" rounding, check if rounding was
+        // applied and subtract one for negative numbers, to round towards
+        // negative infinity.
+
         if constexpr (floor) {
             v_if(r != 0) { q -= 1; }
             v_endif;
