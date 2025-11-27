@@ -9,10 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::repeat {
-
-tt::tt_metal::operation::ProgramWithCallbacks rm_repeat_program_factory(
-    const Tensor& input, uint32_t num_repeats, const Tensor& output, bool is_last_dim);
+namespace ttnn::operations::data_movement::repeat::program {
 
 struct RepeatSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id;
@@ -51,4 +48,4 @@ struct RepeatProgramFactoryLastDim {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::repeat
+}  // namespace ttnn::operations::data_movement::repeat::program

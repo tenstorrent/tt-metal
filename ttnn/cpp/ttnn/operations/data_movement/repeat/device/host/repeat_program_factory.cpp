@@ -22,7 +22,7 @@
 
 constexpr uint32_t READ_ALIGNMENT = 64;
 
-namespace ttnn::operations::data_movement::repeat {
+namespace ttnn::operations::data_movement::repeat::program {
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     // We are repeating the last dim on a 2D shape
@@ -533,4 +533,4 @@ void RepeatProgramFactorySecondDim::override_runtime_arguments(
     }
 }
 
-};  // namespace ttnn::operations::data_movement::repeat
+};  // namespace ttnn::operations::data_movement::repeat::program
