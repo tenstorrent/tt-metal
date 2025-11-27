@@ -11,16 +11,16 @@
 namespace ttnn::operations::reduction {
 
 struct operation_attributes_t {
-    const tt::tt_metal::DataType output_dtype;
-    const std::optional<int> dim;
-    const bool keepdim;
-    const std::optional<CoreRangeSet> sub_core_grids;
-    const bool use_multicore;
-    const tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::DataType output_dtype;
+    std::optional<int> dim;
+    bool keepdim;
+    std::optional<CoreRangeSet> sub_core_grids;
+    bool use_multicore;
+    tt::tt_metal::MemoryConfig output_mem_config;
 };
 
 struct tensor_args_t {
-    const Tensor& input;
+    Tensor input;
     std::optional<Tensor> optional_output_tensor;
 };
 
