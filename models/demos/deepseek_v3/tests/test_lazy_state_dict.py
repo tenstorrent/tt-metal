@@ -116,3 +116,32 @@ def test_get_state_dicts_integration(tmp_path: Path):
     out = get_state_dicts((sub,), "k", shape=(2, 2), dtype=torch.float32)
     assert out.shape == (1, 2, 2)
     assert torch.equal(out[0], t)
+
+
+def test_lazy_cache_does_not_collide_across_views(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create keys with identical suffix under different prefixes
+    file1 = model_dir / "model-00001-of-00002.safetensors"
+    file2 = model_dir / "model-00002-of-00002.safetensors"
+    key_mlp = "model.layers.3.mlp.gate_proj.weight"
+    key_exp = "model.layers.3.mlp.experts.0.gate_proj.weight"
+    t_mlp = torch.randn(18432, 7168, dtype=torch.bfloat16)
+    t_exp = torch.randn(2048, 7168, dtype=torch.bfloat16)
+    safetensors.torch.save_file({key_mlp: t_mlp}, str(file1))
+    safetensors.torch.save_file({key_exp: t_exp}, str(file2))
+    _write_index(model_dir, {key_mlp: file1.name, key_exp: file2.name})
+
+    # Load lazily and create two different sub-views
+    state = load_state_dict(model_dir, "")
+    sub_mlp = sub_state_dict(state, "model.layers.3.mlp.")
+    sub_exp = sub_state_dict(state, "model.layers.3.mlp.experts.0.")
+
+    # Access the MLP key first, caching it
+    v_mlp = sub_mlp["gate_proj.weight"]
+    assert v_mlp.shape == t_mlp.shape
+
+    # Then access the expert key; should not collide with MLP cache
+    v_exp = sub_exp["gate_proj.weight"]
+    assert v_exp.shape == t_exp.shape

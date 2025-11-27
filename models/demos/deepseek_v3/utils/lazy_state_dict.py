@@ -77,16 +77,16 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         return True
 
     def __getitem__(self, key: str) -> torch.Tensor:
-        if key in self._cache:
-            return self._cache[key]
         full_key = self._full_key(key)
+        if full_key in self._cache:
+            return self._cache[full_key]
         if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
             raise KeyError(key)
         file_name = self._full_to_file[full_key]
         file_path = self._model_path / file_name
         with safe_open(file_path, framework="pt", device="cpu") as f:
             tensor = f.get_tensor(full_key)
-        self._cache[key] = tensor
+        self._cache[full_key] = tensor
         return tensor
 
     def __contains__(self, key: object) -> bool:
