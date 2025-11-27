@@ -75,6 +75,24 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config))};
 }
 
+spec_return_value_t RepeatDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.input;
+    auto output_shape = input_tensor_a.logical_shape();
+    output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
+
+    auto mem_config = this->m_output_mem_config;
+    if (input_tensor_a.memory_config().is_sharded()) {
+        auto shard_spec = input_tensor_a.shard_spec().value();
+        shard_spec.shape[0] = output_shape[0];
+        mem_config = mem_config.with_shard_spec(shard_spec);
+    }
+    return {TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config))};
+}
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 RepeatDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
