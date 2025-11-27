@@ -26,18 +26,22 @@ struct RepeatDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
     // use this one, skip the input
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) const;
+
     // need to implement a program factory
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+
     // use this one with appropriate types?
     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
+
     // the compiler will take care of invoke
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
