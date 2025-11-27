@@ -23,13 +23,13 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
 from inspector_data import run as get_inspector_data, InspectorData
-from device_id_mapping import run as get_device_id_mapping, DeviceIdMapping
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "device_id_mapping"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "metal_device_id_mapping"],
 )
 
 
@@ -115,7 +115,7 @@ class MultiCategoryCoreLookup:
 
 # This function builds a lookup map for core info for a given kernel name
 def build_core_lookup_map(
-    inspector_data: InspectorData, device_id_mapping: DeviceIdMapping
+    inspector_data: InspectorData, metal_device_id_mapping: MetalDeviceIdMapping
 ) -> dict[tuple[int, int, int], MultiCategoryCoreLookup]:
     """
     Build lookup map for core info for a given kernel name using unique_id as chip key.
@@ -137,7 +137,7 @@ def build_core_lookup_map(
         for core_entry in category_group.entries:
             # core_entry.key.chip is metal device_id
             metal_device_id = core_entry.key.chip
-            unique_id = device_id_mapping.get_unique_id(metal_device_id)
+            unique_id = metal_device_id_mapping.get_unique_id(metal_device_id)
 
             # Use unique_id as the key
             key = (unique_id, core_entry.key.x, core_entry.key.y)
@@ -297,9 +297,9 @@ def run(args, context: Context):
 
     # Get inspector data and device ID mapping
     inspector_data = get_inspector_data(args, context)
-    device_id_mapping = get_device_id_mapping(args, context)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
     # Build lookup map for core info for a given kernel name
-    core_lookup = build_core_lookup_map(inspector_data, device_id_mapping)
+    core_lookup = build_core_lookup_map(inspector_data, metal_device_id_mapping)
 
     # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
     dispatch_core_pairs = []
