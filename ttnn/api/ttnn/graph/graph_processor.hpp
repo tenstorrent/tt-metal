@@ -75,6 +75,7 @@ public:
         std::unordered_map<std::string, std::string> params;
         std::vector<std::string> arguments;
         std::vector<int> connections;
+        int stacking_level = 0;
     };
 
 private:
