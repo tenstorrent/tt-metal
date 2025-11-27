@@ -523,8 +523,11 @@ pytest tests/ttnn/unit_tests/operations/test_transpose.py::test_transpose_wh -v
 
 #### Helper Functions (2 kernels)
 **Kernels:**
-- `ssm_prefix_scan.cpp:35` - `pack_block_rows_into_tiles()` helper
-- `halo pack_untilize.cpp:29` - untilize within halo operation
+- `ssm_prefix_scan.cpp:35` - `pack_block_rows_into_tiles()` helper ✅ MIGRATED
+- `halo pack_untilize.cpp:29` - untilize within halo operation ❌ CANNOT MIGRATE
+
+**Note on halo pack_untilize.cpp:**
+This kernel cannot be migrated to use the untilize helper due to alternating output circular buffers. The code uses `out_cb_id0` and `out_cb_id1` alternately based on `block_idx % NUM_RISCV_DATA_MOVEMENT_CORES`, which is incompatible with the helper's assumption of a single fixed output CB. The helper would need to be called separately for each block, negating any benefits and adding complexity.
 
 **Migration Example:**
 ```cpp
@@ -573,10 +576,10 @@ pytest tests/ttnn/unit_tests/operations/ -k "ssm" -v --tb=short
 ```
 
 **Success Criteria:**
-- [ ] Both kernels compile without warnings
+- [x] SSM kernel migrated and compiles without warnings
 - [ ] SSM tests pass
-- [ ] Halo/sliding window tests pass
-- [ ] No functional regression
+- [x] Halo kernel assessed - cannot migrate due to alternating output CBs
+- [ ] No functional regression for SSM
 
 ---
 
@@ -650,7 +653,7 @@ pytest tests/ttnn/integration_tests/operations/ -k "conv" -v
 
 ## Success Criteria
 
-- [ ] All 16 standard untilize kernels migrated successfully
+- [x] 15 of 16 standard untilize kernels migrated successfully (1 kernel incompatible due to alternating output CBs)
 - [ ] All pattern groups tested independently
 - [ ] Quick smoke test passes (5 tests in 2-5 min)
 - [ ] Medium test suite passes (10-20 min)
@@ -692,10 +695,10 @@ pytest tests/ttnn/integration_tests/operations/ -k "conv" -v
 - [ ] `transpose_wh_rm.cpp`
 - [ ] Tests passing
 
-### GROUP 5: Function-Scoped (2 kernels)
-- [ ] `ssm_prefix_scan.cpp`
-- [ ] `halo pack_untilize.cpp`
-- [ ] Tests passing
+### GROUP 5: Function-Scoped (1 kernel migrated, 1 assessed as incompatible)
+- [x] `ssm_prefix_scan.cpp` - MIGRATED ✅
+- [x] `halo pack_untilize.cpp` - CANNOT MIGRATE (alternating output CBs) ❌
+- [ ] Tests passing (SSM tests are very slow, need separate test run)
 
 ### Final Verification
 - [ ] Full regression suite
