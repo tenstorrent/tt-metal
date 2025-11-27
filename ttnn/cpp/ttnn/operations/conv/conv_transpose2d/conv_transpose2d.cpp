@@ -470,13 +470,13 @@ Result conv_transpose2d_L1(
     uint32_t input_pad_left = base_pad_width - padding[2];
     uint32_t input_pad_right = base_pad_width - padding[3];
 
-    log_info(tt::LogOp, "Input : {}x{}", input_height, input_width);
-    log_info(tt::LogOp, "Output : {}x{}", output_height, output_width);
+    log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
+    log_debug(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
-    log_info(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
-    log_info(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
+    log_debug(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
+    log_debug(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
-    log_info(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
+    log_debug(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     TT_FATAL(
         full_input_height - strided_input_height == input_pad_top + input_pad_bottom + output_padding[0],
@@ -887,7 +887,7 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
 
     if (output_slice_width % width_rounding_value != 0) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-        log_info(
+        log_debug(
             LogOp,
             "Conv2d Transpose DRAM Slicing: Additional padding of {} added to the right side.",
             additional_padded_width);
@@ -917,8 +917,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
     auto [input_slice_start, input_slice_end] = input_slices;
     uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
     uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
-    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-    log_info(
+    log_debug(
         tt::LogOp,
         "Conv input {}, padding {}, out_pad {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
         sliced_input_tensor.logical_shape(),
@@ -928,7 +927,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
         kernel_size,
         stride,
         output_slice_height_end - output_slice_height_start,
-        output_slice_width);
+        output_slice_width_end - output_slice_width_start);
 
     auto conv_config_l1 = conv_config;
 

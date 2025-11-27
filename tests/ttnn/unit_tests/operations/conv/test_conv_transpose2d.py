@@ -319,8 +319,8 @@ def test_simple_conv_t2d(
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
-@pytest.mark.parametrize("preprocess_weights", [False])
-@pytest.mark.parametrize("mirror_kernel", [False])
+@pytest.mark.parametrize("preprocess_weights", [True, False])
+@pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_convt2d_dram(
     device,
     activations_dtype,
