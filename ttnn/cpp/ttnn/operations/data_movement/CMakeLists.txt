@@ -145,7 +145,8 @@ target_sources(
         repeat/repeat.cpp
         repeat_interleave/repeat_interleave.cpp
         reshape_on_device/device/reshape_op.cpp
-        reshape_on_device/device/reshape_program_factory.cpp
+        reshape_on_device/device/reshape_tile_program_factory.cpp
+        reshape_on_device/device/reshape_rm_program_factory.cpp
         reshape_on_device/reshape.cpp
         reshape_view/device/host/reshape_rm_program_factory.cpp
         reshape_view/device/host/reshape_tiled_program_factory.cpp
