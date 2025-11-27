@@ -909,25 +909,25 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->firmware_context_switch_interval,
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction_),
-        false,  // dateline_connection,
+        false,  // DELETEME: #33360 dateline_connection,
         control_plane.is_cross_host_eth_link(local_physical_chip_id, this->my_eth_channel),
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-        0,  // vc1_has_different_downstream_dest,
+        0,  // DELETEME: #33360 vc1_has_different_downstream_dest
         this->has_tensix_extension,
         this->enable_first_level_ack};
 
     const std::vector<uint32_t> main_args_part2 = {
-        true,  // config.skip_receiver_channel_1_connection,
-        true,  // config.skip_sender_channel_1_connection,
-        true,  // config.skip_sender_vc1_channel_connection,
+        true,  // DELETEME: #33360 config.skip_receiver_channel_1_connection,
+        true,  // DELETEME: #33360 config.skip_sender_channel_1_connection,
+        true,  // DELETEME: #33360 config.skip_sender_vc1_channel_connection,
 
         config.sender_channels_worker_conn_info_base_address[0],
         config.sender_channels_worker_conn_info_base_address[1],
         config.sender_channels_worker_conn_info_base_address[2],
         config.sender_channels_worker_conn_info_base_address[3],
-        0,  // config.sender_channels_worker_conn_info_base_address[4],
+        0,  // DELETEME: #33360 config.sender_channels_worker_conn_info_base_address[4],
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
@@ -941,7 +941,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(1),
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
         config.risc_configs[risc_id].is_sender_channel_serviced(3),
-        false,  // config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        false,  // DELETEME: #33360 config.risc_configs[risc_id].is_sender_channel_serviced(4),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
         config.risc_configs[risc_id].is_receiver_channel_serviced(1),
         config.risc_configs[risc_id].enable_handshake(),
@@ -980,7 +980,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Conditionally add remote channel info when skip_src_ch_id_update is true
     // (these values are used to initialize src channel IDs once, rather than updating them dynamically)
     if (skip_src_ch_id_update) {
-        ct_args.push_back(0);  // remote_vc1_sender_channel);
+        ct_args.push_back(0);  // DELETEME: #33360 remote_vc1_sender_channel);
         ct_args.push_back(remote_worker_sender_channel);
     }
 
@@ -1090,13 +1090,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->sender_channels_connection_semaphore_id[1],
         this->sender_channels_connection_semaphore_id[2],
         this->sender_channels_connection_semaphore_id[3],
-        0,  // this->sender_channels_connection_semaphore_id[4],
+        0,  // DELETEME: #33360 this->sender_channels_connection_semaphore_id[4],
 
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3],
-        0  // this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4]};
+        0  // DELETEME: #33360 this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4]};
     };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);

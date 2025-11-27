@@ -71,7 +71,7 @@ static constexpr std::size_t num_sender_channels_2d = 4;
 static constexpr std::size_t num_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
 static constexpr std::size_t num_downstream_sender_channels = num_sender_channels - 1;
 
-static constexpr std::size_t num_receiver_channels = 1;  // 2;
+static constexpr std::size_t num_receiver_channels = 1;
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
