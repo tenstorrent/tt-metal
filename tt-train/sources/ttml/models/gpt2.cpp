@@ -16,8 +16,10 @@
 #include "serialization/serializable.hpp"
 namespace {
 
-static std::vector<float> transpose_2d_flat(const std::vector<float> &flat, int64_t rows, int64_t cols) {
-    fmt::print("Transposing!\n");
+static std::vector<float> transpose_2d_flat(
+    const std::vector<float> &flat, int64_t rows, int64_t cols, bool verbose = false) {
+    if (verbose)
+        fmt::print("Transposing!\n");
     assert(rows * cols == static_cast<int64_t>(flat.size()));
     std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
     auto src = xt::adapt(flat, shape_vec);
@@ -194,41 +196,49 @@ std::shared_ptr<Transformer> create(const YAML::Node &config) {
     return std::make_shared<Transformer>(transformer_config);
 }
 
-void Transformer::load_from_safetensors(const std::filesystem::path &model_path) {
+void Transformer::load_from_safetensors(const std::filesystem::path &model_path, bool verbose) {
     for (const auto &entry : std::filesystem::directory_iterator(model_path)) {
         if (entry.path().extension() == ".safetensors") {
             auto path = entry.path();
-            fmt::print("Loading model from: {}\n", path.string());
+            if (verbose)
+                fmt::print("Loading model from: {}\n", path.string());
             auto parameters = this->parameters();
-            load_model_from_safetensors(path, parameters);
+            load_model_from_safetensors(path, parameters, verbose);
         }
     }
 }
 
-void load_model_from_safetensors(const std::filesystem::path &path, serialization::NamedParameters &parameters) {
-    for (auto &[k, v] : parameters) {
-        fmt::print("parameter name: {}\n", k);
+void load_model_from_safetensors(
+    const std::filesystem::path &path, serialization::NamedParameters &parameters, bool verbose) {
+    if (verbose) {
+        for (auto &[k, v] : parameters) {
+            fmt::print("parameter name: {}\n", k);
+        }
     }
-    auto get_parameter = [&parameters](const std::string &name) -> ttml::autograd::TensorPtr {
+    auto get_parameter = [&parameters, verbose](const std::string &name) -> ttml::autograd::TensorPtr {
         auto it = parameters.find(name);
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
+        if (verbose)
+            fmt::print(" Parameter {}, shape: {}\n", name, it->second->get_value().logical_shape());
         return it->second;
     };
     serialization::SafetensorSerialization::TensorCallback loading_callback =
-        [&get_parameter](
+        [&get_parameter, verbose](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
-            fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
+            if (verbose)
+                fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
             auto float_vec = serialization::SafetensorSerialization::bytes_to_float_vec(bytes, info.dtype);
             if (info.name == "wte.weight") {
                 auto out_tensor1 = get_parameter("transformer/fc/weight");
-                fmt::print("Original shape {}, {}", info.shape[0], info.shape[1]);
-                fmt::print(
-                    "Transformed shape {}, {}\n",
-                    out_tensor1->get_value().logical_shape()[-2],
-                    out_tensor1->get_value().logical_shape()[-1]);
+                if (verbose) {
+                    fmt::print("Original shape {}, {}", info.shape[0], info.shape[1]);
+                    fmt::print(
+                        "Transformed shape {}, {}\n",
+                        out_tensor1->get_value().logical_shape()[-2],
+                        out_tensor1->get_value().logical_shape()[-1]);
+                }
                 auto padded_emb = pad_rows_flat(
                     float_vec, info.shape[0], info.shape[1], out_tensor1->get_value().logical_shape()[-2]);
                 out_tensor1->set_value(core::from_vector(
@@ -277,7 +287,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 // attention: qkv_linear <- attn.c_attn.{weight,bias}
                 if (info.name == pfx + ".attn.c_attn.weight") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/qkv_linear/weight", i);
-                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1], verbose);
                     auto out_tensor1 = get_parameter(block_name);
                     out_tensor1->set_value(core::from_vector(
                         transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
@@ -292,7 +302,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 // attention: out_linear <- attn.c_proj.{weight,bias}
                 if (info.name == pfx + ".attn.c_proj.weight") {
                     auto block_name = fmt::format("transformer/gpt_block_{}/attention/out_linear/weight", i);
-                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1], verbose);
                     auto out_tensor1 = get_parameter(block_name);
                     out_tensor1->set_value(core::from_vector(
                         transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
@@ -321,7 +331,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 // mlp: fc1 <- mlp.c_fc.{weight,bias}
                 if (info.name == pfx + ".mlp.c_fc.weight") {
                     auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc1/weight");
-                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1], verbose);
                     out_tensor1->set_value(core::from_vector(
                         transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }
@@ -335,7 +345,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
                 // mlp: fc2 <- mlp.c_proj.{weight,bias}
                 if (info.name == pfx + ".mlp.c_proj.weight") {
                     auto out_tensor1 = get_parameter("transformer/gpt_block_" + std::to_string(i) + "/mlp/fc2/weight");
-                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1]);
+                    auto transposed = transpose_2d_flat(float_vec, info.shape[0], info.shape[1], verbose);
                     out_tensor1->set_value(core::from_vector(
                         transposed, out_tensor1->get_value().logical_shape(), out_tensor1->get_value().device()));
                 }

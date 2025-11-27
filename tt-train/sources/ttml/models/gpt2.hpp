@@ -49,7 +49,7 @@ private:
 public:
     explicit Transformer(const TransformerConfig& config);
     virtual ~Transformer() = default;
-    void load_from_safetensors(const std::filesystem::path& model_path) override;
+    void load_from_safetensors(const std::filesystem::path& model_path, bool verbose = false) override;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 };
@@ -59,5 +59,6 @@ public:
 [[nodiscard]] std::shared_ptr<Transformer> create(const TransformerConfig& config);
 [[nodiscard]] std::shared_ptr<Transformer> create(const YAML::Node& config);
 
-void load_model_from_safetensors(const std::filesystem::path& path, serialization::NamedParameters& parameters);
+void load_model_from_safetensors(
+    const std::filesystem::path& path, serialization::NamedParameters& parameters, bool verbose = false);
 }  // namespace ttml::models::gpt2

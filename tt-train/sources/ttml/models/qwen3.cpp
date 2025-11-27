@@ -220,8 +220,6 @@ Qwen3::Qwen3(const Qwen3Config& config) : m_config(config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
-
-    common::transformer::initialize_weights_gpt2(*this);
 }
 
 ttml::autograd::TensorPtr Qwen3::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
@@ -317,7 +315,7 @@ std::shared_ptr<Qwen3> create(const YAML::Node& config) {
     return std::make_shared<Qwen3>(qwen3_config);
 }
 
-void Qwen3::load_from_safetensors(const std::filesystem::path& model_path) {
+void Qwen3::load_from_safetensors(const std::filesystem::path& model_path, bool verbose) {
     std::vector<std::filesystem::path> safetensor_files;
     for (const auto& entry : std::filesystem::directory_iterator(model_path)) {
         if (entry.path().extension() == ".safetensors") {
@@ -332,9 +330,12 @@ void Qwen3::load_from_safetensors(const std::filesystem::path& model_path) {
 
     for (size_t i = 0; i < safetensor_files.size(); ++i) {
         const auto& path = safetensor_files[i];
-        fmt::print("Loading model from: {} ({}/{})\n", path.string(), i + 1, safetensor_files.size());
-        load_model_from_safetensors(path, parameters, m_config, used_parameters_global, ignored_parameters_global);
-        fmt::print("Completed loading file {}/{}\n", i + 1, safetensor_files.size());
+        if (verbose)
+            fmt::print("Loading model from: {} ({}/{})\n", path.string(), i + 1, safetensor_files.size());
+        load_model_from_safetensors(
+            path, parameters, m_config, used_parameters_global, ignored_parameters_global, verbose);
+        if (verbose)
+            fmt::print("Completed loading file {}/{}\n", i + 1, safetensor_files.size());
     }
 
     std::vector<std::string> unused_parameters;
@@ -363,7 +364,8 @@ void load_model_from_safetensors(
     serialization::NamedParameters& parameters,
     const Qwen3Config& config,
     std::set<std::string>& used_parameters,
-    std::set<std::string>& ignored_parameters) {
+    std::set<std::string>& ignored_parameters,
+    bool verbose) {
     const bool meta_style = false;
 
     auto transpose_flat_ = [](const std::vector<float>& x, int64_t r, int64_t c) -> std::vector<float> {
@@ -383,7 +385,8 @@ void load_model_from_safetensors(
             return src;
         }
         if (src_c == tgt_r && src_r == tgt_c) {
-            fmt::print("[{}] transposing weights\n", dbg);
+            if (verbose)
+                fmt::print("[{}] transposing weights\n", dbg);
             return transpose_flat_(src, src_r, src_c);
         }
         throw std::runtime_error(fmt::format(
@@ -401,13 +404,15 @@ void load_model_from_safetensors(
     std::map<int, std::vector<float>> k_weights, v_weights;
     std::map<int, std::array<int64_t, 2>> k_shapes, v_shapes;
 
-    auto get_parameter = [&parameters, &used_parameters](const std::string& name) -> ttml::autograd::TensorPtr {
+    auto get_parameter =
+        [&parameters, &used_parameters, verbose](const std::string& name) -> ttml::autograd::TensorPtr {
         auto it = parameters.find(name);
 
         if (it == parameters.end()) {
             throw std::runtime_error(fmt::format("Parameter {} not found in the model", name));
         }
-        fmt::print("Using parameter: {} with shape: {}\n", name, it->second->get_value().logical_shape());
+        if (verbose)
+            fmt::print("Using parameter: {} with shape: {}\n", name, it->second->get_value().logical_shape());
         used_parameters.insert(name);
         return it->second;
     };
@@ -467,12 +472,14 @@ void load_model_from_safetensors(
         k_shapes.erase(layer_idx);
         v_shapes.erase(layer_idx);
 
-        fmt::print("Combined k_proj + v_proj → kv_linear for layer {}\n", layer_idx);
+        if (verbose)
+            fmt::print("Combined k_proj + v_proj → kv_linear for layer {}\n", layer_idx);
     };
 
     serialization::SafetensorSerialization::TensorCallback loading_callback =
         [&](const serialization::SafetensorSerialization::TensorInfo& info, std::span<const std::byte> bytes) {
-            fmt::print("Loading tensor: {}, shape:{}, dtype:{}\n", info.name, info.shape, info.dtype);
+            if (verbose)
+                fmt::print("Loading tensor: {}, shape:{}, dtype:{}\n", info.name, info.shape, info.dtype);
 
             std::vector<float> float_vec;
             std::string dtype = info.dtype;

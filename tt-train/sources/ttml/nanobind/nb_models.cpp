@@ -108,6 +108,8 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_base_transformer.def(
             "load_from_safetensors",
             &models::BaseTransformer::load_from_safetensors,
+            nb::arg("model_path"),
+            nb::arg("verbose") = false,
             nb::call_guard<nb::gil_scoped_release>());
     }
 

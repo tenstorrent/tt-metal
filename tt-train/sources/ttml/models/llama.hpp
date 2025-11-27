@@ -53,7 +53,7 @@ private:
 public:
     explicit Llama(const LlamaConfig& config);
     virtual ~Llama() = default;
-    void load_from_safetensors(const std::filesystem::path& model_path) override;
+    void load_from_safetensors(const std::filesystem::path& model_path, bool verbose = false) override;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 
@@ -73,5 +73,6 @@ void load_model_from_safetensors(
     serialization::NamedParameters& parameters,
     const LlamaConfig& config,
     std::set<std::string>& used_parameters,
-    std::set<std::string>& ignored_parameters);
+    std::set<std::string>& ignored_parameters,
+    bool verbose = false);
 }  // namespace ttml::models::llama
