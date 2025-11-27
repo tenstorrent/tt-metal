@@ -1145,7 +1145,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
             physical_start.x, physical_start.y, physical_end.x, physical_end.y);
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
-        sub_cmd.length = xfer_size_bytes;
+        sub_cmd.length_minus1 = xfer_size_bytes - 1;
         sub_cmd.num_mcast_dests =
             (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
         sub_cmd.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;

@@ -4555,7 +4555,12 @@ def test_conv2d_dram_oft(
     packer_l1_acc,
 ):
     skip_if_not_blackhole_20_cores(device)
+
+    act_block_h_override = 32*8
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
     batch_size = 1
+
     run_conv(
         device,
         torch_tensor_map,
@@ -4572,7 +4577,7 @@ def test_conv2d_dram_oft(
         stride[0],
         stride[1],
         padding,
-        config_override=None,
+        config_override=config_override,
         dilation_h=dilation[0],
         dilation_w=dilation[1],
         has_bias=has_bias,
