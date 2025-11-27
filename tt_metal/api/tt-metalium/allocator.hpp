@@ -16,12 +16,12 @@ namespace tt {
 namespace tt_metal {
 
 struct Statistics {
-    std::size_t total_allocatable_size_bytes = 0;
-    std::size_t total_allocated_bytes = 0;
-    std::size_t total_free_bytes = 0;
-    std::size_t largest_free_block_bytes = 0;
+    size_t total_allocatable_size_bytes = 0;
+    size_t total_allocated_bytes = 0;
+    size_t total_free_bytes = 0;
+    size_t largest_free_block_bytes = 0;
     // addresses (relative to bank) that can hold the largest_free_block_bytes
-    std::vector<std::uint32_t> largest_free_block_addrs;
+    std::vector<uint32_t> largest_free_block_addrs;
 };
 
 class Buffer;
@@ -41,14 +41,14 @@ public:
 
     void deallocate_buffers();
     std::unordered_set<Buffer*> get_allocated_buffers() const;
-    std::uint32_t get_num_banks(const BufferType& buffer_type) const;
+    uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;
-    CoreCoord get_logical_core_from_bank_id(std::uint32_t bank_id) const;
-    int32_t get_bank_offset(BufferType buffer_type, std::uint32_t bank_id) const;
-    const std::vector<std::uint32_t>& get_bank_ids_from_logical_core(
+    CoreCoord get_logical_core_from_bank_id(uint32_t bank_id) const;
+    int32_t get_bank_offset(BufferType buffer_type, uint32_t bank_id) const;
+    const std::vector<uint32_t>& get_bank_ids_from_logical_core(
         BufferType buffer_type, const CoreCoord& logical_core) const;
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
-    std::uint32_t get_alignment(BufferType buffer_type) const;
+    uint32_t get_alignment(BufferType buffer_type) const;
     Statistics get_statistics(const BufferType& buffer_type) const;
     // AllocatorState Methods
     // Extracts the current state of the allocator.
@@ -69,7 +69,7 @@ namespace detail {
 // This is only used by the move operation in ttnn and is not intended for public use
 // (it's in the detail namespace)
 DeviceAddr calculate_bank_size_spread(
-    DeviceAddr size_bytes, DeviceAddr page_size_bytes, std::uint32_t num_banks, std::uint32_t alignment_bytes);
+    DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes);
 
 }  // namespace detail
 
