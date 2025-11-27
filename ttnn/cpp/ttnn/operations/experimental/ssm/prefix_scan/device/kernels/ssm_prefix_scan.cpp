@@ -7,7 +7,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.h"
+#include "compute_kernel_api/untilize.h"
 
 constexpr uint32_t NUM_TILES_IN_TILIZED_CHUNK = 32;
 
@@ -32,7 +32,17 @@ FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, ui
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    compute_kernel_lib::untilize<true, true>(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out, 1, num_tiles);
+    untilize_init(cb_in);
+
+    cb_wait_front(cb_in, num_tiles);
+    cb_reserve_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
+
+    untilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+
+    cb_push_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
+    cb_pop_front(cb_in, num_tiles);
+
+    untilize_uninit(cb_in);
 }
 
 // This function relies on tilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
