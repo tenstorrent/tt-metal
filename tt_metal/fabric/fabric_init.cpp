@@ -333,14 +333,9 @@ void build_tt_fabric_program(
                 auto eth_chan_dir1 = eth_chans_dir1[link];
                 auto eth_chan_dir2 = eth_chans_dir2[link];
 
-<<<<<<< HEAD
                 auto& router_builder1 = router_builders.at(eth_chan_dir1);
                 auto& router_builder2 = router_builders.at(eth_chan_dir2);
 
-=======
-                auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
-                auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
->>>>>>> fc6f71d751 (Disabled downstream EDM connection for NeighborExchange + Commenting changes)
                 build_downstream_connections(eth_chan_dir1, eth_chan_dir2);
 
                 // select VC based on the current link

@@ -177,12 +177,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     }
     this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
     this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
-<<<<<<< HEAD
 
     set_routing_mode(this->topology_);
-=======
-    set_routing_mode(this->topology_, this->fabric_config_);
->>>>>>> 92daddc599 (WIP: Added Neighbor Exchange Topology to Fabric)
 }
 
 // Used to check whether a physical mesh has wrap-around connections, to enable Ring topology.

@@ -2128,16 +2128,11 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
-<<<<<<< HEAD
-template <uint8_t NUM_SYNC_FABRIC_CONNECTIONS, bool IS_2D_FABRIC, uint8_t NUM_LOCAL_SYNC_CORES>
-=======
 template <
     uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
     bool IS_2D_FABRIC,
-    bool USE_DYNAMIC_ROUTING,
     uint8_t NUM_LOCAL_SYNC_CORES,
     bool USE_UNICAST_SYNC_PACKETS>
->>>>>>> bbade4bb57 (Added unicast packet option for sync traffic)
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2211,13 +2206,8 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-<<<<<<< HEAD
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC>(local_args_idx, packet_header_address);
-=======
-            line_sync_configs()[i]
-                .template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING, USE_UNICAST_SYNC_PACKETS>(
-                    local_args_idx, packet_header_address);
->>>>>>> bbade4bb57 (Added unicast packet option for sync traffic)
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_UNICAST_SYNC_PACKETS>(
+                local_args_idx, packet_header_address);
         }
 
         // Initialize local sync config
