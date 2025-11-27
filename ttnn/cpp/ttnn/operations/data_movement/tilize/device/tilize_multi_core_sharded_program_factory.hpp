@@ -11,10 +11,10 @@ namespace ttnn::operations::data_movement::program {
 
 struct TilizeMultiCoreShardedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        tt::tt_metal::CBHandle input_cb_handle;
-        tt::tt_metal::CBHandle output_cb_handle;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        tt::tt_metal::CBHandle input_cb_handle{};
+        tt::tt_metal::CBHandle output_cb_handle{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
