@@ -49,7 +49,9 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     auto num_cores = shard_spec.grid.num_cores();
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     if (this->on_subcoregrids) {
-        TT_FATAL(num_cores >= this->num_heads, "For subcoregrid inputs, we only support num_heads<=num_cores");
+        TT_FATAL(sub_core_grids.has_value(), "Subcoregrids must be provided if on_subcoregrids is true");
+        TT_FATAL(
+            sub_core_grids.value().num_cores() >= this->num_heads, "Subcoregrids must have at least num_heads cores");
     }
 }
 
@@ -74,8 +76,9 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
         const auto input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
         CoreRangeSet input_core_grid = input_tensor.shard_spec().value().grid;
         const auto start_coord = input_core_ranges[0].start_coord;
-        output_core_grid =
-            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_coord, num_heads, input_core_grid, true);
+        const auto& sub_core_grids = this->sub_core_grids;
+        output_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            start_coord, num_heads, sub_core_grids.value(), true);
     } else {
         output_core_grid = tt::tt_metal::num_cores_to_corerangeset(
             num_heads, input_tensor.device()->compute_with_storage_grid_size(), true);
