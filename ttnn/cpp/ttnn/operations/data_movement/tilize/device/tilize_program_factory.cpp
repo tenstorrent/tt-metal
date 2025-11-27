@@ -198,8 +198,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(
-                grid_size, available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
