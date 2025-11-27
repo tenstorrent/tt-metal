@@ -2,38 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/conv/conv1d/conv1d.hpp"
+
 #include <array>
-#include <cstdint>
-#include <iostream>
-#include <optional>
-#include <string>
-#include <tuple>
-#include <utility>
 #include <variant>
 
-#include <tt-metalium/buffer_types.hpp>
-
-#include <tt-logger/tt-logger.hpp>
+#include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
-
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/conv/conv1d/conv1d.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/move/move.hpp"
 
-namespace ttnn {
-namespace operations::conv {
-using namespace tt;
+namespace ttnn::operations::conv::conv1d {
 
-namespace conv1d {
-
-Result conv1d(
+Result Conv1dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -94,8 +74,9 @@ Result conv1d(
             conv_config,
             compute_config,
             memory_config,
-            Conv2dSliceConfig{
-                .slice_type = Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
+            conv2d::Conv2dSliceConfig{
+                .slice_type =
+                    conv2d::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 
@@ -109,48 +90,5 @@ Result conv1d(
         return Result(output_tensor);
     };
 }
-Result Conv1dOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_length,
-    uint32_t kernel_size,
-    uint32_t stride,
-    std::variant<std::array<uint32_t, 2>, uint32_t> padding,
-    uint32_t dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv1dConfig>& conv_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config,
-    const std::optional<const MemoryConfig>& memory_config,
-    bool return_output_dim,
-    bool return_weights_and_bias) {
-    return conv1d(
-        input_tensor,
-        weight_tensor,
-        device,
-        in_channels,
-        out_channels,
-        batch_size,
-        input_length,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        groups,
-        dtype,
-        bias_tensor,
-        conv_config,
-        compute_config,
-        memory_config,
-        return_output_dim,
-        return_weights_and_bias);
-}
 
-}  // namespace conv1d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv1d

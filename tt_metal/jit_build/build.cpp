@@ -42,16 +42,6 @@ namespace fs = std::filesystem;
 using namespace std;
 using namespace tt;
 
-namespace {
-
-void sync_events(auto& events) {
-    for (auto& f : events) {
-        f.get();
-    }
-}
-
-}  // namespace
-
 namespace tt::tt_metal {
 
 namespace {
@@ -195,6 +185,11 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
     }
+    if (rtoptions.get_profiler_perf_counter_mode() != 0) {
+        // force profiler on if perf counters are being captured
+        TT_ASSERT(tt::tt_metal::getDeviceProfilerState());
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
+    }
 
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
@@ -258,8 +253,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/hw/inc/debug",
-        root_ + "tt_metal/api/",
-        root_ + "tt_metal/api/tt-metalium/"};
+        root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
@@ -478,7 +472,7 @@ size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* set
         }
     }
 
-    sync_events(events);
+    sync_build_steps(events);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -607,7 +601,7 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
-    sync_events(events);
+    sync_build_steps(events);
     for (auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
@@ -619,7 +613,7 @@ void launch_build_step(const std::function<void()>& build_func, std::vector<std:
 
 void sync_build_steps(std::vector<std::shared_future<void>>& events) {
     for (auto& event : events) {
-        event.wait();
+        event.get();
     }
 }
 

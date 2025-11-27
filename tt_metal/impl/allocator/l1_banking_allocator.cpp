@@ -26,6 +26,8 @@
 #include "impl/allocator/allocator_types.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 

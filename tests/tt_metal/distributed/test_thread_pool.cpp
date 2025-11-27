@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include "tt_metal/common/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

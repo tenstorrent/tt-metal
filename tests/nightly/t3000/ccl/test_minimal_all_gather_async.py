@@ -961,10 +961,9 @@ def test_all_gather_async_interleaved_to_sharded(
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric2d_linear", "fabric2d_dynamic_linear"],
+    ids=["fabric_linear", "fabric2d_linear"],
 )
 def test_all_gather_async_2x4(
     mesh_device,
@@ -1061,6 +1060,28 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         mesh_device,
     )
 
+    tile_size = tt_input.spec.tile.tile_shape[0]
+    rank = len(tt_input.shape)
+    gather_dim_normalized = dim if dim >= 0 else rank + dim
+    is_tile_padded = gather_dim_normalized >= rank - 2 and (
+        (gather_dim_normalized == rank - 2 and tt_input.shape[-2] % tile_size != 0)
+        or (gather_dim_normalized == rank - 1 and tt_input.shape[-1] % tile_size != 0)
+    )
+
+    input_topology = tt_input.tensor_topology()
+
+    # Create expected topology based on which all-gather path was used
+    if is_tile_padded:
+        expected_topology = ttnn.TensorTopology(
+            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
+        )
+    else:
+        expected_placements = list(input_topology.placements())
+        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+        expected_topology = ttnn.TensorTopology(
+            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+        )
+
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.all_gather(
             tt_input,
@@ -1074,12 +1095,17 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
 
+        actual_topology = tt_out_tensor.tensor_topology()
+        assert (
+            actual_topology == expected_topology
+        ), f"output TensorTopology mismatch (tile_padded={is_tile_padded}):\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
+
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d_dynamic"],
+    ids=["fabric_linear", "fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
@@ -1111,3 +1137,6 @@ def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
     torch_reference = torch_input.repeat([devices, 1, 1, 1])
     eq, output = comp_equal(torch_output, torch_reference)
     assert eq, f"Output mismatch between torch and ttnn all-gather: {output}"
+
+    output_placements = tt_output.tensor_topology().placements()
+    assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"

@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <tt-metalium/device_pool.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include <algorithm>
 #include <map>
@@ -22,8 +21,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -35,7 +33,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -441,6 +439,63 @@ TEST_F(Fabric2DFixture, Test2DMCastConnAPI_1N1E1W) { RunTest2DMCastConnAPI(this,
 
 TEST_F(Fabric2DFixture, Test2DMCastConnAPI_7N3E) { RunTest2DMCastConnAPI(this, 7, 0, 3, 0); }
 
+// Nightly Fabric Tensix Config UDM Mode Tests - 1-3 hops
+// NOC_UNICAST_WRITE
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricUnicastWriteSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+// NOC_UNICAST_ATOMIC_INC
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricAtomicIncSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+// NOC_UNICAST_INLINE_WRITE
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteEast) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::E, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteWest) {
+    for (uint32_t hops = 1; hops <= 3; hops++) {
+        FabricUnicastCommon(
+            this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::W, hops)}, FabricApiType::Mesh);
+    }
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteNorth) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::N, 1)}, FabricApiType::Mesh);
+}
+TEST_F(NightlyFabric2DTensixUdmFixture, TestTensixUDMFabricInlineWriteSouth) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(RoutingDirection::S, 1)}, FabricApiType::Mesh);
+}
+
 TEST_F(NightlyFabric2DFixture, Test2DMCast) {
     auto valid_combinations = GenerateAllValidCombinations(this);
     for (const auto& [north, south, east, west] : valid_combinations) {
@@ -611,6 +666,88 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocInlineWriteWithState) {
          std::make_tuple(RoutingDirection::S, 1)},
         FabricApiType::Mesh,
         true);
+}
+
+// UDM Mode Tests - test udm api changes for 2D
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
+}
+
+// Nightly UDM Mode Tests - test udm api changes for 2D
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteNorth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::N, 1));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteSouth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::S, 1));
+}
+
+// Nightly UDM Mode Tests - test udm inline write api changes for 2D
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::W, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteNorth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::N, 1));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteSouth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::S, 1));
+}
+
+// Nightly UDM Mode Tests - test udm atomic inc api changes for 2D
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncNorth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::N, 1));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncSouth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::S, 1));
+}
+
+// Nightly UDM Mode Read Tests - test udm read api for 2D
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 2));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadNorth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::N, 1));
+}
+TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadSouth) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::S, 1));
 }
 
 // Unicast Scatter Write
@@ -980,310 +1117,20 @@ TEST_F(NightlyFabric2DFixture, TestLinearFabricMulticastNocFusedAtomicIncWithSta
         true);
 }
 
-// 2D DYNAMIC topology Linear API tests (using 1D Linear API semantics)
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocUnicastWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocInlineWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Scatter Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWrite) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWriteMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocScatterWriteWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicInc) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicIncMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocAtomicIncWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-// Unicast Fused Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicInc) {
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, {std::make_tuple(dir, 1)});
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicIncMultiDir) {
-    FabricUnicastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricUnicastNocFusedAtomicIncWithState) {
-    FabricUnicastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1),
-         std::make_tuple(RoutingDirection::W, 2),
-         std::make_tuple(RoutingDirection::N, 1),
-         std::make_tuple(RoutingDirection::S, 1)},
-        FabricApiType::Linear,
-        true);
-}
-
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocUnicastWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Inline Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocInlineWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_INLINE_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Scatter Write
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWrite) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWriteMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocScatterWriteWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_SCATTER_WRITE,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicInc) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicIncMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocAtomicIncWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
-// Multicast Fused Atomic Inc
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicInc) {
-    std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>> pairs = {
-        {std::make_tuple(RoutingDirection::E, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-        {std::make_tuple(RoutingDirection::N, 1, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
-    };
-    for (auto& cfg : pairs) {
-        FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC, cfg);
-    }
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicIncMultiDir) {
-    FabricMulticastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)});
-}
-TEST_F(NightlyFabric2DDynamicFixture, TestLinearFabricMulticastNocFusedAtomicIncWithState) {
-    FabricMulticastCommon(
-        this,
-        NOC_FUSED_UNICAST_ATOMIC_INC,
-        {std::make_tuple(RoutingDirection::E, 1, 1),
-         std::make_tuple(RoutingDirection::W, 1, 2),
-         std::make_tuple(RoutingDirection::N, 1, 1),
-         std::make_tuple(RoutingDirection::S, 1, 1)},
-        true);
-}
-
 // 1D Routing Validation Test
 TEST_F(Fabric1DFixture, TestGetNextHopRouterDirection1D) { RunGetNextHopRouterDirectionTest(this, false); }
 
 // 2D Dynamic Routing Unicast Tests
-TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
-    for (uint32_t i = 0; i < 10; i++) {
-        RunTestUnicastRaw(this);
-    }
-}
-
-// 2D Dynamic Routing Unicast Tests
-TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
+TEST_P(T3kCustomMeshGraphFabric2DFixture, TestUnicastRaw) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
-    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+    CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
 }
 
-TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
+TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         GTEST_SKIP() << "Test not applicable for TG cluster type";
     }
@@ -1291,219 +1138,215 @@ TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
 }
 
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
-TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMultiMesh) {
+TEST_P(T3kCustomMeshGraphFabric2DFixture, TestGetNextHopRouterDirectionMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
-    CustomMeshGraphFabric2DDynamicFixture::SetUp(
+    CustomMeshGraphFabric2DFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     RunGetNextHopRouterDirectionTest(this, true);
 }
 
 // Skipping other t3k configs because multi-mesh in single process isn't supported
 INSTANTIATE_TEST_SUITE_P(
-    T3kCustomMeshGraphFabric2DDynamicTests,
-    T3kCustomMeshGraphFabric2DDynamicFixture,
+    T3kCustomMeshGraphFabric2DTests,
+    T3kCustomMeshGraphFabric2DFixture,
     ::testing::Values(t3k_mesh_descriptor_chip_mappings[0]));
 
-TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
-
-TEST_F(Fabric2DDynamicFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
-
-// 2D Dynamic Routing Unidirectional mcast tests (no turns)
-TEST_F(Fabric2DDynamicFixture, TestLineMcastE2Hops) {
+// 2D Routing Unidirectional mcast tests (no turns)
+TEST_F(Fabric2DFixture, TestLineMcastE2Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastE3Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastE7Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastW2Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastW3Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     RunTestLineMcast(this, {routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastW7Hops) {
     auto routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     RunTestLineMcast(this, {routing_info});
 }
 
 // 2D Dynamic Routing Unidirectional mcast tests (with turns)
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN1HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN1HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN2HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN2HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS1HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS1HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS2HopE3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS2HopE3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS2HopE7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS2HopE7Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopW3Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN1HopW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN1HopW7Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopW3Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS1HopW7Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS1HopW7Hops) {
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 7};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE1HopW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE1HopW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE1HopW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE1HopW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE2HopsW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE2HopsW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE2HopsW1Hop) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE2HopsW1Hop) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 2};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 1};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS1HopE1HopW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS1HopE1HopW2Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastN1HopE1HopW2Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastN1HopE1HopW2Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 1};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 2};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 1};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric2DDynamicFixture, TestLineMcastS2HopsE4HopsW3Hops) {
+TEST_F(Fabric2DFixture, TestLineMcastS2HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS2HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS2HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS3HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS3HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastS3HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastS3HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto s_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::S, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, s_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN2HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN2HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 2};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE4HopsW3Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE4HopsW3Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 4};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 3};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 3};
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
+TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     auto e_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::E, .num_mcast_hops = 3};
     auto w_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::W, .num_mcast_hops = 4};
     auto n_routing_info = McastRoutingInfo{.mcast_dir = RoutingDirection::N, .num_mcast_hops = 3};

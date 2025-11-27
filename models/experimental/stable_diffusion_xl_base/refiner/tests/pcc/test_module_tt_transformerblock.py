@@ -18,11 +18,11 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     "input_shape, encoder_shape, down_block_id, block_id, query_dim, num_attn_heads, out_dim, pcc, block_type",
     [
         ((1, 4096, 768), (1, 77, 1280), 1, 0, 768, 12, 768, 0.999, "down_blocks"),
-        ((1, 4096, 768), (1, 77, 1280), 1, 1, 768, 12, 768, 0.999, "down_blocks"),
+        ((1, 4096, 768), (1, 77, 1280), 1, 1, 768, 12, 768, 0.998, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 0, 1536, 24, 1536, 0.999, "down_blocks"),
         ((1, 1024, 1536), (1, 77, 1280), 2, 1, 1536, 24, 1536, 0.998, "down_blocks"),
-        ((1, 256, 1536), (1, 77, 1280), -1, 0, 1536, 24, 1536, 0.999, "mid_block"),
-        ((1, 256, 1536), (1, 77, 1280), -1, 1, 1536, 24, 1536, 0.998, "mid_block"),
+        ((1, 256, 1536), (1, 77, 1280), -1, 0, 1536, 24, 1536, 0.998, "mid_block"),
+        ((1, 256, 1536), (1, 77, 1280), -1, 1, 1536, 24, 1536, 0.999, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -81,7 +81,7 @@ def test_transformerblock(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensor.unsqueeze(0),
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,

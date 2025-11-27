@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/device.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -21,9 +22,8 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<const DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                   : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {

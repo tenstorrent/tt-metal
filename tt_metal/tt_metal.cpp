@@ -34,7 +34,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -551,14 +551,14 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
 
     size_t host_idx = 0;
     size_t bank_index = 0;
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
+    std::vector<uint8_t> page(page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
+            case BufferType::TRACE: {
+                ReadFromDeviceDRAMChannel(device, bank_index, address, std::span<uint8_t>(page));
+            } break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
@@ -1036,6 +1036,10 @@ KernelHandle CreateDataMovementKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
@@ -1064,6 +1068,10 @@ KernelHandle CreateEthernetKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
 
     TT_FATAL(

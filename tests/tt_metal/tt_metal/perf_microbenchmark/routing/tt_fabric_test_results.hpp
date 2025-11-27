@@ -14,8 +14,8 @@
 
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using Topology = tt::tt_fabric::Topology;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -53,6 +53,76 @@ struct BandwidthResultSummary {
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
     std::vector<double> statistics_vector;  // Stores the calculated statistics for each test
+
+    // Optional fields for database upload CSV
+    std::optional<std::string> file_name;
+    std::optional<std::string> machine_type;
+    std::optional<std::string> test_ts;
+};
+
+// Latency measurement result structure
+struct LatencyResult {
+    std::string test_name;
+    std::string ftype;
+    std::string ntype;
+    std::string topology;
+    uint32_t num_devices{};
+    uint32_t num_links{};
+    uint32_t num_samples{};
+    uint32_t payload_size{};
+
+    // Statistics for net latency (raw - responder) - MOST IMPORTANT METRIC
+    double net_min_ns{};
+    double net_max_ns{};
+    double net_avg_ns{};
+    double net_p99_ns{};
+
+    // Statistics for responder processing time
+    double responder_min_ns{};
+    double responder_max_ns{};
+    double responder_avg_ns{};
+    double responder_p99_ns{};
+
+    // Statistics for raw latency (round-trip time)
+    double raw_min_ns{};
+    double raw_max_ns{};
+    double raw_avg_ns{};
+    double raw_p99_ns{};
+
+    // Statistics for per-hop latency (net latency / num_hops)
+    double per_hop_min_ns{};
+    double per_hop_max_ns{};
+    double per_hop_avg_ns{};
+    double per_hop_p99_ns{};
+};
+
+// Golden latency comparison structures
+// Extends LatencyResult with tolerance information from golden files
+struct GoldenLatencyEntry : LatencyResult {
+    double tolerance_percent{};  // Per-test tolerance percentage from golden CSV
+};
+
+struct LatencyComparisonResult {
+    double speedup() const { return golden_per_hop_avg_ns / current_per_hop_avg_ns; }  // Lower is better for latency
+    double difference_percent() const {
+        return ((current_per_hop_avg_ns - golden_per_hop_avg_ns) / golden_per_hop_avg_ns) * 100.0;
+    }
+
+    std::string test_name;
+    std::string ftype;
+    std::string ntype;
+    std::string topology;
+    uint32_t num_devices{};
+    uint32_t num_links{};
+    uint32_t num_samples{};
+    uint32_t payload_size{};
+
+    // Current vs golden for per-hop latency average (primary comparison metric)
+    double current_per_hop_avg_ns{};
+    double golden_per_hop_avg_ns{};
+
+    bool within_tolerance{};
+    std::string status;
 };
 
 // Golden CSV comparison structures

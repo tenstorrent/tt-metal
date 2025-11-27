@@ -319,3 +319,32 @@ def test_rotary_embedding_decode_fp32(
     p, o = comp_pcc(pt_out, tt_got_back)
     logger.info(o)
     assert p
+
+
+@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 64, 64)])
+@pytest.mark.parametrize("cache_size", [2048])
+def test_rotary_embedding_row_major(W, Z, Y, X, cache_size, device):
+    """Test rotary embedding with row-major layout inputs."""
+    torch.manual_seed(0)
+
+    input_shape = [W, Z, Y, X]
+    sin_cos_shape = [1, 1, cache_size, X]
+    x = torch.randn(input_shape).bfloat16().float()
+    cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
+    sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16)
+    assert xt.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "Test expects input to be in ROW_MAJOR layout"
+
+    xt = xt.to(device)
+    cost = ttnn.Tensor(cos_cached, ttnn.bfloat16).to(device)
+    sint = ttnn.Tensor(sin_cached, ttnn.bfloat16).to(device)
+
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint)
+
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
+
+    p, o = comp_pcc(pt_out, tt_got_back)
+    logger.info(o)
+    assert p

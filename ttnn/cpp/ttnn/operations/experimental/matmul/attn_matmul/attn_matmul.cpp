@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/attn_matmul_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "attn_matmul.hpp"
-
+#include "ttnn/device.hpp"
 #include <utility>
 
 namespace ttnn::operations::experimental::matmul {
@@ -19,22 +18,16 @@ ttnn::Tensor AttnMatmulOperation::invoke(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
-                    ? input_tensor_a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return tt::tt_metal::operation::run(
-               AttnMatmulDeviceOperation{
-                   std::nullopt,
-                   std::nullopt,
-                   compute_with_storage_grid_size,
-                   memory_config.value_or(input_tensor_a.memory_config()),
-                   dtype.value_or(input_tensor_a.dtype()),
-                   kernel_config_val},
-               {input_tensor_a, input_tensor_b},
-               {},
-               {std::move(optional_output_tensor)})
-        .at(0);
+    return ttnn::prim::attn_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        compute_with_storage_grid_size,
+        dtype,
+        compute_kernel_config,
+        memory_config,
+        std::nullopt,  // num_tokens
+        std::nullopt,  // transpose_hw
+        std::move(optional_output_tensor));
 }
 
 // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
@@ -53,22 +46,16 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
         num_tokens <= input_tensor_b.padded_shape()[2],
         "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
     const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
-    auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
-                    ? input_tensor_a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return tt::tt_metal::operation::run(
-               AttnMatmulDeviceOperation{
-                   num_tokens_rounded_up_to_32,
-                   transpose_hw,
-                   compute_with_storage_grid_size,
-                   memory_config.value_or(input_tensor_a.memory_config()),
-                   dtype.value_or(input_tensor_a.dtype()),
-                   kernel_config_val},
-               {input_tensor_a, input_tensor_b},
-               {},
-               {std::move(optional_output_tensor)})
-        .at(0);
+    return ttnn::prim::attn_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        compute_with_storage_grid_size,
+        dtype,
+        compute_kernel_config,
+        memory_config,
+        num_tokens_rounded_up_to_32,
+        transpose_hw,
+        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::experimental::matmul

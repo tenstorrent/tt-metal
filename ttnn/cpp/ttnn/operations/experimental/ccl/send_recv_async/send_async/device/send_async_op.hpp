@@ -10,7 +10,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_socket.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operation.hpp"
@@ -27,8 +26,7 @@ struct SendAsync {
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        // TODO #25011: Adding mesh_socket requires reflection support including json serialization
-        // attrs.emplace_back("mesh_socket", mesh_socket);
+        attrs.emplace_back("mesh_socket", mesh_socket);
         return attrs;
     }
 
@@ -53,10 +51,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
 namespace operations::experimental::ccl {
 
-std::vector<Tensor> send_async(
-    const Tensor& input_tensor,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    const tt::tt_metal::distributed::SocketConfig& socket_config);
+std::vector<Tensor> send_async(const Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 }  // namespace operations::experimental::ccl
 

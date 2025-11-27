@@ -174,11 +174,16 @@ def build_mpi_command(
     config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
-    # Find mpirun-ulfm executable, fall back to mpirun if not found
-    mpi_launcher = shutil.which("mpirun-ulfm")
-    if not mpi_launcher:
-        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+    # Check if running in SLURM interactive session
+    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
+        logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
         mpi_launcher = "mpirun"
+    else:
+        # Find mpirun-ulfm executable, fall back to mpirun if not found
+        mpi_launcher = shutil.which("mpirun-ulfm")
+        if not mpi_launcher:
+            logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+            mpi_launcher = "mpirun"
 
     cmd = [mpi_launcher]
 

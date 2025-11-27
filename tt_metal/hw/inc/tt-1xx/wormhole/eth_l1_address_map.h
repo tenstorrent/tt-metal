@@ -89,18 +89,18 @@ struct address_map {
     static constexpr std::int32_t FABRIC_ROUTER_RESERVED_BASE = MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE;
     static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE;
 
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = MEM_AERISC_FABRIC_ROUTER_CONFIG_BASE;
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = MEM_AERISC_FABRIC_ROUTER_CONFIG_SIZE;
+    static constexpr std::int32_t AERISC_FABRIC_TELEMETRY_ADDR = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     static constexpr std::int32_t AERISC_ROUTING_TABLE_BASE = MEM_AERISC_ROUTING_TABLE_BASE;
-
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_1D = COMPRESSED_ROUTING_PATH_SIZE_1D;
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = COMPRESSED_ROUTING_PATH_SIZE_2D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = ROUTING_PATH_SIZE_1D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_2D = FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
+
     static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_1D = FABRIC_ROUTING_PATH_BASE;
     static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_2D =
         FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE_1D;
+
     static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_1D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D;
     static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_2D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
     static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = FABRIC_ROUTING_PATH_SIZE_1D + FABRIC_ROUTING_PATH_SIZE_2D;
@@ -111,6 +111,9 @@ struct address_map {
         "Active Erisc region is greater than MAX_SIZE");
     static constexpr std::int32_t ERISC_BARRIER_BASE =
         (FABRIC_ROUTER_RESERVED_BASE + FABRIC_ROUTER_RESERVED_SIZE + 31) & ~31;
+    static_assert(
+        MEM_AERISC_ROUTING_TABLE_BASE + MEM_AERISC_ROUTING_TABLE_SIZE <= ERISC_BARRIER_BASE,
+        "Fabric router memory map exceeds reserved space");
     static_assert(ERISC_BARRIER_BASE < MAX_SIZE, "Erisc config region is greater than MAX_SIZE");
 
     // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during

@@ -187,7 +187,15 @@ struct DispatchRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = downstream_cb_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
-    static inline CBWriter<my_downstream_cb_sem, my_noc_index, downstream_noc_xy, downstream_cb_sem> cb_writer{};
+    static inline CBWriter<
+        my_downstream_cb_sem,
+        my_noc_index,
+        downstream_noc_xy,
+        downstream_cb_sem,
+        downstream_cb_base,
+        downstream_cb_end,
+        downstream_cb_page_size>
+        cb_writer{};
 };
 
 struct DispatchSRelayInlineState {
@@ -200,7 +208,14 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
-    static inline CBWriter<my_dispatch_s_cb_sem_id, my_noc_index, dispatch_s_noc_xy, downstream_dispatch_s_cb_sem_id>
+    static inline CBWriter<
+        my_dispatch_s_cb_sem_id,
+        my_noc_index,
+        dispatch_s_noc_xy,
+        downstream_dispatch_s_cb_sem_id,
+        dispatch_s_buffer_base,
+        dispatch_s_buffer_end,
+        dispatch_s_cb_page_size>
         cb_writer{};
 };
 
@@ -477,7 +492,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
-    RelayInlineState::cb_writer.release_pages(npages);
+    RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
     return cmd->relay_inline.stride;
 }
 
@@ -635,7 +650,7 @@ uint32_t process_relay_paged_cmd_large(
 
         write_length -= amt_to_write;
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        DispatchRelayInlineState::cb_writer.release_pages(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
@@ -647,13 +662,13 @@ uint32_t process_relay_paged_cmd_large(
         uint32_t amt_to_write = write_length;
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
+        downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-        DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
+        DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     } else {
-        DispatchRelayInlineState::cb_writer.release_pages(1);
+        downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+        DispatchRelayInlineState::cb_writer.release_pages(1, downstream_data_ptr);
     }
-
-    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -749,7 +764,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
             // Third step - write from DB
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-            DispatchRelayInlineState::cb_writer.release_pages(npages);
+            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
             read_length -= amt_read;
 
@@ -769,7 +784,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -869,7 +884,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
 
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        DispatchRelayInlineState::cb_writer.release_pages(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
         total_length -= amt_read;
 
@@ -885,7 +900,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 }
 
 template <bool cmddat_wrap_enable>
@@ -1002,7 +1017,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
             uint32_t npages =
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-            DispatchRelayInlineState::cb_writer.release_pages(npages);
+            DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
 
             read_length -= amt_to_read;
 
@@ -1019,7 +1034,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1125,7 +1140,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         RelayInlineState::downstream_noc_encoding);
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
-    RelayInlineState::cb_writer.release_pages(npages);
+    RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
 
     return stride;
 }
@@ -1356,7 +1371,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
 
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, start, length);
 
-        DispatchRelayInlineState::cb_writer.release_pages(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
         sub_cmd++;
     }
     uint32_t start = ringbuffer_start + sub_cmd->start;
@@ -1364,8 +1379,8 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
     uint32_t npages = write_pages_to_dispatcher<1, false>(downstream_data_ptr, start, length);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
 }
 
 template <bool cmddat_wrap_enable>
@@ -1699,7 +1714,8 @@ CBReaderWithManualRelease<
     cmddat_q_log_page_size,
     cmddat_q_blocks,
     cmddat_q_pages_per_block,
-    cmddat_q_base>
+    cmddat_q_base,
+    cmddat_q_end>
     h_cmddat_q_reader;
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
@@ -1714,24 +1730,9 @@ inline void relay_raw_data_to_downstream(
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
+        uint32_t available_data = h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
-        // Compute contiguous bytes available to read now without wrapping
-        uint32_t contiguous_until_wrap = cmddat_q_end - data_ptr;
-        uint32_t contiguous_until_fence;
-        if (data_ptr < h_cmddat_q_reader.cb_fence) {
-            contiguous_until_fence = h_cmddat_q_reader.cb_fence - data_ptr;
-        } else if (data_ptr > h_cmddat_q_reader.cb_fence) {
-            // Fence wrapped but data_ptr has not; only read until end-of-buffer
-            contiguous_until_fence = contiguous_until_wrap;
-        } else {
-            // Should not happen due to ensure above; treat as no data
-            continue;
-        }
-
-        uint32_t can_read_now = contiguous_until_fence;
+        uint32_t can_read_now = available_data;
         if (can_read_now > remaining) {
             can_read_now = remaining;
         }
@@ -1752,7 +1753,7 @@ inline void relay_raw_data_to_downstream(
             pages_to_release += extra_pages;
         }
         if (pages_to_release != 0) {
-            RelayInlineState::cb_writer.release_pages(pages_to_release);
+            RelayInlineState::cb_writer.release_pages(pages_to_release, local_downstream_data_ptr);
         }
 
         // Advance pointers and remaining
@@ -1783,10 +1784,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
         // ENDL();
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
-            // Ensure header is present
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
+        h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
             (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1805,7 +1803,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
             relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
         } else {
             // Ensure the entire command payload is present before returning
-            uint32_t pages_ready = (h_cmddat_q_reader.cb_fence - data_ptr) >> cmddat_q_log_page_size;
+            uint32_t pages_ready = h_cmddat_q_reader.available_bytes(data_ptr) >> cmddat_q_log_page_size;
             uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             int32_t pages_pending = pages_needed - pages_ready;
             int32_t npages = 0;
@@ -1882,7 +1880,6 @@ void kernel_main_d() {
 
     h_cmddat_q_reader.init();
     uint32_t cmd_ptr = cmddat_q_base;
-    uint32_t& fence = h_cmddat_q_reader.cb_fence;
 
     bool done = false;
     uint32_t heartbeat = 0;
@@ -1932,18 +1929,7 @@ void kernel_main_d() {
             done = process_cmd<true, false>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
             amt_processed += stride;
 
-            // This is ugly: relay_inline_cmd code can wrap and this can wrap
-            // They peacefully coexist because we won't wrap there and here at once
-            if (cmd_ptr + stride >= cmddat_q_end) {
-                stride -= cmddat_q_end - cmd_ptr;
-                cmd_ptr = cmddat_q_base;
-                if (fence == cmddat_q_end) {
-                    // We hit the nail on the head, wrap the fence
-                    ASSERT(stride == 0);
-                    fence = cmddat_q_base;
-                }
-            }
-            cmd_ptr += stride;
+            h_cmddat_q_reader.consumed_data(cmd_ptr, stride);
         }
 
         // TODO: evaluate less costly free pattern (blocks?)

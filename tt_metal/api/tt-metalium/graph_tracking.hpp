@@ -93,10 +93,7 @@ public:
     GraphTracker(const GraphTracker&) = delete;
     GraphTracker(GraphTracker&&) = delete;
 
-    static GraphTracker& instance() {
-        static GraphTracker tracker;
-        return tracker;
-    }
+    static GraphTracker& instance();
 
     bool is_enabled() const;
 

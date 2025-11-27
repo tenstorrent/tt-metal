@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <random>
 
@@ -44,7 +44,6 @@ public:
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
-    virtual bool is_dynamic_routing_enabled() const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
