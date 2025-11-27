@@ -16,7 +16,8 @@ struct ExecuteUnary {
     static Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static ComplexTensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
@@ -47,7 +48,8 @@ struct ExecuteUnaryWithFloatParameter {
         const Tensor& input_tensor,
         float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type>
@@ -135,20 +137,6 @@ struct Abs {
 };
 
 struct Eqz {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct Floor {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct Trunc {
     static Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

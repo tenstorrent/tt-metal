@@ -1555,6 +1555,7 @@ void bind_binary_overload_operation(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1594,24 +1595,30 @@ void bind_binary_overload_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
                float scalar,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, scalar, memory_config); },
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor, scalar, memory_config, sub_core_grids);
+            },
             py::arg("input_tensor"),
             py::arg("scalar"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 template <typename binary_operation_t>
