@@ -218,9 +218,6 @@ ttnn::Tensor reshape_tiled(
     auto rt_args_estimate = reshape::detail::estimate_reshape_rt_args(
         tensor3d, requested_shape_3d, requested_padded_shape_3d, memory_config);
 
-    printf(
-        "on_device_mappings: %s\n",
-        on_device_mappings.has_value() ? (on_device_mappings.value() ? "true" : "false") : "nullopt");
     if ((!rt_args_estimate.can_fit_in_rt_args()) &&
         (on_device_mappings.has_value() && on_device_mappings.value() == false)) {
         // run untilize + reshape + tilize
@@ -237,7 +234,6 @@ ttnn::Tensor reshape_tiled(
         if (typecast_back) {
             output_tensor_3d = ttnn::typecast(output_tensor_3d, DataType::FLOAT32);
         }
-        printf("composite path\n");
     } else {
         printf("direct path\n");
         auto output_tensor_3d = ttnn::prim::reshape(
