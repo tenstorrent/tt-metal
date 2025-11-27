@@ -65,6 +65,7 @@ struct ScatterCTAs {
     const uint32_t index_cb;
     const uint32_t source_cb;
     const uint32_t output_cb;
+    const uint32_t fp32_temp_cb;
     const uint32_t input_stick_size;
     const uint32_t index_stick_size;
     const uint32_t source_stick_size;
@@ -81,7 +82,7 @@ struct ScatterCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto source_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<source_args.next_compile_time_args_offset()>();
@@ -103,6 +104,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
         input_args,
         index_args,
         source_args,

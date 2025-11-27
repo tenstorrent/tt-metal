@@ -13,17 +13,18 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
-enum class ScatterCB : std::underlying_type_t<tt::CBIndex> {
+enum class ScatterReduceBfloat16CB : std::underlying_type_t<tt::CBIndex> {
     INPUT = CBIndex::c_0,
     SRC = CBIndex::c_1,
     INDEX = CBIndex::c_2,
     DST = CBIndex::c_3,
+    FP32_TEMP = CBIndex::c_4
 };
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-struct ScatterProgramFactory {
+struct ScatterReduceBfloat16ProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id{};
         KernelHandle writer_kernel_id{};

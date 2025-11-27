@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "scatter_device_operation.hpp"
-#include "scatter_program_factory.hpp"
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -12,8 +11,13 @@
 namespace ttnn::operations::data_movement::scatter {
 
 ScatterDeviceOperation::program_factory_t ScatterDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ScatterProgramFactory{};
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if ((args.opt_reduction != ScatterReductionType::INVALID) &&
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16) {
+        return ScatterReduceBfloat16ProgramFactory{};
+    } else {
+        return ScatterProgramFactory{};
+    }
 }
 
 void ScatterDeviceOperation::validate_on_program_cache_hit(
