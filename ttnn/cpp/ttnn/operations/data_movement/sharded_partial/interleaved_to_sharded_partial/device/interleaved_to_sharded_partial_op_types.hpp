@@ -11,7 +11,7 @@
 namespace ttnn::operations::data_movement::interleaved_to_sharded_partial {
 
 struct operation_attributes_t {
-    tt::tt_metal::CoreCoord grid_size{};
+    tt::tt_metal::CoreCoord grid_size;
     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec(tt::tt_metal::CoreRangeSet(), {0, 0});
     uint32_t num_slices{};
     uint32_t slice_index{};

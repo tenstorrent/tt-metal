@@ -15,7 +15,7 @@ struct InterleavedToShardedPartialProgramFactory {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
         tt::tt_metal::CBHandle cb_output{};
-        std::vector<tt::tt_metal::CoreCoord> cores{};
+        std::vector<tt::tt_metal::CoreCoord> cores;
         uint32_t num_slices{};
     };
 
