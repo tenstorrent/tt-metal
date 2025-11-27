@@ -57,7 +57,6 @@ public:
         FabricNodeId fabric_node_id,
         FabricNodeId remote_fabric_node_id,
         const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
         tt::tt_fabric::eth_chan_directions eth_direction,
         bool dispatch_link,
         tt::tt_fabric::chan_id_t eth_chan,

@@ -305,8 +305,6 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args() co
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config);
 
     auto channel_allocator = fabric_router_config.channel_allocator.get();
@@ -600,8 +598,6 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config);
 
     auto ct_args = config_->get_compile_time_args();
@@ -734,8 +730,6 @@ std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args()
 
     // 23: fabric_router_sync_address
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config);
     ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);  // 23: fabric_router_sync_address
 
