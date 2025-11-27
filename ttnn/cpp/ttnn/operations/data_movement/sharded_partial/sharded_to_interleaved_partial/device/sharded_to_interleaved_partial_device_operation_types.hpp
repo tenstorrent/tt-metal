@@ -9,12 +9,11 @@
 
 namespace ttnn::operations::data_movement {
 
-// Partial operation specific types
 struct sharded_to_interleaved_partial_operation_attributes_t {
-    uint32_t num_slices;
-    uint32_t slice_index;
-    tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype;
+    uint32_t num_slices{};
+    uint32_t slice_index{};
+    tt::tt_metal::MemoryConfig output_mem_config{};
+    tt::tt_metal::DataType output_dtype{};
 };
 
 struct sharded_to_interleaved_partial_tensor_args_t {

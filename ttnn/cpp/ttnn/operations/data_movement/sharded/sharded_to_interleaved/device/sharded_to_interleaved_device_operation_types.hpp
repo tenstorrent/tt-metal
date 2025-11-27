@@ -10,11 +10,11 @@
 namespace ttnn::operations::data_movement {
 
 struct sharded_to_interleaved_operation_attributes_t {
-    tt::tt_metal::MemoryConfig output_mem_config;
-    tt::tt_metal::DataType output_dtype;
-    bool is_l1_aligned;
-    uint32_t num_slices;
-    uint32_t slice_index;
+    tt::tt_metal::MemoryConfig output_mem_config{};
+    tt::tt_metal::DataType output_dtype{};
+    bool is_l1_aligned = false;
+    uint32_t num_slices = 1;
+    uint32_t slice_index = 0;
 };
 
 struct sharded_to_interleaved_tensor_args_t {
