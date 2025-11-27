@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Tuple, Union
 
 import torch
@@ -168,6 +168,8 @@ class Conv2dConfiguration:
 
     deallocate_activation: bool = False
     reallocate_halo_output: bool = True
+
+    return_output_dim: bool = False
 
     config_tensors_in_dram: bool = False
 
@@ -508,7 +510,9 @@ class TtConv2d:
         self,
         configuration: Conv2dConfiguration,
         device: ttnn.Device,
+        return_output_dim: bool = False,
     ):
+        configuration = replace(configuration, return_output_dim=return_output_dim)
         self.configuration = configuration
         self.conv2d_config = to_conv2d_config(configuration)
         self.compute_config = to_compute_config(configuration, device)
@@ -629,11 +633,11 @@ class TtConv2d:
             slice_kwargs = self.get_conv2d_kwargs()
             slice_kwargs["in_channels"] = channels_per_slice
 
-            output_slice, self.weight_slices[i] = ttnn.conv2d(
+            output_slice, [h_out, w_out], self.weight_slices[i] = ttnn.conv2d(
                 input_tensor=input_slices[i],
                 weight_tensor=self.weight_slices[i],
                 bias_tensor=None,
-                return_output_dim=False,
+                return_output_dim=True,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
                 **slice_kwargs,
@@ -655,22 +659,25 @@ class TtConv2d:
 
             accumulated_output = ttnn.add(accumulated_output, self.bias, output_tensor=accumulated_output)
 
-        return accumulated_output
+        return accumulated_output, (h_out, w_out)
 
     def __call__(self, x):
         if not self.weight_slices:
             # No slicing
-            x, [self.weight, self.bias] = ttnn.conv2d(
+            x, [h_out, w_out], [self.weight, self.bias] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.weight,
                 bias_tensor=self.bias,
-                return_output_dim=False,
+                return_output_dim=True,
                 return_weights_and_bias=True,
                 compute_config=self.compute_config,
                 **self.get_conv2d_kwargs(),
             )
         else:
-            x = self._apply_channel_slicing(x)
+            x, (h_out, w_out) = self._apply_channel_slicing(x)
+
+        if self.configuration.return_output_dim:
+            return x, (h_out, w_out)
 
         return x
 
