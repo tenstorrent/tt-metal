@@ -51,7 +51,7 @@ def create_tt_model(
             weights_path=gpt_oss_model_args.model_path,
             head_dim=gpt_oss_model_args.hf_config.head_dim,
             dummy_weights=gpt_oss_model_args.dummy_weights,
-            convert_to_meta_format=gpt_oss_model_args.convert_to_meta_format,
+            convert_to_meta_format=True,
         )
 
     # Create GPT-OSS model using transformer-compatible constructor
