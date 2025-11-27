@@ -35,7 +35,7 @@ struct RotaryEmbeddingLlamaDeviceOperation {
         const tt::tt_metal::Tensor& trans_mat,
         bool is_decode_mode,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama

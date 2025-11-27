@@ -196,7 +196,7 @@ RotaryEmbeddingLlamaDeviceOperation::invoke(
     const tt::tt_metal::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
