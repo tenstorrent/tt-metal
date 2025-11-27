@@ -130,6 +130,7 @@ void py_bind_reshape_view(pybind11::module& module) {
                 * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
                 * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
                 * :attr:`sub_core_grids` (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
+                * :attr:`on_device_mappings` (bool, optional): Specifies whether to use the tile reshape version with on device mappings. Default is True.
 
 
             Returns:
