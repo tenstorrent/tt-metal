@@ -14,4 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(
 tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const Tensor& input, const Tensor& output, std::optional<CoreRangeSet> sub_core_grid);
 
+tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_without_device_mapping(
+    const Tensor& input, const Tensor& output, std::optional<CoreRangeSet> sub_core_grid);
+
 }  // namespace ttnn::operations::data_movement::reshape

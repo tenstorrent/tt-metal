@@ -149,6 +149,7 @@ target_sources(
         reshape_on_device/reshape.cpp
         reshape_view/device/host/reshape_rm_program_factory.cpp
         reshape_view/device/host/reshape_tiled_program_factory.cpp
+        reshape_view/device/host/reshape_tiled_without_device_mapping_program.cpp
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp

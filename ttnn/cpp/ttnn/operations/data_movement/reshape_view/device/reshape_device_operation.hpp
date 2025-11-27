@@ -15,6 +15,7 @@ struct ReshapeDeviceOperation {
     tt::tt_metal::MemoryConfig output_mem_config;
     const bool recreate_mapping_tensor;
     std::optional<CoreRangeSet> sub_core_grid;
+    std::optional<bool> on_device_mappings;
 
     // Required functions to all tensor op functions
     void update_structure(const Tensor& input_tensor);
