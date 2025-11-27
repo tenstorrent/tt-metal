@@ -330,11 +330,14 @@ private:
 // Tracks whether the gRPC server has been started (enforces single instance, no restart)
 static std::atomic<bool> g_grpc_server_started{false};
 
+// Global socket path for signal handlers
+static std::string g_grpc_socket_path;
+
 // Signal handler for all signals (graceful shutdown and fatal crashes)
 // Must be async-signal-safe - only unlink() is safe to call
 static void signal_cleanup_handler(int signum) {
     // Clean up socket file (async-signal-safe, idempotent)
-    unlink(GRPC_TELEMETRY_SOCKET_PATH);
+    unlink(g_grpc_socket_path.c_str());
 
     // Re-raise signal with default handler to allow normal termination/crash behavior
     std::signal(signum, SIG_DFL);
@@ -344,11 +347,11 @@ static void signal_cleanup_handler(int signum) {
 // atexit() handler for normal exit() calls (e.g., from watchdog)
 static void atexit_cleanup_handler() {
     // Clean up socket file (safe in exit context, idempotent)
-    unlink(GRPC_TELEMETRY_SOCKET_PATH);
+    unlink(g_grpc_socket_path.c_str());
 }
 
 // Install signal handlers and atexit cleanup (called once from start())
-static void install_cleanup_handlers() {
+static void install_cleanup_handlers(const std::string& socket_path) {
     // Enforce single instance, no restart policy
     if (g_grpc_server_started.exchange(true)) {
         TT_FATAL(
@@ -356,6 +359,8 @@ static void install_cleanup_handlers() {
             "GrpcTelemetryServer::start() called but server has already been started! "
             "Only one GrpcTelemetryServer instance can exist and it cannot be restarted.");
     }
+
+    g_grpc_socket_path = socket_path;
 
     // Graceful shutdown signals
     std::signal(SIGINT, signal_cleanup_handler);   // ^C
@@ -381,26 +386,27 @@ static void install_cleanup_handlers() {
  Starts the gRPC telemetry service and forwards metric updates to it.
 **************************************************************************************************/
 
-GrpcTelemetryServer::GrpcTelemetryServer() :
+GrpcTelemetryServer::GrpcTelemetryServer(const std::string& socket_path) :
     TelemetrySubscriber(),
+    socket_path_(socket_path),
     service_impl_(std::make_unique<tt::telemetry::TelemetryServiceImpl>(telemetry_state_, state_mutex_)) {}
 
 GrpcTelemetryServer::~GrpcTelemetryServer() { stop(); }
 
 void GrpcTelemetryServer::start() {
     // Install signal and atexit handlers (enforces single instance, no restart)
-    install_cleanup_handlers();
+    install_cleanup_handlers(socket_path_);
 
     // Remove existing socket file if it exists
-    if (unlink(GRPC_TELEMETRY_SOCKET_PATH) == 0) {
-        log_info(tt::LogAlways, "[gRPC] Removed stale UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+    if (unlink(socket_path_.c_str()) == 0) {
+        log_info(tt::LogAlways, "[gRPC] Removed stale UNIX socket: {}", socket_path_);
     } else if (errno != ENOENT) {
         // ENOENT is expected (file doesn't exist), but other errors are problems
         log_warning(
             tt::LogAlways,
             "[gRPC] Failed to unlink socket {} (errno={}). This may indicate a permission issue from a previous "
             "run with elevated privileges. The socket creation may fail.",
-            GRPC_TELEMETRY_SOCKET_PATH,
+            socket_path_,
             errno);
     }
 
@@ -408,7 +414,7 @@ void GrpcTelemetryServer::start() {
 
     // Configure to listen on UNIX socket
     // Format: unix:///path/to/socket.sock (note the triple slash for absolute path)
-    std::string server_address = std::string("unix://") + GRPC_TELEMETRY_SOCKET_PATH;
+    std::string server_address = std::string("unix://") + socket_path_;
 
     // Add listening port (no authentication for UNIX sockets)
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -420,16 +426,16 @@ void GrpcTelemetryServer::start() {
     server_ = builder.BuildAndStart();
 
     if (!server_) {
-        log_error(tt::LogAlways, "[gRPC] Failed to start gRPC server on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+        log_error(tt::LogAlways, "[gRPC] Failed to start gRPC server on UNIX socket: {}", socket_path_);
         return;
     }
 
-    log_info(tt::LogAlways, "[gRPC] Server listening on UNIX socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+    log_info(tt::LogAlways, "[gRPC] Server listening on UNIX socket: {}", socket_path_);
 
     // Set permissions so other processes can access it
     // 0666 = read/write for owner, group, and others
-    if (chmod(GRPC_TELEMETRY_SOCKET_PATH, 0666) != 0) {
-        log_warning(tt::LogAlways, "[gRPC] Failed to set permissions on socket: {}", GRPC_TELEMETRY_SOCKET_PATH);
+    if (chmod(socket_path_.c_str(), 0666) != 0) {
+        log_warning(tt::LogAlways, "[gRPC] Failed to set permissions on socket: {}", socket_path_);
     }
 }
 
@@ -446,7 +452,7 @@ void GrpcTelemetryServer::stop() {
         server_.reset();
 
         // Clean up socket file (idempotent - safe even if signal handler already called it)
-        unlink(GRPC_TELEMETRY_SOCKET_PATH);
+        unlink(socket_path_.c_str());
 
         log_info(tt::LogAlways, "[gRPC] Server stopped and socket cleaned up");
     }
