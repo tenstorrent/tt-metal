@@ -194,10 +194,12 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        dc35d69f65936280b2521941b2ce9d5ad16141d1 # v2.9.2 + bug fixes and dlpack support
+        dbe8a3c075f628482cfdf0e9fac1d2939794a6ca # v2.9.2 + bug fixes and dlpack support
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
+    PATCHES
+        nanobind-bfloat.patch
 )
 
 ############################################################################################################################
