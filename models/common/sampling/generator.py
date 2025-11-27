@@ -145,8 +145,8 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, *, k, p, temp, calculate_log_probs=None):
-        self.tt_sampling.reset_params(k=k, p=p, temp=temp, calculate_log_probs=calculate_log_probs)
+    def reset_sampling_params(self, *, k, p, temp, enable_log_probs=None):
+        self.tt_sampling.reset_params(k=k, p=p, temp=temp, enable_log_probs=enable_log_probs)
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:

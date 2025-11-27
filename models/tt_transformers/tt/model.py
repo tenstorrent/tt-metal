@@ -331,7 +331,7 @@ class Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_host_output(self, tt_out):
+    def concat_host_output(self, tt_out, is_log_probs=False):
         """
         Concatenate the output of the devices into a single host tensor.
         """
@@ -343,7 +343,14 @@ class Transformer(LightweightModule):
 
         rows, cols = self.args.cluster_shape
         mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        if is_log_probs:
+            row_concatenated = []
+            for row in mesh_shape:
+                row_reshaped = [tensor.reshape(1, 1, -1, 1) for tensor in row]
+                row_concatenated.append(torch.cat(row_reshaped, dim=col_dim))
+        else:
+            row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+
         return torch.cat(row_concatenated, dim=row_dim)
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -360,8 +367,9 @@ class Transformer(LightweightModule):
         if is_tokens or is_log_probs:
             # Pad to 32 to match the expected batch size for decode operations (tiles are 32x32)
             padded_batch_size = 32
-            tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
-            return self.concat_host_output(tt_out)[0, 0, :B, 0]
+            if not is_log_probs:
+                tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
+            return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
@@ -412,7 +420,6 @@ class Transformer(LightweightModule):
         kv_cache=None,
         sampling_on_device=False,
         capture_sampling_trace=False,
-        calculate_log_probs=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -440,7 +447,6 @@ class Transformer(LightweightModule):
                 tt_out_tok=x,
                 enable_trace=False,
                 batch_size=self.args.max_batch_size,
-                calculate_log_probs=calculate_log_probs,
             )
 
             return tt_toks, tt_log_probs
