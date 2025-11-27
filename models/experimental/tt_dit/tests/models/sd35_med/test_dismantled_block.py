@@ -40,7 +40,7 @@ def attention(q, k, v, heads, mask=None):
     return out.reshape(b, seq_len, heads * dim_head)
 
 
-class ReferenceDismantledBlock(torch.nn.Module):
+class DismantledBlock(torch.nn.Module):
     """Reference PyTorch implementation matching MM-DiT DismantledBlock"""
 
     def __init__(
@@ -316,28 +316,39 @@ class ReferenceDismantledBlock(torch.nn.Module):
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "hidden_size, num_heads, seq_len, batch_size, mlp_ratio, x_block_self_attn, swiglu",
+    "hidden_size, num_heads, seq_len, batch_size, mlp_ratio, pre_only, x_block_self_attn, swiglu",
     [
-        (1536, 24, 1024, 1, 4.0, False, False),  # SD3.5 Medium standard block
-        (1536, 24, 1024, 1, 4.0, True, False),  # SD3.5 Medium dual attention block
-        (1536, 24, 512, 1, 4.0, False, True),  # SD3.5 Medium with SwiGLU
+        (1536, 24, 1024, 1, 4.0, False, False, False),  # SD3.5 Medium standard block
+        (1536, 24, 1024, 1, 4.0, False, True, False),  # SD3.5 Medium dual attention block
+        (1536, 24, 512, 1, 4.0, False, False, True),  # SD3.5 Medium with SwiGLU
+        (1536, 24, 77, 1, 4.0, True, False, False),  # SD3.5 Medium pre_only block (attention only, no MLP)
     ],
-    ids=["standard", "dual_attn", "swiglu"],
+    ids=["standard", "dual_attn", "swiglu", "pre_only"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_sd35_medium_dismantled_block(
-    device, dtype, hidden_size, num_heads, seq_len, batch_size, mlp_ratio, x_block_self_attn, swiglu, reset_seeds
+    device,
+    dtype,
+    hidden_size,
+    num_heads,
+    seq_len,
+    batch_size,
+    mlp_ratio,
+    pre_only,
+    x_block_self_attn,
+    swiglu,
+    reset_seeds,
 ):
     """Test SD3.5 Medium DismantledBlock forward pass"""
     torch.manual_seed(1234)
 
     # Create reference model
-    reference_model = ReferenceDismantledBlock(
+    reference_model = DismantledBlock(
         hidden_size=hidden_size,
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
         qkv_bias=True,
-        pre_only=False,
+        pre_only=pre_only,
         scale_mod_only=False,
         swiglu=swiglu,
         x_block_self_attn=x_block_self_attn,
@@ -357,7 +368,7 @@ def test_sd35_medium_dismantled_block(
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
         qkv_bias=True,
-        pre_only=False,
+        pre_only=pre_only,
         scale_mod_only=False,
         swiglu=swiglu,
         qk_norm="rms",
