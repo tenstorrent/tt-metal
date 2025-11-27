@@ -968,7 +968,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Conditionally add remote channel info when skip_src_ch_id_update is true
     // (these values are used to initialize src channel IDs once, rather than updating them dynamically)
     if (skip_src_ch_id_update) {
-        ct_args.push_back(0);  // DELETEME: #33360 remote_vc1_sender_channel);
         ct_args.push_back(remote_worker_sender_channel);
     }
 
