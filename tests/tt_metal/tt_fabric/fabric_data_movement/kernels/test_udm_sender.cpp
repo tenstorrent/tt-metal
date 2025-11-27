@@ -24,10 +24,9 @@ void kernel_main() {
     tt::tt_fabric::udm::fabric_local_state_init();
 
     // Per-core receiver coordinates from runtime args
-    // TODO: once we dont need any runtime args for fabric connection, we can start from 0 offset
-    uint32_t start_offset = 3;
-    uint32_t noc_x_start = get_arg_val<uint32_t>(start_offset++);
-    uint32_t noc_y_start = get_arg_val<uint32_t>(start_offset);
+    uint32_t arg_index = 0;
+    uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
+    uint32_t noc_y_start = get_arg_val<uint32_t>(arg_index);
 
     uint32_t time_seed = time_seed_init;
 

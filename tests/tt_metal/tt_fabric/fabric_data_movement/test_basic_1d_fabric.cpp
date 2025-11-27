@@ -2446,31 +2446,11 @@ void UDMFabricUnicastCommon(
         CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
         // Sender runtime args: receiver coords first, then fabric connection
-        uint32_t sender_link_idx = 0;
-        std::vector<uint32_t> sender_runtime_args;
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            fabric_connection_dest_node_id,
-            sender_link_idx,
-            sender_program,
-            sender_logical_core,
-            sender_runtime_args);
-        sender_runtime_args.push_back(receiver_virtual_core.x);
-        sender_runtime_args.push_back(receiver_virtual_core.y);
+        std::vector<uint32_t> sender_runtime_args = {receiver_virtual_core.x, receiver_virtual_core.y};
         tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
         // Receiver runtime args: sender coords first, then fabric connection
-        uint32_t receiver_link_idx = 0;
-        std::vector<uint32_t> receiver_runtime_args;
-        append_fabric_connection_rt_args(
-            dest_fabric_node_id,
-            src_fabric_node_id,
-            receiver_link_idx,
-            receiver_program,
-            receiver_logical_core,
-            receiver_runtime_args);
-        receiver_runtime_args.push_back(sender_virtual_core.x);
-        receiver_runtime_args.push_back(sender_virtual_core.y);
+        std::vector<uint32_t> receiver_runtime_args = {sender_virtual_core.x, sender_virtual_core.y};
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
         // Clear target L1 memory for atomic increments
