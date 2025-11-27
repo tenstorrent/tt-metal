@@ -94,6 +94,10 @@ class Generator:
             if traced_seq_len not in sequence_lengths_to_warmup:
                 sequence_lengths_to_warmup.append(traced_seq_len)
         sequence_lengths_to_warmup.sort()
+        for seq_len in sequence_lengths_to_warmup:
+            if seq_len > self.model_args[0].max_seq_len:
+                sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(seq_len)]
+                break
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
