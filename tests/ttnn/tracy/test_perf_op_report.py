@@ -29,7 +29,11 @@ def run_test(request):
     sum_profiling = False if "sum_profiling" not in request.param else request.param["sum_profiling"]
     capture_perf_counters_groups = request.param.get("capture_perf_counters_groups")
     run_device_profiler(
-        request.param["command"], request.param["name"], capture_perf_counters_groups=capture_perf_counters_groups, sum_profiling=sum_profiling, op_support_count=op_support_count
+        request.param["command"],
+        request.param["name"],
+        capture_perf_counters_groups=capture_perf_counters_groups,
+        sum_profiling=sum_profiling,
+        op_support_count=op_support_count,
     )
     return request.param
 
