@@ -49,32 +49,21 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt lo;
     sfpi::vInt hi;
 
-    sfpi::l_reg[LRegs::LReg1] = q1;
-    sfpi::l_reg[LRegs::LReg2] = b;
-    TTI_SFPMUL24(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);  // q1 = b*q1
-    q1 = sfpi::l_reg[LRegs::LReg1];
+    q1.get() = __builtin_rvtt_bh_sfpmul24(b.get(), q1.get(), 0);
+    b1.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b1.get(), 0);
+    lo.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
+    hi.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 1);
 
-    sfpi::l_reg[LRegs::LReg0] = q;
-    sfpi::l_reg[LRegs::LReg3] = b1;
-    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);  // b1 = q*b1
-    b1 = sfpi::l_reg[LRegs::LReg3];
     q1 += b1;
-
-    sfpi::l_reg[LRegs::LReg0] = q;
-    sfpi::l_reg[LRegs::LReg1] = b;
-    sfpi::l_reg[LRegs::LReg2] = lo;
-    sfpi::l_reg[LRegs::LReg3] = hi;
-    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);  // lo = q*b
-    TTI_SFPMUL24(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG3, 1);  // hi = q*b
-    lo = sfpi::l_reg[LRegs::LReg2];
-    hi = sfpi::l_reg[LRegs::LReg3];
     q1 += hi;
 
     lo += q1 << 23;
+
     sfpi::vInt r = a - lo;
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
     sfpi::vFloat correction_f = r_f * inv_b_f;
 
+    // convert to integer, with round to zero
     sfpi::vInt correction = 0;
     exp = sfpi::exexp(correction_f);
     v_if(exp >= 0) {
