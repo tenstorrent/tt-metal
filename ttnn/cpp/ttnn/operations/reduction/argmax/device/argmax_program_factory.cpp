@@ -4,8 +4,6 @@
 
 #include "argmax_program_factory.hpp"
 
-#include <string>
-
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>

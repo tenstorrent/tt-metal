@@ -4,8 +4,6 @@
 
 #include "argmax_device_operation.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
-
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::reduction {

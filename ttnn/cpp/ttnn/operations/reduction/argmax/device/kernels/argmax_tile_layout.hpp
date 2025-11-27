@@ -5,7 +5,6 @@
 
 #include "argmax_common.hpp"
 #include "tt-metalium/constants.hpp"
-
 #include "debug/assert.h"
 #include "debug/waypoint.h"
 

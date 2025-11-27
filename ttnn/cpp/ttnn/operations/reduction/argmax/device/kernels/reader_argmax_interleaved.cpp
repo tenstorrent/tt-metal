@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
+#include "argmax_common.hpp"
 #include "dataflow_api.h"
 
-#include "argmax_common.hpp"
+#include <stdint.h>
 
 void kernel_main() {
     // Runtime args

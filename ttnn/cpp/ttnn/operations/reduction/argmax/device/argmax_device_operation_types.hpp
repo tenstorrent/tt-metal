@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <optional>
-
 #include "ttnn/tensor/tensor.hpp"
+
+#include <optional>
 
 namespace ttnn::operations::reduction {
 
