@@ -14,7 +14,8 @@
           "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "TRUE"},
           "ENABLE_CCACHE": {"value": "TRUE"},
-          "TT_UNITY_BUILDS": {"value": "FALSE"}
+          "TT_UNITY_BUILDS": {"value": "FALSE"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "ON"}
         },
         "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
       },
@@ -45,9 +46,23 @@
         "description": "Build with GCC",
         "binaryDir": "${sourceDir}/.build/gcc",
         "cacheVariables": {
-          "BUILD_TT_TRAIN": {"value": "OFF"}
+          "BUILD_TT_TRAIN": {"value": "OFF"},
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "ON"}
         },
         "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+      },
+      {
+        "name": "intellisense",
+        "displayName": "IntelliSense Config (Single-Config)",
+        "description": "Single-config build for IntelliSense with compile_commands.json",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build",
+        "cacheVariables": {
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "ON"},
+          "TT_UNITY_BUILDS": {"value": "OFF"},
+          "CMAKE_BUILD_TYPE": {"value": "RelWithDebInfo"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
       }
     ],
     "buildPresets": [
