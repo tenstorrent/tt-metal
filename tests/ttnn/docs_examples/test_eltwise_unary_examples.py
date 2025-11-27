@@ -1148,59 +1148,76 @@ def test_rdiv(device):
     logger.info(f"Reverse division: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_left_shift(device):
-    # Create tensors with specific integer values
+    # Create tensors with integer values (requires INT32 dtype)
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[4, 8], [16, 32]], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [2, 3]], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
 
-    # Apply bitwise left shift operation
-    output = ttnn.bitwise_left_shift(tensor1, tensor2)  # CHECK
+    # Apply bitwise left shift operation (shifts bits left)
+    output = ttnn.bitwise_left_shift(tensor1, tensor2)
     logger.info(f"Bitwise left shift: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_bitwise_right_shift(device):
-    # Create tensors with specific integer values
+    # Create tensors with integer values (requires INT32 dtype)
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[16, 32], [64, 128]], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[1, 2], [3, 4]], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
 
-    # Apply bitwise right shift operation
+    # Apply bitwise right shift operation (shifts bits right)
     output = ttnn.bitwise_right_shift(tensor1, tensor2)
-    logger.info(f"Bitwise right shift: {output}")  # Check
+    logger.info(f"Bitwise right shift: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_prelu(device):
     # Create tensors for PReLU activation function
-    tensor1 = ttnn.from_torch(torch.rand([1, 2, 32, 32], dtype=torch.bfloat16), device=device)
-    tensor2 = ttnn.from_torch(torch.tensor([1, 2], dtype=torch.bfloat16), device=device)
-    scalar = 2.0
+    tensor = ttnn.from_torch(
+        torch.tensor([[-1.0, -0.5], [0.5, 1.0]], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    weight = 0.25  # Negative slope
 
-    # Apply PReLU activation function
-    output = ttnn.prelu(tensor1, tensor2 / scalar)
+    # Apply PReLU activation function (for x < 0: weight * x, for x >= 0: x)
+    output = ttnn.prelu(tensor, weight)
     logger.info(f"PReLU: {output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_remainder(device):
     # Create tensors for remainder operation
     tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[5.0, 7.0], [9.0, 11.0]], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
     tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        torch.tensor([[2.0, 3.0], [4.0, 5.0]], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
-    scalar = 2.0
 
-    # Compute the remainder of division
-    output = ttnn.remainder(tensor1, tensor2 / scalar)
+    # Compute the remainder of division (like modulo)
+    output = ttnn.remainder(tensor1, tensor2)
     logger.info(f"Remainder: {output}")

@@ -24,6 +24,20 @@ void bind_clone_operation(py::module& module) {
             ttnn.Tensor: the cloned output tensor.
 
         Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32
+                 - TILE, ROW_MAJOR
+                 - 2, 3, 4
+
+            Layout-specific behavior:
+
             * ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
             * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
             * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.

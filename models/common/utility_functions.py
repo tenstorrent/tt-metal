@@ -217,10 +217,10 @@ def tt_tensors_to_torch_tensors(
 
 
 def tt2torch_tensor(tt_tensor):
-    tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
-    return tt_output.to_torch()
+    # tt_output = tt_tensor.cpu()
+    # if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+    #     tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.to_torch(tt_tensor)
 
 
 def tt_to_torch_tensor(tt_tensor):

@@ -255,8 +255,13 @@ Tensor AddcmulOperation::invoke(
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
+    // Check if any input is bfloat8_b - HLK doesn't support it properly
+    bool has_bfloat8b =
+        (input_a.dtype() == DataType::BFLOAT8_B || input_b.dtype() == DataType::BFLOAT8_B ||
+         input_c.dtype() == DataType::BFLOAT8_B);
+
     if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
-        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+        is_sharded(output) || is_invalid_bcast(broadcast_type) || has_bfloat8b) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         return _addcmul(input_a, input_b, input_c, value, memory_config);

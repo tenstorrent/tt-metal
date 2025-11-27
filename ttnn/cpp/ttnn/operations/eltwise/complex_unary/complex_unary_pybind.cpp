@@ -35,6 +35,19 @@ void bind_complex_unary_tensor(
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
+
         )doc",
 
         operation.base_name(),
@@ -68,7 +81,20 @@ void bind_complex_unary_complextensor(
             memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ComplexTensor: the output complex tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16
+                 - TILE
+                 - 2, 3, 4
 
         )doc",
 
