@@ -3029,8 +3029,6 @@ struct UnicastEndpoint {
     uint64_t get_noc_unicast_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc) const {
         return ::get_noc_addr(noc_x, noc_y, addr, noc);
     }
-
-    uint64_t get_noc_unicast_addr(uint32_t addr) const { return ::get_noc_addr(addr); }
 };
 
 /**
