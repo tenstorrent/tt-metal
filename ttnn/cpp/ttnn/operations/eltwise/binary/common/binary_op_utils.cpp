@@ -256,6 +256,12 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
             op_name = "div_binary_tile";
             break;
+        case BinaryOpType::DIV_FLOOR:
+            new_defines.insert({"BINOP_INIT", fmt::format("div_int32_floor_tile_init();")});
+            break;
+        case BinaryOpType::DIV_TRUNC:
+            new_defines.insert({"BINOP_INIT", fmt::format("div_int32_trunc_tile_init();")});
+            break;
         case BinaryOpType::BITWISE_AND:
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"BITWISE_UINT16_INIT", fmt::format("binary_bitwise_tile_init();")});
