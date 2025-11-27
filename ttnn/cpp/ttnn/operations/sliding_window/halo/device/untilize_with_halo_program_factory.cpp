@@ -79,6 +79,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
+    std::cout << "DEBUG CB SIZE: Function called with max_out_nsticks_per_core=" << max_out_nsticks_per_core
+              << ", ncores_nhw=" << ncores_nhw << std::endl;
 
     const auto& input_shape = input_tensor.padded_shape();
 
@@ -91,20 +93,30 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const ShardOrientation shard_orientation = output_tensor.shard_spec().value().orientation;
     const auto input_shard_shape = input_tensor.shard_spec().value().shape;
     const auto output_shard_shape = output_tensor.shard_spec().value().shape;
+    std::cout << "DEBUG CB SIZE: input_shard_shape=(" << input_shard_shape[0] << ", " << input_shard_shape[1]
+              << "), output_shard_shape=(" << output_shard_shape[0] << ", " << output_shard_shape[1] << ")"
+              << std::endl;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1], "Expected input and output shard widths to match");
 
     const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
+    std::cout << "DEBUG CB SIZE: input_nhw_height=" << input_nhw_height << ", ncores_nhw=" << ncores_nhw
+              << ", remapped_input_shard_shape_for_output_grid=" << remapped_input_shard_shape_for_output_grid
+              << std::endl;
 
     uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
-    uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
+    uint32_t input_nblocks_per_core = tt::div_up(input_shard_shape[0], TILE_HEIGHT);  // Use actual input shard height
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
     uint32_t in_page_size = tt::tile_size(in_df);
+    std::cout << "DEBUG CB SIZE: Initial in_page_size=" << in_page_size << ", input_npages=" << input_npages
+              << ", skip_untilize=" << skip_untilize << std::endl;
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
         in_page_size = input_shard_shape[1] * in_nbytes;
-        input_npages = remapped_input_shard_shape_for_output_grid;
+        input_npages = input_shard_shape[0];  // Use actual input shard height
+        std::cout << "DEBUG CB SIZE: After skip_untilize - in_nbytes=" << in_nbytes << ", in_page_size=" << in_page_size
+                  << ", input_npages=" << input_npages << std::endl;
     }
 
     // Calculate aligned stick size - used for both input and output since channels don't change
@@ -113,12 +125,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     if (stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
     }
+    std::cout << "DEBUG CB SIZE: output_shard_shape[1]=" << output_shard_shape[1] << ", out_nbytes=" << out_nbytes
+              << ", stick_nbytes=" << stick_nbytes << ", aligned_stick_nbytes=" << aligned_stick_nbytes << std::endl;
     const uint32_t out_tile_size = tt::tile_size(out_df);
 
     CBIndices cb_indices = CBIndices();
 
     // The input CB can either be tiled or row-major
     cb_indices.src_cb_id = cb_indices.get_next_cb_id();
+    std::cout << "DEBUG CB SIZE: About to create input CB - input_npages=" << input_npages
+              << ", in_page_size=" << in_page_size << ", total_input_cb_size=" << (input_npages * in_page_size)
+              << std::endl;
     auto src_cb =
         create_circular_buffer(program, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, src_buffer);
 
@@ -133,13 +150,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     uint32_t out_cb_pagesize = aligned_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
+    std::cout << "DEBUG CB SIZE: out_cb_pagesize=" << out_cb_pagesize << ", out_cb_npages=" << out_cb_npages
+              << ", total_cb_size=" << (out_cb_pagesize * out_cb_npages) << std::endl;
     cb_indices.out_cb_id = cb_indices.get_next_cb_id();
+    std::cout << "DEBUG CB SIZE: About to create out_cb with " << out_cb_npages << " pages of " << out_cb_pagesize
+              << " bytes each" << std::endl;
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 
     // Used for storing padding immediate values (only used if not zero padding)
     uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     uint32_t pad_cb_npages = 1;
+    std::cout << "DEBUG CB SIZE: pad_cb_pagesize=" << pad_cb_pagesize << ", pad_cb_npages=" << pad_cb_npages
+              << ", total_pad_cb_size=" << (pad_cb_pagesize * pad_cb_npages) << std::endl;
     cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
     create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
     cb_indices.pad_cb_id1 = cb_indices.get_next_cb_id();

@@ -634,6 +634,19 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     };
 
     uint32_t num_cores_nhw = shard_boundaries.size();
+    std::cout << "DEBUG: num_cores_nhw = " << num_cores_nhw << std::endl;
+
+    // Find the maximum source core ID to size the config arrays correctly
+    uint32_t max_src_core_id = 0;
+    for (int i = 0; i < tensor_metadata.size(); i++) {
+        auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[i];
+        if (!is_pad_stick && src_core_id > max_src_core_id) {
+            max_src_core_id = src_core_id;
+        }
+    }
+    uint32_t num_input_cores = max_src_core_id + 1;
+    std::cout << "DEBUG: Found max_src_core_id = " << max_src_core_id << ", num_input_cores = " << num_input_cores
+              << std::endl;
     PerCoreGatherData
         per_core_gather_data;  // This maps all routes (src_core->dst_core) onto a sequence of operations on the
                                // input sticks that can be padding, local copy/transfer, or remote copy/transfer
@@ -668,9 +681,9 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
-    pad_config.resize(num_cores_nhw);
-    local_config.resize(num_cores_nhw);
-    remote_config.resize(num_cores_nhw);
+    pad_config.resize(num_cores_nhw);       // indexed by dst_core_id, keep as output cores
+    local_config.resize(num_input_cores);   // indexed by src_core_id, use input cores
+    remote_config.resize(num_input_cores);  // indexed by src_core_id, use input cores
 
     // Split off padding, local transfer, remote transfer operations into their own configs
     for (const auto& [src_dst, data] : per_core_gather_data) {
@@ -684,6 +697,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             }
         } else if (is_local) {
             CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+            std::cout << "DEBUG: Local config using src_core_id " << src_core_id << " directly" << std::endl;
             local_config[src_core_id].first = {noc_xy.x, noc_xy.y, 3 * data.size()};
             local_config[src_core_id].second = data;
         } else if (is_remote) {
@@ -692,14 +706,19 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
                 remote_config[dst_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
             } else {
                 CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
+                std::cout << "DEBUG: Remote config using src_core_id " << src_core_id
+                          << " directly (num_cores_nhw=" << num_cores_nhw << ")" << std::endl;
                 remote_config[src_core_id].push_back({{noc_xy.x, noc_xy.y, 3 * data.size()}, data});
             }
         }
     }
 
-    std::vector<GatherConfig> gather_configs(num_cores_nhw);
+    std::vector<GatherConfig> gather_configs(num_input_cores);  // Size based on input cores
     for (int core_id = 0; core_id < local_config.size(); core_id++) {
         const auto& config = local_config[core_id];
+        if (config.first == uint32_triplet_t{}) {
+            continue;  // Skip empty configs
+        }
         const auto& [src_core_id, dst_core_id, num_copies] = config.first;
         std::vector<GatherTransfer> transfers;
         for (const auto& transfer : config.second) {
