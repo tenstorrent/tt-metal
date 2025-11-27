@@ -690,7 +690,7 @@ FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
     auto [perp_dir1, perp_dir2] = get_perpendicular_directions(direction);
     std::array<eth_chan_directions, NUM_MUX_CONNECTIONS> target_mux_dirs = {direction, perp_dir1, perp_dir2};
 
-    std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> mux_infos;
+    std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> mux_infos{};
 
     for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
         auto target_dir = target_mux_dirs[i];
