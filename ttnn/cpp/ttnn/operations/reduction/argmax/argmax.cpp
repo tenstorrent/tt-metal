@@ -33,10 +33,10 @@ static Tensor zero_volume_argmax(
 
 ttnn::Tensor ArgMaxOperation::invoke(
     const Tensor& input_tensor,
-    const std::optional<int> dim,
-    const bool keepdim,
+    const std::optional<int>& dim,
+    bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const bool use_muticore,
+    bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     auto input_shape = input_tensor.logical_shape();

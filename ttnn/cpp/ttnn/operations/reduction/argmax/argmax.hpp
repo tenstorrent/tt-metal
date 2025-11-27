@@ -14,7 +14,7 @@ namespace operations::reduction {
 struct ArgMaxOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
-        std::optional<int> dim = std::nullopt,
+        const std::optional<int>& dim = std::nullopt,
         bool keepdim = false,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         bool use_muticore = false,
