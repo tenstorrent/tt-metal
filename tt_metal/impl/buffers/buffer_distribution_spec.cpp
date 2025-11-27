@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "buffer_distribution_spec.hpp"
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include "impl/buffers/buffer_distribution_spec.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
@@ -295,6 +296,10 @@ void BufferDistributionSpec::init_precomputed_data() {
             };
         }
     }
+}
+
+UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
+    return detail::compute_page_mapping(tensor_shape_in_pages_, shard_shape_in_pages_, cores_);
 }
 
 namespace detail {
