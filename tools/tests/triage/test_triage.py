@@ -138,3 +138,21 @@ class TestTriage:
         assert (
             len(FAILURE_CHECKS) == 0
         ), f"Binary integrity check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_check_arc(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "check_arc.py"),
+            args=None,
+            context=None,
+            argv=[],
+            return_result=True,
+        )
+        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+        for check in result:
+            assert check.location == check.device.arc_block.location
+            assert check.clock_mhz > 0

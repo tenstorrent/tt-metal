@@ -519,7 +519,6 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     mismatch unless `--skip-version-check` is provided. If the ref file
     is missing or empty, a warning is printed and the check is skipped.
     """
-    return
     # Skip flag for dependency checks
     try:
         skip_check = bool(args["--skip-version-check"])
