@@ -30,8 +30,8 @@ def check_ttnn_output(
     to_channel_first=False,
     output_channels=None,
     exp_pcc=0.999,
-    exp_atol=12.0,
-    exp_rtol=5.0,
+    exp_atol=1e-08,
+    exp_rtol=1e-05,
 ):
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
