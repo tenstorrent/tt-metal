@@ -99,6 +99,7 @@ struct ConvTranpose2dOperation {
 
 class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using InputWithPadding = std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>, std::array<uint32_t, 2>>;
     uint32_t batch_size;
     IOShape input_shape;
     uint32_t input_channels;
@@ -145,6 +146,7 @@ public:
         MeshDevice* device,
         bool mirror_kernel);
     std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
+    InputWithPadding get_input_slice_and_padding(IOShape output_slice_start, IOShape output_slice_end);
     uint32_t get_L1_usage() override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
     ttnn::Tensor run_L1_op(

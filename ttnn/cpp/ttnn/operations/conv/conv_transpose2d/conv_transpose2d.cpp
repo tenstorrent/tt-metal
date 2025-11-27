@@ -806,39 +806,7 @@ ConvT2DSliceAttr::ConvT2DSliceAttr(
 
 std::tuple<ConvT2DSliceAttr::IOShape, ConvT2DSliceAttr::IOShape> ConvT2DSliceAttr::get_input_slice(
     IOShape output_slice_start, IOShape output_slice_end) {
-    auto [input_height, input_width] = input_shape;
-    int output_slice_height_start, output_slice_width_start;
-    int output_slice_height_end, output_slice_width_end;
-    std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
-    std::tie(output_slice_height_end, output_slice_width_end) = output_slice_end;
-    int input_slice_height_start = div_up((output_slice_height_start - (int)padding_n4[0]), (int)stride[0]);
-    int input_slice_width_start = div_up((output_slice_width_start - (int)padding_n4[2]), (int)stride[1]);
-
-    int input_slice_height_end = div_up(
-        (output_slice_height_end - input_padding[0] + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0] - 1),
-        (int)stride[0]);
-    int input_slice_width_end = div_up(
-        (output_slice_width_end - input_padding[2] + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1] - 1),
-        (int)stride[1]);
-
-    // Clamp input slice to valid input tensor bounds
-    input_slice_height_start = std::max<int>(0, input_slice_height_start);
-    input_slice_height_end = std::min<int>(input_height, input_slice_height_end);
-    input_slice_width_start = std::max<int>(0, input_slice_width_start);
-    input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
-
-    log_info(
-        tt::LogOp,
-        " ConvT2D Output Slice: H({}-{}), W({}-{}) maps to Input Slice H({}-{}), W({}-{})",
-        output_slice_height_start,
-        output_slice_height_end,
-        output_slice_width_start,
-        output_slice_width_end,
-        input_slice_height_start,
-        input_slice_height_end,
-        input_slice_width_start,
-        input_slice_width_end);
-    return {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}};
+    return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
 }
 
 uint32_t ConvT2DSliceAttr::get_L1_usage() { return 0; }
@@ -904,8 +872,8 @@ tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
     return sliced_input_tensor_memory_config;
 }
 
-ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
-    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding(
+    IOShape output_slice_start, IOShape output_slice_end) {
     int output_slice_height_start, output_slice_width_start;
     int output_slice_height_end, output_slice_width_end;
     std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
@@ -967,9 +935,6 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
         this_output_pad[1] = output_padding[1];
     }
 
-    int input_slice_height = input_slice_height_end - input_slice_height_start;
-    int input_slice_width = input_slice_width_end - input_slice_width_start;
-
     uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
     uint32_t width_rounding_value =
         (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
@@ -980,7 +945,7 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
             LogOp,
             "Conv2d Transpose DRAM Slicing: Additional padding of {} added to the right side.",
             additional_padded_width);
-        pad_right += additional_padded_width * stride[1];
+        this_output_pad[1] += additional_padded_width;
         output_slice_width += additional_padded_width;
     }
     uint32_t base_pad_height = dilation[0] * (kernel_size[0] - 1);
@@ -990,11 +955,29 @@ ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
          base_pad_height - pad_bottom,
          base_pad_width - pad_left,
          base_pad_width - pad_right});
+    return {
+        {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
+        this_op_padding,
+        this_output_pad};
+}
+ttnn::Tensor ConvT2DSliceAttr::run_L1_op(
+    const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) {
+    int output_slice_height_start, output_slice_width_start;
+    int output_slice_height_end, output_slice_width_end;
+    std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
+    std::tie(output_slice_height_end, output_slice_width_end) = output_slice_end;
+    auto [input_slices, this_op_padding, this_output_pad] =
+        get_input_slice_and_padding(output_slice_start, output_slice_end);
+    auto [input_slice_start, input_slice_end] = input_slices;
+    uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
+    uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
+    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
     log_info(
         tt::LogOp,
-        "Conv input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
+        "Conv input {}, padding {}, out_pad {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
         sliced_input_tensor.logical_shape(),
         this_op_padding,
+        this_output_pad,
         dilation,
         kernel_size,
         stride,

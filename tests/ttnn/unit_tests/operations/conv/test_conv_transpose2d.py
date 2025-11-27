@@ -302,6 +302,7 @@ def test_simple_conv_t2d(
         (1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
         (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
         (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 512, 512, 512, 512, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 8, SliceWidth ),
         # fmt: on
     ),
 )
