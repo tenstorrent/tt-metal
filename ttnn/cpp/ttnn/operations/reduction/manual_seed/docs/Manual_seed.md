@@ -153,20 +153,24 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
    * Computes the device core grid
    * All cores in the grid are assigned kernels (both reader and compute)
 
-2. **Data Movement - User IDs**:
-   * A circular buffer (CB) is created for the user_ids tensor
-   * Each core has a reader kernel that loads the user_ids tensor from DRAM to L1
-   * The user_ids tensor contains core IDs that should receive the seed
+2. **Kernel Deployment**:
+   * A single reader kernel and single compute kernel are created for the entire core grid
+   * Each core receives the same kernels but with different runtime arguments
+   * The seed is passed as a compile-time argument to the compute kernel
 
-3. **Core Matching and Seed Initialization**:
-   * Each core's compute kernel reads the user_ids tensor from the CB
-   * The kernel iterates through the user_ids to check if its core ID matches any entry
-   * If a match is found, the core calls `rand_tile_init(seed)` to initialize RNG
+3. **Data Movement and Processing**:
+   * Each core's reader kernel loads the user_ids tensor from DRAM to L1
+   * The reader kernel checks if its core_id (passed at runtime) matches any ID in the tensor
+   * The match result is communicated to the compute kernel via mailbox
+
+4. **Seed Initialization**:
+   * The compute kernel reads the match result from the mailbox
+   * If matched, it calls `rand_tile_init(seed)` to initialize RNG
    * Non-matching cores skip initialization and remain unmodified
 
-4. **Runtime Arguments**:
+5. **Runtime Arguments**:
    * User_ids tensor buffer address (updated on cache hit)
-   * Number of IDs in the tensor (updated on cache hit)
+   * Core ID for each core (unique per core)
 
 #### Implementation Details:
 
@@ -174,14 +178,29 @@ This strategy sets the same seed value to multiple cores specified by a tensor o
 ```cpp
 // reader_manual_seed_read_user_id.cpp
 void kernel_main() {
-    const uint32_t user_ids_tensor_buffer_addr = get_arg_val<uint32_t>(0);
+    ...
 
-    // Read user_ids tile from DRAM to circular buffer
+    // Read user_ids tile from DRAM to L1
     cb_reserve_back(user_ids_cb_index, one_tile);
     const uint32_t l1_write_addr_index = get_write_ptr(user_ids_cb_index);
     noc_async_read_tile(0, user_ids_tensor_dram, l1_write_addr_index);
     noc_async_read_barrier();
-    cb_push_back(user_ids_cb_index, one_tile);
+
+    // Process user_ids - check if this core matches
+    bool is_user_id = false;
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_index);
+    for (uint32_t id = 0; id < number_of_ids; ++id) {
+        if (core_id == ptr[id]) {
+            is_user_id = true;
+            break;
+        }
+    }
+
+    // Send result to compute kernel via mailbox
+    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
+    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
+    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
 }
 ```
 
@@ -189,25 +208,16 @@ void kernel_main() {
 ```cpp
 // manual_seed_single_seed_receive_user_id.cpp
 void MAIN {
-    const uint32_t number_of_ids = get_arg_val<uint32_t>(0);
-    constexpr uint32_t core_id = get_compile_time_arg_val(0);
-    constexpr uint32_t seed = get_compile_time_arg_val(2);
+    // Compile time args
+    constexpr uint32_t seed = get_compile_time_arg_val(0);
 
-    // Read user_ids from circular buffer
-    cb_wait_front(user_ids_cb_index, one_tile);
-    uint32_t* user_ids = nullptr;
-    cb_get_tile(user_ids_cb_index, 0, &user_ids);
-    user_ids += metadata_fields;  // Skip tile metadata
+    // Read match result from mailbox (sent by reader kernel)
+    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
-    // Check if this core should be seeded
-    for (uint32_t i = 0; i < number_of_ids; i++) {
-        if (core_id == user_ids[i]) {
-            rand_tile_init(seed);
-            break;
-        }
+    // Initialize random generator if this core matched
+    if (is_core_id) {
+        rand_tile_init(seed);
     }
-
-    cb_pop_front(user_ids_cb_index, one_tile);
 }
 ```
 
@@ -225,24 +235,28 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
    * Computes the device core grid
    * All cores in the grid receive both reader and compute kernels
 
-2. **Data Movement - Dual Tensors**:
-   * Two circular buffers are created:
-     * CB 0: user_ids tensor (containing core IDs)
-     * CB 1: seeds tensor (containing corresponding seed values)
-   * Each core's reader kernel loads both tensors from DRAM to L1
+2. **Kernel Deployment**:
+   * A single reader kernel and single compute kernel are created for the entire core grid
+   * Each core receives the same kernels but with different runtime arguments
+   * No compile-time arguments are passed to the compute kernel
+
+3. **Data Movement and Processing**:
+   * Each core's reader kernel loads both user_ids and seeds tensors from DRAM to L1
+   * The reader kernel checks if its core_id (passed at runtime) matches any ID in user_ids
+   * If matched, it retrieves the corresponding seed from the seeds tensor at the same index
+   * Both the match result and the seed value are communicated to the compute kernel via mailbox
    * Tensors must have identical shapes and volumes (1-dimensional)
 
-3. **Core Matching and Unique Seed Initialization**:
-   * Each core's compute kernel reads both user_ids and seeds tensors
-   * Iterates through user_ids to find its core ID
-   * When found, retrieves the corresponding seed from the seeds tensor at the same index
+4. **Seed Initialization**:
+   * The compute kernel reads the match result from the mailbox
+   * If matched, it reads the seed value from the mailbox
    * Calls `rand_tile_init(seed)` with the matched seed value
    * Cores not listed in user_ids remain unmodified
 
-4. **Runtime Arguments**:
+5. **Runtime Arguments**:
    * User_ids tensor buffer address
    * Seeds tensor buffer address
-   * Number of IDs in the tensors
+   * Core ID for each core (unique per core)
 
 #### Implementation Details:
 
@@ -250,22 +264,46 @@ This strategy provides maximum flexibility by allowing different seeds to be ass
 ```cpp
 // reader_manual_seed_read_all_data.cpp
 void kernel_main() {
-    const uint32_t user_ids_tensor_buffer_addr = get_arg_val<uint32_t>(0);
-    const uint32_t seeds_tensor_buffer_addr = get_arg_val<uint32_t>(1);
+    ...
 
-    // Read user_ids tile from DRAM
+    // Read user_ids tile from DRAM to L1
     cb_reserve_back(user_ids_cb_index, one_tile);
     const uint32_t l1_write_addr_index = get_write_ptr(user_ids_cb_index);
     noc_async_read_tile(0, user_ids_tensor_dram, l1_write_addr_index);
     noc_async_read_barrier();
-    cb_push_back(user_ids_cb_index, one_tile);
 
-    // Read seeds tile from DRAM
+    // Read seeds tile from DRAM to L1
     cb_reserve_back(seeds_cb_index, one_tile);
     const uint32_t seeds_l1_write_addr_index = get_write_ptr(seeds_cb_index);
     noc_async_read_tile(0, seeds_tensor_dram, seeds_l1_write_addr_index);
     noc_async_read_barrier();
-    cb_push_back(seeds_cb_index, one_tile);
+
+    // Process user_ids - check if this core matches and get seed
+    uint32_t seed = 0;
+    bool is_user_id = false;
+    volatile tt_l1_ptr uint32_t* user_id =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_index);
+    volatile tt_l1_ptr uint32_t* seeds =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seeds_l1_write_addr_index);
+    for (uint32_t id = 0; id < number_of_ids; ++id) {
+        if (core_id == user_id[id]) {
+            is_user_id = true;
+            seed = seeds[id];
+            break;
+        }
+    }
+
+    // Send match result to compute kernel via mailbox
+    ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
+    ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
+    ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
+
+    // Send seed to compute kernel if matched
+    if (is_user_id) {
+        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, seed);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, seed);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, seed);
+    }
 }
 ```
 
@@ -273,34 +311,16 @@ void kernel_main() {
 ```cpp
 // manual_seed_receive_all_data.cpp
 void MAIN {
-    const uint32_t number_of_ids = get_arg_val<uint32_t>(0);
-    constexpr uint32_t core_id = get_compile_time_arg_val(0);
+    // Read match result from mailbox (sent by reader kernel)
+    bool is_core_id = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
-    // Read user_ids from circular buffer
-    cb_wait_front(user_ids_cb_index, one_tile);
-    uint32_t* user_ids = nullptr;
-    cb_get_tile(user_ids_cb_index, 0, &user_ids);
-    user_ids += metadata_fields;
+    if (is_core_id) {
+        // Read seed from mailbox
+        uint32_t seed = (uint32_t)mailbox_read(ckernel::ThreadId::BriscThreadId);
 
-    // Find matching core ID and get corresponding seed
-    for (uint32_t i = 0; i < number_of_ids; i++) {
-        if (core_id == user_ids[i]) {
-            // Read seeds from circular buffer
-            cb_wait_front(seeds_cb_index, one_tile);
-            uint32_t* seeds = nullptr;
-            cb_get_tile(seeds_cb_index, 0, &seeds);
-            seeds += metadata_fields;
-            const uint32_t seed = seeds[i];
-
-            // Initialize RNG with matched seed
-            rand_tile_init(seed);
-
-            cb_pop_front(seeds_cb_index, one_tile);
-            break;
-        }
+        // Initialize RNG with matched seed
+        rand_tile_init(seed);
     }
-
-    cb_pop_front(user_ids_cb_index, one_tile);
 }
 ```
 
