@@ -58,6 +58,10 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    if (input_tensor.layout() == Layout::TILE) {
+        return input_tensor;
+    }
+
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
