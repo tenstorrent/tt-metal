@@ -25,17 +25,25 @@ struct InferenceConfig {
     bool use_kv_cache = true;          // Whether to use KV cache
 };
 
-// Create a causal attention mask for autoregressive generation
-TensorPtr create_causal_mask(uint32_t seq_len, uint32_t max_seq_len, ttnn::distributed::MeshDevice* device) {
-    std::vector<float> mask_data(max_seq_len * max_seq_len, 0.0f);
+constexpr uint32_t TILE_SIZE = 32;
 
-    for (uint32_t i = 0; i < seq_len; ++i) {
-        for (uint32_t j = 0; j <= i; ++j) {
-            mask_data[i * max_seq_len + j] = 1.0f;
+// Create a causal attention mask for autoregressive generation
+TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t query_seq_len, uint32_t prompt_len = 0) {
+    // Pad seq_len to tile boundary for query dimension
+    uint32_t padded_query_seq_len = ((query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    uint32_t padded_whole_seq_len = ((prompt_len + query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
+    // Mask shape: [padded_seq_len, max_seq_len] - query_len x key_len
+    std::vector<float> mask_data(padded_query_seq_len * padded_whole_seq_len, 0.0f);
+
+    for (uint32_t i = 0; i < query_seq_len; ++i) {
+        for (uint32_t j = 0; j <= prompt_len + i; ++j) {
+            mask_data[i * padded_whole_seq_len + j] = 1.0f;
         }
     }
 
-    auto shape = ttnn::Shape({1, 1, max_seq_len, max_seq_len});
+    // Mask shape: [1, 1, seq_len, max_seq_len] - query_len x key_len
+    auto shape = ttnn::Shape({1, 1, padded_query_seq_len, padded_whole_seq_len});
     auto mask_tensor = ttml::core::from_vector(mask_data, shape, device);
 
     return ttml::autograd::create_tensor(mask_tensor);
@@ -65,15 +73,20 @@ uint32_t sample_token(const TensorPtr& logits, int position) {
     return max_idx;
 }
 
-// Create tensor from token IDs
+// Create tensor from token IDs (no padding to max_seq_len)
 TensorPtr tokens_to_tensor(
     const std::vector<uint32_t>& tokens, uint32_t max_seq_len, ttnn::distributed::MeshDevice* device) {
-    std::vector<uint32_t> padded_tokens(max_seq_len, 0);
-    for (size_t i = 0; i < tokens.size() && i < max_seq_len; ++i) {
+    // Use actual token length, no padding
+    uint32_t actual_len = std::min(static_cast<uint32_t>(tokens.size()), max_seq_len);
+    // Pad to nearest tile boundary (32, 64, 96, ...) instead of max_seq_len
+    uint32_t padded_len = ((actual_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+
+    std::vector<uint32_t> padded_tokens(padded_len, 0);
+    for (size_t i = 0; i < actual_len; ++i) {
         padded_tokens[i] = tokens[i];
     }
 
-    auto shape = ttnn::Shape({1, 1, 1, max_seq_len});
+    auto shape = ttnn::Shape({1, 1, 1, padded_len});
     auto tokens_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         padded_tokens, shape, device, ttnn::Layout::ROW_MAJOR);
 
@@ -116,7 +129,7 @@ void run_inference_with_kv_cache(
     auto start_prefill = std::chrono::high_resolution_clock::now();
 
     auto prompt_tensor = tokens_to_tensor(prompt_tokens, max_seq_len, device);
-    auto prefill_mask = create_causal_mask(prompt_len, max_seq_len, device);
+    auto prefill_mask = create_causal_mask(device, prompt_len, 0);
 
     // Forward pass - fills KV cache with all prompt tokens
     auto logits = (*model)(prompt_tensor, prefill_mask);
@@ -147,18 +160,16 @@ void run_inference_with_kv_cache(
     decode_tokens.push_back(next_token);
 
     for (uint32_t step = 0; step < inference_config.max_new_tokens - 1; ++step) {
+        // Deallocate previous iteration's logits to prevent memory accumulation
+        if (logits) {
+            auto old_logits = logits->get_value();
+            ttnn::deallocate(old_logits);
+        }
+
         std::vector<uint32_t> single_token = {next_token};
         auto token_tensor = tokens_to_tensor(single_token, max_seq_len, device);
 
-        // Create decode mask: position 0 can attend to all cached positions
-        uint32_t current_cache_pos = model->get_cache_position();
-        std::vector<float> decode_mask_data(max_seq_len * max_seq_len, 0.0f);
-        for (uint32_t j = 0; j <= current_cache_pos && j < max_seq_len; ++j) {
-            decode_mask_data[j] = 1.0f;
-        }
-        auto decode_mask_shape = ttnn::Shape({1, 1, max_seq_len, max_seq_len});
-        auto decode_mask_tensor = ttml::core::from_vector(decode_mask_data, decode_mask_shape, device);
-        auto decode_mask = ttml::autograd::create_tensor(decode_mask_tensor);
+        auto decode_mask = create_causal_mask(device, 1, model->get_cache_position());
 
         logits = (*model)(token_tensor, decode_mask);
         next_token = sample_token(logits, 1);
@@ -239,7 +250,7 @@ void run_inference_no_cache(
         auto current_seq = tokens_to_tensor(generated_tokens, max_seq_len, device);
 
         // Create causal mask for current sequence length
-        auto mask = create_causal_mask(generated_tokens.size(), max_seq_len, device);
+        auto mask = create_causal_mask(device, generated_tokens.size(), 0);
 
         // Full forward pass through entire sequence
         auto logits = (*model)(current_seq, mask);
@@ -371,7 +382,11 @@ int main(int argc, char** argv) {
 
     // Set model to eval mode
     model->eval();
-    fmt::print("   Model set to eval mode\n\n");
+    fmt::print("   Model set to eval mode\n");
+
+    // Disable gradient computation for inference (critical for memory!)
+    ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::DISABLED);
+    fmt::print("   Gradient mode disabled for inference\n\n");
 
     // Parse prompt tokens (comma-separated numbers)
     fmt::print("4. Parsing prompt: '{}'\n", inference_config.prompt);

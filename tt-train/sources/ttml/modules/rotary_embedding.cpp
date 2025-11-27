@@ -16,4 +16,11 @@ autograd::TensorPtr RotaryEmbedding::operator()(const autograd::TensorPtr& input
     return ttml::ops::rope(input, m_rope_params);
 }
 
+autograd::TensorPtr RotaryEmbedding::operator()(
+    const autograd::TensorPtr& input, bool is_decode_mode, std::optional<uint32_t> token_position) {
+    auto params = m_rope_params;
+    params.is_decode_mode = is_decode_mode;
+    return ttml::ops::rope(input, params, token_position);
+}
+
 }  // namespace ttml::modules
