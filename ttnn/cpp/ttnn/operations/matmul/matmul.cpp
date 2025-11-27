@@ -90,53 +90,27 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Act
 
 static bool get_post_process_bias(
     const std::optional<const ttnn::Tensor>& bias,
-    const std::optional<const MatmulProgramConfig>& program_config,
+    const MatmulProgramConfig& program_config,
     const std::optional<const CoreCoord>& user_core_coord,
     const MemoryConfig& output_mem_config,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const bool transpose_a) {
-    // Determine if we should post-process bias based on the program config
-    // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
-    bool post_process_bias = false;
-    if (bias.has_value()) {
-        // Check if bias shape is compatible with kernel fusion
-        // Bias fusion requires bias_shape_aligned[-2] == tile_height
-        const auto& bias_tensor = bias.value();
-        const auto& bias_padded_shape = bias_tensor.padded_shape();
-        const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
-        uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
-
-        // If bias second-to-last dimension doesn't match tile height, must post-process
-        if (bias_padded_shape[-2] != tile_height) {
-            post_process_bias = true;
-        } else if (program_config.has_value()) {
-            // Check if the provided program config is MatmulMultiCoreProgramConfig
-            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
-        } else if (!user_core_coord.has_value()) {
-            // When program_config and user_core_coord are not provided, config is auto-generated
-
-            // Special case: L1 memory often leads to MatmulMultiCoreProgramConfig
-            // Be conservative and post-process bias for non-DRAM outputs
-            if (output_mem_config.buffer_type() != BufferType::DRAM) {
-                post_process_bias = true;
-            } else if (!input_tensor_a.is_sharded()) {
-                // For DRAM output, check if all tensors are DRAM interleaved
-                bool all_dram_interleaved =
-                    input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                    input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
-                    input_tensor_b.memory_config().buffer_type() == BufferType::DRAM;
-
-                // If not all DRAM interleaved, MatmulMultiCoreProgramConfig is more likely
-                if (!all_dram_interleaved) {
-                    post_process_bias = true;
-                }
-            }
-        }
+    if (!bias.has_value()) {
+        return false;
     }
-    return post_process_bias;
+
+    // Check if bias shape is compatible with kernel fusion
+    // Bias fusion requires bias_shape_aligned[-2] == tile_height
+    const auto& bias_tensor = bias.value();
+    const auto& bias_padded_shape = bias_tensor.padded_shape();
+    const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
+
+    // If bias second-to-last dimension doesn't match tile height, must post-process
+    // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
+    return (bias_padded_shape[-2] != tile_height) ||
+           std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config);
 }
 
 ttnn::Tensor bound_matmul(
@@ -211,15 +185,15 @@ ttnn::Tensor bound_matmul(
     // We need to change the transpose_a and transpose_b flags if we manually transposed
     // the input tensors
     if (needs_manual_transpose_a) {
-        parameters.transpose_a = true;
+        parameters.transpose_a = false;
     }
     if (needs_manual_transpose_b) {
-        parameters.transpose_b = true;
+        parameters.transpose_b = false;
     }
 
     bool post_process_bias = get_post_process_bias(
         bias,
-        parameters.program_config,
+        chosen_program_config,
         parameters.user_core_coord,
         parameters.output_mem_config,
         input_tensor_a_adjusted,
@@ -241,7 +215,7 @@ ttnn::Tensor bound_matmul(
     }
 
     // Apply bias as post-processing if needed
-    if (post_process_bias && bias.has_value()) {
+    if (post_process_bias) {
         output_tensor = ttnn::add(
             output_tensor,
             bias.value(),
