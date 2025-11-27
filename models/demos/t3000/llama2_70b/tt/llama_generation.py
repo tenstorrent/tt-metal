@@ -396,9 +396,6 @@ class TtLlamaModelForGeneration:
         )
         return logits[..., : self.params.vocab_size].float()
 
-    def warmup_model_prefill(self) -> None:
-        logger.warning("Warmup model prefill not implemented for TtLlamaModelForGeneration")
-
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):

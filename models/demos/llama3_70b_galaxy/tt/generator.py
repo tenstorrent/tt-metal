@@ -700,8 +700,8 @@ class Generator:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self) -> None:
-        logger.warning("Warmup model prefill not implemented for Llama3_70b_Galaxy Generator")
+    def warmup_model_prefill(self, kv_cache, enable_trace) -> None:
+        pass
 
     ## Destructor (used to delete ttnn trace if exists)
 

@@ -78,25 +78,35 @@ class Generator:
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self.already_warmed_up_prefill = False
 
     def warmup_prefill_traces(
         self,
         kv_cache,
         enable_trace,
     ):
-        if not enable_trace:
+        if self.already_warmed_up_prefill:
             return
+        self.already_warmed_up_prefill = True
+
+        sequence_lengths_to_warmup = [128, 256, 512, 1024, 2048, 4096, 8192]
+        for traced_seq_len in self.model_args[0].trace_prefill_supported_seq_lens:
+            if traced_seq_len not in sequence_lengths_to_warmup:
+                sequence_lengths_to_warmup.append(traced_seq_len)
+        sequence_lengths_to_warmup.sort()
 
         for model_id in range(self.data_parallel):
-            for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
-                if not self.model_args[0].can_enable_trace(supported_length):
+            for supported_length in sequence_lengths_to_warmup:
+                # When model_id = 0, we compile all operators for the first time
+                # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
+                if model_id != 0 and supported_length not in self.model_args[0].trace_prefill_supported_seq_lens:
                     continue
 
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
 
-                logger.info(f"Warming up prefill traces for sequence length: {supported_length}")
+                logger.info(f"Warming up prefill for sequence length: {supported_length}")
                 # The page table will get padded properly in the prefill_forward method later
                 page_table = torch.zeros(1, 1, dtype=torch.int32)
                 self.prefill_forward_text(
@@ -224,6 +234,9 @@ class Generator:
         else:
             # Only paged attention is supported for prefill
             enable_trace = False
+
+        # we need this here becuase of tt-metal tests
+        self.warmup_prefill_traces(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
