@@ -18,6 +18,8 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
+namespace slice {
+
 struct SliceDeviceOperation {
     using operation_attributes_t = slice::operation_attributes_t;
     using tensor_args_t = slice::tensor_args_t;
@@ -58,10 +60,11 @@ struct SliceDeviceOperation {
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
+}  // namespace slice
 }  // namespace ttnn::operations::data_movement
 
 // Register the operation with ttnn::register_operation API to make it available as ttnn::prim::slice
 namespace ttnn::prim {
 constexpr auto slice =
-    ttnn::register_operation<"ttnn::prim::slice", ttnn::operations::data_movement::SliceDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::slice", ttnn::operations::data_movement::slice::SliceDeviceOperation>();
 }  // namespace ttnn::prim

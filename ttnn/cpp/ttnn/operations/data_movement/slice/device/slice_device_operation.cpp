@@ -79,6 +79,8 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
+namespace slice {
+
 void SliceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -280,4 +282,5 @@ SliceDeviceOperation::invoke(
         tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output}};
 }
 
+}  // namespace slice
 }  // namespace ttnn::operations::data_movement

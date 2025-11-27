@@ -45,14 +45,14 @@ struct MeshPartitionDeviceOperation {
 
         // -- shared variables --------------------------------------------
         using SliceSharedVariables = std::variant<
-            data_movement::program::SliceRmProgramFactory::shared_variables_t,
-            data_movement::program::SliceRmShardedProgramFactory::shared_variables_t,
-            data_movement::program::SliceRmStrideProgramFactory::shared_variables_t,
-            data_movement::program::SliceTileProgramFactory::shared_variables_t,
-            data_movement::program::SliceTileTensorArgsProgramFactory::shared_variables_t>;
+            data_movement::slice::program::SliceRmProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceRmShardedProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceRmStrideProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceTileProgramFactory::shared_variables_t,
+            data_movement::slice::program::SliceTileTensorArgsProgramFactory::shared_variables_t>;
 
         struct shared_variables_t {
-            data_movement::SliceDeviceOperation::program_factory_t slice_program_factory;
+            data_movement::slice::SliceDeviceOperation::program_factory_t slice_program_factory;
             SliceSharedVariables slice_shared_variables;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

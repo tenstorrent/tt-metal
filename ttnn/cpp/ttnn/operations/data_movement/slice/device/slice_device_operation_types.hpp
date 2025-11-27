@@ -11,21 +11,21 @@
 namespace ttnn::operations::data_movement::slice {
 
 struct operation_attributes_t {
-    const ttnn::Shape slice_start;
-    const ttnn::Shape slice_end;
-    const ttnn::Shape step;
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const bool use_tensor_args;
-    const std::optional<uint32_t> slice_dim;
-    const std::optional<uint32_t> num_devices;
-    const std::optional<CoreRangeSet> sub_core_grids;
+    ttnn::Shape slice_start;
+    ttnn::Shape slice_end;
+    ttnn::Shape step;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    bool use_tensor_args = false;
+    std::optional<uint32_t> slice_dim = std::nullopt;
+    std::optional<uint32_t> num_devices = std::nullopt;
+    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct tensor_args_t {
-    const Tensor& input;
-    const std::optional<Tensor> start_tensor;
-    const std::optional<Tensor> end_tensor;
-    const std::optional<Tensor>& preallocated_output;
+    Tensor input;
+    std::optional<Tensor> start_tensor;
+    std::optional<Tensor> end_tensor;
+    std::optional<Tensor> preallocated_output;
 };
 
 using spec_return_value_t = TensorSpec;

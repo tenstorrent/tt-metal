@@ -672,7 +672,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
 
 }  // namespace detail
 
-program::SliceRmProgramFactory::cached_program_t program::SliceRmProgramFactory::create(
+namespace slice::program {
+SliceRmProgramFactory::cached_program_t SliceRmProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -745,7 +746,7 @@ program::SliceRmProgramFactory::cached_program_t program::SliceRmProgramFactory:
         {unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, args.sub_core_grids, cb_src0}};
 }
 
-void program::SliceRmProgramFactory::override_runtime_arguments(
+void SliceRmProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -793,7 +794,7 @@ void program::SliceRmProgramFactory::override_runtime_arguments(
 }
 
 // SliceRmShardedProgramFactory implementation
-program::SliceRmShardedProgramFactory::cached_program_t program::SliceRmShardedProgramFactory::create(
+SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -901,7 +902,7 @@ program::SliceRmShardedProgramFactory::cached_program_t program::SliceRmShardedP
     return {std::move(program), {cb_src0, cb_output}};
 }
 
-void program::SliceRmShardedProgramFactory::override_runtime_arguments(
+void SliceRmShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -914,7 +915,7 @@ void program::SliceRmShardedProgramFactory::override_runtime_arguments(
 }
 
 // SliceRmStrideProgramFactory implementation
-program::SliceRmStrideProgramFactory::cached_program_t program::SliceRmStrideProgramFactory::create(
+SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -1089,7 +1090,7 @@ program::SliceRmStrideProgramFactory::cached_program_t program::SliceRmStridePro
     return {std::move(program), {reader_kernel_id, writer_kernel_id, all_cores_vec}};
 }
 
-void program::SliceRmStrideProgramFactory::override_runtime_arguments(
+void SliceRmStrideProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -1111,7 +1112,7 @@ void program::SliceRmStrideProgramFactory::override_runtime_arguments(
 }
 
 // Slice Tile Program Factory implementation
-program::SliceTileProgramFactory::cached_program_t program::SliceTileProgramFactory::create(
+SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -1187,7 +1188,7 @@ program::SliceTileProgramFactory::cached_program_t program::SliceTileProgramFact
          accumulated_total_per_dim}};
 }
 
-void program::SliceTileProgramFactory::override_runtime_arguments(
+void SliceTileProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -1221,7 +1222,7 @@ void program::SliceTileProgramFactory::override_runtime_arguments(
 }
 
 // Slice Tile Tensor Args Program Factory implementation
-program::SliceTileTensorArgsProgramFactory::cached_program_t program::SliceTileTensorArgsProgramFactory::create(
+SliceTileTensorArgsProgramFactory::cached_program_t SliceTileTensorArgsProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
     const auto& start_tensor = tensor_args.start_tensor.value();
@@ -1318,7 +1319,7 @@ program::SliceTileTensorArgsProgramFactory::cached_program_t program::SliceTileT
          accumulated_total_per_dim}};
 }
 
-void program::SliceTileTensorArgsProgramFactory::override_runtime_arguments(
+void SliceTileTensorArgsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -1352,5 +1353,7 @@ void program::SliceTileTensorArgsProgramFactory::override_runtime_arguments(
         cached_program.shared_variables.unary_writer_kernel_id,
         cached_program.shared_variables.accumulated_total_per_dim);
 }
+
+}  // namespace slice::program
 
 }  // namespace ttnn::operations::data_movement

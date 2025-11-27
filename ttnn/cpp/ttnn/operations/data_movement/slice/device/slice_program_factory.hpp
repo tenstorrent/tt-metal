@@ -7,9 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "slice_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::program {
-
-using namespace slice;
+namespace ttnn::operations::data_movement::slice::program {
 
 struct SliceRmProgramFactory {
     struct shared_variables_t {
@@ -121,4 +119,4 @@ struct SliceTileTensorArgsProgramFactory {
         tensor_return_value_t& output);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::slice::program
