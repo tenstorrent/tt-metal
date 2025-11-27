@@ -80,7 +80,7 @@ class Generator:
         self.trace_output_decode = defaultdict(lambda: None)
         self.already_warmed_up_prefill = False
 
-    def warmup_prefill_traces(
+    def warmup_prefill(
         self,
         kv_cache,
         enable_trace,
@@ -236,7 +236,7 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_prefill_traces(kv_cache, enable_trace)
+        self.warmup_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -250,7 +250,7 @@ class Generator:
 
         out_list = []
         for idx, user_id in enumerate(empty_slots):
-            # if model_id is not None, it means that prefill is called from warmup_prefill_traces
+            # if model_id is not None, it means that prefill is called from warmup_prefill
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
@@ -1642,7 +1642,7 @@ class Generator:
         return page_table[:, :num_blocks]
 
     def warmup_model_prefill(self, kv_cache, enable_trace):
-        self.warmup_prefill_traces(kv_cache, enable_trace)
+        self.warmup_prefill(kv_cache, enable_trace)
 
     ## Destructor
 
