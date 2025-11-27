@@ -250,7 +250,8 @@ void py_bind_conv2d(py::module& module) {
             std::optional<bool>,
             bool,
             std::optional<bool>,
-            bool>(),
+            bool,
+            uint32_t>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -271,7 +272,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
         py::arg("force_split_reader") = std::nullopt,
-        py::arg("override_output_sharding_config") = false);
+        py::arg("override_output_sharding_config") = false,
+        py::arg("base_matmul_stagger_cycles") = 0);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -446,6 +448,29 @@ void py_bind_conv2d(py::module& module) {
         Additionally, NHW number of cores must match between input and output tensors
 
         ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("base_matmul_stagger_cycles", &Conv2dConfig::base_matmul_stagger_cycles, R"doc(
+        Base number of cycles to stagger matmul compute start across cores.
+
+        Used to mitigate di/dt (current change) issues on Wormhole B0 by delaying
+        the start of compute operations on different cores. This helps prevent power spikes
+        when many cores start intensive compute operations simultaneously.
+
+        **Important:** This setting only takes effect on:
+        - **Architecture:** Wormhole B0 only (not currently applied on Blackhole)
+        - **Sharding:** Block sharded tensor memory layout
+        - **Core count:** More than 48 cores
+
+        For height sharded or width sharded configurations, fewer than 48 cores,
+        or on Blackhole architecture, this setting has no effect.
+
+        A value of 0 means no stagger is applied (default behavior).
+        Higher values introduce more delay between core starts, potentially reducing peak power
+        consumption at the cost of some performance overhead.
+
+        The actual stagger delay for each core is calculated as:
+        `stagger_delay = (max_y_coord - core_y_position) * base_matmul_stagger_cycles`
     )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });

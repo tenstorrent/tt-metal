@@ -46,7 +46,8 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    uint32_t base_matmul_stagger_cycles) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
 
@@ -68,7 +69,8 @@ Tensor conv2d(
         full_inner_dim,
         enable_activation_reuse,
         config_tensors_in_dram,
-        force_split_reader);
+        force_split_reader,
+        base_matmul_stagger_cycles);
     IDevice* device = a.device();
 
     conv_op.pre_op_l1_allocation_size_bytes =
@@ -256,7 +258,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
             full_inner_dim,
             enable_activation_reuse,
             config_tensors_in_dram,
-            force_split_reader);
+            force_split_reader,
+            base_matmul_stagger_cycles);
     }
 
     const uint32_t post_op_l1_allocation_size =

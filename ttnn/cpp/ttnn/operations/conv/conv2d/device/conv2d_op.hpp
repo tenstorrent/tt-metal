@@ -121,6 +121,13 @@ struct Conv2dConfig {
     // Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
     // Additionally, NHW number of cores must match between input and output tensors
     bool override_output_sharding_config = false;
+
+    // Base number of cycles to stagger matmul compute start across cores.
+    // Used to mitigate di/dt issues by delaying the start of compute on different cores.
+    // Only applies to block sharded configurations on Wormhole B0 when core count exceeds 48.
+    // Not currently applied on Blackhole (pending threshold determination).
+    // A value of 0 means no stagger is applied (default behavior).
+    uint32_t base_matmul_stagger_cycles = 0;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -143,7 +150,8 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
         "force_split_reader",
-        "override_output_sharding_config");
+        "override_output_sharding_config",
+        "base_matmul_stagger_cycles");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -165,7 +173,8 @@ struct Conv2dConfig {
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
-            std::cref(this->override_output_sharding_config));
+            std::cref(this->override_output_sharding_config),
+            std::cref(this->base_matmul_stagger_cycles));
     }
 };
 
@@ -238,7 +247,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    uint32_t base_matmul_stagger_cycles = 0);
 
 // new micro op
 struct Conv2d {
@@ -260,6 +270,7 @@ struct Conv2d {
     bool config_tensors_in_dram;
     uint32_t pre_op_l1_allocation_size_bytes{};
     std::optional<bool> force_split_reader = std::nullopt;
+    uint32_t base_matmul_stagger_cycles = 0;
     Conv2d(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
@@ -278,7 +289,8 @@ struct Conv2d {
         bool full_inner_dim,
         bool enable_activation_reuse,
         bool config_tensors_in_dram,
-        std::optional<bool> force_split_reader) :
+        std::optional<bool> force_split_reader,
+        uint32_t base_matmul_stagger_cycles = 0) :
         parallelization_config(p_config),
         block_config(b_config),
         sliding_window_config(sliding_window_config),
@@ -296,7 +308,8 @@ struct Conv2d {
         full_inner_dim(full_inner_dim),
         enable_activation_reuse(enable_activation_reuse),
         config_tensors_in_dram(config_tensors_in_dram),
-        force_split_reader(force_split_reader) {};
+        force_split_reader(force_split_reader),
+        base_matmul_stagger_cycles(base_matmul_stagger_cycles) {};
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -327,7 +340,8 @@ struct Conv2d {
         "enable_weights_double_buffer",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "base_matmul_stagger_cycles");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -345,7 +359,8 @@ struct Conv2d {
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_activation_reuse),
             std::cref(this->config_tensors_in_dram),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->base_matmul_stagger_cycles));
     }
 };
 
@@ -369,7 +384,8 @@ Tensor conv2d(
     bool full_inner_dim = false,
     bool enable_activation_reuse = false,
     bool config_tensors_in_dram = false,
-    std::optional<bool> force_split_reader = std::nullopt);
+    std::optional<bool> force_split_reader = std::nullopt,
+    uint32_t base_matmul_stagger_cycles = 0);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
