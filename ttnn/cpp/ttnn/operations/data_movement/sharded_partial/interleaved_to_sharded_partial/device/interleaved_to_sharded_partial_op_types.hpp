@@ -15,7 +15,7 @@ struct operation_attributes_t {
     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec(tt::tt_metal::CoreRangeSet(), {0, 0});
     uint32_t num_slices{};
     uint32_t slice_index{};
-    tt::tt_metal::MemoryConfig output_mem_config{};
+    tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{tt::tt_metal::DataType::INVALID};
 };
 
