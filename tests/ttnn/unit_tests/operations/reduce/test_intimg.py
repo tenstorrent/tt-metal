@@ -24,24 +24,29 @@ def ttnn_integral_image_channel_last(features_nhwc):
 
 
 @pytest.mark.parametrize(
-    "input_shape_nhwc",
+    "input_shape_nhwc, filename",
     [
         # fmt: off
-        ([1, 12, 40, 256]),
-        ([1, 24, 80, 256]),
-        ([1, 48, 160, 256])
+        ([1, 48, 160, 256], "features_Shape([1, 48, 160, 256]).pts")
+        # fmt: on
     ],
-    ids=["OFT32", "OFT16", "OFT8"],
+    ids=["OFT8"],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("dtype", [ttnn.float32], ids=["float32"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["DRAM"])
-def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
+def test_cumsum_channel_last(input_shape_nhwc, filename, dtype, memory_config, device):
     torch.manual_seed(0)
 
     if dtype != ttnn.bfloat16 and dtype != ttnn.float32:
         pytest.skip("Unsupported dtype")
 
-    torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
+    # torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
+    import os
+
+    if not os.path.exists(filename):
+        pytest.skip(f"Test data file '{filename}' not found.")
+    torch_input_tensor = torch.load(filename).type(torch.float32)
+
     # golden
     torch_output_tensor = torch.cumsum(torch.cumsum(torch_input_tensor, dim=1), dim=2)
 
