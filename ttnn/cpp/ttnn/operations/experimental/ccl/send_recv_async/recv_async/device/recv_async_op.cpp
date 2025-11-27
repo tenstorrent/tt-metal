@@ -30,8 +30,11 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RecvAsync::create_mesh_worklo
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    ttnn::MeshCoordinateRangeSet workload_coords =
+        ttnn::send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::RECEIVER>(
+            tensor_coords, this->mesh_socket);
     return ccl::create_mesh_workload_from_programs(
-        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+        workload_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
             return create_program_at(coord, input_tensors, output_tensors);
         });
 }
@@ -40,7 +43,14 @@ tt::tt_metal::operation::ProgramWithCallbacks RecvAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    return recv_async_multicore(input_tensors[0], target_device, this->mesh_socket);
+    auto version = ttnn::send_recv_utils::select_version(input_tensors[0], this->mesh_socket);
+    switch (version) {
+        case ttnn::send_recv_utils::SendRecvVersion::MULTI_CORE_DEFAULT:
+            return recv_async_multicore(input_tensors[0], target_device, this->mesh_socket);
+        case ttnn::send_recv_utils::SendRecvVersion::MINIMAL_SINGLE_CORE_MULTI_LINK:
+            return recv_async_minimal_single_core(input_tensors[0], target_device, this->mesh_socket);
+        default: TT_FATAL(false, "Invalid recv version");
+    }
 }
 
 tt::tt_metal::operation::Hash RecvAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {

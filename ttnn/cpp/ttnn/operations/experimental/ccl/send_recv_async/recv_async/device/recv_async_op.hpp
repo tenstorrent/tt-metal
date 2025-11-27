@@ -44,6 +44,11 @@ struct RecvAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
+tt::tt_metal::operation::ProgramWithCallbacks recv_async_minimal_single_core(
+    const Tensor& output_tensor,
+    tt::tt_metal::IDevice* target_device,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket);
+
 tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     const Tensor& output_tensor,
     tt::tt_metal::IDevice* target_device,

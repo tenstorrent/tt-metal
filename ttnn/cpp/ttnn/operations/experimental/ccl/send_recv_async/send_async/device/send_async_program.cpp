@@ -22,6 +22,150 @@ using namespace tt::constants;
 
 namespace ttnn {
 
+tt::tt_metal::operation::ProgramWithCallbacks send_async_minimal_single_core_multi_link(
+    const Tensor& input_tensor,
+    tt::tt_metal::IDevice* target_device,
+    const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    tt::tt_metal::Program program{};
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
+    const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
+    CoreCoord sender_core_coord;
+    CoreCoord receiver_core_coord;
+    tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
+    tt::tt_fabric::FabricNodeId receiver_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
+
+    for (const auto& connection : socket_connection_config) {
+        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+            sender_core_coord = connection.sender_core.core_coord;
+            receiver_core_coord = connection.receiver_core.core_coord;
+            sender_fabric_node_id = input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord);
+            receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
+                tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
+            break;
+        }
+    }
+    auto max_alignment = std::max(
+        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        input_tensor.buffer()->alignment());
+    auto input_page_size = input_tensor.buffer()->aligned_page_size();
+    auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
+
+    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+    TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
+    uint32_t num_links = 2;
+
+    // fabric_max_payload_size will always be less than the fifo size for this version
+    uint32_t fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+
+    uint32_t num_whole_packets = input_page_size / fabric_max_payload_size;
+    uint32_t partial_packet_size = input_page_size % fabric_max_payload_size;
+    // Link 0 gets the first set of whole packets. Send 1 extra on link 0 if there is a partial packet (which will be
+    // sent on link 1).
+    uint32_t num_whole_packets_link_0 =
+        (num_whole_packets / num_links) + static_cast<uint32_t>(partial_packet_size > 0);
+    // Link 1 gets the remaining whole packets + the partial packet (if any)
+    uint32_t num_whole_packets_link_1 = num_whole_packets - num_whole_packets_link_0;
+
+    uint32_t socket_block_size = socket_aligned_page_size;
+    uint32_t socket_fifo_size_in_pages =
+        mesh_socket.get_config().socket_mem_config.fifo_size / socket_aligned_page_size;
+
+    // Setup the input L1 CB to match the socket specs
+    uint32_t cb_num_pages = socket_fifo_size_in_pages;
+    uint32_t cb_page_size = socket_block_size;
+
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+
+    auto src0_cb_index = tt::CBIndex::c_0;
+
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
+            .set_page_size(src0_cb_index, cb_page_size);
+
+    CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
+
+    // 1 Packet Header CB per Channel (acks are inlined with data)
+    uint32_t packet_header_cb_num_pages = num_links;
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+
+    auto packet_header_cb_index = tt::CBIndex::c_1;
+
+    tt::tt_metal::CircularBufferConfig cb_packet_header_config =
+        tt::tt_metal::CircularBufferConfig(
+            packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
+            .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
+
+    CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
+
+    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
+    auto compile_time_args = input_accessor_args.get_compile_time_args();
+    std::vector<uint32_t> reader_compile_args = {
+        src0_cb_index,    // cb0_id
+        input_page_size,  // input_page_size
+    };
+
+    reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
+
+    auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader_minimal.cpp",
+        sender_core_coord,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+
+    std::vector<uint32_t> reader_rt_args = {input_tensor.buffer()->address()};
+    tt::tt_metal::SetRuntimeArgs(program, worker_reader_kernel_id, sender_core_coord, reader_rt_args);
+
+    std::vector<uint32_t> writer_compile_args = {
+        src0_cb_index,             // cb0_id
+        packet_header_cb_index,    // fabric_packet_header_cb_id
+        socket_block_size,         // socket_block_size
+        partial_packet_size,       // partial_packet_size
+        fabric_max_payload_size,   // whole_packet_size (fabric_max_payload_size)
+        num_whole_packets_link_0,  // num_whole_packets_link_0
+        num_whole_packets_link_1,  // num_whole_packets_link_1
+    };
+
+    auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_writer_minimal.cpp",
+        sender_core_coord,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+
+    // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
+    uint32_t recv_bank_id = 0;
+    recv_bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
+        mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
+
+    std::vector<uint32_t> writer_rt_args = {mesh_socket.get_config_buffer()->address(), recv_bank_id};
+    for (uint32_t i = 0; i < num_links; ++i) {
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            sender_fabric_node_id,
+            receiver_fabric_node_id,
+            link_indices[i],
+            program,
+            sender_core_coord,
+            writer_rt_args);
+    }
+    tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord, writer_rt_args);
+
+    auto override_runtime_arguments_callback =
+        [sender_core_coord, worker_reader_kernel_id, worker_writer_kernel_id](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            const auto& mesh_socket = static_cast<const ttnn::SendAsync*>(operation)->mesh_socket;
+            auto& reader_runtime_args = GetRuntimeArgs(program, worker_reader_kernel_id, sender_core_coord);
+            auto& writer_runtime_args = GetRuntimeArgs(program, worker_writer_kernel_id, sender_core_coord);
+
+            reader_runtime_args[0] = input_tensors[0].buffer()->address();
+            writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     const Tensor& input_tensor,
     tt::tt_metal::IDevice* target_device,
