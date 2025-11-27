@@ -46,7 +46,8 @@ struct ScatterDeviceOperation {
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
         const ScatterReductionType& opt_reduction,
-        const std::optional<CoreRangeSet>& sub_core_grid);
+        const std::optional<CoreRangeSet>& sub_core_grid,
+        uint32_t l1_reserved_memory_bytes = 0);
 };
 
 }  // namespace ttnn::operations::data_movement::scatter

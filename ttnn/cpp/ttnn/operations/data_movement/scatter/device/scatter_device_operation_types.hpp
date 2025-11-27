@@ -19,6 +19,7 @@ struct operation_attributes_t {
     // reduction applied to source values coming from repeating indices
     const ScatterReductionType opt_reduction;
     const std::optional<CoreRangeSet> sub_core_grid;
+    const int32_t l1_reserved_memory_bytes;
 };
 
 struct tensor_args_t {
