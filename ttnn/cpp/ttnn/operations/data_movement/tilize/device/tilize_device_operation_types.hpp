@@ -11,9 +11,9 @@ namespace ttnn::operations::data_movement {
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
-    bool use_multicore;
-    bool enough_space_width;
-    bool enough_space_height;
+    bool use_multicore = false;
+    bool enough_space_width = false;
+    bool enough_space_height = false;
 };
 
 struct tensor_args_t {
@@ -27,8 +27,8 @@ using spec_return_value_t = ttnn::TensorSpec;
 namespace program {
 struct MultiCoreSharedVariables {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
         std::vector<CoreCoord> cores;
     };
 };
