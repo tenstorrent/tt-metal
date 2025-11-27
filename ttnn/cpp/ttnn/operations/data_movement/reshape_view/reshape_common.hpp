@@ -4,7 +4,7 @@
 
 #include <variant>
 #include <cstdint>
-#include "reshape_kernel_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 #pragma once

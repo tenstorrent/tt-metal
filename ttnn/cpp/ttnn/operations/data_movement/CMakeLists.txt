@@ -63,6 +63,7 @@ target_sources(
             repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
+            reshape_view/reshape_kernel_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
             sharded/reshard/reshard.hpp

@@ -22,7 +22,6 @@
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
 #include "reshape_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::reshape {
