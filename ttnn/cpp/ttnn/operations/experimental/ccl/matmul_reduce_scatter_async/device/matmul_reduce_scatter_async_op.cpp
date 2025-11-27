@@ -20,10 +20,9 @@ namespace matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
-    const CoreCoord reduce_scatter_core_grid_offset,
-    const std::vector<IDevice*>& devices) {
+    const CoreCoord reduce_scatter_core_grid_offset) {
     return ttnn::MatmulReduceScatterAsync{
-        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset, devices};
+        reduce_scatter_minimal_struct_input, matmul_struct_input, reduce_scatter_core_grid_offset};
 }
 
 }  // namespace matmul_reduce_scatter_async_detail
@@ -212,7 +211,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const ttnn::CoreGrid> core_grid) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = ttnn::ccl::get_active_fabric_node_ids(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -260,7 +259,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     ttnn::ReduceScatterMinimalAsync reduce_scatter_minimal_async_struct = ttnn::ReduceScatterMinimalAsync(
         dim,
         num_links,
-        devices.size(),
+        fabric_node_ids.size(),
         memory_config_rs.value_or(input_tensor.memory_config()),
         intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         topology,
@@ -280,8 +279,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
             /* Matmul params */
             matmul_struct,
             /* Fusion params */
-            reduce_scatter_core_grid_offset,
-            devices),
+            reduce_scatter_core_grid_offset),
         {input_tensor, weight_tensor},
         optional_input_tensors,
         optional_output_tensors);

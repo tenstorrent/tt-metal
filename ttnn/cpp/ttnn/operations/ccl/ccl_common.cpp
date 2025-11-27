@@ -335,28 +335,37 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     return config;
 }
 
-// TODO(p1-0tr): Dig into usage in ops and remove this.
-std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto* mesh_device = tensor.device();
-    std::vector<IDevice*> devices = {};
-    devices.reserve(tensor.device_storage().coords.size());
-    for (const auto& coord : tensor.device_storage().coords) {
-        devices.push_back(mesh_device->get_device(coord));
-    }
-    return devices;
-}
+// TODO(p1-0tr): deprecate
+// std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
+//    auto mesh_device = tensor.device();
+//    std::vector<IDevice*> devices = {};
+//    devices.reserve(tensor.device_storage().coords.size());
+//    for (const auto& coord : tensor.device_storage().coords) {
+//        devices.push_back(mesh_device->get_device(coord));
+//    }
+//    return devices;
+//}
 
-// TODO(p1-0tr): Dig into usage in ops and remove this.
-std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
-    std::vector<IDevice*> devices;
-    devices.reserve(tensor_shards.size());
-    for (const auto& tensor : tensor_shards) {
-        TT_FATAL(
-            tensor.device()->shape().mesh_size() == 1,
-            "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
-        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
+// TODO(p1-0tr): deprecate
+// std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
+//    std::vector<IDevice*> devices;
+//    devices.reserve(tensor_shards.size());
+//    for (const auto& tensor : tensor_shards) {
+//        TT_FATAL(
+//            tensor.device()->shape().mesh_size() == 1,
+//            "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
+//        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
+//    }
+//    return devices;
+//}
+
+std::vector<tt::tt_fabric::FabricNodeId> get_active_fabric_node_ids(const Tensor& tensor) {
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    fabric_node_ids.reserve(tensor.device_storage().coords.size());
+    for (const auto& coord : tensor.device_storage().coords) {
+        fabric_node_ids.push_back(tensor.device()->get_fabric_node_id(coord));
     }
-    return devices;
+    return fabric_node_ids;
 }
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
