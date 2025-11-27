@@ -19,6 +19,9 @@ ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor must have a shard spec");
 
+    TT_FATAL(num_slices >= 0 && num_slices <= UINT32_MAX, "num_slices must be in range [0, UINT32_MAX]");
+    TT_FATAL(slice_index >= 0 && slice_index <= UINT32_MAX, "slice_index must be in range [0, UINT32_MAX]");
+
     ttnn::prim::sharded_to_interleaved_partial(
         input_tensor,
         cache_tensor,
