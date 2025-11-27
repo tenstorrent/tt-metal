@@ -190,7 +190,7 @@ protected:
     Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     FDKernelType kernel_type_ = FDKernelType::UNSET;
-    KernelHandle kernel_handle_ = 0;
+    KernelHandle kernel_handle_;
     ChipId device_id_;
     ChipId servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;

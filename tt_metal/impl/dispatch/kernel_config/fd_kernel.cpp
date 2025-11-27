@@ -160,7 +160,7 @@ KernelHandle FDKernel::configure_kernel_variant(
     }
 
     if (GetCoreType() == CoreType::WORKER) {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -172,7 +172,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -183,6 +183,8 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+
+    return kernel_handle_;
 }
 
 void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
