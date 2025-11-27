@@ -186,18 +186,13 @@ unit_tg_device() {
 }
 
 # Run tg frequent tests
-# DEPRECATED: Galaxy frequent tests now call pytest directly from GitHub Actions workflow
-# See: .github/workflows/galaxy-frequent-tests-impl.yaml
 frequent_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
     local model=$4
 
-    echo "ERROR: frequent_tg_device is deprecated."
-    echo "Galaxy frequent tests now run directly from GitHub Actions workflow."
-    echo "See: .github/workflows/galaxy-frequent-tests-impl.yaml"
-    exit 1
+    ./tests/scripts/tg/run_tg_frequent_tests.sh --model "$model"
 }
 
 # Run tg demo tests
