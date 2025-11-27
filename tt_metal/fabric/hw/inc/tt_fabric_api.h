@@ -223,7 +223,7 @@ int fabric_set_unicast_route(
         if (next_direction < eth_chan_directions::COUNT) {
             // when arrive at another mesh, but dst chip is not itself. -> go to next chip -> prepend FORWARD_<DIR> ->
             // add route
-            num_cmd = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
+            num_cmd = routing_info->decode_route_to_buffer<true>(dst_dev_id, packet_header->route_buffer);
         } else {
             if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
                 // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done

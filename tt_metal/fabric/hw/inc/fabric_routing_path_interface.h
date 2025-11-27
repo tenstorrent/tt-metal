@@ -11,8 +11,9 @@ namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing
 template <>
+template <bool prepend_one_hop = false>
 inline int intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // invalid chip
         out_route_buffer[0] = 0;
@@ -84,8 +85,9 @@ inline int intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 
 // Device-side decoder function for 1D routing (packed paths)
 template <>
+template <bool prepend_one_hop = false>
 inline int intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // Out of bounds - fill buffer with NOOPs/zeros
         for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
@@ -105,8 +107,9 @@ inline int intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
 
 // Device-side compressed decoder function for 1D routing
 template <>
+template <bool prepend_one_hop = false>
 inline int intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
-    uint16_t hops, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+    uint16_t hops, volatile uint8_t* out_route_buffer) const {
     return SINGLE_ROUTE_SIZE_1D;
 }
 
