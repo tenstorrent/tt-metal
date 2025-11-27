@@ -5,7 +5,13 @@
 #include <cstdint>
 
 void print_tile(
-    uint32_t cb_idx, uint32_t tile_idx, bool untilize = true, uint16_t start_row = 0, uint16_t end_row = 32) {
+    uint32_t cb_idx,
+    uint32_t tile_idx,
+    bool untilize = true,
+    uint16_t start_row = 0,
+    uint16_t end_row = 32,
+    uint8_t start_col = 0,
+    uint8_t end_col = 32) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
     DPRINT << "======" << ENDL();
     for (uint16_t r = start_row; r < end_row; ++r) {
@@ -17,8 +23,8 @@ void print_tile(
                           .h0 = (uint8_t)r,
                           .h1 = (uint8_t)(r + 1),
                           .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
+                          .w0 = (uint8_t)start_col,
+                          .w1 = (uint8_t)end_col,
                           .ws = (uint8_t)1},
                       true,
                       untilize)
@@ -77,7 +83,7 @@ FORCE_INLINE void generate_index_tiles(
 // Vertically along each tile, write index 0, ..., n_groups - 1
 FORCE_INLINE void generate_group_indices_tiles(
     const uint32_t group_indices_cb_index, uint32_t width_tiles, uint32_t n_groups) {
-    cb_reserve_back(group_indices_cb_index, width_tiles);
+    cb_reserve_back(group_indices_cb_index, 1);  // max of 32 groups
     uint32_t base_write_addr = get_write_ptr(group_indices_cb_index);
     constexpr uint32_t face_line = 16;
     constexpr uint32_t face_line_bytes = 32;
@@ -118,13 +124,7 @@ FORCE_INLINE void generate_group_indices_tiles(
     noc_async_read(dm_engine_index_write_offset_face_3, face_4_l1_write_addr, face_size_bytes);
     uint32_t tile_write_addr = base_write_addr + tile_size_bytes;
     noc_async_read_barrier();
-    // then copy the tile to the rest of the tiles
-    for (uint32_t tile_index = 1; tile_index < width_tiles; tile_index++) {
-        noc_async_read(dm_engine_index_write_offset_face_1, tile_write_addr, tile_size_bytes);
-        tile_write_addr += tile_size_bytes;
-    }
-    noc_async_read_barrier();
-    cb_push_back(group_indices_cb_index, width_tiles);
+    cb_push_back(group_indices_cb_index, 1);
 }
 
 FORCE_INLINE void generate_summed_experts_tiles(

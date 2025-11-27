@@ -114,7 +114,7 @@ void process_and_sort_tiles(
         pack_tile<true>(3, index_transposed_cb_index, wt + 1);
 
         cb_pop_front(input_cb_index, 2);
-        cb_pop_front(index_cb_index, 2);
+        // don't pop index_cb_index as it gets re-used for the next tile heights
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
@@ -126,21 +126,31 @@ void process_and_sort_tiles(
 void sum_top_experts_per_group(
     const uint32_t summed_experts_cb_index, const uint32_t group_scores_cb_index, uint32_t summed_experts_per_group) {
     // sum the top experts_per_group rows for each group
-    add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, false);
+    binary_op_init_common(
+        summed_experts_cb_index, summed_experts_cb_index, group_scores_cb_index);  // with full init, good
+    add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, true);
     cb_wait_front(summed_experts_cb_index, summed_experts_per_group);
-    UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16));
-    UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16));
-    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        tile_regs_acquire();
-        add_tiles(summed_experts_cb_index, summed_experts_cb_index, i, i + 1, 0);
-        tile_regs_commit();
 
-        cb_reserve_back(group_scores_cb_index, 1);
-        tile_regs_wait();
-        pack_tile(0, group_scores_cb_index);
-        tile_regs_release();
-        cb_push_back(group_scores_cb_index, 1);
+    // UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16));
+    // UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16));
+
+    cb_reserve_back(group_scores_cb_index, 1);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
+        add_tiles(
+            summed_experts_cb_index,
+            summed_experts_cb_index,
+            i,
+            i + 1,
+            0);  // with full init, good, without full init, bad
+        dprint_tensix_dest_reg(0);
     }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, group_scores_cb_index);
+    tile_regs_release();
+
+    cb_push_back(group_scores_cb_index, 1);
     cb_pop_front(summed_experts_cb_index, summed_experts_per_group);
 }
 
@@ -151,13 +161,16 @@ void topk_group_scores(
     bool switch_dir,
     bool& ascending,
     int log_topk_groups) {
-    cb_reserve_back(sorted_group_scores_cb_index, 1);
+    topk_tile_init();
+    cb_reserve_back(sorted_group_indices_cb_index, 1);
 
     // Sort single input and index tile that have already ben transposed.
     acquire_dst();
     // local sort into k groups
     cb_wait_front(group_scores_cb_index, 1);
+    // UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
     cb_wait_front(group_indices_cb_index, 1);
+    // UNPACK(print_tile(group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     // copy scores tile to dest reg 0
     copy_tile_to_dst_init_short(group_scores_cb_index);
@@ -175,7 +188,7 @@ void topk_group_scores(
     pack_tile(2, sorted_group_indices_cb_index);
 
     cb_pop_front(group_scores_cb_index, 1);
-    cb_pop_front(group_indices_cb_index, 1);
+    // don't pop group indices as it gets re-used for the next tile heights
     release_dst();
 
     cb_push_back(sorted_group_indices_cb_index, 1);
@@ -275,6 +288,9 @@ void MAIN {
             switch_dir,
             ascending,
             log_topk_groups);
+
+        cb_wait_front(sorted_group_indices_cb_index, 1);
+        UNPACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
     }
 }
 }  // namespace NAMESPACE

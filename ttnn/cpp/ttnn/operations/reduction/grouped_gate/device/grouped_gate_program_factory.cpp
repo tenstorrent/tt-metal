@@ -113,7 +113,12 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto summed_experts_cb_index = tt::CBIndex::c_11;
     auto sorted_group_indices_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::create_cb(
-        group_indices_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, tt::DataFormat::UInt16);
+        group_indices_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        tt::div_up(operation_attributes.n_groups, 32),
+        tt::DataFormat::UInt16);
     tt::tt_metal::create_cb(
         summed_experts_cb_index,
         program,
@@ -122,13 +127,18 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         operation_attributes.summed_experts_per_group,
         scores_data_format);
     tt::tt_metal::create_cb(
-        group_scores_cb_index, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
+        group_scores_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        tt::div_up(operation_attributes.n_groups, 32),
+        scores_data_format);
     tt::tt_metal::create_cb(
         sorted_group_indices_cb_index,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
-        width_tiles,
+        tt::div_up(operation_attributes.n_groups, 32),
         tt::DataFormat::UInt16);
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
