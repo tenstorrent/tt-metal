@@ -64,6 +64,7 @@ target_sources(
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp
+        topology_mapper_utils.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
