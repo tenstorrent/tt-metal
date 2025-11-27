@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/device_operation.hpp"
-#include "sharded_to_interleaved_partial_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement::program {
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sharded_to_interleaved_partial_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::program {
 

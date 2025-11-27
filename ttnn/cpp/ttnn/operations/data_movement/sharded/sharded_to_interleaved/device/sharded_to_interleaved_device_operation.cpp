@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sharded_to_interleaved_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;

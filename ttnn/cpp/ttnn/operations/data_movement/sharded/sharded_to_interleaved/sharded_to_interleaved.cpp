@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "device/sharded_to_interleaved_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {

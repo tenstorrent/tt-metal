@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sharded_to_interleaved_partial.hpp"
-#include "device/sharded_to_interleaved_partial_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.hpp"
+#include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -12,8 +12,8 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& cache_tensor,
-    int64_t& num_slices,
-    int64_t& slice_index,
+    int64_t num_slices,
+    int64_t slice_index,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DataType>& data_type_arg) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
