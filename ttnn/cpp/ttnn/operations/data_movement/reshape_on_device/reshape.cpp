@@ -87,9 +87,7 @@ ttnn::Tensor ReshapeOperation::invoke(
             input_tensor.device(),
             output_mem_config);
     }
-    return tt::tt_metal::operation::run(
-               ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
-        .at(0);
+    return ttnn::prim::reshape_on_device(input_tensor, logical_output_shape, padded_output_shape, output_mem_config);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
