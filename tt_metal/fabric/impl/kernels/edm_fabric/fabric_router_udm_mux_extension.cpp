@@ -252,16 +252,8 @@ void forward_data(
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        // TODO: once we group the channels into udm-worker, relay-mux, mux-mux, then we only need to check the
-        // directions for the udm-worker channels.
-        // if (is_persistent_channel) {
-        //     fabric_connection.wait_for_empty_write_slot();
-        //     fabric_connection.send_payload_flush_non_blocking_from_address(
-        //         (uint32_t)packet_header, packet_header->get_payload_size_including_header());
-        // } else {
         tt::tt_fabric::udm::forward_to_downstream_mux_or_local_router<Direction>(
             packet_header, fabric_connection, downstream_mux_connections);
-        // }
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
