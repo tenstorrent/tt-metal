@@ -141,3 +141,6 @@ Testing
 .auto_triage/logs
 .auto_triage/data
 .auto_triage/output
+
+# Local temporary files for PR fixes
+_local/
