@@ -13,7 +13,7 @@ struct SliceRmProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        CoreCoord compute_with_storage_grid_size;
+        CoreCoord compute_with_storage_grid_size{};
         std::optional<CoreRangeSet> sub_core_grids;
         tt::tt_metal::CBHandle cb_src0{};
     };
@@ -34,8 +34,8 @@ struct SliceRmProgramFactory {
 
 struct SliceRmShardedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::CBHandle cb_src0;
-        tt::tt_metal::CBHandle cb_output;
+        tt::tt_metal::CBHandle cb_src0{};
+        tt::tt_metal::CBHandle cb_output{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -54,9 +54,9 @@ struct SliceRmShardedProgramFactory {
 
 struct SliceRmStrideProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        std::vector<CoreCoord> all_cores_vec;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
+        std::vector<CoreCoord> all_cores_vec{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -75,11 +75,11 @@ struct SliceRmStrideProgramFactory {
 
 struct SliceTileProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        CoreCoord compute_with_storage_grid_size;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        CoreCoord compute_with_storage_grid_size{};
         std::optional<CoreRangeSet> sub_core_grids;
-        std::vector<uint32_t> accumulated_total_per_dim;
+        std::vector<uint32_t> accumulated_total_per_dim{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -98,11 +98,11 @@ struct SliceTileProgramFactory {
 
 struct SliceTileTensorArgsProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id;
-        tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        CoreCoord compute_with_storage_grid_size;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        CoreCoord compute_with_storage_grid_size{};
         std::optional<CoreRangeSet> sub_core_grids;
-        std::vector<uint32_t> accumulated_total_per_dim;
+        std::vector<uint32_t> accumulated_total_per_dim{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
