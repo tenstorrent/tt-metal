@@ -138,7 +138,7 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
             exp_pcc=0.986,
-            exp_atol=2.0,
+            exp_atol=1.3,
             exp_rtol=0.4,
         )
     )
@@ -151,8 +151,8 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
                 exp_pcc=0.805,
-                exp_atol=0.09,
-                exp_rtol=31.0,
+                exp_atol=0.1,
+                exp_rtol=2.0,
             )
         )
         all_passed.append(
@@ -163,8 +163,8 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
                 exp_pcc=0.990,
-                exp_atol=9.8,
-                exp_rtol=5.0,
+                exp_atol=10.4,
+                exp_rtol=0.6,
             )
         )
 
