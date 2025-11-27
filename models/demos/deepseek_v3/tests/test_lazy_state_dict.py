@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import pytest
 import safetensors.torch
 import torch
 
+from models.demos.deepseek_v3.utils import lazy_state_dict as lsd
 from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
@@ -35,7 +35,6 @@ def test_lazy_state_dict_access_single_key(tmp_path: Path, monkeypatch: pytest.M
     _write_index(model_dir, {"w1": file1.name, "w2": file2.name})
 
     # Count safetensors.safe_open calls
-    lsd = importlib.import_module("models.demos.deepseek_v3.utils.lazy_state_dict")
     open_counts: dict[str, int] = {}
     original_safe_open = lsd.safe_open
 
@@ -77,7 +76,6 @@ def test_lazy_sub_state_dict_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         },
     )
 
-    lsd = importlib.import_module("models.demos.deepseek_v3.utils.lazy_state_dict")
     open_counts: dict[str, int] = {}
     original_safe_open = lsd.safe_open
 
@@ -127,8 +125,8 @@ def test_lazy_cache_does_not_collide_across_views(tmp_path: Path):
     file2 = model_dir / "model-00002-of-00002.safetensors"
     key_mlp = "model.layers.3.mlp.gate_proj.weight"
     key_exp = "model.layers.3.mlp.experts.0.gate_proj.weight"
-    t_mlp = torch.randn(18432, 7168, dtype=torch.bfloat16)
-    t_exp = torch.randn(2048, 7168, dtype=torch.bfloat16)
+    t_mlp = torch.randn(32, 32, dtype=torch.bfloat16)
+    t_exp = torch.randn(9, 5, dtype=torch.bfloat16)
     safetensors.torch.save_file({key_mlp: t_mlp}, str(file1))
     safetensors.torch.save_file({key_exp: t_exp}, str(file2))
     _write_index(model_dir, {key_mlp: file1.name, key_exp: file2.name})
@@ -145,3 +143,190 @@ def test_lazy_cache_does_not_collide_across_views(tmp_path: Path):
     # Then access the expert key; should not collide with MLP cache
     v_exp = sub_exp["gate_proj.weight"]
     assert v_exp.shape == t_exp.shape
+
+
+def test_layer_filtering_in_view(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create safetensors with multiple layers and a non-layer key
+    file1 = model_dir / "model-00001-of-00002.safetensors"
+    file2 = model_dir / "model-00002-of-00002.safetensors"
+    keys_file1 = {
+        "model.layers.0.foo": torch.randn(1),
+        "model.layers.1.foo": torch.randn(1),
+        "lm_head.weight": torch.randn(2, 2),
+    }
+    keys_file2 = {
+        "model.layers.2.foo": torch.randn(1),
+    }
+    safetensors.torch.save_file(keys_file1, str(file1))
+    safetensors.torch.save_file(keys_file2, str(file2))
+    _write_index(
+        model_dir,
+        {
+            **{k: file1.name for k in keys_file1.keys()},
+            **{k: file2.name for k in keys_file2.keys()},
+        },
+    )
+
+    state = load_state_dict(model_dir, "")
+
+    # Create a view that filters layers >= 2
+    view = state.view_with_prefix("", num_layers=2)
+    view_keys = set(view.keys())
+    assert "model.layers.0.foo" in view_keys
+    assert "model.layers.1.foo" in view_keys
+    assert "lm_head.weight" in view_keys  # non-layer key should always pass
+    assert "model.layers.2.foo" not in view_keys
+
+    # Accessible keys load successfully
+    _ = view["model.layers.0.foo"]
+    _ = view["lm_head.weight"]
+
+    # Filtered-out key should raise
+    try:
+        _ = view["model.layers.2.foo"]
+        assert False, "Expected KeyError for filtered-out layer key"
+    except KeyError:
+        pass
+
+
+def test_contains_and_len_reflect_filtering(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    file2 = model_dir / "b.safetensors"
+    safetensors.torch.save_file(
+        {
+            "model.layers.0.k": torch.randn(1),
+            "model.layers.1.k": torch.randn(1),
+            "lm_head.weight": torch.randn(2, 2),
+        },
+        str(file1),
+    )
+    safetensors.torch.save_file({"model.layers.2.k": torch.randn(1)}, str(file2))
+    _write_index(
+        model_dir,
+        {
+            "model.layers.0.k": file1.name,
+            "model.layers.1.k": file1.name,
+            "lm_head.weight": file1.name,
+            "model.layers.2.k": file2.name,
+        },
+    )
+
+    state = load_state_dict(model_dir, "")
+    view = state.view_with_prefix("", num_layers=2)
+
+    # __contains__
+    assert "model.layers.0.k" in view
+    assert "model.layers.1.k" in view
+    assert "lm_head.weight" in view
+    assert "model.layers.2.k" not in view
+
+    # __len__
+    assert len(view) == 3
+
+
+def test_view_without_num_layers_includes_all(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    safetensors.torch.save_file(
+        {
+            "model.layers.0.k": torch.randn(1),
+            "model.layers.2.k": torch.randn(1),
+        },
+        str(file1),
+    )
+    _write_index(
+        model_dir,
+        {
+            "model.layers.0.k": file1.name,
+            "model.layers.2.k": file1.name,
+        },
+    )
+    state = load_state_dict(model_dir, "")
+    view = state.view_with_prefix("")  # no filtering
+    keys = set(view.keys())
+    assert "model.layers.0.k" in keys
+    assert "model.layers.2.k" in keys
+
+
+def test_cache_reuse_across_views_single_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    full_key = "model.layers.0.w"
+    t = torch.randn(3, 3)
+    safetensors.torch.save_file({full_key: t}, str(file1))
+    _write_index(model_dir, {full_key: file1.name})
+
+    open_counts: dict[str, int] = {}
+    original_safe_open = lsd.safe_open
+
+    def counting_safe_open(path, *args, **kwargs):
+        name = Path(path).name
+        open_counts[name] = open_counts.get(name, 0) + 1
+        return original_safe_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(lsd, "safe_open", counting_safe_open, raising=True)
+
+    state = load_state_dict(model_dir, "")
+    # Access via base (full key)
+    _ = state[full_key]
+    # Access via prefixed view
+    sub = sub_state_dict(state, "model.layers.0.")
+    _ = sub["w"]
+    assert open_counts.get(file1.name, 0) == 1
+
+
+def test_missing_file_raises(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Index points to a non-existent file
+    missing = "missing.safetensors"
+    key = "model.layers.0.q"
+    _write_index(model_dir, {key: missing})
+
+    state = load_state_dict(model_dir, "")
+    with pytest.raises(FileNotFoundError):
+        _ = state[key]
+
+
+def test_non_numeric_layer_segment_not_filtered(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    keys = {
+        "model.layers.foo.bar": torch.randn(1),
+        "model.layers.2.x": torch.randn(1),
+        "misc.key": torch.randn(1),
+    }
+    safetensors.torch.save_file(keys, str(file1))
+    _write_index(
+        model_dir,
+        {k: file1.name for k in keys.keys()},
+    )
+
+    state = load_state_dict(model_dir, "")
+    view = state.view_with_prefix("", num_layers=2)
+    keys_in_view = set(view.keys())
+
+    # Non-numeric layer segment should not be filtered
+    assert "model.layers.foo.bar" in keys_in_view
+
+    # Numeric segment equal/above threshold should be filtered
+    assert "model.layers.2.x" not in keys_in_view
+
+    # Non-layer keys should always pass
+    assert "misc.key" in keys_in_view
+
+    # Access works for non-numeric segment
+    _ = view["model.layers.foo.bar"]
