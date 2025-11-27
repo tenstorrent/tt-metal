@@ -126,7 +126,7 @@ Tensor create_typed_tt_tensor_from_py_data(
 
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_ndarray.data()), py_data_shape.volume());
 
-    TT_FATAL(not py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
+    TT_FATAL(py_ndarray.is_valid(), "create_typed_tt_tensor_from_py_data: py_ndarray is invalid!");
     TT_FATAL(
         py_ndarray.size() == py_data_shape.volume(),
         "create_typed_tt_tensor_from_py_data: array size ({}) shape volume ({}) mismatch!",
