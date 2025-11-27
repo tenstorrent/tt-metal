@@ -49,16 +49,15 @@ public:
         BufferType buffer_type, const CoreCoord& logical_core) const;
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
     uint32_t get_alignment(BufferType buffer_type) const;
+    // This a proxy of get_config().worker_l1_size,
+    // this helper function is made for reports.cpp in TTNN and act as a transient member function.
+    size_t get_worker_l1_size() const;
     Statistics get_statistics(const BufferType& buffer_type) const;
     // AllocatorState Methods
     // Extracts the current state of the allocator.
     AllocatorState extract_state() const;
     // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
-
-    // This a proxy of get_config().worker_l1_size,
-    // this helper function is made for reports.cpp in TTNN and act as a transient member function.
-    size_t get_worker_l1_size() const;
 
 private:
     AllocatorImpl* impl;
