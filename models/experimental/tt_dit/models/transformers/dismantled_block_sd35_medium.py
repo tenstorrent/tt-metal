@@ -300,73 +300,57 @@ class SD35MediumDismantledBlock:
         if hasattr(self.attn2, "ln_k") and self.attn2.ln_k is not None:
             k2 = self.attn2.ln_k(k2)
 
-        # Compute attention outputs from QKV
-        # Reshape to [B, seq_len, num_heads, head_dim]
-        q1 = ttnn.reshape(q1, (B, seq_len, self.num_heads, self.attn.head_dim))
-        k1 = ttnn.reshape(k1, (B, seq_len, self.num_heads, self.attn.head_dim))
-        v1 = ttnn.reshape(v1, (B, seq_len, self.num_heads, self.attn.head_dim))
-
-        # Transpose to [B, num_heads, seq_len, head_dim]
-        q1 = ttnn.permute(q1, (0, 2, 1, 3))
+        # Reshape QKV tensors to [B, num_heads, seq_len, head_dim] format for joint SDPA
+        # First attention QKV (for joint attention)
+        q1 = ttnn.squeeze(q1, 0)  # [B, seq_len, num_heads, head_dim]
+        k1 = ttnn.squeeze(k1, 0)
+        v1 = ttnn.squeeze(v1, 0)
+        q1 = ttnn.permute(q1, (0, 2, 1, 3))  # [B, num_heads, seq_len, head_dim]
         k1 = ttnn.permute(k1, (0, 2, 1, 3))
         v1 = ttnn.permute(v1, (0, 2, 1, 3))
 
-        # Scaled dot-product attention
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.attn.core_grid,
-            q_chunk_size=64,
-            k_chunk_size=64,
-        )
+        # Remove padding on head_dim dimension for joint SDPA compatibility
+        q1_torch = ttnn.to_torch(q1)
+        k1_torch = ttnn.to_torch(k1)
+        v1_torch = ttnn.to_torch(v1)
+        q1_torch = q1_torch[:, :, :, : self.attn.head_dim]
+        k1_torch = k1_torch[:, :, :, : self.attn.head_dim]
+        v1_torch = v1_torch[:, :, :, : self.attn.head_dim]
+        logical_shape1 = ttnn.Shape([B, self.num_heads, seq_len, self.attn.head_dim])
+        q1 = ttnn.from_torch(q1_torch, dtype=q1.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        k1 = ttnn.from_torch(k1_torch, dtype=k1.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        v1 = ttnn.from_torch(v1_torch, dtype=v1.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        q1 = ttnn.reshape(q1, logical_shape1, logical_shape1)
+        k1 = ttnn.reshape(k1, logical_shape1, logical_shape1)
+        v1 = ttnn.reshape(v1, logical_shape1, logical_shape1)
 
-        attn_out1 = ttnn.transformer.scaled_dot_product_attention(
-            q1,
-            k1,
-            v1,
-            is_causal=False,
-            scale=self.attn.scale,
-            program_config=program_config,
-            compute_kernel_config=self.attn.compute_kernel_config,
-        )
-
-        # Transpose back and reshape
-        attn_out1 = ttnn.permute(attn_out1, (0, 2, 1, 3))
-        attn_out1 = ttnn.reshape(attn_out1, (1, B, seq_len, self.attn.inner_dim))
-
-        # Output projection
-        attn_out1 = self.attn.proj(attn_out1)
-
-        # Same for second attention
-        q2 = ttnn.reshape(q2, (B, seq_len, self.num_heads, self.attn2.head_dim))
-        k2 = ttnn.reshape(k2, (B, seq_len, self.num_heads, self.attn2.head_dim))
-        v2 = ttnn.reshape(v2, (B, seq_len, self.num_heads, self.attn2.head_dim))
-
-        q2 = ttnn.permute(q2, (0, 2, 1, 3))
+        # Second attention QKV (for dual attention)
+        q2 = ttnn.squeeze(q2, 0)  # [B, seq_len, num_heads, head_dim]
+        k2 = ttnn.squeeze(k2, 0)
+        v2 = ttnn.squeeze(v2, 0)
+        q2 = ttnn.permute(q2, (0, 2, 1, 3))  # [B, num_heads, seq_len, head_dim]
         k2 = ttnn.permute(k2, (0, 2, 1, 3))
         v2 = ttnn.permute(v2, (0, 2, 1, 3))
 
-        program_config2 = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.attn2.core_grid,
-            q_chunk_size=64,
-            k_chunk_size=64,
-        )
+        # Remove padding on head_dim dimension
+        q2_torch = ttnn.to_torch(q2)
+        k2_torch = ttnn.to_torch(k2)
+        v2_torch = ttnn.to_torch(v2)
+        q2_torch = q2_torch[:, :, :, : self.attn2.head_dim]
+        k2_torch = k2_torch[:, :, :, : self.attn2.head_dim]
+        v2_torch = v2_torch[:, :, :, : self.attn2.head_dim]
+        logical_shape2 = ttnn.Shape([B, self.num_heads, seq_len, self.attn2.head_dim])
+        q2 = ttnn.from_torch(q2_torch, dtype=q2.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        k2 = ttnn.from_torch(k2_torch, dtype=k2.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        v2 = ttnn.from_torch(v2_torch, dtype=v2.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        q2 = ttnn.reshape(q2, logical_shape2, logical_shape2)
+        k2 = ttnn.reshape(k2, logical_shape2, logical_shape2)
+        v2 = ttnn.reshape(v2, logical_shape2, logical_shape2)
 
-        attn_out2 = ttnn.transformer.scaled_dot_product_attention(
-            q2,
-            k2,
-            v2,
-            is_causal=False,
-            scale=self.attn2.scale,
-            program_config=program_config2,
-            compute_kernel_config=self.attn2.compute_kernel_config,
-        )
-
-        attn_out2 = ttnn.permute(attn_out2, (0, 2, 1, 3))
-        attn_out2 = ttnn.reshape(attn_out2, (1, B, seq_len, self.attn2.inner_dim))
-        attn_out2 = self.attn2.proj(attn_out2)
-
+        # Return QKV tuples for both attentions
         return (
-            attn_out1,
-            attn_out2,
+            (q1, k1, v1),  # First attention QKV (for joint attention)
+            (q2, k2, v2),  # Second attention QKV (for dual attention)
             (x, gate_msa, shift_mlp, scale_mlp, gate_mlp, gate_msa2),
         )
 
@@ -397,6 +381,53 @@ class SD35MediumDismantledBlock:
     ):
         """Post-attention for dual attention mode"""
         assert not self.pre_only
+
+        # If attn_out is a tuple (QKV tuple), compute attention output from it
+        if isinstance(attn_out, tuple):
+            q1, k1, v1 = attn_out
+            # Compute attention output from QKV
+            # QKV tensors are already in [B, num_heads, seq_len, head_dim] format
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.attn.core_grid,
+                q_chunk_size=64,
+                k_chunk_size=64,
+            )
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q1,
+                k1,
+                v1,
+                is_causal=False,
+                scale=self.attn.scale,
+                program_config=program_config,
+                compute_kernel_config=self.attn.compute_kernel_config,
+            )
+            # Concatenate heads: [B, num_heads, seq_len, head_dim] -> [1, B, seq_len, hidden_size]
+            attn_out = ttnn.transformer.concatenate_heads(attn_out)
+            # Output projection
+            attn_out = self.attn.proj(attn_out)
+
+        # If attn_out2 is a tuple (QKV tuple), compute attention output from it
+        if isinstance(attn_out2, tuple):
+            q2, k2, v2 = attn_out2
+            # Compute attention output from QKV
+            program_config2 = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.attn2.core_grid,
+                q_chunk_size=64,
+                k_chunk_size=64,
+            )
+            attn_out2 = ttnn.transformer.scaled_dot_product_attention(
+                q2,
+                k2,
+                v2,
+                is_causal=False,
+                scale=self.attn2.scale,
+                program_config=program_config2,
+                compute_kernel_config=self.attn2.compute_kernel_config,
+            )
+            # Concatenate heads: [B, num_heads, seq_len, head_dim] -> [1, B, seq_len, hidden_size]
+            attn_out2 = ttnn.transformer.concatenate_heads(attn_out2)
+            # Output projection
+            attn_out2 = self.attn2.proj(attn_out2)
 
         # Apply first attention
         x = x + gate_msa * attn_out

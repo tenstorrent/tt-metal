@@ -3,13 +3,12 @@
 
 import pytest
 import torch
-from loguru import logger
 from typing import Optional
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.experimental.tt_dit.tests.models.sd35_med.test_dismantled_block import (
-    ReferenceDismantledBlock,
+    DismantledBlock,
     attention,
 )
 from models.experimental.tt_dit.models.transformers.joint_block_sd35_medium import SD35MediumJointBlock
@@ -17,7 +16,7 @@ from models.experimental.tt_dit.models.transformers.joint_block_sd35_medium impo
 
 def block_mixing(context, x, context_block, x_block, c):
     """Reference block mixing implementation"""
-    assert context is not None, "block_mixing called with None context"
+    assert context is not None, "block_mixing called with None context input"
 
     # Use pre_attention_qkv for joint attention
     context_qkv, context_intermediates = context_block.pre_attention_qkv(context, c)
@@ -26,6 +25,18 @@ def block_mixing(context, x, context_block, x_block, c):
         x_qkv, x_qkv2, x_intermediates = x_block.pre_attention_x(x, c)
     else:
         x_qkv, x_intermediates = x_block.pre_attention_qkv(x, c)
+
+    # If x_qkv[0] is 2D, it might be attention output instead of QKV tuple
+    # Reshape if needed: (L, hidden_size) -> (1, L, num_heads, head_dim)
+    if len(x_qkv[0].shape) == 2:
+        # This is likely an attention output, not a QKV tuple
+        # This shouldn't happen if pre_attention_x is correct
+        raise ValueError(
+            f"x_qkv[0] has wrong shape {x_qkv[0].shape}. Expected 4D (B, L, num_heads, head_dim), got 2D. This suggests pre_attention_x is returning attention outputs instead of QKV tuples."
+        )
+
+    assert len(context_qkv[0].shape) == 4, f"context_qkv[0] shape: {context_qkv[0].shape}"
+    assert len(x_qkv[0].shape) == 4, f"x_qkv[0] shape: {x_qkv[0].shape}"
 
     q, k, v = tuple(torch.cat(tuple(qkv[i] for qkv in [context_qkv, x_qkv]), dim=1) for i in range(3))
     attn = attention(q, k, v, x_block.attn.num_heads)
@@ -49,7 +60,7 @@ def block_mixing(context, x, context_block, x_block, c):
     return context, x
 
 
-class ReferenceJointBlock(torch.nn.Module):
+class JointBlock(torch.nn.Module):
     """Reference PyTorch implementation matching MM-DiT JointBlock"""
 
     def __init__(
@@ -66,7 +77,7 @@ class ReferenceJointBlock(torch.nn.Module):
         x_block_self_attn: bool = False,
     ):
         super().__init__()
-        self.context_block = ReferenceDismantledBlock(
+        self.context_block = DismantledBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
@@ -78,7 +89,7 @@ class ReferenceJointBlock(torch.nn.Module):
             swiglu=swiglu,
             x_block_self_attn=False,
         )
-        self.x_block = ReferenceDismantledBlock(
+        self.x_block = DismantledBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
@@ -97,13 +108,34 @@ class ReferenceJointBlock(torch.nn.Module):
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize(
-    "hidden_size, num_heads, context_seq_len, x_seq_len, batch_size, mlp_ratio, x_block_self_attn, swiglu",
+    "hidden_size, num_heads, context_seq_len, x_seq_len, batch_size, mlp_ratio, pre_only, x_block_self_attn, swiglu",
     [
-        (1536, 24, 77, 1024, 1, 4.0, False, False),  # SD3.5 Medium standard joint block
-        # (1536, 24, 77, 1024, 1, 4.0, True, False),   # SD3.5 Medium dual attention joint block
+        (1536, 24, 77, 1024, 1, 4.0, False, True, False),  # SD3.5 Medium dual attention joint block (0-12)
+        (
+            1536,
+            24,
+            77,
+            1024,
+            1,
+            4.0,
+            False,
+            False,
+            False,
+        ),  # SD3.5 Medium standard joint block (both blocks standard) (13-22)
+        (
+            1536,
+            24,
+            77,
+            1024,
+            1,
+            4.0,
+            True,
+            False,
+            False,
+        ),  # SD3.5 Medium last joint block (context pre_only, x full) (23)
     ],
-    ids=["standard"],
-    # ids=["standard", "dual_attn"],
+    # ids=["dual_attn"],
+    ids=["dual_attn", "standard", "pre_only"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_sd35_medium_joint_block(
@@ -115,6 +147,7 @@ def test_sd35_medium_joint_block(
     x_seq_len,
     batch_size,
     mlp_ratio,
+    pre_only,
     x_block_self_attn,
     swiglu,
     reset_seeds,
@@ -123,19 +156,17 @@ def test_sd35_medium_joint_block(
     torch.manual_seed(1234)
 
     # Create reference model
-    reference_model = ReferenceJointBlock(
+    reference_model = JointBlock(
         hidden_size=hidden_size,
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
         qkv_bias=True,
-        pre_only=False,
+        pre_only=pre_only,
         scale_mod_only=False,
         swiglu=swiglu,
         x_block_self_attn=x_block_self_attn,
     )
     reference_model.eval()
-    print(reference_model)
-
     # Create parallel config for N150
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
@@ -149,7 +180,7 @@ def test_sd35_medium_joint_block(
         num_heads=num_heads,
         mlp_ratio=mlp_ratio,
         qkv_bias=True,
-        pre_only=False,
+        pre_only=pre_only,
         scale_mod_only=False,
         swiglu=swiglu,
         qk_norm="rms",
@@ -181,20 +212,23 @@ def test_sd35_medium_joint_block(
 
     tt_context_output, tt_x_output = tt_model(tt_context_input, tt_x_input, tt_c_input)
 
-    # Convert back and compare
-    tt_context_output_torch = ttnn.to_torch(tt_context_output)[0, :batch_size, :context_seq_len, :hidden_size]
-    tt_x_output_torch = ttnn.to_torch(tt_x_output)[0, :batch_size, :x_seq_len, :hidden_size]
-
-    # Compare context output
+    # Compare outputs
     pcc_required = 0.99
-    passing_context, pcc_context = comp_pcc(ref_context_output, tt_context_output_torch, pcc_required)
-    logger.info(f"JointBlock Context PCC: {pcc_context}")
 
-    # Compare x output
+    # Handle context output (may be None if pre_only)
+    if pre_only:
+        assert tt_context_output is None, "Context output should be None when pre_only=True"
+        assert ref_context_output is None, "Reference context output should be None when pre_only=True"
+    else:
+        # Convert back and compare
+        tt_context_output_torch = ttnn.to_torch(tt_context_output)[0, :batch_size, :context_seq_len, :hidden_size]
+        passing_context, _ = comp_pcc(ref_context_output, tt_context_output_torch, pcc_required)
+        assert passing_context, f"Context output does not meet PCC requirement {pcc_required}."
+
+    # Convert back and compare x output
+    tt_x_output_torch = ttnn.to_torch(tt_x_output)[0, :batch_size, :x_seq_len, :hidden_size]
     passing_x, pcc_x = comp_pcc(ref_x_output, tt_x_output_torch, pcc_required)
-    logger.info(f"JointBlock X PCC: {pcc_x}")
-
-    assert passing_context, f"Context output does not meet PCC requirement {pcc_required}."
     assert passing_x, f"X output does not meet PCC requirement {pcc_required}."
 
-    logger.info("SD3.5 Medium JointBlock test passed!")
+    # Print final joint block PCC
+    print(f"JointBlock PCC: {pcc_x}")

@@ -208,27 +208,44 @@ class DismantledBlock(torch.nn.Module):
         ) = self.adaLN_modulation(c).chunk(9, dim=1)
 
         x_norm = self.norm1(x)
-        # Use pre_attention_qkv for joint attention compatibility
-        qkv, _ = self.pre_attention_qkv(x, c)
-        qkv2, _ = (
-            self.attn2.pre_attention_qkv(x_norm, shift_msa2, scale_msa2)
-            if hasattr(self.attn2, "pre_attention_qkv")
-            else (None, None)
-        )
 
-        if qkv2 is None:
-            # Fallback for attention without pre_attention_qkv
-            modulated_x2 = modulate(x_norm, shift_msa2, scale_msa2)
-            B, L, C = modulated_x2.shape
-            qkv2 = self.attn2.qkv(modulated_x2).reshape(B, L, 3, self.attn2.num_heads, self.attn2.head_dim)
-            q2, k2, v2 = qkv2.unbind(2)
-            q2 = self.attn2.ln_q(q2)
-            k2 = self.attn2.ln_k(k2)
-            qkv2 = (q2, k2, v2)
+        # Get QKV tuples for first attention (for joint attention)
+        modulated_x1 = modulate(x_norm, shift_msa, scale_msa)
+        B, L, C = modulated_x1.shape
+        qkv1 = self.attn.qkv(modulated_x1).reshape(B, L, 3, self.attn.num_heads, self.attn.head_dim)
+        q1, k1, v1 = qkv1.unbind(2)
+        q1 = self.attn.ln_q(q1)
+        k1 = self.attn.ln_k(k1)
+
+        # Ensure QKV tensors have correct 4D shape (B, L, num_heads, head_dim)
+        assert q1.shape == (
+            B,
+            L,
+            self.attn.num_heads,
+            self.attn.head_dim,
+        ), f"q1 shape: {q1.shape}, expected: {(B, L, self.attn.num_heads, self.attn.head_dim)}"
+        assert k1.shape == (B, L, self.attn.num_heads, self.attn.head_dim), f"k1 shape: {k1.shape}"
+        assert v1.shape == (B, L, self.attn.num_heads, self.attn.head_dim), f"v1 shape: {v1.shape}"
+
+        qkv1_tuple = (q1, k1, v1)
+
+        # Get QKV tuples for second attention
+        modulated_x2 = modulate(x_norm, shift_msa2, scale_msa2)
+        qkv2 = self.attn2.qkv(modulated_x2).reshape(B, L, 3, self.attn2.num_heads, self.attn2.head_dim)
+        q2, k2, v2 = qkv2.unbind(2)
+        q2 = self.attn2.ln_q(q2)
+        k2 = self.attn2.ln_k(k2)
+
+        # Ensure QKV tensors have correct 4D shape
+        assert q2.shape == (B, L, self.attn2.num_heads, self.attn2.head_dim), f"q2 shape: {q2.shape}"
+        assert k2.shape == (B, L, self.attn2.num_heads, self.attn2.head_dim), f"k2 shape: {k2.shape}"
+        assert v2.shape == (B, L, self.attn2.num_heads, self.attn2.head_dim), f"v2 shape: {v2.shape}"
+
+        qkv2_tuple = (q2, k2, v2)
 
         return (
-            qkv,
-            qkv2,
+            qkv1_tuple,
+            qkv2_tuple,
             (x, gate_msa, shift_mlp, scale_mlp, gate_mlp, gate_msa2),
         )
 
@@ -239,32 +256,6 @@ class DismantledBlock(torch.nn.Module):
         x = x + gate_msa.unsqueeze(1) * attn_out
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
-
-    def pre_attention_x(self, x: torch.Tensor, c: torch.Tensor):
-        """Pre-attention for dual attention mode (x_block_self_attn)"""
-        assert self.x_block_self_attn
-        (
-            shift_msa,
-            scale_msa,
-            gate_msa,
-            shift_mlp,
-            scale_mlp,
-            gate_mlp,
-            shift_msa2,
-            scale_msa2,
-            gate_msa2,
-        ) = self.adaLN_modulation(c).chunk(9, dim=1)
-
-        x_norm = self.norm1(x)
-        # Call full forward passes instead of pre_attention
-        attn_out = self.attn(modulate(x_norm, shift_msa, scale_msa))
-        attn_out2 = self.attn2(modulate(x_norm, shift_msa2, scale_msa2))
-
-        return (
-            attn_out,
-            attn_out2,
-            (x, gate_msa, shift_mlp, scale_mlp, gate_mlp, gate_msa2),
-        )
 
     def post_attention_x(
         self,
@@ -280,6 +271,42 @@ class DismantledBlock(torch.nn.Module):
     ):
         """Post-attention for dual attention mode"""
         assert not self.pre_only
+
+        # If attn_out is a tuple (QKV tuple), compute attention output from it
+        if isinstance(attn_out, tuple):
+            q1, k1, v1 = attn_out
+            # Compute attention output from QKV
+            B, L, num_heads, head_dim = q1.shape
+            # Transpose to [B, num_heads, L, head_dim] for SDPA
+            q1 = q1.transpose(1, 2)
+            k1 = k1.transpose(1, 2)
+            v1 = v1.transpose(1, 2)
+            # Scaled dot-product attention
+            attn_out = torch.nn.functional.scaled_dot_product_attention(
+                q1, k1, v1, scale=self.attn.scale, is_causal=False
+            )
+            # Transpose back and reshape to [B, L, hidden_size]
+            attn_out = attn_out.transpose(1, 2).reshape(B, L, -1)
+            # Output projection
+            attn_out = self.attn.proj(attn_out)
+
+        # If attn_out2 is a tuple (QKV tuple), compute attention output from it
+        if isinstance(attn_out2, tuple):
+            q2, k2, v2 = attn_out2
+            # Compute attention output from QKV
+            B, L, num_heads, head_dim = q2.shape
+            # Transpose to [B, num_heads, L, head_dim] for SDPA
+            q2 = q2.transpose(1, 2)
+            k2 = k2.transpose(1, 2)
+            v2 = v2.transpose(1, 2)
+            # Scaled dot-product attention
+            attn_out2 = torch.nn.functional.scaled_dot_product_attention(
+                q2, k2, v2, scale=self.attn2.scale, is_causal=False
+            )
+            # Transpose back and reshape to [B, L, hidden_size]
+            attn_out2 = attn_out2.transpose(1, 2).reshape(B, L, -1)
+            # Output projection
+            attn_out2 = self.attn2.proj(attn_out2)
 
         if attn1_dropout > 0.0:
             attn1_dropout_mask = torch.bernoulli(
