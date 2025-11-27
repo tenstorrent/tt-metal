@@ -134,3 +134,69 @@ def test_manual_seed_mapping_functionality(device):
     tensor_2 = ttnn.sampling(input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor)
 
     assert_allclose(tensor_1, tensor_2)
+
+
+def test_manual_seed_mapping_functionality_sub_core_grids(device):
+    """
+    Test that manual_seed correctly handles per-core seed mapping.
+    """
+    # Prepare test data
+    shape = (1, 1, 32, 64)
+    input_values = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_indices = ttnn.from_torch(
+        torch.arange(0, shape[-1], dtype=torch.int32).expand(shape),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    k_tensor = ttnn.from_torch(
+        torch.tensor([10, 15, 20, 25, 30] * 6 + [10, 20]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    p_tensor = ttnn.from_torch(
+        torch.tensor([1.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    temp_tensor = ttnn.ones([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 6)),
+            ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 3)),
+        ]
+    )
+    # Set all cores PRNG
+    ttnn.manual_seed(seeds=42, device=device, sub_core_grids=sub_core_grids)
+
+    # Prepare seed and user_id tensors for mapping
+    user_id_tensor = ttnn.arange(0, 32, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+    seed_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    # Get first sampling result with mapped seeds
+    ttnn.manual_seed(seeds=seed_tensor, user_ids=user_id_tensor, sub_core_grids=sub_core_grids)
+    tensor_1 = ttnn.sampling(
+        input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, sub_core_grids=sub_core_grids
+    )
+
+    # Run sampling multiple times with different seeds to change internal state
+    for i in range(5):
+        ttnn.sampling(
+            input_values,
+            input_indices,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp_tensor,
+            seed=i + 1,
+            sub_core_grids=sub_core_grids,
+        )
+
+    # Get second sampling result with mapped seeds
+    ttnn.manual_seed(seeds=seed_tensor, user_ids=user_id_tensor, sub_core_grids=sub_core_grids)
+    tensor_2 = ttnn.sampling(
+        input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, sub_core_grids=sub_core_grids
+    )
+    assert_allclose(tensor_1, tensor_2)
