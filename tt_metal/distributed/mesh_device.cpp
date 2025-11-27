@@ -1131,7 +1131,7 @@ const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl() const {
 const std::unique_ptr<Allocator>& MeshDevice::allocator() const { return this->allocator_impl()->view(); }
 
 const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
 const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
