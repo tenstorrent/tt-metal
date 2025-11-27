@@ -4,7 +4,7 @@
 
 #include "moe.hpp"
 
-#include "device/moe_device_operation.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
 
 namespace ttnn::operations::reduction::moe {
 

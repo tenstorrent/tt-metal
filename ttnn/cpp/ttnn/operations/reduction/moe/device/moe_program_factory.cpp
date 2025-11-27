@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_program_factory.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>

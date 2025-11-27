@@ -10,8 +10,8 @@
 namespace ttnn::operations::reduction::moe {
 
 struct operation_attributes_t {
-    const uint16_t k;
-    const tt::tt_metal::MemoryConfig output_memory_config;
+    uint16_t k{};
+    tt::tt_metal::MemoryConfig output_memory_config;
 };
 
 struct tensor_args_t {

@@ -5,13 +5,13 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "moe_device_operation_types.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 
 namespace ttnn::operations::reduction::moe::program {
 
 struct MoeSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id;
+    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
 };
 
 struct MoeProgramFactory {

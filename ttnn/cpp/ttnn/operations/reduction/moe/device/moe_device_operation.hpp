@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-#include "moe_device_operation_types.hpp"
-#include "moe_program_factory.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 
 namespace ttnn::operations::reduction::moe {
 

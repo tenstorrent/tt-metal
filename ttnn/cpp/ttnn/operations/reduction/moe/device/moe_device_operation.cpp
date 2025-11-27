@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_device_operation.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
 
 #include <optional>
 
-#include "moe_device_operation_types.hpp"
-#include "moe_program_factory.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
+#include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -46,7 +46,7 @@ void MoeDeviceOperation::validate_on_program_cache_miss(
         input_shape[-1]);
     TT_FATAL(
         (input_shape[0] * input_shape[1] * input_shape[2]) % 32 == 0,
-        "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
+        "Input height (combined input_shape[0-2]) {} must be a multiple of 32",
         input_shape[0] * input_shape[1] * input_shape[2]);
 
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");

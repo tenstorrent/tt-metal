@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_pybind.hpp"
+#include "ttnn/operations/reduction/moe/moe_pybind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -10,7 +10,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "moe.hpp"
+#include "ttnn/operations/reduction/moe/moe.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::reduction::detail {
