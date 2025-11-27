@@ -247,8 +247,6 @@ Tensor llama_all_gather_matmul_async_impl(
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     TT_FATAL(
         gather_dim >= -rank && gather_dim <= rank - 1,
         "Dimension input should be in between -{} and {}, but has {}",
@@ -292,7 +290,7 @@ Tensor llama_all_gather_matmul_async_impl(
             /*global_cb=*/global_cb});
 
     ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
-        ttnn::LlamaAllGatherMatmulAsync{all_gather_params, matmul_struct, devices};
+        ttnn::LlamaAllGatherMatmulAsync{all_gather_params, matmul_struct, {} /* devices, not used */};
     // return input_tensor;  // TODO: Implement the actual logic
     // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
     //     .at(0);

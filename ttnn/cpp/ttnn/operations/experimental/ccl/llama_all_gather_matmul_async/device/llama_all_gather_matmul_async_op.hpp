@@ -65,7 +65,7 @@ struct LlamaAllGatherMatmulAsync {
     const operations::matmul::Matmul matmul_struct;
 
     /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
+    std::vector<IDevice*> devices; // not used, could be removed?
 
     /* General */
     void validate_with_output_tensors(

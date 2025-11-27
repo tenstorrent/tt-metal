@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::ccl::strided_all_gather_async {
 
 struct operation_attributes_t {
-    const std::vector<IDevice*> devices;
+    const std::vector<IDevice*> devices; // not used, could be deleted?
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;

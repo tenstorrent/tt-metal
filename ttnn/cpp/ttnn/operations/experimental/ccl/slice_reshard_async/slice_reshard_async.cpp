@@ -24,7 +24,6 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -36,7 +35,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
 
     return tt::tt_metal::operation::run(
                ttnn::SliceReshardAsync(
-                   devices,
+                   {} /* devices, not used */,
                    dim,
                    output_dim_offset,
                    output_dim_shape,
