@@ -25,51 +25,6 @@ using ResultWithOptions = std::variant<
         ttnn::Tensor,
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
-
-Result conv_transpose2d_DRAM(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> output_padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config_,
-    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
-    bool mirror_kernel);
-
-Result conv_transpose2d_L1(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> output_padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const conv2d::Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config_,
-    bool mirror_kernel);
 struct ConvTranpose2dOperation {
     static ResultWithOptions invoke(
         const ttnn::Tensor& input_tensor,
@@ -95,63 +50,6 @@ struct ConvTranpose2dOperation {
         bool mirror_kernel = true,
         bool return_output_dim = false,
         bool return_weights_and_bias = false);
-};
-
-class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
-    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
-    using InputWithPadding = std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>, std::array<uint32_t, 2>>;
-    uint32_t batch_size;
-    IOShape input_shape;
-    uint32_t input_channels;
-    uint32_t output_channels;
-    std::array<uint32_t, 2> kernel_size;
-    std::array<uint32_t, 2> stride;
-    std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> output_padding;
-    std::array<uint32_t, 2> dilation;
-    uint32_t groups;
-    Layout input_layout;
-    DataType input_dtype;
-    DataType output_dtype;
-    Tensor& weight_tensor;
-    OptionalRefTensor bias_tensor;
-    conv2d::Conv2dConfig conv_config;
-    DeviceComputeKernelConfig compute_config;
-    MeshDevice* device;
-    bool mirror_kernel;
-
-    IOShape full_input_shape;
-    IOShape strided_input_shape;
-    std::array<int, 4> input_padding;
-
-public:
-    ConvT2DSliceAttr(
-        uint32_t batch_size,
-        IOShape input_shape,
-        uint32_t input_channels,
-        uint32_t output_channels,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 4> padding_n4,
-        std::array<uint32_t, 2> output_padding,
-        std::array<uint32_t, 2> dilation,
-        uint32_t groups,
-        Layout input_layout,
-        DataType input_dtype,
-        DataType output_dtype,
-        Tensor& weight_tensor,
-        OptionalRefTensor bias_tensor,
-        conv2d::Conv2dConfig& conv_config,
-        DeviceComputeKernelConfig& compute_config,
-        MeshDevice* device,
-        bool mirror_kernel);
-    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
-    InputWithPadding get_input_slice_and_padding(IOShape output_slice_start, IOShape output_slice_end);
-    uint32_t get_L1_usage() override;
-    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
-    ttnn::Tensor run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
-    std::string name() override;
 };
 
 }  // namespace ttnn::operations::conv::conv_transpose2d
