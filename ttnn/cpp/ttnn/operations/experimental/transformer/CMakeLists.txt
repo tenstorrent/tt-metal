@@ -54,6 +54,7 @@ target_sources(
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
         concatenate_heads/device/concatenate_heads_device_operation.cpp
+        concatenate_heads/device/concatenate_heads_program_factory.cpp
         create_qkv_heads/create_qkv_heads.cpp
         create_qkv_heads/device/create_qkv_heads_device_operation.cpp
         create_qkv_heads/device/create_qkv_heads_program_factory.cpp

@@ -45,7 +45,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const sliding_window::ParallelConfig& parallel_config,
     const std::vector<uint32_t>& op_trace_metadata,
@@ -312,6 +312,21 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
 
     bool tilize_in0 = false;
 
+    // Select preferred NoCs for DRAM operations based on architecture
+    // Must be done early to use in multicast coordinate setup
+    // weights_kernel (RISCV_1) reads weights/bias from DRAM -> use preferred read NoC
+    // act_kernel (RISCV_0) primarily does L1 reads and multicasts -> use preferred write NoC
+    // This optimizes NoC bandwidth by separating DRAM reads from L1/multicast operations
+    tt::tt_metal::NOC weights_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt::tt_metal::NOC act_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+
+    log_debug(
+        tt::LogOp,
+        "Conv2D NoC selection: act_noc={}, weights_noc={} for arch={}",
+        (uint32_t)act_noc,
+        (uint32_t)weights_noc,
+        (uint32_t)device->arch());
+
     uint32_t act_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);    // 0==INVALID
     uint32_t act_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, 0);  // 0==INVALID.
 
@@ -319,6 +334,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     CoreCoord act_mcast_end_core_logical(all_cores.bounding_box().end_coord.x, all_cores.bounding_box().end_coord.y);
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
+
+    // Swap multicast coordinates if using NOC_1 for proper addressing
+    // NOC_0 and NOC_1 have inverted coordinate systems on some architectures
+    if (act_noc == tt::tt_metal::NOC::NOC_1) {
+        std::swap(act_mcast_start, act_mcast_end);
+        log_debug(
+            tt::LogOp,
+            "Conv2D: Swapped mcast coords for NOC_1: start=({},{}), end=({},{})",
+            act_mcast_start.x,
+            act_mcast_start.y,
+            act_mcast_end.x,
+            act_mcast_end.y);
+    }
+
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
     std::map<std::string, std::string> writer_defines;
@@ -342,7 +371,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), all_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+        device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -522,7 +551,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         all_reader_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = act_noc,
             .compile_args = activation_kernel_compile_args,
             .defines = reader_defines});
 
@@ -532,7 +561,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .noc = weights_noc,
             .compile_args = weights_kernel_compile_args,
             .defines = writer_defines});
 

@@ -5,8 +5,6 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 namespace tt {
 
 using namespace constants;

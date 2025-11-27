@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -15,7 +14,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt;
-using namespace tt::constants;
 
 namespace reuse_dram_sharded_optimized_helpers {
 using ttnn::operations::unary::UnaryOpType;

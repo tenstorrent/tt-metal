@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
-#include <tt-metalium/constants.hpp>
-
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/matmul.h"

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {

@@ -272,6 +272,7 @@ jobs:
 
   ttsim-integration-tests:
     needs: [ build ]
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
@@ -310,7 +311,6 @@ jobs:
       run: |
         # Run script that compares the models chart in README.md with the models chart in models/README.md
         python .github/scripts/utils/model-charts-sync.py
-
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.

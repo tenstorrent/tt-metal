@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
 

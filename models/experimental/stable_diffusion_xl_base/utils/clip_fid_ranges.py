@@ -13,7 +13,7 @@ def get_model_targets(model_name):
     with open(TARGET_JSON_PATH) as f:
         model_targets_json = json.load(f)
 
-    model_targets = model_targets_json[model_name]
+    model_targets = model_targets_json[model_name.removesuffix("-tp")]
     if model_name.endswith("-tp"):
         model_targets["perf"] = model_targets.pop("perf-tp")
 

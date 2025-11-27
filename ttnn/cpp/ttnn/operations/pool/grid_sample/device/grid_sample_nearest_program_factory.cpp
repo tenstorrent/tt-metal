@@ -12,7 +12,6 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 

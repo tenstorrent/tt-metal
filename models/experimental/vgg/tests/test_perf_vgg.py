@@ -13,8 +13,6 @@ import ttnn
 
 from models.experimental.vgg.tt.vgg import *
 from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
     Profiler,
     torch_to_tt_tensor,
 )
@@ -26,7 +24,6 @@ BATCH_SIZE = 1
 
 def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -50,8 +47,6 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
         tt_output = tt_vgg(tt_image)
         ttnn.synchronize_device(device)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_vgg(tt_image)

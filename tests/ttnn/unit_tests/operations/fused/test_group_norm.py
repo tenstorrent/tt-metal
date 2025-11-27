@@ -68,14 +68,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
@@ -160,14 +154,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # gamma/beta
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
@@ -265,14 +253,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # gamma/beta
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
@@ -360,14 +342,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
     )
 
     # input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # gamma/beta
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
@@ -486,14 +462,8 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford):
     )
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -563,25 +533,13 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape):
     )
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x)
-    input_mask_tensor_torch = input_mask_tensor
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
-    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_size.x)
-    input_negative_mask_tensor_torch = input_negative_mask_tensor
-    input_negative_mask_tensor = ttnn.from_torch(
-        input_negative_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(
+        C, num_groups, grid_size.x, ttnn.DataType.BFLOAT8_B
     )
+    input_negative_mask_tensor = ttnn.to_device(input_negative_mask_tensor, device)
 
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.x)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.x)
@@ -654,14 +612,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT16)
+    tt_input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
@@ -686,7 +638,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         tt_output_tensor = ttnn.group_norm(
             tt_input_tensor,
             num_groups=num_groups,
-            input_mask=input_mask_tensor,
+            input_mask=tt_input_mask_tensor,
             memory_config=sharded_mem_config,
             core_grid=grid_size,
             compute_kernel_config=compute_config,
@@ -770,23 +722,11 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
     else:
         grid_x = grid_size.x
         grid_y = grid_size.y
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_y)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
     if use_negative_mask:
-        input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y)
-        input_nmask_tensor = ttnn.from_torch(
-            input_nmask_tensor,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y, ttnn.DataType.BFLOAT16)
+        input_nmask_tensor = ttnn.to_device(input_nmask_tensor, device)
     else:
         input_nmask_tensor = None
     # Generate gamma/beta tensors
@@ -837,3 +777,83 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("N", [1])
+@pytest.mark.parametrize("C", [256])
+@pytest.mark.parametrize("H", [64])
+@pytest.mark.parametrize("W", [64])
+@pytest.mark.parametrize("num_groups", [32])
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
+    """
+    Test that a group norm without an input mask produces the same result as torch.
+    """
+    torch.manual_seed(0)
+    input_shape = (N, C, H, W)
+    grid_size = ttnn.CoreGrid(y=4, x=4)
+
+    # Execute torch group_norm
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    # Generate shard config
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // grid_size.x, C // grid_size.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    # Helper function to execute group_norm for a given compute config
+    def do_group_norm_for_config(compute_config):
+        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+        tt_input_tensor = ttnn.from_torch(
+            tt_input_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=sharded_mem_config,
+        )
+
+        tt_output_tensor = ttnn.group_norm(
+            tt_input_tensor,
+            num_groups=num_groups,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            compute_kernel_config=compute_config,
+        )
+        tt_output_tensor_host = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor_host = ttnn.to_torch(tt_output_tensor_host)
+
+        ttnn.deallocate(tt_input_tensor)
+        ttnn.deallocate(tt_output_tensor)
+
+        return tt_output_tensor_host
+
+    # Execute low-accuracy groupnorm
+    config_low = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    tt_output_low = do_group_norm_for_config(config_low)
+    _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
+
+    # Execute high-accuracy groupnorm
+    config_high = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_output_high = do_group_norm_for_config(config_high)
+    _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
+
+    # Verify that the higher-accuracy config is closer to torch
+    assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"

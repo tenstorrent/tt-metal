@@ -19,13 +19,13 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -33,7 +33,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -198,6 +198,9 @@ DevicePool* DevicePool::_inst = nullptr;
 
 void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
+    if (!getDeviceProfilerState()) {
+        return;
+    }
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =
@@ -325,13 +328,16 @@ void DevicePool::initialize(
     if (any_remote_devices) {
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
             tt::tt_fabric::SetFabricConfig(
-                tt::tt_fabric::FabricConfig::FABRIC_1D,
-                tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-                1);
+                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
             // Call initialize again because previously it was a no-op
             tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-            fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
+            log_info(
+                tt::LogMetal,
+                "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
+                "accordingly.",
+                fabric_config);
         } else {
             // Use the same mode
             tt::tt_fabric::SetFabricConfig(
@@ -356,7 +362,8 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
             tt::LogMetal, "Initializing Fabric and Dispatch Firmware for Galaxy cluster (this may take a few minutes)");
     }
     this->initialize_active_devices();
-    this->wait_for_fabric_router_sync();
+
+    this->wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -629,6 +636,19 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 }
 
+uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
+    // Return user-configured timeout or default value
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_simulator_enabled()) {
+        return 15000;  // Keep simulator timeout unchanged
+    }
+
+    auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
+
+    // Return user override if set, otherwise use fabric default
+    return timeout.value_or(10000);
+}
+
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
@@ -657,7 +677,11 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
-
+            // If the read value matches expected status, then we can break out of the loop
+            // No need to check for timeout in this case.
+            if (master_router_status[0] == expected_status) {
+                break;
+            }
             // Check for timeout
             auto current_time = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
@@ -918,8 +942,9 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
                 const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
                 for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                     auto [tensix_termination_address, tensix_signal] =
-                        tensix_config.get_termination_address_and_signal(dev->id(), eth_chan_id);
+                        tensix_config.get_termination_address_and_signal(core_id);
                     std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
                     auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 

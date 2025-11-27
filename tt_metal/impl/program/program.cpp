@@ -9,7 +9,6 @@
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
-#include <persistent_kernel_cache.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
@@ -52,7 +51,6 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
@@ -77,6 +75,8 @@
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
 #include "tt_stl/reflection.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 class tt_hlk_desc;
