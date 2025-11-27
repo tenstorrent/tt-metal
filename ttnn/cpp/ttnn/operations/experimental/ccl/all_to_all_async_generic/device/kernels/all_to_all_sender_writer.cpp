@@ -312,7 +312,7 @@ void kernel_main() {
             cb_pop_front(cb0_id, tiles_this_iteration);
         }
     }
-
+    noc_async_write_barrier();
     fabric_connection.close();
 
     noc_semaphore_wait(global_semaphore_addr_ptr, num_devices);
