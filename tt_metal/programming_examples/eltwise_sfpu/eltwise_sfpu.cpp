@@ -9,6 +9,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/constants.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
