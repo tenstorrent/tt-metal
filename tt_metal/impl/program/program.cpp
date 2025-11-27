@@ -755,8 +755,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                         target_cb_indices[buffer_index] = true;
                     }
                 };
-                add_buffer_indices(circular_buffer->config().impl()->local_buffer_indices(), local_cb_indices);
-                add_buffer_indices(circular_buffer->config().impl()->remote_buffer_indices(), remote_cb_indices);
+                add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);
+                add_buffer_indices(circular_buffer->config().remote_buffer_indices(), remote_cb_indices);
             }
         }
 
