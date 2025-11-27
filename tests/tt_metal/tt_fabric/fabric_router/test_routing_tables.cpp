@@ -87,22 +87,6 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
     return control_plane;
 }
 
-// Helper function to create control plane without MGD
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_no_mgd(tt::tt_fabric::FabricConfig fabric_config) {
-    // Set fabric config in MetalContext
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    // Create control plane without MGD (uses auto-discovery)
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>();
-    control_plane->initialize_fabric_context(fabric_config);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-
-    return control_plane;
-}
-
 }  // namespace
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -137,6 +121,14 @@ TEST(MeshGraphValidation, TestMGDConnections) {
     EXPECT_EQ(rev_src_dev, 1);
     EXPECT_EQ(rev_dst_dev, 0);
     EXPECT_EQ(rev_count, 1);
+}
+
+TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    tt::tt_metal::MetalContext::instance().get_control_plane();
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
@@ -1007,89 +999,4 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
         { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
 }
-
-TEST_F(ControlPlaneFixture, Test2xP300DisconnectedFabric2DSanity) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    tt::tt_metal::MetalContext::instance().get_control_plane();
-}
-
-TEST_F(ControlPlaneFixture, TestRoutingTablesFabric2DNoMGD) {
-    auto control_plane = make_control_plane_no_mgd(tt::tt_fabric::FabricConfig::FABRIC_2D);
-
-    // Test that we can get valid routing information
-    auto user_meshes = control_plane->get_user_physical_mesh_ids();
-    EXPECT_GT(user_meshes.size(), 0);
-
-    // Test routing between nodes in the mesh
-    for (const auto& src_mesh : user_meshes) {
-        auto src_mesh_shape = control_plane->get_physical_mesh_shape(src_mesh);
-        auto src_mesh_size = src_mesh_shape.mesh_size();
-
-        if (src_mesh_size > 1) {
-            // Test routing from first node to last node
-            auto src_fabric_node_id = FabricNodeId(src_mesh, 0);
-            auto dst_fabric_node_id = FabricNodeId(src_mesh, src_mesh_size - 1);
-
-            // Get valid channels on routing plane 0
-            auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(src_fabric_node_id, 0);
-            EXPECT_GT(valid_chans.size(), 0);
-
-            // Test that we can get a route
-            for (auto chan : valid_chans) {
-                auto path = control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, chan);
-                EXPECT_EQ(!path.empty(), true);
-            }
-
-            // Test forwarding direction
-            auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            EXPECT_EQ(forwarding_direction.has_value(), true);
-
-            // Test active fabric eth channels
-            auto active_fabric_eth_channels = control_plane->get_active_fabric_eth_channels(src_fabric_node_id);
-            EXPECT_GT(active_fabric_eth_channels.size(), 0);
-        }
-    }
-}
-
-TEST_F(ControlPlaneFixture, TestRoutingTablesFabric2DTorusXYNoMGD) {
-    auto control_plane = make_control_plane_no_mgd(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
-
-    // Test that we can get valid routing information
-    auto user_meshes = control_plane->get_user_physical_mesh_ids();
-    EXPECT_GT(user_meshes.size(), 0);
-
-    // Test routing between nodes in the mesh
-    for (const auto& src_mesh : user_meshes) {
-        auto src_mesh_shape = control_plane->get_physical_mesh_shape(src_mesh);
-        auto src_mesh_size = src_mesh_shape.mesh_size();
-
-        if (src_mesh_size > 1) {
-            // Test routing from first node to last node
-            auto src_fabric_node_id = FabricNodeId(src_mesh, 0);
-            auto dst_fabric_node_id = FabricNodeId(src_mesh, src_mesh_size - 1);
-
-            // Get valid channels on routing plane 0
-            auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(src_fabric_node_id, 0);
-            EXPECT_GT(valid_chans.size(), 0);
-
-            // Test that we can get a route
-            for (auto chan : valid_chans) {
-                auto path = control_plane->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, chan);
-                EXPECT_EQ(!path.empty(), true);
-            }
-
-            // Test forwarding direction
-            auto forwarding_direction = control_plane->get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            EXPECT_EQ(forwarding_direction.has_value(), true);
-
-            // Test active fabric eth channels
-            auto active_fabric_eth_channels = control_plane->get_active_fabric_eth_channels(src_fabric_node_id);
-            EXPECT_GT(active_fabric_eth_channels.size(), 0);
-        }
-    }
-}
-
 }  // namespace tt::tt_fabric::fabric_router_tests

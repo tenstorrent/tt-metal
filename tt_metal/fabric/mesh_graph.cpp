@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "fabric_host_utils.hpp"
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
@@ -841,35 +842,46 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
 
 std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_number_of_chips) {
     // Come up with all possible mesh shapes that can be formed from the given number of chips
-    // by finding all divisor pairs (x, y) where x * y = total_number_of_chips
-    std::set<MeshShape> unique_shapes;
-    std::set<MeshShape> unique_one_d_shapes;
+    // Try shapes for total_number_of_chips first, then total_number_of_chips - 1, etc., down to 1
+    // All 1D cases (where one dimension is 1) are saved for the end
+    std::vector<MeshShape> mesh_shapes_to_try;
+    std::vector<MeshShape> one_d_shapes;
 
-    // Only check divisors up to sqrt(total_number_of_chips) for efficiency
-    std::uint32_t sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(total_number_of_chips));
+    // Try from total_number_of_chips down to 1
+    for (std::uint32_t num_chips = total_number_of_chips; num_chips >= 1; num_chips--) {
+        // Find all divisor pairs (x, y) where x * y = num_chips
+        // Only check divisors up to sqrt(num_chips) for efficiency
+        std::uint32_t sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(num_chips));
 
-    for (std::uint32_t i = 1; i <= sqrt_num_chips; i++) {
-        if (total_number_of_chips % i == 0) {
-            auto x = total_number_of_chips / i;
-            auto y = i;
-            // Normalize: always put larger dimension first to avoid duplicates like (x,y) and (y,x)
-            // This ensures (x,y) and (y,x) are treated as the same shape
-            auto larger_dim = std::max(x, y);
-            auto smaller_dim = std::min(x, y);
-            MeshShape shape(larger_dim, smaller_dim);
+        for (std::uint32_t i = 1; i <= sqrt_num_chips; i++) {
+            if (num_chips % i == 0) {
+                auto x = num_chips / i;
+                auto y = i;
+                // Normalize: always put larger dimension first to avoid duplicates like (x,y) and (y,x)
+                // This ensures (x,y) and (y,x) are treated as the same shape
+                auto larger_dim = std::max(x, y);
+                auto smaller_dim = std::min(x, y);
+                MeshShape shape(larger_dim, smaller_dim);
 
-            // Save 1D cases (where one dimension is 1) to be added at the end
-            if (smaller_dim == 1) {
-                unique_one_d_shapes.insert(shape);
-            } else {
-                unique_shapes.insert(shape);
+                // Save 1D cases (where one dimension is 1) to be added at the end
+                if (smaller_dim == 1) {
+                    // Avoid duplicates by checking if this shape is already in one_d_shapes
+                    if (std::find(one_d_shapes.begin(), one_d_shapes.end(), shape) == one_d_shapes.end()) {
+                        one_d_shapes.push_back(shape);
+                    }
+                } else {
+                    // Avoid duplicates by checking if this shape is already in mesh_shapes_to_try
+                    if (std::find(mesh_shapes_to_try.begin(), mesh_shapes_to_try.end(), shape) ==
+                        mesh_shapes_to_try.end()) {
+                        mesh_shapes_to_try.push_back(shape);
+                    }
+                }
             }
         }
     }
 
-    // Convert sets to vectors, with 1D shapes at the end
-    std::vector<MeshShape> mesh_shapes_to_try(unique_shapes.begin(), unique_shapes.end());
-    mesh_shapes_to_try.insert(mesh_shapes_to_try.end(), unique_one_d_shapes.begin(), unique_one_d_shapes.end());
+    // Append all 1D shapes at the end
+    mesh_shapes_to_try.insert(mesh_shapes_to_try.end(), one_d_shapes.begin(), one_d_shapes.end());
 
     return mesh_shapes_to_try;
 }
@@ -904,13 +916,43 @@ MeshGraph MeshGraph::generate_from_physical_system_descriptor(
     std::vector<MeshShape> mesh_shapes_to_try = generate_possible_cluster_shapes(total_number_of_chips);
 
     // Try all possible mesh shapes
+    const MeshId mesh_id{0};
     for (const auto& mesh_shape : mesh_shapes_to_try) {
         auto mesh_graph = generate_mesh_graph_of_shape(mesh_shape, fabric_type, number_of_connections);
         auto logical_adjacency_matrix = TopologyMapper::build_adjacency_map_logical(mesh_graph);
 
-        // Do the mapping and see if its successful
+        // Extract adjacency maps for this mesh_id
+        if (logical_adjacency_matrix.find(mesh_id) == logical_adjacency_matrix.end() ||
+            physical_adjacency_matrix.find(mesh_id) == physical_adjacency_matrix.end()) {
+            continue;
+        }
 
-        // Return true if mapping is successful
+        const auto& logical_adj = logical_adjacency_matrix.at(mesh_id);
+        const auto& physical_adj = physical_adjacency_matrix.at(mesh_id);
+
+        // Build node_to_host_rank map - assume single mesh, all nodes on same host rank
+        std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
+        auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        const MeshHostRankId single_host_rank{0};
+        for (const auto& chip_id : chip_ids.values()) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            node_to_host_rank[fabric_node_id] = single_host_rank;
+        }
+
+        // Extract asic_to_host_rank for this mesh_id
+        const auto& asic_to_host_rank = asic_id_to_mesh_rank.at(mesh_id);
+
+        // Do the mapping and see if its successful
+        tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
+        config.strict_mode = false;  // Use relaxed mode for initial matching
+
+        auto mapping_result = tt::tt_metal::experimental::tt_fabric::map_mesh_to_physical(
+            mesh_id, logical_adj, physical_adj, node_to_host_rank, asic_to_host_rank, config);
+
+        // Return mesh_graph if mapping is successful
+        if (mapping_result.success) {
+            return mesh_graph;
+        }
     }
     // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
     TT_THROW("No possible mesh shape found to match physical adjacency matrix");

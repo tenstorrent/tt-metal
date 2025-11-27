@@ -858,4 +858,46 @@ INSTANTIATE_TEST_SUITE_P(
     T3kTopologyMapperWithCustomMappingFixture,
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
 
+TEST_F(TopologyMapperTest, GenerateMeshGraphFromPhysicalSystemDescriptor) {
+    // Test that generate_from_physical_system_descriptor uses map_mesh_to_physical
+    // to find a valid mesh shape that can be mapped to the physical topology
+    FabricConfig fabric_config = FabricConfig::FABRIC_2D;
+
+    // Generate mesh graph from physical system descriptor
+    // This should internally use map_mesh_to_physical to find a valid mapping
+    MeshGraph mesh_graph =
+        MeshGraph::generate_from_physical_system_descriptor(*physical_system_descriptor_, fabric_config);
+
+    // Verify that the mesh graph was generated successfully
+    const MeshId mesh_id{0};
+    EXPECT_TRUE(mesh_graph.get_mesh_ids().size() > 0) << "Mesh graph should have at least one mesh";
+
+    // Verify that the mesh graph has chips
+    auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
+    EXPECT_GT(chip_ids.values().size(), 0u) << "Mesh graph should have at least one chip";
+
+    // Verify that host ranks are set up correctly
+    for (const auto& chip_id : chip_ids.values()) {
+        auto host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+        EXPECT_TRUE(host_rank.has_value()) << "Host rank should be set for chip " << chip_id;
+    }
+
+    // Verify that the mesh graph can be used with TopologyMapper
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {mesh_id};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    // This should work without throwing since the mesh graph was generated
+    // to match the physical topology
+    EXPECT_NO_THROW({
+        TopologyMapper topology_mapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+        // Verify that mappings exist
+        for (const auto& chip_id : chip_ids.values()) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node_id);
+            EXPECT_NE(asic_id.get(), 0u) << "ASIC ID should be valid for fabric node " << fabric_node_id;
+        }
+    });
+}
+
 }  // namespace tt::tt_fabric
