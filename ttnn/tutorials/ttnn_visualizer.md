@@ -18,7 +18,7 @@ In this tutorial, we’ll explore the **TT-NN Visualizer** – a powerful tool d
 
 TT-NN Visualizer gives you a comprehensive overview of how your model utilizes hardware resources. It helps identify optimization opportunities, debug bottlenecks, and better understand your model’s execution at the system level.
 
-For more details, visit the official [ttnn-visualizer GitHub repository](https://github.com/tenstorrent/ttnn-visualizer). You can also watch the full walkthrough video [here](https://youtu.be/lHtcD8cHoes?feature=shared).
+For more details, visit the official [TT-NN Visualizer GitHub repository](https://github.com/tenstorrent/ttnn-visualizer). You can also watch the full walkthrough video [here](https://youtu.be/lHtcD8cHoes?feature=shared).
 
 ---
 
@@ -46,14 +46,14 @@ Then, install `ttnn-visualizer` via pip:
 pip install ttnn-visualizer
 ```
 
-For installation from source or system requirements, see the [getting started guide](https://github.com/tenstorrent/ttnn-visualizer/blob/main/docs/getting-started.md).
+For installation from source or system requirements, see the [getting started guide](https://docs.tenstorrent.com/ttnn-visualizer/src/installing.html).
 
 > [!NOTE]
 > You can run the visualizer on your local machine and either connect remotely to your Tenstorrent system via SSH or copy the generated profiling files to your local machine for offline analysis.
 
 ---
 
-## Running TTNN Visualizer
+## Running TT-NN Visualizer
 
 Once installed, launch TT-NN Visualizer using:
 
@@ -63,7 +63,7 @@ ttnn-visualizer
 
 This starts a local server at [http://localhost:8000](http://localhost:8000). Open this address in a browser (preferably Chrome). You’ll be greeted by the visualizer’s homepage:
 
-![TTNN Visualizer Homepage](https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/1_ttnn_visualizer_homepage.jpg?raw=true)
+![TT-NN Visualizer Homepage](https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/1_ttnn_visualizer_homepage.jpg?raw=true)
 
 Initially, you’ll only see the **Reports** tab active. Once the memory and performance reports are uploaded, all other tabs become available.
 
@@ -312,7 +312,7 @@ To summarize:
    ```bash
    ./build_metal.sh
    ```
-2. **Install and Launch TTNN Visualizer**:
+2. **Install and Launch TT-NN Visualizer**:
 
    ```bash
    pip install ttnn-visualizer

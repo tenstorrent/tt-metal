@@ -40,6 +40,9 @@
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <impl/debug/dprint_server.hpp>
+#include <impl/debug/watcher_server.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {

@@ -43,6 +43,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using std::flush;
 using std::int32_t;

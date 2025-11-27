@@ -210,6 +210,10 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
+    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
+    // This is especially important when using rankfiles with hostnames that may require DNS resolution,
+    // as MPI connections may not be fully established when discovery starts.
+    distributed_context_->barrier();
     this->resolve_hostname_uniqueness();
     this->run_local_discovery(run_live_discovery);
     if (run_global_discovery) {
