@@ -388,6 +388,8 @@ private:
     std::array<MemoryRegion, NUM_MUX_CONNECTIONS> mux_buffer_index_semaphore_regions_{};
 
     // Memory pool for storing read response data temporarily
+    static constexpr size_t udm_memory_pool_num_slots_ = 8;
+    size_t udm_memory_pool_slot_size_ = 0;
     MemoryRegion udm_memory_pool_region_{};
 };
 

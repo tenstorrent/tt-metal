@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/udm/udm_memory_pool.hpp"
 #include <type_traits>
 #include "tt_fabric_udm_impl.hpp"
 #include "debug/dprint.h"
@@ -645,21 +646,22 @@ FORCE_INLINE void fabric_fast_read_ack(
  *
  * This function processes a received read request packet by extracting the request
  * parameters from the UDM control fields and sending the requested data back to
- * the source. It handles breaking up large data into multiple packets if needed,
- * and uses a fused atomic increment on the last packet to signal completion.
+ * the source. It reads slot by slot from the UDMMemoryPool circular buffer to
+ * handle wrap-around correctly, and uses a fused atomic increment on the last
+ * packet to signal completion.
  *
  * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
  * @tparam FabricConnectionType The connection type
  * @tparam NumConnections Number of mux connections
  * @param connections Array of mux connections [local, downstream_en, downstream_ws]
  * @param received_header Pointer to the received read request packet header
- * @param src_addr Local source address where the requested data is stored
+ * @param memory_pool Reference to the UDM memory pool instance
  */
-template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections, typename UDMMemoryPoolType>
 FORCE_INLINE void fabric_fast_read_any_len_ack(
     std::array<FabricConnectionType, NumConnections>& connections,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
-    uint32_t src_addr) {
+    UDMMemoryPoolType& memory_pool) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();
 
     // Extract read request parameters from the received header
@@ -681,14 +683,22 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     uint32_t mux_idx = select_relay_to_mux_connection<Direction>(src_chip_id);
 
     fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
-    while (size_bytes > max_fabric_payload_size) {
-        fabric_fast_read_ack<false>(
-            connections[mux_idx], response_header, src_addr, dest_addr, max_fabric_payload_size);
 
-        src_addr += max_fabric_payload_size;
-        dest_addr += max_fabric_payload_size;
-        size_bytes -= max_fabric_payload_size;
+    // Read slot by slot from memory pool
+    uint32_t slot_size = memory_pool.get_slot_size();
+    uint32_t slot_idx = memory_pool.get_rd_slot_idx();
+
+    while (size_bytes > slot_size) {
+        uint32_t src_addr = memory_pool.get_slot_addr(slot_idx);
+        fabric_fast_read_ack<false>(connections[mux_idx], response_header, src_addr, dest_addr, slot_size);
+
+        slot_idx = memory_pool.get_next_slot_idx(slot_idx);
+        dest_addr += slot_size;
+        size_bytes -= slot_size;
     }
+
+    // Send final chunk with atomic increment
+    uint32_t src_addr = memory_pool.get_slot_addr(slot_idx);
     fabric_fast_read_ack<true>(
         connections[mux_idx], response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
 }

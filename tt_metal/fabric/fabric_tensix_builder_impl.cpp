@@ -641,7 +641,9 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
         current_address = mux_buffer_index_semaphore_regions_[i].get_end_address();
     }
 
-    constexpr size_t udm_memory_pool_size = 32 * 1024;  // 32KB as default memory pool size
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    udm_memory_pool_slot_size_ = fabric_context.get_fabric_max_payload_size_bytes();
+    const size_t udm_memory_pool_size = udm_memory_pool_slot_size_ * udm_memory_pool_num_slots_;
     udm_memory_pool_region_ = MemoryRegion(current_address, udm_memory_pool_size, 1);
     current_address = udm_memory_pool_region_.get_end_address();
 
@@ -852,8 +854,9 @@ std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
     // Final args
     ct_args.push_back(mux_config->get_status_address());       // 44: local_mux_status_address
     ct_args.push_back(udm_memory_pool_region_.get_address());  // 45: udm_memory_pool_base_address
-    ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_region_.get_total_size()));  // 46: udm_memory_pool_size
-    ct_args.push_back(static_cast<uint32_t>(direction));                                 // 47: direction
+    ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_slot_size_));  // 46: udm_memory_pool_slot_size
+    ct_args.push_back(static_cast<uint32_t>(udm_memory_pool_num_slots_));  // 47: udm_memory_pool_num_slots
+    ct_args.push_back(static_cast<uint32_t>(direction));                   // 48: direction
 
     // Note: router NOC coords and sync address will be added by the builder
     return ct_args;
