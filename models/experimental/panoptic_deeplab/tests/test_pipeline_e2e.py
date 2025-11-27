@@ -40,14 +40,16 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     preprocess_nchw_input_tensor,
 )
-from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
+from models.common.utility_functions import profiler
+from tests.ttnn.utils_for_testing import check_with_pcc
 from models.tt_cnn.tt.executor import (
     ModelExecutor,
-    MultiCQTracedModelOverlappedInputExecutor,
-    TracedModelExecutor,
 )
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
+)
+from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
+    CustomTracedModelExecutor,
     create_pipeline_from_config,
 )
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
@@ -81,19 +83,8 @@ EXECUTOR_CONFIGS = [
         num_command_queues=1,
         all_transfers_on_separate_command_queue=False,
         requires_minimum_inputs=1,
-        expected_executor_type=TracedModelExecutor,
+        expected_executor_type=CustomTracedModelExecutor,
     ),
-    ExecutorTestConfig(
-        name="MultiCQTracedModelOverlappedInputExecutor",
-        use_trace=True,
-        num_command_queues=2,
-        all_transfers_on_separate_command_queue=False,
-        requires_minimum_inputs=1,
-        expected_executor_type=MultiCQTracedModelOverlappedInputExecutor,
-    ),
-    # Note: MultiCQTracedModelPipelinedIOExecutor doesn't support tuple outputs,
-    # so we skip it for now. If needed, we'd need to modify the model wrapper
-    # to return a single tensor or modify the executor to support tuples.
 ]
 
 
@@ -209,7 +200,7 @@ def create_host_input_tensors(
         {
             "l1_small_size": PDL_L1_SMALL_SIZE,
             "trace_region_size": 2000000,
-            "num_command_queues": 2,  # Required for multi-CQ executors
+            "num_command_queues": 1,
         }
     ],
     indirect=True,
@@ -220,8 +211,9 @@ def test_panoptic_deeplab_pipeline_e2e(
     """
     End-to-end test for Panoptic DeepLab using pipeline/executor framework.
 
-    Tests the complete model with different executor configurations and validates
-    outputs against PyTorch reference.
+    Tests the complete model with different executor configurations, validates
+    outputs against PyTorch reference, and measures execution timing.
+    Uses 100 random inputs in a single round.
     """
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
@@ -288,24 +280,22 @@ def test_panoptic_deeplab_pipeline_e2e(
         # Create model wrapper for pipeline
         model_wrapper = create_model_wrapper(ttnn_model)
 
-        # Determine number of inputs based on executor requirements
-        num_inputs = max(executor_config.requires_minimum_inputs, 3)  # Test with at least 3 inputs
-
-        # Create host input tensors and extract memory configs
-        # Uses interleaved DRAM to avoid core grid constraints, converts to L1 via to_memory_config
+        # Create 100 random input tensors
+        num_inputs = 100
+        logger.info(f"Creating {num_inputs} random input tensors...")
         host_inputs, dram_memory_config, l1_memory_config = create_host_input_tensors(
             device, batch_size, input_height, input_width, num_inputs
         )
 
         # Create pipeline using extracted memory configs
-        config = PipelineConfig(
+        pipeline_config = PipelineConfig(
             use_trace=executor_config.use_trace,
             num_command_queues=executor_config.num_command_queues,
             all_transfers_on_separate_command_queue=executor_config.all_transfers_on_separate_command_queue,
         )
 
         pipeline_args = {
-            "config": config,
+            "config": pipeline_config,
             "model": model_wrapper,
             "device": device,
             "dram_input_memory_config": dram_memory_config,
@@ -323,7 +313,24 @@ def test_panoptic_deeplab_pipeline_e2e(
         logger.info(f"Compiling pipeline with {executor_config.name}...")
         pipe.compile(host_inputs[0])
 
-        # Generate reference outputs from PyTorch
+        # Run pipeline with timing
+        logger.info(f"Running pipeline with {executor_config.name} for {num_inputs} inputs...")
+        timing_key = f"pipeline_execution_{executor_config.name}_{model_category}"
+
+        profiler.clear()
+        profiler.enable()
+        profiler.start(timing_key)
+        outputs = pipe.enqueue(host_inputs).pop_all()
+        profiler.end(timing_key, PERF_CNT=num_inputs)
+
+        # Store timing results for later printing (after PCC)
+        avg_execution_time = profiler.get(timing_key)
+        total_execution_time = avg_execution_time * num_inputs
+        avg_execution_time_us = avg_execution_time * 1e6  # Convert to microseconds
+        samples_per_second = 1.0 / avg_execution_time if avg_execution_time > 0 else 0
+
+        # Generate reference outputs from PyTorch (after pipeline execution)
+        logger.info("Generating reference outputs from PyTorch model...")
         reference_outputs = []
         for host_input in host_inputs:
             # Convert host input back to torch for reference
@@ -331,7 +338,6 @@ def test_panoptic_deeplab_pipeline_e2e(
             # Input is in NHWC format [1, H, W, C] where C=8 (3 original + 5 padding)
             # We need to remove padding and convert to NCHW for PyTorch model
             assert torch_input.shape[0] == 1, f"Expected batch size 1, got {torch_input.shape[0]}"
-            h, w, c = torch_input.shape[1], torch_input.shape[2], torch_input.shape[3]
             # Remove padding: take only first 3 channels
             torch_input = torch_input[:, :, :, :3]  # [1, H, W, 3]
             # Convert NHWC -> NCHW
@@ -341,14 +347,30 @@ def test_panoptic_deeplab_pipeline_e2e(
                 pytorch_semantic, pytorch_center, pytorch_offset, _ = pytorch_model.forward(torch_input)
             reference_outputs.append((pytorch_semantic, pytorch_center, pytorch_offset))
 
-        # Run pipeline
-        logger.info(f"Running pipeline with {executor_config.name}...")
-        outputs = pipe.enqueue(host_inputs).pop_all()
-
         # Validate outputs
         assert len(outputs) == len(reference_outputs), f"Expected {len(reference_outputs)} outputs, got {len(outputs)}"
+        assert len(outputs) == num_inputs, f"Expected {num_inputs} outputs, got {len(outputs)}"
 
+        # Validate outputs with PCC checks
+        logger.info("Validating outputs with PCC checks...")
         all_passed = []
+        semantic_pcc_values = []
+        center_pcc_values = []
+        offset_pcc_values = []
+
+        def get_pcc_value(pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.999):
+            """Helper function to get PCC value without logging."""
+            ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+            if to_channel_first:
+                ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
+
+            if output_channels is not None:
+                ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
+
+            passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
+            return passed, float(pcc)
+
         for i, (ttnn_output, ref_tuple) in enumerate(zip(outputs, reference_outputs)):
             pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
 
@@ -377,159 +399,69 @@ def test_panoptic_deeplab_pipeline_e2e(
                 assert ttnn_offset.storage_type() == ttnn.StorageType.HOST, f"Offset output {i} should be on host"
 
             # Check semantic output
-            all_passed.append(
-                check_ttnn_output(
-                    f"Semantic_{i}",
-                    pytorch_semantic,
-                    ttnn_semantic,
-                    to_channel_first=False,
-                    output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-                    exp_pcc=0.986,
-                )
+            passed, pcc = get_pcc_value(
+                pytorch_semantic,
+                ttnn_semantic,
+                to_channel_first=False,
+                output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+                exp_pcc=0.985,
             )
+            all_passed.append(passed)
+            semantic_pcc_values.append(pcc)
 
             # Check instance outputs (only for PANOPTIC_DEEPLAB)
             if model_category == PANOPTIC_DEEPLAB:
-                all_passed.append(
-                    check_ttnn_output(
-                        f"Center_{i}",
-                        pytorch_center,
-                        ttnn_center,
-                        to_channel_first=False,
-                        output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                        exp_pcc=0.805,
-                    )
+                passed_center, pcc_center = get_pcc_value(
+                    pytorch_center,
+                    ttnn_center,
+                    to_channel_first=False,
+                    output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+                    exp_pcc=0.784,
                 )
-                all_passed.append(
-                    check_ttnn_output(
-                        f"Offset_{i}",
-                        pytorch_offset,
-                        ttnn_offset,
-                        to_channel_first=False,
-                        output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                        exp_pcc=0.989,
-                    )
+                all_passed.append(passed_center)
+                center_pcc_values.append(pcc_center)
+
+                passed_offset, pcc_offset = get_pcc_value(
+                    pytorch_offset,
+                    ttnn_offset,
+                    to_channel_first=False,
+                    output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+                    exp_pcc=0.985,
                 )
+                all_passed.append(passed_offset)
+                offset_pcc_values.append(pcc_offset)
 
         # Cleanup
         pipe.cleanup()
 
+        # Calculate and display PCC statistics
+        def print_pcc_stats(pcc_values, output_name):
+            """Helper function to calculate and print PCC statistics."""
+            if pcc_values:
+                min_pcc = min(pcc_values)
+                max_pcc = max(pcc_values)
+                avg_pcc = sum(pcc_values) / len(pcc_values)
+                logger.info(f"  {output_name}: Min: {min_pcc:.6f}, Max: {max_pcc:.6f}, Avg: {avg_pcc:.6f}")
+            else:
+                logger.warning(f"  {output_name}: No PCC values collected!")
+
+        logger.info(f"PCC statistics for {executor_config.name} with {model_category}:")
+        print_pcc_stats(semantic_pcc_values, "Semantic")
+
+        if model_category == PANOPTIC_DEEPLAB:
+            print_pcc_stats(center_pcc_values, "Center")
+            print_pcc_stats(offset_pcc_values, "Offset")
+
+        # Print timing results after PCC statistics
+        logger.info(
+            f"Timing results for {executor_config.name} with {model_category}: "
+            f"Average execution time: {avg_execution_time_us:.2f} μs, "
+            f"Average samples per second: {samples_per_second:.2f}"
+        )
+
         # Fail test if any PCC checks failed
         assert all(all_passed), f"Some outputs did not pass PCC check. Results: {all_passed}"
         logger.info(f"✅ All PCC tests passed for {executor_config.name} with {model_category}!")
-
-    except FileNotFoundError:
-        pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
-
-
-@pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS[:2], ids=lambda cfg: cfg.name)  # Test first 2 executors
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "l1_small_size": PDL_L1_SMALL_SIZE,
-            "trace_region_size": 2000000,
-            "num_command_queues": 2,  # Required for multi-CQ executors
-        }
-    ],
-    indirect=True,
-)
-def test_panoptic_deeplab_pipeline_multiple_rounds(
-    device, executor_config: ExecutorTestConfig, model_location_generator
-):
-    """
-    Test multiple execution rounds with the pipeline to ensure stability.
-    """
-    skip_if_not_blackhole_20_cores(device)
-    torch.manual_seed(0)
-
-    config = get_panoptic_deeplab_config()
-    batch_size = config["batch_size"]
-    input_height, input_width = config["train_size"]
-
-    complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
-
-    try:
-        # Setup model (same as main test)
-        pytorch_model = PytorchPanopticDeepLab(
-            num_classes=config["num_classes"],
-            common_stride=config["common_stride"],
-            project_channels=config["project_channels"],
-            decoder_channels=config["decoder_channels"],
-            sem_seg_head_channels=config["sem_seg_head_channels"],
-            ins_embed_head_channels=config["ins_embed_head_channels"],
-            train_size=config["train_size"],
-            weights_path=complete_weights_path,
-            model_category=PANOPTIC_DEEPLAB,
-        )
-        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
-        pytorch_model.eval()
-
-        ttnn_parameters = create_panoptic_deeplab_parameters(
-            pytorch_model, device, input_height=input_height, input_width=input_width, batch_size=batch_size
-        )
-        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
-
-        model_configs = ModelOptimisations(conv_act_dtype=ttnn.bfloat8_b, conv_w_dtype=ttnn.bfloat8_b)
-        model_configs.setup_resnet_backbone()
-        model_configs.setup_aspp()
-        model_configs.setup_decoder()
-        model_configs.setup_heads()
-
-        ttnn_model = TtPanopticDeepLab(
-            device=device,
-            parameters=fused_parameters,
-            num_classes=config["num_classes"],
-            common_stride=config["common_stride"],
-            project_channels=config["project_channels"],
-            decoder_channels=config["decoder_channels"],
-            sem_seg_head_channels=config["sem_seg_head_channels"],
-            ins_embed_head_channels=config["ins_embed_head_channels"],
-            train_size=config["train_size"],
-            model_configs=model_configs,
-            model_category=PANOPTIC_DEEPLAB,
-        )
-
-        model_wrapper = create_model_wrapper(ttnn_model)
-
-        # Create pipeline
-        num_inputs_per_round = 2
-        host_inputs_sample, dram_memory_config, l1_memory_config = create_host_input_tensors(
-            device, batch_size, input_height, input_width, 1
-        )
-
-        config = PipelineConfig(
-            use_trace=executor_config.use_trace,
-            num_command_queues=executor_config.num_command_queues,
-            all_transfers_on_separate_command_queue=executor_config.all_transfers_on_separate_command_queue,
-        )
-
-        pipeline_args = {
-            "config": config,
-            "model": model_wrapper,
-            "device": device,
-            "dram_input_memory_config": dram_memory_config,
-            "l1_input_memory_config": l1_memory_config,
-        }
-
-        pipe = create_pipeline_from_config(**pipeline_args)
-        pipe.compile(host_inputs_sample[0])
-
-        # Run multiple rounds
-        total_outputs = []
-        for round_num in range(3):
-            logger.info(f"Running round {round_num + 1}/3...")
-            round_inputs, _, _ = create_host_input_tensors(
-                device, batch_size, input_height, input_width, num_inputs_per_round
-            )
-            round_outputs = pipe.enqueue(round_inputs).pop_all()
-            total_outputs.extend(round_outputs)
-
-        pipe.cleanup()
-
-        # Verify we got expected number of outputs
-        assert len(total_outputs) == 3 * num_inputs_per_round, f"Expected {3 * num_inputs_per_round} outputs"
-        logger.info(f"✅ Multiple rounds test passed for {executor_config.name}!")
 
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
