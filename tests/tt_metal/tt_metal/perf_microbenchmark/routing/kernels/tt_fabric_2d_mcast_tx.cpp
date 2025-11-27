@@ -58,6 +58,8 @@ inline void send_packet(
 
 void set_mcast_header(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t dst_dev_id,
+    uint32_t dst_mesh_id,
     eth_chan_directions trunk_direction,
     uint16_t trunk_hops,
     uint16_t e_hops,
@@ -74,7 +76,8 @@ void set_mcast_header(
         s_hops = 0;
     }
 
-    fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
+    fabric_set_mcast_route(
+        (HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id, e_hops, w_hops, n_hops, s_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
@@ -94,12 +97,16 @@ void kernel_main() {
     uint32_t north_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
+    uint32_t north_dst_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t north_dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender north_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     uint32_t south_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
+    uint32_t south_dst_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t south_dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
@@ -110,9 +117,13 @@ void kernel_main() {
     uint16_t left_hops = direct_hops >> 16;
     uint16_t right_hops = direct_hops & 0xFFFF;
 
+    uint32_t left_dst_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t left_dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender left_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
+    uint32_t right_dst_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t right_dst_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     tt::tt_fabric::WorkerToFabricEdmSender right_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
@@ -129,13 +140,15 @@ void kernel_main() {
 
     if (left_hops > 0) {
         // Direct left branch present
-        set_mcast_header(left_packet_header, eth_chan_directions::WEST, 0, 0, left_hops);
+        set_mcast_header(
+            left_packet_header, left_dst_chip_id, left_dst_mesh_id, eth_chan_directions::WEST, 0, 0, left_hops);
         setup_connection_and_headers(left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
     }
 
     if (right_hops > 0) {
         // Direct right branch present
-        set_mcast_header(right_packet_header, eth_chan_directions::EAST, 0, right_hops, 0);
+        set_mcast_header(
+            right_packet_header, right_dst_chip_id, right_dst_mesh_id, eth_chan_directions::EAST, 0, right_hops, 0);
         setup_connection_and_headers(right_connection, right_packet_header, noc_dest_addr, packet_payload_size_bytes);
     }
 
@@ -143,6 +156,8 @@ void kernel_main() {
         // North trunk present
         set_mcast_header(
             north_packet_header,
+            north_dst_chip_id,
+            north_dst_mesh_id,
             eth_chan_directions::NORTH,
             north_trunk_hops,
             north_trunk_branch_hops & 0xFFFF,
@@ -154,6 +169,8 @@ void kernel_main() {
         // South trunk present
         set_mcast_header(
             south_packet_header,
+            south_dst_chip_id,
+            south_dst_mesh_id,
             eth_chan_directions::SOUTH,
             south_trunk_hops,
             south_trunk_branch_hops & 0xFFFF,
