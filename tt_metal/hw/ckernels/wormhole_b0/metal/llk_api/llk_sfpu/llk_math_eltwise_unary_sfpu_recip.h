@@ -18,9 +18,10 @@ inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mo
         vector_mode);
 }
 
-template <bool APPROXIMATE, bool legacy_compat>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal, APPROXIMATE>(sfpu::recip_init<APPROXIMATE, legacy_compat>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal, APPROXIMATE>(
+        sfpu::recip_init<APPROXIMATE, is_fp32_dest_acc_en, legacy_compat>);
 }
 
 }  // namespace ckernel

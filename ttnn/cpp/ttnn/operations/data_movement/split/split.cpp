@@ -10,7 +10,6 @@
 #include "ttnn/operations/data_movement/split/device/split_op.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -20,12 +19,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto& input_shape = input_tensor.padded_shape();
-    auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return tt::tt_metal::operation::run_with_autoformat(
-        SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
+    return tt::tt_metal::operation::run(SplitDeviceOperation{2, 3, mem_config}, {input_tensor});
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {

@@ -179,7 +179,6 @@ static Tensor reduce_impl(
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -340,7 +339,6 @@ static Tensor std_var_impl(
     const ttnn::SmallVector<int>& non_height_width_dims,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());

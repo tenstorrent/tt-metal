@@ -57,8 +57,10 @@ template <UnaryOpType... unary_op_types>
 Tensor ExecuteUnary<unary_op_types...>::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 template <>
@@ -170,12 +172,14 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
     const Tensor& input_tensor,
     const float parameter,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return detail::unary_impl(
         input_tensor,
         {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
         memory_config,
-        optional_output_tensor);
+        optional_output_tensor,
+        sub_core_grids);
 }
 
 template <UnaryOpType unary_op_type>

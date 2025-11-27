@@ -1734,7 +1734,6 @@ def test_sharded_matmul(
         input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_b_sharded_memory_config)
 
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 

@@ -240,8 +240,6 @@ def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
-format_input_tensor = ttnn._ttnn.device.format_input_tensor
-format_output_tensor = ttnn._ttnn.device.format_output_tensor
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice

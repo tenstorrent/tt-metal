@@ -93,6 +93,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program_descriptors.hpp
     api/tt-metalium/queue_id.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
+    api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
@@ -109,6 +110,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_metal_profiler.hpp
     api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
+    api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
 )
 target_sources(

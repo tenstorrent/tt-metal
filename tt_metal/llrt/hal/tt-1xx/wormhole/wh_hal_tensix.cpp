@@ -4,6 +4,7 @@
 
 #define HAL_BUILD tt::tt_metal::wormhole::tensix
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::wormhole::tensix;
 
 #include <cstdint>
@@ -23,6 +24,10 @@ namespace tt::tt_metal::wormhole {
 // This file is intended to be wrapped inside arch/core-specific namespace.
 namespace tensix_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
+}
+
+namespace tensix_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
 HalCoreInfoType create_tensix_mem_map() {
@@ -144,7 +149,8 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(processor_classes_names),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
-        tensix_dev_msgs::create_factory()};
+        tensix_dev_msgs::create_factory(),
+        tensix_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole
