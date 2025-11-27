@@ -167,8 +167,6 @@ std::vector<CBInfo> get_cb_info(
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
 
-    const bool is_1d_conv = input_shape[0] != 1 && input_shape[1] == 1;
-
     {
         // Weights CB
         uint32_t weight_block_num_tiles =
@@ -291,10 +289,8 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = is_1d_conv && conv_config.config_tensors_in_dram
-                         ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
-                               6  // 3 indices per output, 2B per index
-                         : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index
+        .page_size = pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
+                     6,  // 3 indices per output, 2B per index
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
 
