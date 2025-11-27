@@ -23,7 +23,8 @@ struct ScatterOperation {
         const Tensor& source_tensor,
         const std::optional<MemoryConfig>& output_memory_config,
         const std::optional<std::string>& opt_reduction_string,
-        const std::optional<CoreRangeSet>& sub_core_grid);
+        const std::optional<CoreRangeSet>& sub_core_grid,
+        uint32_t l1_reserved_memory_bytes = 0);
 };
 
 struct ScatterAddOperation {

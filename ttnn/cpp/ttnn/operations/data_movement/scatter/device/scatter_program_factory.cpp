@@ -27,7 +27,9 @@ uint64_t ceil32(const uint64_t& number) {
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+uint32_t calculate_optimal_chunk_size(IDevice* device, uint32_t l1_reserved_memory_bytes) {
+    return ceil32((device->l1_size_per_core() - l1_reserved_memory_bytes) / 4 / 4 * 0.8 - 32);
+}
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -67,12 +69,15 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
+    // ... minimised by the amount of memory reserved by a model...
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
     // ... minimized by ~20% to account for reserved memory
-    const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
-    const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
+    const uint32_t input_and_output_max_chunk_size =
+        calculate_optimal_chunk_size(input_tensor.device(), args.l1_reserved_memory_bytes);
+    const uint32_t index_and_source_max_chunk_size =
+        calculate_optimal_chunk_size(input_tensor.device(), args.l1_reserved_memory_bytes);
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
     const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
@@ -137,7 +142,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
 
     std::vector<CoreCoord> cores{};
-
     uint32_t stick_offset = 0;
     for (uint32_t i = 0; i < all_cores_in_bounding_box; ++i) {
         const CoreCoord core{i / (farthest_x_y.y + 1), i % (farthest_x_y.y + 1)};
