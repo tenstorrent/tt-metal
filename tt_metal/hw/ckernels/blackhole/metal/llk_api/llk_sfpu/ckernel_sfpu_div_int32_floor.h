@@ -22,9 +22,6 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-    // If a ^ b >= 0, then the result will be positive, otherwise negative.
-    sfpi::vInt sign = a ^ b;
-
     // When converting to float, the integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems, as the
     // original inputs are two's complement integers.  Note that
@@ -104,13 +101,41 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    // The correction value could be negative.
-    v_if(r < 0) { correction = ~correction; }
+    sfpi::vInt tmp_lo;
+    sfpi::vInt tmp_hi;
+    b1 = b >> 23;
+    b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
+    tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
+    tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
+    tmp_hi += b1;
+    tmp_hi <<= 23;
+    tmp_lo += tmp_hi;
+    v_if(r < 0) {
+        q -= correction;
+        r += tmp_lo;
+    }
+    v_else {
+        q += correction;
+        r -= tmp_lo;
+    }
     v_endif;
 
-    // Apply correction.
-    q += correction;
+    v_if(r >= b) { q += 1; }
+    v_endif;
+    v_if(r < 0) { q -= 1; }
+    v_endif;
 
+    // The correction value could be negative.
+    // v_if(r < 0) { correction = -correction; }
+    // v_endif;
+
+    // Apply correction.
+    // q += correction;
+
+    // If a ^ b >= 0, then the result will be positive, otherwise negative.
+    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vInt sign = a ^ b;
     // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
         q = -q;
