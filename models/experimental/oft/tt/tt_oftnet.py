@@ -101,7 +101,7 @@ class TTOftNet:
             for i in range(topdown_layers)
         ]
 
-        self.head = TtConv2d(layer_args.head["optimized_configuration"], device)
+        self.head = TtConv2d(layer_args.head["optimized_configuration"], device, return_output_dim=True)
         self.mean = ttnn.from_torch(
             mean, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -311,8 +311,7 @@ class TTOftNet:
     def forward_predict_encoded_outputs(self, device, td):
         """Predict encoded outputs and slice them"""
         signpost(header="Head started")
-        out_h, out_w = 159, 159  # todo plumb return output shape from common conv wrapper
-        outputs = self.head(td)
+        outputs, (out_h, out_w) = self.head(td)
         logger.debug(f"Head output shape: {outputs.shape}, dtype: {outputs.dtype} {out_h=} {out_w=}")
         outputs = ttnn.permute(outputs, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs = ttnn.reshape(outputs, (1, -1, 9, out_h, out_w))
