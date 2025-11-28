@@ -112,40 +112,40 @@ jobs:
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
 
-  publish-wheels:
-    name: "Publish wheels to internal PyPI"
-    needs: build-artifact
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # Required for AWS OIDC
-    if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
-    steps:
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+  # publish-wheels:
+  #   name: "Publish wheels to internal PyPI"
+  #   needs: build-artifact
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write  # Required for AWS OIDC
+  #   if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
+  #   steps:
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v4
+  #       with:
+  #         python-version: '3.10'
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.PYPI_ROLE }}
-          aws-region: ${{ secrets.PYPI_REGION }}
+  #     - name: Configure AWS Credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         role-to-assume: ${{ secrets.PYPI_ROLE }}
+  #         aws-region: ${{ secrets.PYPI_REGION }}
 
-      - name: Install s3pypi
-        run: |
-          pip install s3pypi
+  #     - name: Install s3pypi
+  #       run: |
+  #         pip install s3pypi
 
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          path: ./wheels
+  #     - name: Download wheel artifacts
+  #       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+  #       with:
+  #         name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #         path: ./wheels
 
-      - name: Publish wheels to internal PyPI
-        if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
-        run: |
-          found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
-          for wheel in $found_wheel_files; do
-            echo "Publishing wheel: $wheel"
-            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
-          done
+  #     - name: Publish wheels to internal PyPI
+  #       if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
+  #       run: |
+  #         found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
+  #         for wheel in $found_wheel_files; do
+  #           echo "Publishing wheel: $wheel"
+  #           s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
+  #         done
