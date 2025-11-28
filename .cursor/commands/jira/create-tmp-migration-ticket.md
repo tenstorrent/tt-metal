@@ -16,7 +16,7 @@ When creating a new TMP migration ticket, provide:
 1. **Operation name** (e.g., `transpose`, `argmax`, `embedding`, `prod`)
 2. **Operation path** (e.g., `data_movement/transpose/device/transpose_op`, `reduction/prod/device/prod_nc_op`)
 3. **GitHub issue number** (optional, e.g., `32761`, `32699`)
-4. **Test directory/path** (optional) - Use {{@.cursor/commands/ttnn/find-operation-tests.md}} to identify the correct test paths and CI jobs during initial investigation. If not provided, the testing path will be marked as an assumption.
+4. **Test directory/path** (optional) - **MANDATORY**: You MUST use {{@.cursor/commands/ttnn/find-operation-tests.md}} Cursor command to identify the correct test paths and CI jobs during initial investigation. If test information is not obtained through this command, the testing path will be marked as an assumption with a clear warning.
 
 ## JIRA Ticket Configuration
 
@@ -102,12 +102,16 @@ When the user requests to create a TMP migration ticket, ask for:
 3. GitHub issue number (optional, e.g., "32761", "32699")
 4. Test directory/path (optional) - if not provided, search the codebase to find test files and use the most relevant one
 
-### Step 2: Search for Test Information
+### Step 2: ⚠️ CRITICAL - Find Test Information Using Cursor Command
 
-Before generating the ticket:
-- Search for test files related to the operation (e.g., `test_*prod*.py`, `test_*transpose*.py`)
-- Identify the main unit test file and function name
-- Note additional test locations if found
+**MANDATORY**: Before generating the ticket, you MUST use the `@.cursor/commands/ttnn/find-operation-tests.md` Cursor command to identify the correct test paths and CI jobs.
+
+**DO NOT** manually search for test files using codebase_search or grep. The find-operation-tests command provides accurate, verified test information including:
+- Exact pytest paths
+- CI job names that validate the operation
+- All relevant test files and their locations
+
+If test information is not obtained through the find-operation-tests command, the testing paths in the generated description MUST be marked as assumptions with a clear warning.
 
 ### Step 3: Generate Ticket Details
 
@@ -141,6 +145,6 @@ Only after receiving explicit user confirmation:
 3. Provide the ticket key and URL to the user
 
 **Important Notes**:
-- If test information is not provided, the testing path in the generated description should be marked as an assumption
-- Recommend using the {{@.cursor/commands/ttnn/find-operation-tests.md}} command during initial investigation to identify the correct test paths and CI jobs that validate the operation
+- **CRITICAL**: Test information MUST be obtained using the {{@.cursor/commands/ttnn/find-operation-tests.md}} Cursor command. Manual searching (codebase_search, grep, glob_file_search) is NOT acceptable and will result in assumptions being marked in the ticket.
+- If test information is not obtained through the find-operation-tests command, the testing path in the generated description MUST be marked as an assumption with a clear warning that the information needs to be verified.
 - Always verify the operation path format matches existing tickets (e.g., `reduction/prod/device/prod_nc_op`)
