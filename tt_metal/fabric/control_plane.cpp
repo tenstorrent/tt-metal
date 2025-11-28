@@ -495,7 +495,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     TT_FATAL(
         *distributed_context->size() == 1,
         "Auto discovery is only supported for single host systems, since you are running on a {} host system,"
-        "please specify a rank binding file via the tt-run argument --rank-binding argument",
+        " please specify a rank binding file via the tt-run argument --rank-binding argument",
         *distributed_context->size());
 
     // Initialize physical system descriptor
