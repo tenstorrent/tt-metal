@@ -894,6 +894,7 @@ def test_demo_text(
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        # if batch_size == 1:
         if batch_size < 32:
             # pad current_pos to 32 with -1s
             current_pos = torch.nn.functional.pad(current_pos, (0, 32 - current_pos.shape[0]), value=-1)
@@ -907,12 +908,13 @@ def test_demo_text(
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
 
+        # if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+        # out_tok = out_tok.repeat(32, 1)
         if out_tok.shape == torch.Size([]):
             out_tok = out_tok.unsqueeze(0).repeat(32, 1)
         elif len(out_tok.shape) > 0 and out_tok.shape[0] < 32:
             # Pad to 32 users for decode (max_batch_size)
             out_tok = torch.nn.functional.pad(out_tok, (0, 0, 0, 32 - out_tok.shape[0]), value=0)
-
         try:
             model.switch_mode("decode")
         except Exception as e:
@@ -983,6 +985,8 @@ def test_demo_text(
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
+                # if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                # out_tok = out_tok.repeat(32, 1)
                 if out_tok.shape == torch.Size([]):
                     out_tok = out_tok.unsqueeze(0).repeat(32, 1)
                 elif len(out_tok.shape) > 0 and out_tok.shape[0] < 32:

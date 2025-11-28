@@ -165,10 +165,11 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch))
 
-        # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
+        # If batch is divisible by 4 and prompt_lens are all the same and batch_seq_len * batch is less than 128*1024, use batched prefill
         use_batched_prefill = False
         if (
-            batch >= 2
+            batch >= 4
+            and batch % 4 == 0
             and len(set(prefill_seq_lens)) == 1
             and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None
@@ -198,7 +199,12 @@ class Generator:
 
             if use_batched_prefill:
                 # reordering the tokens when empty_slots are not sequential (from vllm)
-                inverse_empty_slots = [empty_slots.index(i) for i in range(batch)]
+                # Only reorder if empty_slots is a permutation of 0 to batch-1
+                if set(empty_slots) == set(range(batch)):
+                    inverse_empty_slots = [empty_slots.index(i) for i in range(batch)]
+                else:
+                    # empty_slots contains arbitrary slot numbers, use sequential ordering
+                    inverse_empty_slots = list(range(batch))
                 prefill_ids = torch.cat(
                     [
                         torch.cat(
@@ -241,7 +247,10 @@ class Generator:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
             if use_batched_prefill:
                 # reverse the reordering of the tokens when empty_slots are not sequential (from vllm)
-                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)[empty_slots]
+                output_toks = torch.cat(tt_tok, dim=0).reshape(batch, 1, 1)
+                # Only reorder if empty_slots is a permutation of 0 to batch-1
+                if set(empty_slots) == set(range(batch)):
+                    output_toks = output_toks[empty_slots]
             else:
                 output_toks[id] = tt_tok
 
