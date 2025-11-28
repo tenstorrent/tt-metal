@@ -14,8 +14,14 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/optional.h>
+
+// variants are used for a lot of config types and nanobind otherwise will autogenerate
+// the appropriate binding if the typecaster is present. This comes up everywhere
+// so include it here.
 #include <nanobind/stl/variant.h>
 
+// used all over the place so just include it here to make the typecaster visible
+#include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {

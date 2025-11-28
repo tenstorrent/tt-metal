@@ -155,8 +155,8 @@ void bind_max_pool2d_operation(nb::module_& mod) {
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,
             nb::arg("return_indices") = false,
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("output_layout") = Layout::ROW_MAJOR});
+            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR)});
 }
 
 void bind_avg_pool2d_operation(nb::module_& mod) {
@@ -290,8 +290,8 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::arg("in_place_halo") = false,
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("output_layout") = Layout::ROW_MAJOR});
+            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+            nb::arg("output_layout") = nb::cast(Layout::ROW_MAJOR)});
 }
 
 void py_module(nb::module_& mod) {
