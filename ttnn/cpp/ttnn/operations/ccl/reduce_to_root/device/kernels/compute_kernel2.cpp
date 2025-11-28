@@ -68,15 +68,16 @@ void MAIN {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
         // move l2 input
+        /*
         move_block<true>(cb_out_accumulate_im_2, cb_l2_temp, out_chunk_tiles);
         // move l1 input
         move_block<true>(cb_out_accumulate_im, cb_l1_temp, out_chunk_tiles);
 
         // move s1 and s2
-        move_block<true>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
+        move_block<true>(cb_out_accumulate_im_2, cb_s1_temp, Sq_chunk_t);
         move_block<true>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
 
-        max_block<vector_mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
+        max_block<vector_mode>(cb_m_in, cb_out_accumulate_im_2, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
 
         // EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
         // PREV_SUM_2 *= EXP_MAX_DIFF_2
@@ -126,6 +127,34 @@ void MAIN {
 
         // OUT_SUM <- TEMP_SUM
         move_block<true>(cb_s_temp, cb_cur_sum, Sq_chunk_t);
+        DPRINT << "end of loop\n";
+        */
+        // OUT <- OUT_ACC
+
+        DPRINT << "moving first inputs as well to temps\n";
+        DPRINT << "waiting for inputs and pushing outputs\n";
+        cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
+        cb_wait_front(cb_out_accumulate_im_2, out_chunk_tiles);
+        cb_wait_front(cb_prev_sum, Sq_chunk_t);
+        cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
+        cb_wait_front(cb_m_in, Sq_chunk_t);
+        cb_wait_front(cb_prev_max, Sq_chunk_t);
+
+        cb_reserve_back(cb_out_o, out_chunk_tiles);
+        cb_reserve_back(cb_cur_sum, Sq_chunk_t);
+        cb_reserve_back(cb_cur_max, Sq_chunk_t);
+
+        // now push back output and pop front inputs
+        cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
+        cb_pop_front(cb_out_accumulate_im_2, out_chunk_tiles);
+        cb_pop_front(cb_prev_sum, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
+        cb_pop_front(cb_m_in, Sq_chunk_t);
+        cb_pop_front(cb_prev_max, Sq_chunk_t);
+
+        cb_push_back(cb_out_o, out_chunk_tiles);
+        cb_push_back(cb_cur_sum, Sq_chunk_t);
+        cb_push_back(cb_cur_max, Sq_chunk_t);
         DPRINT << "end of loop\n";
     }
 }
