@@ -113,7 +113,7 @@ inline int intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
     return SINGLE_ROUTE_SIZE_1D;
 }
 
-inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
+inline int decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
     if (hops >= intra_mesh_routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {

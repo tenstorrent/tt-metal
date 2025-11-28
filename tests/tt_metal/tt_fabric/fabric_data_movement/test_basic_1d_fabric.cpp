@@ -914,8 +914,8 @@ void RunTestMCastConnAPI(
     auto left_recv_device = fixture->get_device(left_recv_phys_chip_id);
     auto right_recv_device = fixture->get_device(right_recv_phys_chip_id);
 
-    auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][fwd_hops - fwd_hops];
-    auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][bwd_hops - bwd_hops];
+    auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][0];
+    auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][0];
 
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
