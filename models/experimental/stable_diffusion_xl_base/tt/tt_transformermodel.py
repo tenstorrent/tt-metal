@@ -96,10 +96,9 @@ class TtTransformer2DModel(LightweightModule):
         if rm_gn:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-
-        if C == 1280:
-            # due to block sharded mm constraints, if we block shard the input tensor, we can only run it on 56 cores
-            # hence using L1 memory config instead
+        elif C == 1280:
+            # For 1280 channels shard laypout will be over 64 cores, but MM runs on 40
+            # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.linear(
             hidden_states,
