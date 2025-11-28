@@ -18,15 +18,20 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
+#include "repeat_program_factory.hpp"
+
 constexpr uint32_t READ_ALIGNMENT = 64;
 
-namespace ttnn::operations::data_movement::repeat {
+namespace ttnn::operations::data_movement::repeat::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
+RepeatProgramFactorySecondDim::cached_program_t RepeatProgramFactorySecondDim::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     // We are repeating the last dim on a 2D shape
-    const Tensor& input,
-    uint32_t num_repeats,
-    const Tensor& output) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const uint32_t num_repeats = operation_attributes.m_num_repeats;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -107,30 +112,16 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
-                                              const void* operation,
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& input = input_tensors.at(0);
-        const auto& output = output_tensors.at(0);
-        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const auto& core : total_cores) {
-            auto& runtime_args = runtime_args_by_core[core.x][core.y];
-            runtime_args.at(0) = input.buffer()->address();
-            runtime_args.at(1) = output.buffer()->address();
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return RepeatProgramFactorySecondDim::cached_program_t{std::move(program), {reader_kernel_id, total_cores}};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
-    // We are repeating the second dim on a 4D shape
-    const Tensor& input,
-    uint32_t num_repeats,
-    const Tensor& output) {
+RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const uint32_t num_repeats = operation_attributes.m_num_repeats;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -243,33 +234,53 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
-                                              const void* operation,
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& input = input_tensors.at(0);
-        const auto& output = output_tensors.at(0);
-        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const auto& core : total_cores) {
-            auto& runtime_args = runtime_args_by_core[core.x][core.y];
-            runtime_args.at(0) = input.buffer()->address();
-            runtime_args.at(1) = output.buffer()->address();
-        }
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return RepeatProgramFactoryLastDim::cached_program_t{std::move(program), {reader_kernel_id, total_cores}};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks rm_repeat_program_factory(
-    const Tensor& input, uint32_t num_repeats, const Tensor& output, bool is_last_dim) {
-    // We are repeating the second dim. If is_last_dim then the tensor is 2D.
-    // otherwise it is 4D.
-    if (is_last_dim) {
-        return rm_repeater_last_dim(input, num_repeats, output);
-    } else {
-        return rm_repeater(input, num_repeats, output);
+void RepeatProgramFactoryLastDim::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // TODO: Implement this
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+
+    auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    auto& total_cores = shared_vars.total_cores;
+
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+
+    auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    for (const auto& core : total_cores) {
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args.at(0) = input.buffer()->address();
+        runtime_args.at(1) = output.buffer()->address();
     }
 }
 
-};  // namespace ttnn::operations::data_movement::repeat
+void RepeatProgramFactorySecondDim::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // TODO: Implement this
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+
+    auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    auto& total_cores = shared_vars.total_cores;
+
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+
+    auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    for (const auto& core : total_cores) {
+        auto& runtime_args = runtime_args_by_core[core.x][core.y];
+        runtime_args.at(0) = input.buffer()->address();
+        runtime_args.at(1) = output.buffer()->address();
+    }
+}
+
+};  // namespace ttnn::operations::data_movement::repeat::program
