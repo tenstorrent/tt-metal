@@ -37,9 +37,6 @@ struct MatmulReduceScatterAsync {
     /* Fusion Params */
     const CoreCoord reduce_scatter_core_grid_offset;
 
-    /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
-
     /* General */
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors,
@@ -76,8 +73,7 @@ namespace matmul_reduce_scatter_async_detail {
 MatmulReduceScatterAsync create_matmul_reduce_scatter_async_struct(
     const ttnn::ReduceScatterMinimalAsync& reduce_scatter_minimal_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
-    CoreCoord reduce_scatter_core_grid_offset,
-    const std::vector<IDevice*>& devices);
+    CoreCoord reduce_scatter_core_grid_offset);
 }  // namespace matmul_reduce_scatter_async_detail
 }  // namespace ccl
 

@@ -64,9 +64,6 @@ struct LlamaAllGatherMatmulAsync {
     /* Matmul Params */
     const operations::matmul::Matmul matmul_struct;
 
-    /* Physical Devices this op runs on*/
-    std::vector<IDevice*> devices;
-
     /* General */
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors,
@@ -93,8 +90,8 @@ struct LlamaAllGatherMatmulAsync {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "devices");
-    auto attribute_values() const { return std::forward_as_tuple(this->matmul_struct, this->devices); }
+    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct");
+    auto attribute_values() const { return std::forward_as_tuple(this->matmul_struct); }
 };
 
 // llama All Gather MM Variants
@@ -104,9 +101,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,

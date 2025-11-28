@@ -30,9 +30,9 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index,

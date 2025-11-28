@@ -57,9 +57,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -1024,24 +1024,16 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_x.begin(), stats_tensor_cores_x.end());
             all_gather_rts.insert(all_gather_rts.end(), stats_tensor_cores_y.begin(), stats_tensor_cores_y.end());
 
-            all_gather_rts.push_back(forward_device.has_value());
-            if (forward_device.has_value()) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto forward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+            all_gather_rts.push_back(forward_fabric_node_id.has_value());
+            if (forward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, forward_device_fabric_node_id, i, program, {core}, all_gather_rts);
+                    target_fabric_node_id, forward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
             }
 
-            all_gather_rts.push_back(backward_device.has_value());
-            if (backward_device.has_value()) {
-                const auto target_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-                const auto backward_device_fabric_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+            all_gather_rts.push_back(backward_fabric_node_id.has_value());
+            if (backward_fabric_node_id.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device_fabric_node_id, backward_device_fabric_node_id, i, program, {core}, all_gather_rts);
+                    target_fabric_node_id, backward_fabric_node_id.value(), i, program, {core}, all_gather_rts);
             }
         }
         // Set writer runtime args

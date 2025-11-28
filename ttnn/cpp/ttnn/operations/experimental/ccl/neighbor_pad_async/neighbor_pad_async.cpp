@@ -27,8 +27,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     auto mesh_device = input_tensor.device();
     uint32_t num_devices;
     const auto& mesh_view = mesh_device->get_view();
@@ -41,7 +39,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
 
     return tt::tt_metal::operation::run(
                ttnn::NeighborPadAsync(
-                   devices,
                    dim,
                    padding_left,
                    padding_right,

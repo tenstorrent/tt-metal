@@ -24,7 +24,7 @@ namespace ttnn {
 
 tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     const Tensor& output_tensor,
-    tt::tt_metal::IDevice* target_device,
+    const tt::tt_fabric::FabricNodeId& target_fabric_node_id,
     const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     tt::tt_metal::Program program{};
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
@@ -38,7 +38,8 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (uint32_t i = 0; i < socket_connection_config.size(); ++i) {
         const auto& connection = socket_connection_config[i];
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        // TODO(p1-0tr): We can probably use fabric_id->chip_id here
+        if (socket_mesh_device->get_fabric_node_id(connection.receiver_core.device_coord) == target_fabric_node_id) {
             receiver_core_coords.push_back(connection.receiver_core.core_coord);
             receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
@@ -70,7 +71,8 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
     // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
     auto max_alignment = std::max(
-        target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
+        output_tensor.device()->allocator()->get_alignment(
+            mesh_socket.get_config().socket_mem_config.socket_storage_type),
         output_tensor.buffer()->alignment());
     auto output_page_size = output_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(output_page_size, max_alignment);
@@ -259,11 +261,12 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             uint32_t bank_id = 0;
             if (socket_storage_in_dram) {
                 // Assign DRAM banks in round-robin for each receiver core
-                auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+                auto num_dram_banks =
+                    output_tensor.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
                 bank_id = core_idx % num_dram_banks;
             } else {
                 // L1 mode: use logical core mapping
-                bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
+                bank_id = output_tensor.device()->allocator()->get_bank_ids_from_logical_core(
                     mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
             }
 

@@ -20,10 +20,8 @@ namespace all_gather_matmul_async_detail {
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const ttnn::AllGatherAsync& all_gather_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
-    const CoreCoord all_gather_core_grid_offset,
-    const std::vector<IDevice*>& devices) {
-    return ttnn::AllGatherMatmulAsync{
-        all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, devices};
+    const CoreCoord all_gather_core_grid_offset) {
+    return ttnn::AllGatherMatmulAsync{all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset};
 }
 
 }  // namespace all_gather_matmul_async_detail
@@ -126,8 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", mesh_coord);
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
+    // TODO(p1-0tr): does not seem to be used in all_gather_matmul_async_multi_core_with_workers anyway
+    IDevice* target_device = input_tensors[0].device();
 
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
         input_tensors[0], mesh_coord, this->all_gather_async_struct.cluster_axis);
@@ -243,7 +241,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = ttnn::ccl::get_active_fabric_node_ids(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -258,7 +256,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
         dim,
         num_links,
-        devices.size(),
+        fabric_node_ids.size(),
         memory_config_ag.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
@@ -309,8 +307,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
             /* Matmul params */
             matmul_struct,
             /* Fusion params */
-            all_gather_core_grid_offset,
-            devices),
+            all_gather_core_grid_offset),
         {input_tensor, weight_tensor},
         optional_input_tensors,
         optional_output_tensors);

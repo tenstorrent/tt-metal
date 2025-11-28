@@ -35,9 +35,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers(
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     std::vector<Tensor>& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -52,9 +52,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     return ring_attention_all_gather_async_multi_core_with_workers_helper(
         program,
         input_tensor,
-        target_device,
-        forward_device,
-        backward_device,
+        target_fabric_node_id,
+        forward_fabric_node_id,
+        backward_fabric_node_id,
         output_tensor,
         dim,
         num_links,
@@ -69,9 +69,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     std::vector<Tensor>& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -421,15 +421,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
         writer_forward_rt_args.push_back(false);
-        writer_forward_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_forward_rt_args.push_back(backward_fabric_node_id.has_value());
+        if (backward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
-                backward_fabric_node_id,
+                backward_fabric_node_id.value(),
                 link,
                 program,
                 sender_worker_cores[(link * 2) + 1],
@@ -462,15 +458,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
-        writer_backward_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_backward_rt_args.push_back(forward_fabric_node_id.has_value());
+        if (forward_fabric_node_id.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
-                forward_fabric_node_id,
+                forward_fabric_node_id.value(),
                 link,
                 program,
                 sender_worker_cores[link * 2],

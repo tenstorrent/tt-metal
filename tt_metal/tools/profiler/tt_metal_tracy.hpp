@@ -59,13 +59,13 @@
         for (auto& [device_range, program] : (mesh_workload).get_programs()) {                                \
             if ((trace_id).has_value()) {                                                                     \
                 for_each_local((mesh_device), device_range, [&](const auto& coord) {                          \
-                    auto device = (mesh_device)->get_device(coord);                                           \
+                    auto device_id = (mesh_device)->get_fabric_node_id(coord).chip_id;                        \
                     tt::tt_metal::MetalContext::instance().profiler_state_manager()->add_runtime_id_to_trace( \
-                        device->id(), *((trace_id).value()), program.get_runtime_id());                       \
+                        device_id, *((trace_id).value()), program.get_runtime_id());                          \
                     if (TracyTTMetalTraceTrackingEnabled()) {                                                 \
                         std::string trace_message = fmt::format(                                              \
                             "`TT_METAL_TRACE_ENQUEUE_PROGRAM: {}, {}, {}`",                                   \
-                            device->id(),                                                                     \
+                            device_id,                                                                        \
                             *((trace_id).value()),                                                            \
                             program.get_runtime_id());                                                        \
                         TracyMessage(trace_message.c_str(), trace_message.size());                            \

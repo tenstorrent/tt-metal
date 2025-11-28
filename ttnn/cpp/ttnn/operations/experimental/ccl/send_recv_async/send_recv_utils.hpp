@@ -33,28 +33,26 @@ void validate(
         "{} op requires a fifo size greater than or equal to the input tensor page size",
         op_name);
 
-    auto device_ids = input_tensor.device()->get_device_ids();
-    std::unordered_set<tt::ChipId> found_device_ids;
+    auto fabric_node_ids = input_tensor.device()->get_view().get_fabric_node_ids();
+    std::unordered_set<tt::tt_fabric::FabricNodeId> found_fabric_node_ids;
     for (const auto& connection : socket_connection_config) {
-        tt::ChipId device_id;
+        auto fabric_node_id = socket_mesh_device->get_fabric_node_id(connection.receiver_core.device_coord);
         if constexpr (socket_type == tt::tt_metal::distributed::SocketEndpoint::SENDER) {
-            device_id = socket_mesh_device->get_device(connection.sender_core.device_coord)->id();
-        } else {
-            device_id = socket_mesh_device->get_device(connection.receiver_core.device_coord)->id();
+            fabric_node_id = socket_mesh_device->get_fabric_node_id(connection.sender_core.device_coord);
         }
-        auto found_device = std::find(device_ids.begin(), device_ids.end(), device_id);
-        if (found_device != device_ids.end()) {
-            found_device_ids.insert(*found_device);
-            if (found_device_ids.size() == device_ids.size()) {
+        auto found_fabric_node_id = std::find(fabric_node_ids.begin(), fabric_node_ids.end(), fabric_node_id);
+        if (found_fabric_node_id != fabric_node_ids.end()) {
+            found_fabric_node_ids.insert(*found_fabric_node_id);
+            if (found_fabric_node_ids.size() == fabric_node_ids.size()) {
                 break;
             }
         }
     }
     TT_FATAL(
-        found_device_ids.size() == device_ids.size(),
+        found_fabric_node_ids.size() == fabric_node_ids.size(),
         "{} op input tensor devices {} is not part of the connected cores of the socket",
         op_name,
-        device_ids);
+        fabric_node_ids);
 }
 
 }  // namespace ttnn::send_recv_utils
