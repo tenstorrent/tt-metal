@@ -334,51 +334,43 @@ std::string op_meta_data_serialized_json(
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
 
-std::string op_meta_data_serialized_json_helper(
-    uint32_t operation_id,
-    auto device_id,
-    const auto& program,
-    const auto& operation_attributes,
-    const auto& tensor_args,
-    auto& tensor_return_value,
-    auto program_hash,
-    bool useCachedOps,
-    auto j,
-    auto perfModel) {
-    if (!useCachedOps) {
-        j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
-        j["device_id"] = device_id;
-        j["op_hash"] = program_hash;
-        j["kernel_info"] = get_kernels_json(device_id, program);
-        auto opname = j["op_code"].template get<std::string>();
-        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
-        program_hash_to_opname_.insert({device_id, program_hash}, opname);
-        j["optional_input_tensors"] = std::vector<json>{};
-        j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
-        j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
-        j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
-        j["performance_model"]["input_bws"] = perfModel.get_input_bws();
-        j["performance_model"]["output_bws"] = perfModel.get_output_bws();
+std::string op_meta_data_serialized_json_cashed(
+    uint32_t operation_id, auto device_id, const auto& program, auto program_hash) {
+    auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
+    runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
+    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+}
 
-        std::string short_str =
-            fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
-        if (cached_ops.find(device_id) == cached_ops.end()) {
-            cached_ops.emplace(
-                device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
-        } else {
-            cached_ops.at(device_id).emplace(program_hash, short_str);
-        }
+std::string op_meta_data_serialized_json_new(
+    uint32_t operation_id, auto device_id, const auto& program, auto program_hash, auto j, auto perfModel) {
+    j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
+    j["device_id"] = device_id;
+    j["op_hash"] = program_hash;
+    j["kernel_info"] = get_kernels_json(device_id, program);
+    auto opname = j["op_code"].template get<std::string>();
+    runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
+    program_hash_to_opname_.insert({device_id, program_hash}, opname);
+    j["optional_input_tensors"] = std::vector<json>{};
+    j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
+    j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
+    j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
+    j["performance_model"]["input_bws"] = perfModel.get_input_bws();
+    j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
-        auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
-        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
-            msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
-        }
-        return msg;
+    std::string short_str =
+        fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
+    if (cached_ops.find(device_id) == cached_ops.end()) {
+        cached_ops.emplace(
+            device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
     } else {
-        auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
-        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-        return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+        cached_ops.at(device_id).emplace(program_hash, short_str);
     }
+
+    auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
+    if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
+        msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+    }
+    return msg;
 }
 
 bool is_program_hashed(auto device_id, auto program_hash) {

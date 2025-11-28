@@ -70,17 +70,11 @@ std::string op_meta_data_serialized_json(
 
 bool is_op_profiler_env_var_set();
 
-std::string op_meta_data_serialized_json_helper(
-    uint32_t operation_id,
-    auto device_id,
-    const auto& program,
-    const auto& operation_attributes,
-    const auto& tensor_args,
-    auto& tensor_return_value,
-    auto program_hash,
-    bool useCachedOps = true,
-    auto j = 0,
-    auto perfModel = 0);
+std::string op_meta_data_serialized_json_cashed(
+    uint32_t operation_id, auto device_id, const auto& program, auto program_hash);
+
+std::string op_meta_data_serialized_json_new(
+    uint32_t operation_id, auto device_id, const auto& program, auto program_hash, auto j, auto perfModel);
 
 template <typename device_operation_t>
 auto compute_program_hash(
@@ -174,20 +168,9 @@ std::string op_meta_data_serialized_json(
                 return tt::tt_metal::operation::OpPerformanceModel{};
             }
         }();
-        return op_meta_data_serialized_json_helper(
-            operation_id,
-            device_id,
-            program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value,
-            program_hash,
-            false,
-            j,
-            perfModel);
+        return op_meta_data_serialized_json_new(operation_id, device_id, program, program_hash, j, perfModel);
     } else {
-        return op_meta_data_serialized_json_helper(
-            operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value, program_hash);
+        return op_meta_data_serialized_json_cashed(operation_id, device_id, program, program_hash);
     }
 }
 
