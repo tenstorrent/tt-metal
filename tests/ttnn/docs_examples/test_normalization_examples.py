@@ -169,6 +169,24 @@ def test_layer_norm(device):
     logger.info(f"Layer Norm result: {output_tensor}")
 
 
+def test_layernorm_distributed(device):
+    # Create input tensor
+    input_tensor = ttnn.rand([1, 1, 32, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Apply pre-all-gather layer normalization
+    stats = ttnn.layer_norm_pre_all_gather(input_tensor)
+    logger.info(f"Layer Norm Pre All Gather result: {stats}")
+
+    # On a distributed setup, all gather would go here to collect the stats from all devices
+
+    # Now apply the post-all-gather layer normalization
+    output = ttnn.layer_norm_post_all_gather(input_tensor, stats)
+    logger.info(f"Layer Norm Post All Gather result: {output}")
+
+    # For reference, this two-step process is equivalent to the following
+    # output = ttnn.layer_norm(input_tensor)
+
+
 def test_rms_norm(device):
     # Setup input tensor and weight
     h, w = 32, 64
@@ -179,6 +197,25 @@ def test_rms_norm(device):
     # Apply RMS normalization
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     logger.info(f"RMS Norm result: {output_tensor}")
+
+
+def test_rms_norm_distributed(device):
+    # Create input tensor
+    input_tensor = ttnn.rand([1, 1, 32, 32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.rand([32], dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Apply pre-all-gather RMS normalization
+    stats = ttnn.rms_norm_pre_all_gather(input_tensor)
+    logger.info(f"RMS Norm Pre All Gather result: {stats}")
+
+    # On a distributed setup, an all gather would go here to collect the stats from all the devices
+
+    # Now apply the post-all-gather RMS normalization
+    output = ttnn.rms_norm_post_all_gather(input_tensor, stats, weight=weight)
+    logger.info(f"RMS Norm Post All Gather result: {output}")
+
+    # For reference, this two-step process is equivalent to the following
+    # output = ttnn.rms_norm(input_tensor, weight=weight)
 
 
 def test_batch_norm(device):
