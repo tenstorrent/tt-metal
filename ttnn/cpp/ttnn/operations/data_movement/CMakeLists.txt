@@ -204,8 +204,13 @@ target_sources(
         tilize_with_val_padding/device/tilize_with_val_padding_op.cpp
         tilize_with_val_padding/device/tilize_with_val_padding_program_factory.cpp
         tilize_with_val_padding/tilize_with_val_padding.cpp
-        transpose/device/transpose_op.cpp
-        transpose/device/transpose_program_factory.cpp
+        transpose/device/transpose_device_operation.cpp
+        transpose/device/transpose_cn_program_factory.cpp
+        transpose/device/transpose_hc_program_factory.cpp
+        transpose/device/transpose_hc_sharded_program_factory.cpp
+        transpose/device/transpose_wh_program_factory.cpp
+        transpose/device/transpose_wh_sharded_program_factory.cpp
+        transpose/device/transpose_wh_sharded_rm_program_factory.cpp
         transpose/transpose.cpp
         unsqueeze/unsqueeze.cpp
         untilize/device/untilize_op.cpp
