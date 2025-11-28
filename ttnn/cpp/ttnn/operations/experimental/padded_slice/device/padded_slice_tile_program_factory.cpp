@@ -12,7 +12,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include <algorithm>
 #include <cstdint>
