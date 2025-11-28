@@ -1,1 +1,1 @@
-../../../../wormhole/stable_diffusion/tests/vae/test_vae_attention.py
+../../../wormhole/tests/vae/test_vae_attention.py
