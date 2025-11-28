@@ -52,9 +52,8 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
 ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& out_mem_config = tensor_args.preallocated_output.has_value()
-                                     ? tensor_args.preallocated_output->memory_config()
-                                     : args.output_mem_config;
+    auto output_tensor_spec = compute_output_specs(args, tensor_args);
+    const auto& out_mem_config = output_tensor_spec.memory_config();
 
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
