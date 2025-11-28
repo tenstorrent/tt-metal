@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "slice_pybind.hpp"
+#include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-
-#include "slice.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
