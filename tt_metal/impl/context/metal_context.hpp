@@ -5,7 +5,6 @@
 #pragma once
 
 #include <vector>
-//#include <mutex>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include "tt-metalium/experimental/fabric/routing_table_generator.hpp"

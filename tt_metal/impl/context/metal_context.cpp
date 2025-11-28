@@ -42,6 +42,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/common/executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -154,7 +155,7 @@ void MetalContext::initialize(
     // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
 
-    std::vector<std::future<void>> futures;
+    std::vector<std::shared_future<void>> futures;
     {
         ZoneScopedN("FW builds and Device Inits");
 
@@ -162,7 +163,7 @@ void MetalContext::initialize(
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(std::async(std::launch::async, [this, device_id, fw_compile_hash]() {
+            futures.emplace_back(detail::async([this, device_id, fw_compile_hash]() {
                 // Clear L1/DRAM if requested
                 if (rtoptions_.get_clear_l1()) {
                     clear_l1_state(device_id);
@@ -233,7 +234,7 @@ void MetalContext::initialize(
 
         // Launch async tasks for each device
         for (ChipId device_id : all_devices) {
-            futures.emplace_back(std::async(std::launch::async, [this, device_id]() {
+            futures.emplace_back(detail::async([this, device_id]() {
                 ClearNocData(device_id);
 
                 reset_cores(device_id);
