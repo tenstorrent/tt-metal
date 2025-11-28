@@ -858,7 +858,7 @@ INSTANTIATE_TEST_SUITE_P(
     T3kTopologyMapperWithCustomMappingFixture,
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
 
-TEST_F(TopologyMapperTest, GenerateMeshGraphFromPhysicalSystemDescriptor) {
+TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // Test that generate_from_physical_system_descriptor uses map_mesh_to_physical
     // to find a valid mesh shape that can be mapped to the physical topology
     FabricConfig fabric_config = FabricConfig::FABRIC_2D;
@@ -874,7 +874,13 @@ TEST_F(TopologyMapperTest, GenerateMeshGraphFromPhysicalSystemDescriptor) {
 
     // Verify that the mesh graph has chips
     auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
-    EXPECT_GT(chip_ids.values().size(), 0u) << "Mesh graph should have at least one chip";
+    EXPECT_EQ(chip_ids.values().size(), physical_system_descriptor_->get_asic_descriptors().size())
+        << "Mesh graph should have same number of chips as the physical system descriptor";
+
+    // Check that the mesh shape is either 2x4 or 4x2
+    auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_TRUE(mesh_shape == MeshShape(2, 4) || mesh_shape == MeshShape(4, 2))
+        << "Mesh shape should be either 2x4 or 4x2";
 
     // Verify that host ranks are set up correctly
     for (const auto& chip_id : chip_ids.values()) {
