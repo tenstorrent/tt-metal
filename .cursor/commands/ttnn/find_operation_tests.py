@@ -8,14 +8,33 @@ Usage:
 Example:
     python find_operation_tests.py slice_write
     python find_operation_tests.py conv2d --operation-path conv/conv2d
+    python find_operation_tests.py transpose
 """
 
 import os
 import re
 import sys
+import json
 import argparse
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
+
+
+# APC workflow configuration
+APC_WORKFLOW_URL = "https://github.com/tenstorrent/tt-metal/actions/workflows/apc-select-tests.yaml"
+APC_JSON_TEMPLATE = {
+    "sd-unit-tests": False,
+    "fast-dispatch-unit-tests": False,
+    "fabric-unit-tests": False,
+    "cpp-unit-tests": False,
+    "ttnn-unit-tests": False,
+    "models-unit-tests": False,
+    "tt-train-cpp-unit-tests": False,
+    "run-profiler-regression": False,
+    "t3000-apc-fast-tests": False,
+    "test-ttnn-tutorials": False,
+    "triage-tests": False,
+}
 
 
 def find_operation_path(operation_name: str, repo_root: Path) -> Optional[str]:
@@ -41,42 +60,75 @@ def find_operation_path(operation_name: str, repo_root: Path) -> Optional[str]:
     return None
 
 
-def find_test_files(operation_name: str, repo_root: Path) -> List[Path]:
+def find_test_files(operation_name: str, repo_root: Path, search_dirs: List[str] = None) -> List[Path]:
     """Find test files that test the given operation"""
-    tests_dir = repo_root / "tests" / "ttnn" / "unit_tests" / "operations"
-    if not tests_dir.exists():
-        return []
+    if search_dirs is None:
+        search_dirs = [
+            "tests/ttnn/unit_tests/operations",
+            "tests/ttnn/unit_tests/base_functionality",
+            "tests/tt_eager/python_api_testing/unit_testing",
+            "tests/tt_eager/python_api_testing/sweep_tests/pytests",
+        ]
 
     test_files = []
     operation_lower = operation_name.lower()
 
-    # Search for test files
-    for root, dirs, files in os.walk(tests_dir):
-        for file_name in files:
-            if file_name.startswith("test_") and file_name.endswith(".py"):
-                file_path = Path(root) / file_name
+    for search_dir in search_dirs:
+        tests_dir = repo_root / search_dir
+        if not tests_dir.exists():
+            continue
 
-                # Check if operation name appears in filename
-                if operation_lower in file_name.lower():
-                    test_files.append(file_path)
-                    continue
+        # Search for test files
+        for root, dirs, files in os.walk(tests_dir):
+            for file_name in files:
+                if file_name.startswith("test_") and file_name.endswith(".py"):
+                    file_path = Path(root) / file_name
 
-                # Check if operation name appears in file content
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        # Look for operation name in imports, function calls, etc.
-                        if (
-                            operation_lower in content.lower()
-                            or f"ttnn.{operation_name}" in content
-                            or f"ttnn.experimental.{operation_name}" in content
-                            or f"{operation_name}(" in content
-                        ):
-                            test_files.append(file_path)
-                except Exception:
-                    pass
+                    # Check if operation name appears in filename
+                    if operation_lower in file_name.lower():
+                        test_files.append(file_path)
+                        continue
+
+                    # Check if operation name appears in file content (for operations dir only)
+                    if "operations" in str(root) or "base_functionality" in str(root):
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                                # Look for operation name in imports, function calls, etc.
+                                if (
+                                    f"ttnn.{operation_name}" in content
+                                    or f"ttnn.experimental.{operation_name}" in content
+                                ):
+                                    test_files.append(file_path)
+                        except Exception:
+                            pass
 
     return test_files
+
+
+def categorize_test_files(test_files: List[Path], repo_root: Path, operation_name: str) -> Dict[str, List[Path]]:
+    """Categorize test files by type (primary, related, legacy)"""
+    categories = {
+        "primary": [],
+        "related": [],
+        "legacy": [],
+    }
+
+    operation_lower = operation_name.lower()
+
+    for test_file in test_files:
+        rel_path = str(test_file.relative_to(repo_root))
+        file_name_lower = test_file.name.lower()
+
+        if "tt_eager" in rel_path:
+            categories["legacy"].append(test_file)
+        # Check if operation name is in the filename (primary test)
+        elif operation_lower in file_name_lower:
+            categories["primary"].append(test_file)
+        else:
+            categories["related"].append(test_file)
+
+    return categories
 
 
 def get_test_directory(test_file: Path, repo_root: Path) -> str:
@@ -89,6 +141,15 @@ def get_test_directory(test_file: Path, repo_root: Path) -> str:
             return rel_path.parts[0]
     except ValueError:
         pass
+
+    # Check base_functionality
+    base_func_dir = repo_root / "tests" / "ttnn" / "unit_tests" / "base_functionality"
+    try:
+        test_file.relative_to(base_func_dir)
+        return "base_functionality"
+    except ValueError:
+        pass
+
     return "unknown"
 
 
@@ -187,6 +248,79 @@ def find_pipelines_for_test_directory(test_dir: str, repo_root: Path) -> List[Di
     return pipelines
 
 
+def generate_apc_config(test_dirs: Set[str]) -> Dict:
+    """Generate APC JSON configuration based on test directories"""
+    config = APC_JSON_TEMPLATE.copy()
+
+    # Map test directories to APC config options
+    ttnn_dirs = {
+        "data_movement",
+        "eltwise",
+        "conv",
+        "matmul",
+        "pool",
+        "fused",
+        "reduce",
+        "ccl",
+        "transformers",
+        "rand",
+        "debug",
+        "ssm",
+        "base_functionality",
+    }
+
+    if any(d in ttnn_dirs for d in test_dirs):
+        config["ttnn-unit-tests"] = True
+
+    return config
+
+
+def print_local_testing_commands(test_files: List[Path], repo_root: Path, categories: Dict[str, List[Path]]):
+    """Print local testing commands"""
+    print("\n" + "=" * 80)
+    print("Local Testing Commands")
+    print("=" * 80)
+
+    print("\n# Activate environment and run tests")
+    print("source python_env/bin/activate\n")
+
+    if categories["primary"]:
+        print("# Primary tests:")
+        for test_file in categories["primary"][:3]:  # Limit to first 3
+            rel_path = test_file.relative_to(repo_root)
+            print(f"pytest {rel_path} -v")
+
+    if categories["related"]:
+        print("\n# Related tests (use ttnn.{operation}):")
+        for test_file in categories["related"][:3]:
+            rel_path = test_file.relative_to(repo_root)
+            print(f"pytest {rel_path} -v")
+
+    if categories["legacy"]:
+        print("\n# Legacy tests:")
+        for test_file in categories["legacy"][:2]:
+            rel_path = test_file.relative_to(repo_root)
+            print(f"pytest {rel_path} -v")
+
+
+def print_apc_info(test_dirs: Set[str]):
+    """Print APC workflow information"""
+    print("\n" + "=" * 80)
+    print("CI Testing via APC (Automated Pre-Commit)")
+    print("=" * 80)
+
+    print(f"\nWorkflow URL: {APC_WORKFLOW_URL}")
+
+    config = generate_apc_config(test_dirs)
+    config_json = json.dumps(config, separators=(",", ":"))
+
+    print("\nJSON Configuration (copy-paste ready):")
+    print(config_json)
+
+    print("\nPretty-printed config:")
+    print(json.dumps(config, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Find unit tests for an operation and identify CI/CD pipelines")
     parser.add_argument("operation_name", help="Name of the operation (e.g., 'slice_write', 'conv2d', 'matmul')")
@@ -235,6 +369,9 @@ def main():
         print("3. Check if tests might be in a different location")
         return 1
 
+    # Categorize test files
+    categories = categorize_test_files(test_files, repo_root, args.operation_name)
+
     # Group test files by directory
     test_directories: Dict[str, List[Path]] = {}
     for test_file in test_files:
@@ -251,15 +388,31 @@ def main():
     print(f"{'='*80}\n")
 
     print("Test Files Found:")
-    for test_dir, files in test_directories.items():
-        print(f"\n  Test Directory: {test_dir}/")
-        for test_file in files:
+
+    if categories["primary"]:
+        print("\n  Primary Tests:")
+        for test_file in categories["primary"]:
             rel_path = test_file.relative_to(repo_root)
             print(f"    - {rel_path}")
 
+    if categories["related"]:
+        print(f"\n  Tests that use ttnn.{args.operation_name}:")
+        for test_file in categories["related"]:
+            rel_path = test_file.relative_to(repo_root)
+            print(f"    - {rel_path}")
+
+    if categories["legacy"]:
+        print("\n  Legacy Tests:")
+        for test_file in categories["legacy"]:
+            rel_path = test_file.relative_to(repo_root)
+            print(f"    - {rel_path}")
+
+    # Print local testing commands
+    print_local_testing_commands(test_files, repo_root, categories)
+
     # Find pipelines
     print(f"\n{'='*80}")
-    print("Pipelines That Run These Tests:")
+    print("Pipelines That Run These Tests (Post-Commit)")
     print(f"{'='*80}\n")
 
     all_pipelines = []
@@ -289,6 +442,9 @@ def main():
             print(f"   Command: {pipeline['command']}")
             print(f"   Test Directory: {pipeline['test_directory']}/")
             print()
+
+    # Print APC info
+    print_apc_info(set(test_directories.keys()))
 
     return 0
 
