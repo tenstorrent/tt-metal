@@ -52,7 +52,9 @@ target_sources(
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
         layernorm/device/layernorm_op.cpp
-        layernorm/device/multi_core/layernorm_op_multi_core.cpp
+        layernorm/device/layernorm_common.cpp
+        layernorm/device/layernorm_op_multi_core.cpp
+        layernorm/device/layernorm_op_multi_core_sharded.cpp
         layernorm/layernorm.cpp
         layernorm_distributed/device/layernorm_post_all_gather_op.cpp
         layernorm_distributed/device/layernorm_pre_all_gather_op.cpp

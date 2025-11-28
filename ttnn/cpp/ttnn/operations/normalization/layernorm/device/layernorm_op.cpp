@@ -11,6 +11,9 @@
 
 #include <optional>
 
+#include "ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.hpp"
+
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;

@@ -14,39 +14,6 @@
 #include "layernorm_types.hpp"
 
 namespace ttnn::operations::normalization {
-
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core(
-    const Tensor& a,
-    const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    Tensor& output,
-    LayerNormType norm_type,
-    float eps,
-    bool legacy_reduction,
-    bool legacy_rsqrt,
-    bool use_welford,
-    DeviceComputeKernelConfig compute_kernel_config);
-
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core_sharded(
-    const Tensor& a,
-    const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& stats,
-    Tensor& output,
-    LayerNormType norm_type,
-    DistributedLayerNormStage distributed_norm_stage,
-    float eps,
-    CoreCoord compute_grid_size,
-    uint32_t subblock_wt,
-    uint32_t block_ht,
-    uint32_t block_wt,
-    bool legacy_reduction,
-    bool legacy_rsqrt,
-    bool use_welford,
-    DeviceComputeKernelConfig compute_kernel_config);
-
 struct LayerNorm {
     LayerNormType norm_type;
     DistributedLayerNormStage distributed_norm_stage;
