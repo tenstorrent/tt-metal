@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
 #include <variant>
 #include "adaptive_pools.hpp"
 #include "adaptive_pool_utils.hpp"
@@ -43,6 +44,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         false,         // count_include_pad always false because we want to ignore padding values
         std::nullopt,  // divisor_override
         memory_config,
+        std::nullopt,
         applied_shard_scheme,
         compute_kernel_config,
         deallocate_input,
@@ -80,6 +82,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         {1, 1},  // dilation
         false,   // ceil_mode
         memory_config,
+        std::nullopt,
         applied_shard_scheme,
         deallocate_input,
         reallocate_output,
