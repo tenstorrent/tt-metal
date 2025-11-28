@@ -22,13 +22,13 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-    // When converting to float, the integers are treated as sign-magnitude.
-    // Convert inputs to positive values to avoid conversion problems, as the
+    // When converting to float, integers are treated as sign-magnitude.
+    // Convert inputs to positive values to avoid conversion problems; the
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::int32_to_float.
     a = sfpi::abs(a);
-    b = sfpi::abs(b);
+    b = sfpi::reinterpret<sfpi::vInt>(sfpi::abs(b));
 
     // Convert to floats, but check for the edge case mentioned above.
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
@@ -86,18 +86,9 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-
-    // Convert to integer, truncating the fractional part.
-    sfpi::vInt correction = 0;
-    exp = sfpi::exexp(correction_f);
-    v_if(exp >= 0) {
-        correction = sfpi::exman8(correction_f);
-        exp = exp - 23;
-        correction = correction << exp;
-    }
-    v_endif;
-
+    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
     correction_f = sfpi::int32_to_float(correction, 0);
+
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
@@ -109,7 +100,6 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt tmp = sfpi::exman9(low);
     tmp += sfpi::exman9(mid) << 11;
     tmp += sfpi::exman9(top) << 22;
-    // sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = tmp;
 
     v_if(r < 0) {
         q -= correction;
@@ -121,14 +111,13 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    v_if(r >= b) {
-        q += 1;
-        r -= b;
-    }
-    v_endif;
     v_if(r < 0) {
         q -= 1;
         r += b;
+    }
+    v_elseif(r >= b) {
+        q += 1;
+        r -= b;
     }
     v_endif;
 
