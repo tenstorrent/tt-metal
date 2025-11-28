@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <vector>
 #include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"

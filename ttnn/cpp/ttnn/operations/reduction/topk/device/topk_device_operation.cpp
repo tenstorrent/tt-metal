@@ -25,8 +25,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     ttnn::Shape input_shape = input_tensor.padded_shape();
     bool uint16_output = (input_shape[args.dim] < 65536);
 
-    bool multicore_supported = true;
-    multicore_supported &= (input_tensor.padded_shape()[args.dim] >= topk::constants::multi_core_min_width);
+    bool multicore_supported = (input_tensor.padded_shape()[args.dim] >= topk::constants::multi_core_min_width);
 
     // for now multicore does not support uint32 output, so if uint16 is not
     // supported, we default to single core

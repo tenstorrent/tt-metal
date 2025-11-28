@@ -4,13 +4,11 @@
 
 #include "ttnn/operations/reduction/topk/device/topk_program_factory.hpp"
 
-#include <iostream>
 #include <cmath>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
 using namespace tt::tt_metal;
