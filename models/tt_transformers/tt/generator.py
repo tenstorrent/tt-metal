@@ -287,19 +287,20 @@ class Generator:
                 
                 # Reorder tokens if empty_slots are not sequential (from vLLM)
                 # Create a reverse mapping: maps user_id -> position in tokens array
-                empty_slots_map = {slot: idx for idx, slot in enumerate(empty_slots)}
+                empty_slots_map = {slot: tok_idx for tok_idx, slot in enumerate(empty_slots)}
+                # The assertion above ensures all indices 0..batch_size-1 are in empty_slots, so this is safe
                 inverse_empty_slots = [empty_slots_map[i] for i in range(batch_size)]
                 prefill_ids = torch.cat(
                     [
                         torch.cat(
-                            [tokens[id : id + 1, : seq_lens[id]], torch.zeros(1, prefill_seq_len - seq_lens[id]).long()],
+                            [tokens[tok_idx : tok_idx + 1, : seq_lens[tok_idx]], torch.zeros(1, prefill_seq_len - seq_lens[tok_idx]).long()],
                             dim=-1,
                         )
-                        for id in inverse_empty_slots
+                        for tok_idx in inverse_empty_slots
                     ],
                     dim=-1,
                 )
-                last_token_idx = [last_token_idx[id] for id in inverse_empty_slots]
+                last_token_idx = [last_token_idx[tok_idx] for tok_idx in inverse_empty_slots]
                 
                 # Get page table for batched prefill
                 model_id = 0  # All users go to first model in batched mode
@@ -397,10 +398,12 @@ class Generator:
                 # Map batched output back to original empty_slots order
                 # After forward, logits are in user_id order [0, 1, 2, ...]
                 # We need to place them in output_logits according to empty_slots positions
+                assert logits.shape[0] == batch_size, f"Expected logits batch dimension {batch_size}, got {logits.shape[0]}"
                 for i, user_id in enumerate(empty_slots):
                     # Get logits for this user_id from the batched output
                     # inverse_empty_slots[user_id] tells us where user_id's tokens were in the input
                     # but after processing, logits are ordered by user_id, so we use user_id directly
+                    assert user_id < logits.shape[0], f"user_id {user_id} exceeds logits batch size {logits.shape[0]}"
                     user_last_token_idx = prompt_lens_list[i] - 1
                     user_logits = logits[user_id]  # Get user_id's output from batched result
                     output_logits[i] = self.model[model_id].process_output_prefill(
