@@ -471,7 +471,7 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
-        for i, layer in enumerate(self.layers):
+        for i, layer in list(enumerate(self.layers))[:2]:
             # No-op if callers already provide the right memory config
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
