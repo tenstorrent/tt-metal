@@ -526,7 +526,6 @@ target_sources(
         FILES ${ttnn_kernels}
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
-        cpp/tools/profiler/op_profiler.cpp
         cpp/ttnn/operations/compute_throttle_utils.cpp
         cpp/ttnn/operations/trace.cpp
         cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
