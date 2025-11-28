@@ -175,7 +175,7 @@ class TracedModelExecutor(Executor):
     def _run_model_for_compilation(self, host_input):
         l1_input_for_compile = self._prepare_l1_input(host_input)
         self._compilation_output_tensor = self.model(l1_input_for_compile)
-        ttnn.deallocate(l1_input_for_compile)
+        # ttnn.deallocate(l1_input_for_compile)
 
     def _capture_execution_trace(self, host_input):
         l1_input_for_trace, spec = self._prepare_input_for_trace_capture(host_input)
@@ -183,7 +183,7 @@ class TracedModelExecutor(Executor):
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
 
         self.output_tensor = self.model(l1_input_for_trace)
-        ttnn.deallocate(l1_input_for_trace)
+        # ttnn.deallocate(l1_input_for_trace)
 
         self._validate_trace_address_consistency(spec)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.cq_id)
@@ -202,7 +202,8 @@ class TracedModelExecutor(Executor):
         Validates that allocating a persistent L1 tensor will use the expected address
         that was captured during trace recording.
         """
-        self.l1_input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
+        # self.l1_input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
+        self.l1_input_tensor = self.dram_input_tensor  # HACK
         actual_addr = self.l1_input_tensor.buffer_address()
 
         if self.input_trace_addr != actual_addr:
@@ -223,11 +224,12 @@ class TracedModelExecutor(Executor):
         dram_mem_config = self.dram_input_tensor.memory_config()
         l1_is_sharded = self.l1_input_memory_config.is_sharded()
         if not dram_mem_config.is_sharded() and not l1_is_sharded:
-            self.cloned_dram_input_tensor = ttnn.clone(self.dram_input_tensor)
+            # self.cloned_dram_input_tensor = ttnn.clone(self.dram_input_tensor)
             # breakpoint()
             print(f"self.dram_input_tensor: {self.dram_input_tensor.buffer_address()}")
-            print(f"self.cloned_dram_input_tensor: {self.cloned_dram_input_tensor.buffer_address()}")
-            return self.cloned_dram_input_tensor
+            # print(f"self.cloned_dram_input_tensor: {self.cloned_dram_input_tensor.buffer_address()}")
+            # return self.cloned_dram_input_tensor
+            return self.dram_input_tensor  # HACK
         if not self.dram_input_tensor.memory_config().is_sharded():
             # return ttnn.clone(self.dram_input_tensor)
             return ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
@@ -260,10 +262,10 @@ class TracedModelExecutor(Executor):
         if not dram_mem_config.is_sharded() and not l1_is_sharded:
             print("Using cloned DRAM input tensor")
             print(f"self.dram_input_tensor.")
-            self.cloned_dram_input_tensor = ttnn.clone(self.dram_input_tensor)
-            self.l1_input_tensor = self.cloned_dram_input_tensor  # ← Konzistentno sa capture
+            # self.cloned_dram_input_tensor = ttnn.clone(self.dram_input_tensor)
+            self.l1_input_tensor = self.dram_input_tensor  # HACK
             print(f"self.l1_input_tensor: {self.l1_input_tensor.buffer_address()}")
-            print(f"self.cloned_dram_input_tensor: {self.cloned_dram_input_tensor.buffer_address()}")
+            # print(f"self.cloned_dram_input_tensor: {self.cloned_dram_input_tensor.buffer_address()}")
             print(f"self.dram_input_tensor: {self.dram_input_tensor.buffer_address()}")
         # Reuse persistent L1 tensor by converting in-place
         elif not dram_mem_config.is_sharded():
@@ -545,7 +547,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
         # If DRAM is interleaved, use to_memory_config, otherwise use reshard
         if not self.dram_input_tensor.memory_config().is_sharded():
-            l1_input_tensor = ttnn.to_memory_config(self.dram_input_tensor, self.l1_input_memory_config)
+            l1_input_tensor = self.dram_input_tensor  # HACK
         else:
             l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config)
         ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
