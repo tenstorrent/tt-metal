@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_config import DataFormat
@@ -26,21 +27,20 @@ mathop_mapping = {
 }
 
 
+@pytest.mark.quasar
 @parametrize(
-    test_name="reduce_test",
+    test_name="reduce_quasar_test",
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,
-        ]
+        ],
     ),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
 )
-def test_reduce(test_name, formats, dest_acc, reduce_dim, pool_type):
+def test_reduce_quasar(test_name, formats, dest_acc, reduce_dim, pool_type):
 
     input_dimensions = [32, 32]
 
