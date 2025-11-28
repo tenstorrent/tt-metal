@@ -715,6 +715,117 @@ The modern pattern uses these file names:
 
 ---
 
+## Execution Logging (Optional)
+
+If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file.
+
+### Log File Location
+`{operation_name}_scaffolder_execution_log.md` in the operation directory.
+
+### Log Format
+```markdown
+# Execution Log: {Operation Name} Scaffolding
+
+## Session Info
+- **Started**: {timestamp or "session start"}
+- **Operation**: {operation_name}
+- **Spec Path**: {path to spec file}
+- **Operation Path**: {target directory}
+
+## Execution Timeline
+
+### Step 1: {Description}
+**Action**: {What you did - e.g., "Read spec file", "Create pybind header"}
+**Command/Tool**: {Tool used and parameters}
+**Result**:
+```
+{Full output - especially important for builds}
+```
+**Decision**: {What you decided based on this result}
+
+### Step 2: {Description}
+...
+
+## Spec Extraction
+| Section | Extracted Value | Used For |
+|---------|-----------------|----------|
+| Parameters | {list} | operation_attributes_t struct |
+| Input Requirements | {list} | validate_on_program_cache_miss |
+| Output Shape | {formula} | compute_output_specs |
+| ... | ... | ... |
+
+## Files Created
+| File | Stage | Template Used | Customizations |
+|------|-------|---------------|----------------|
+| {path} | 1/2/3 | {which template} | {what was customized} |
+
+## Files Modified
+| File | Change | Reason |
+|------|--------|--------|
+| {path} | {what changed} | {why} |
+
+## Build Attempts
+### Build 1
+**Command**: `./build_metal.sh -b Debug`
+**Timestamp**: {when}
+**Duration**: {how long}
+**Result**: SUCCESS / FAILED
+**Output** (last 100 lines if failed):
+```
+{build output}
+```
+**Errors Found**: {list of errors if any}
+**Fix Applied**: {what was changed to fix}
+
+### Build 2 (if retry needed)
+...
+
+## Verification Checks
+| Check | Command | Result | Notes |
+|-------|---------|--------|-------|
+| File names correct | `ls -la device/` | PASS/FAIL | {details} |
+| No banned patterns | `grep -r "run_operation.hpp"` | PASS/FAIL | {details} |
+| Has required patterns | `grep -r "device_operation.hpp"` | PASS/FAIL | {details} |
+| Static functions | `grep "static void validate"` | PASS/FAIL | {details} |
+
+## Errors Encountered
+| Error | Stage | Context | Resolution |
+|-------|-------|---------|------------|
+| {error message} | 1/2/3 | {what caused it} | {how fixed} |
+
+## Key Decisions
+| Decision | Options | Choice | Rationale |
+|----------|---------|--------|-----------|
+| {topic} | {options} | {choice} | {why} |
+
+## Final Status
+- **Stage 1 (API Existence)**: PASS/FAIL
+- **Stage 2 (Validation)**: PASS/FAIL
+- **Stage 3 (Registration)**: PASS/FAIL
+- **Build Status**: PASS/FAIL
+- **Verification Checklist**: PASS/FAIL
+- **Output Files**: {list all created files}
+- **Issues**: {any unresolved issues}
+```
+
+### What to Log
+1. **Every file created** - path, which template, what customizations
+2. **Every file modified** - path, what changed, why
+3. **Every build attempt** - full command, output (especially errors), result
+4. **Every build error** - exact error message, file/line if available, fix applied
+5. **All verification checks** - command run, result, any issues found
+6. **Every decision point** - what options existed, what was chosen, why
+
+### Logging Guidelines
+- Log in real-time as you work, not retrospectively
+- **ALWAYS capture full build output** for failed builds (this is critical for debugging)
+- Include exact error messages, not paraphrases
+- Document the fix for each error before moving on
+- If a build succeeds after multiple attempts, document what finally worked
+- Be explicit about which stage each action belongs to
+
+---
+
 ## 🔍 MANDATORY VERIFICATION CHECKLIST
 
 **BEFORE reporting completion, verify ALL of the following:**
