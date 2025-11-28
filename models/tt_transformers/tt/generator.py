@@ -286,6 +286,8 @@ class Generator:
                 seq_lens = prompt_lens_list
                 
                 # Reorder tokens if empty_slots are not sequential (from vLLM)
+                # We need to reorder input tokens to be in user_id order [0, 1, 2, ...]
+                # because the model will output results in that order
                 # Create a reverse mapping: maps user_id -> position in tokens array
                 empty_slots_map = {slot: tok_idx for tok_idx, slot in enumerate(empty_slots)}
                 # The assertion above ensures all indices 0..batch_size-1 are in empty_slots, so this is safe
@@ -396,13 +398,14 @@ class Generator:
             # Handle batched prefill output
             if use_batched_prefill:
                 # Map batched output back to original empty_slots order
-                # After forward, logits are in user_id order [0, 1, 2, ...]
+                # After forward pass, logits are ordered by user_id [0, 1, 2, ...] 
                 # We need to place them in output_logits according to empty_slots positions
+                # Example: if empty_slots = [2, 0, 1], then:
+                #   output_logits[0] = logits[2] (user 2's output goes to position 0)
+                #   output_logits[1] = logits[0] (user 0's output goes to position 1)
+                #   output_logits[2] = logits[1] (user 1's output goes to position 2)
                 assert logits.shape[0] == batch_size, f"Expected logits batch dimension {batch_size}, got {logits.shape[0]}"
                 for i, user_id in enumerate(empty_slots):
-                    # Get logits for this user_id from the batched output
-                    # inverse_empty_slots[user_id] tells us where user_id's tokens were in the input
-                    # but after processing, logits are ordered by user_id, so we use user_id directly
                     assert user_id < logits.shape[0], f"user_id {user_id} exceeds logits batch size {logits.shape[0]}"
                     user_last_token_idx = prompt_lens_list[i] - 1
                     user_logits = logits[user_id]  # Get user_id's output from batched result
@@ -521,13 +524,21 @@ class Generator:
                 **kwargs,
             )
 
+            # Calculate get_last_token parameter (round down to nearest multiple of 32)
+            if isinstance(last_token_idx, list):
+                # Batched prefill: list of token indices
+                get_last_token_param = [(idx // 32) * 32 for idx in last_token_idx]
+            else:
+                # Single user prefill: scalar token index
+                get_last_token_param = (last_token_idx // 32) * 32
+
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats_global=rot_mats_global_prefill,
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32 if not isinstance(last_token_idx, list) else [(idx // 32) * 32 for idx in last_token_idx],
+                get_last_token=get_last_token_param,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )

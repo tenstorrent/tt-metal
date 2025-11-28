@@ -670,6 +670,8 @@ class Attention(LightweightModule):
         batch_size=1,
     ):
         # Handle batched prefill: reshape input when batch_size > 1
+        # Expected input shape: [batch_size, 1, seq_len_per_user, hidden_dim]
+        # After reshape: [1, 1, batch_size * seq_len_per_user, hidden_dim]
         if batch_size > 1:
             assert x_11SH.ndim == 4, f"Expected 4D tensor, got {x_11SH.ndim}D tensor"
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
