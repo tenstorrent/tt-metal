@@ -274,8 +274,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
         } else {
             // Generate fabric connection args directly using passed parameters
             const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
+            TT_FATAL(
+                neighbor_node_id.has_value(),
+                "When generating connection args, neighbor not found for {} in direction: {}",
+                fabric_node_id,
+                key.direction);
             append_fabric_connection_rt_args(
-                fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                fabric_node_id, neighbor_node_id.value(), key.link_idx, program_handle, core, rt_args);
         }
     }
 
@@ -712,10 +717,15 @@ void TestDevice::create_mux_kernels() {
         const auto& connection_key = mux_worker.connection_key_;
 
         const auto dst_node_id = route_manager_->get_neighbor_node_id(fabric_node_id_, connection_key.direction);
+        TT_FATAL(
+            dst_node_id.has_value(),
+            "When creating mux kernel, neighbor not found for {} in direction: {}",
+            fabric_node_id_,
+            connection_key.direction);
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
-            fabric_node_id_, dst_node_id, connection_key.link_idx, program_handle_, mux_core);
+            fabric_node_id_, dst_node_id.value(), connection_key.link_idx, program_handle_, mux_core);
 
         mux_worker.create_kernel(
             coord_,

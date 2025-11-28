@@ -1110,10 +1110,12 @@ public:
         return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
     }
 
-    FabricNodeId get_neighbor_node_id_soft_exit(
+    std::optional<FabricNodeId> get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
-        // This function is used to get the neighbor node ID for a given source node ID and direction, returning the
-        // source node ID if no neighbor is found.
+        // This function is used to get the neighbor node ID for a given source node ID and direction, returning nullopt
+        // if no neighbor is found.
+        std::optional<FabricNodeId> neighbor_node_id = std::nullopt;
+
         const auto& neighbors =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
 
@@ -1124,24 +1126,22 @@ public:
             src_node_id,
             direction);
 
-        // If no neighbor chips are found, return the original node ID as the neighbor.
-        return (neighbors.empty() ? src_node_id : FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]));
-    }
+        if (!neighbors.empty()) {
+            neighbor_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+        }
 
-    FabricNodeId get_neighbor_node_id(
-        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
-        // This function is used to get the neighbor node ID for a given source node ID and direction, throwing an error
-        // if no neighbor is found.
-        FabricNodeId neighbor_node_id = get_neighbor_node_id_soft_exit(src_node_id, direction);
-        TT_FATAL(
-            neighbor_node_id != src_node_id, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
         return neighbor_node_id;
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
         const auto& neighbor_node_id = get_neighbor_node_id(src_node_id, direction);
-        return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id, direction);
+        TT_FATAL(
+            neighbor_node_id.has_value(),
+            "No neighbor chips found for forwarding links in direction: {} from {}",
+            direction,
+            src_node_id);
+        return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id.value(), direction);
     }
 
     /// Helper to compute per‐direction hops and the global sync value
@@ -1492,9 +1492,9 @@ public:
         std::unordered_map<RoutingDirection, uint32_t> hops_to_nearest_neighbors;
         for (const auto& direction :
              {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
-            const FabricNodeId neighbor_node_id = get_neighbor_node_id_soft_exit(src_device, direction);
+            const std::optional<FabricNodeId> neighbor_node_id = get_neighbor_node_id(src_device, direction);
             // If there is no neighbor, function will return src_device
-            if (neighbor_node_id != src_device) {
+            if (neighbor_node_id.has_value()) {
                 hops_to_nearest_neighbors[direction] = 1;
             }
         }

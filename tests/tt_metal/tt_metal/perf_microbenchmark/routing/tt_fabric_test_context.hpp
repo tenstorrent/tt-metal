@@ -981,7 +981,11 @@ private:
                 outgoing_traffic_[current_node][next_direction]++;
 
                 // Move to next node in this direction
-                current_node = fixture_->get_neighbor_node_id(current_node, next_direction);
+                const std::optional<FabricNodeId> next_node =
+                    fixture_->get_neighbor_node_id(current_node, next_direction);
+                TT_FATAL(
+                    next_node.has_value(), "Next node not found for {} in direction: {}", current_node, next_direction);
+                current_node = next_node.value();
             }
 
             // Mark this direction as completed
