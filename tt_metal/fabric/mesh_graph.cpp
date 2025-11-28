@@ -774,6 +774,25 @@ bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
     return it->second;
 }
 
+/**
+ * Generate all possible mesh shapes that can be formed from a given number of chips.
+ *
+ * The function considers all pairs of positive integers (x, y) such that x * y = N,
+ * where N ranges from total_number_of_chips down to 1. Each pair represents a possible
+ * mesh shape (rows, columns). To avoid duplicates, shapes are normalized so that the
+ * larger dimension is always second (i.e., MeshShape(smaller_dim, larger_dim)).
+ *
+ * Filtering rules:
+ *   - Only shapes where both dimensions are even or 1 are considered (except for 1D shapes).
+ *     Odd dimensions (other than 1) are skipped to ensure compatibility with hardware constraints.
+ *   - 1D shapes (where one dimension is 1) are collected separately and appended at the end
+ *     of the result, so that 2D shapes are prioritized.
+ *   - Duplicate shapes are avoided.
+ *
+ * @param total_number_of_chips The total number of chips to partition into mesh shapes.
+ * @return A vector of possible MeshShape objects, with 2D shapes first (sorted by decreasing chip count),
+ *         followed by 1D shapes. Each shape appears only once.
+ */
 std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_number_of_chips) {
     // Come up with all possible mesh shapes that can be formed from the given number of chips
     // Try shapes for total_number_of_chips first, then total_number_of_chips - 1, etc., down to 1
