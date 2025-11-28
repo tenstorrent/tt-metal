@@ -14,6 +14,7 @@
 #include "ttnn/graph/levelized_graph.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -722,8 +723,126 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
         levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
     // At level 2, at least one subtract operation should have internals
-    auto subtract_ab_l2 = levelized_graph_2.get_vertex(2);
+    const auto& subtract_ab_l2 = levelized_graph_2.get_vertex(2);
     EXPECT_FALSE(subtract_ab_l2.internals.empty());
+}
+
+TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
+    tt::tt_metal::IDevice* device = device_;
+
+    const auto tensor_spec = ttnn::TensorSpec(
+        ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto tensor_a = tt::tt_metal::create_device_tensor(tensor_spec, device);
+    const auto tensor_b = tt::tt_metal::create_device_tensor(tensor_spec, device);
+
+    auto operation = [](const auto& a, const auto& b) {
+        const auto output_tensor_1 = ttnn::add(a, a);
+        const auto output_tensor_2 = ttnn::add(b, b);
+        const auto output_tensor_3 = ttnn::subtract(output_tensor_1, output_tensor_2);
+        const auto output_tensor_4 = ttnn::subtract(output_tensor_2, output_tensor_1);
+    };
+
+    nlohmann::json ref_json_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        operation(tensor_a, tensor_b);
+        ref_json_trace = capture.end_graph_capture();
+    }
+
+    // Test level 1
+    ttnn::graph::LevelizedGraph levelized_graph(ref_json_trace, 1);
+
+    // Should have 6 vertices: 2 input tensors, 2 adds, 2 subtracts
+    EXPECT_EQ(levelized_graph.size(), 6);
+    EXPECT_TRUE(std::ranges::all_of(
+        levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
+
+    // Get vertices
+    const auto& tensor_a_vertex = levelized_graph.get_vertex(0);
+    const auto& tensor_b_vertex = levelized_graph.get_vertex(1);
+    const auto& add_aa = levelized_graph.get_vertex(2);       // add(a, a)
+    const auto& add_bb = levelized_graph.get_vertex(3);       // add(b, b)
+    const auto& subtract_12 = levelized_graph.get_vertex(4);  // subtract(output_tensor_1, output_tensor_2)
+    const auto& subtract_21 = levelized_graph.get_vertex(5);  // subtract(output_tensor_2, output_tensor_1)
+
+    // Verify tensor names
+    EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
+    EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
+    EXPECT_EQ(add_aa.name, "ttnn::add");
+    EXPECT_EQ(add_bb.name, "ttnn::add");
+    EXPECT_EQ(subtract_12.name, "ttnn::subtract");
+    EXPECT_EQ(subtract_21.name, "ttnn::subtract");
+
+    // Verify input tensors have no incoming edges (they are runtime inputs)
+    EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
+    EXPECT_TRUE(tensor_b_vertex.in_edges.empty());
+
+    // Verify first add(a, a) has correct inputs
+    EXPECT_EQ(add_aa.in_edges.size(), 2);
+    EXPECT_EQ(add_aa.in_edges[0], tensor_a_vertex.id);
+    EXPECT_EQ(add_aa.in_edges[1], tensor_a_vertex.id);
+
+    // Verify second add(b, b) has correct inputs
+    EXPECT_EQ(add_bb.in_edges.size(), 2);
+    EXPECT_EQ(add_bb.in_edges[0], tensor_b_vertex.id);
+    EXPECT_EQ(add_bb.in_edges[1], tensor_b_vertex.id);
+
+    // KEY TEST: Verify first subtract(output_tensor_1, output_tensor_2) has correct argument order
+    // This tests that intermediate tensors maintain their order
+    EXPECT_EQ(subtract_12.in_edges.size(), 2);
+    EXPECT_EQ(subtract_12.in_edges[0], add_aa.id);  // First arg: output_tensor_1 = add(a, a)
+    EXPECT_EQ(subtract_12.in_edges[1], add_bb.id);  // Second arg: output_tensor_2 = add(b, b)
+
+    // KEY TEST: Verify second subtract(output_tensor_2, output_tensor_1) has REVERSED argument order
+    // This is the critical test - argument order must be preserved for intermediate tensors
+    EXPECT_EQ(subtract_21.in_edges.size(), 2);
+    EXPECT_EQ(subtract_21.in_edges[0], add_bb.id);  // First arg: output_tensor_2 = add(b, b)
+    EXPECT_EQ(subtract_21.in_edges[1], add_aa.id);  // Second arg: output_tensor_1 = add(a, a)
+
+    // Verify the two subtract operations have different input orders
+    EXPECT_NE(subtract_12.in_edges, subtract_21.in_edges);
+
+    // Verify that subtract(out1, out2) has reversed order compared to subtract(out2, out1)
+    EXPECT_EQ(subtract_12.in_edges[0], subtract_21.in_edges[1]);
+    EXPECT_EQ(subtract_12.in_edges[1], subtract_21.in_edges[0]);
+
+    // Verify output connections
+    EXPECT_EQ(tensor_a_vertex.out_edges.size(), 1);
+    EXPECT_EQ(tensor_a_vertex.out_edges[0], add_aa.id);
+
+    EXPECT_EQ(tensor_b_vertex.out_edges.size(), 1);
+    EXPECT_EQ(tensor_b_vertex.out_edges[0], add_bb.id);
+
+    // Each add operation feeds into both subtract operations
+    EXPECT_EQ(add_aa.out_edges.size(), 2);
+    EXPECT_TRUE(std::ranges::find(add_aa.out_edges, subtract_12.id) != add_aa.out_edges.end());
+    EXPECT_TRUE(std::ranges::find(add_aa.out_edges, subtract_21.id) != add_aa.out_edges.end());
+
+    EXPECT_EQ(add_bb.out_edges.size(), 2);
+    EXPECT_TRUE(std::ranges::find(add_bb.out_edges, subtract_12.id) != add_bb.out_edges.end());
+    EXPECT_TRUE(std::ranges::find(add_bb.out_edges, subtract_21.id) != add_bb.out_edges.end());
+
+    // Both subtract operations are terminal (no outgoing edges)
+    EXPECT_TRUE(subtract_12.out_edges.empty());
+    EXPECT_TRUE(subtract_21.out_edges.empty());
+
+    // Test level 2
+    auto levelized_graph_2 = ttnn::graph::LevelizedGraph(ref_json_trace, 2);
+    EXPECT_TRUE(std::ranges::all_of(
+        levelized_graph_2.vertices(), [&](const auto& vertex) { return vertex.stacking_level <= 2; }));
+    EXPECT_TRUE(std::ranges::all_of(
+        levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
+
+    // At level 2, add and subtract operations should have internals
+    const auto& add_aa_l2 = levelized_graph_2.get_vertex(2);
+    EXPECT_FALSE(add_aa_l2.internals.empty());
+
+    const auto& subtract_12_l2 = levelized_graph_2.get_vertex(4);
+    EXPECT_FALSE(subtract_12_l2.internals.empty());
 }
 
 TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
@@ -776,7 +895,7 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
         levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
     // At level 2, add should have internals (binary_ng)
-    auto add_aa_l2 = levelized_graph_2.get_vertex(1);
+    const auto& add_aa_l2 = levelized_graph_2.get_vertex(1);
     EXPECT_FALSE(add_aa_l2.internals.empty());
     EXPECT_EQ(add_aa_l2.internals.size(), 1);
 }
@@ -857,7 +976,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
         levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
     // At level 2, at least one addcmul operation should have internals
-    auto addcmul_abc_l2 = levelized_graph_2.get_vertex(3);
+    const auto& addcmul_abc_l2 = levelized_graph_2.get_vertex(3);
     EXPECT_FALSE(addcmul_abc_l2.internals.empty());
 }
 
@@ -932,7 +1051,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
         levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
     // At level 2, at least one addcmul operation should have internals
-    auto addcmul_aba_l2 = levelized_graph_2.get_vertex(2);
+    const auto& addcmul_aba_l2 = levelized_graph_2.get_vertex(2);
     EXPECT_FALSE(addcmul_aba_l2.internals.empty());
 }
 
@@ -1016,7 +1135,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
         levelized_graph_2.get_vertices_at_level(2), [&](const auto& vertex) { return vertex.internals.empty(); }));
 
     // At level 2, at least one matmul operation should have internals
-    auto matmul_ab_l2 = levelized_graph_2.get_vertex(2);
+    const auto& matmul_ab_l2 = levelized_graph_2.get_vertex(2);
     EXPECT_FALSE(matmul_ab_l2.internals.empty());
 }
 
