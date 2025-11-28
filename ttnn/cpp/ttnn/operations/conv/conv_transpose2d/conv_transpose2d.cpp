@@ -78,10 +78,9 @@ Result conv_transpose2d_L1(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height = ((input_height - 1) * stride[0]) - (padding[0] + padding[1]) +
-                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
-    uint32_t output_width = ((input_width - 1) * stride[1]) - (padding[2] + padding[3]) +
-                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
 
     // Dimensions of Input to Conv u_op
     uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
@@ -422,10 +421,9 @@ Result conv_transpose2d_DRAM(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height = ((input_height - 1) * stride[0]) - (padding_n4[0] + padding_n4[1]) +
-                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
-    uint32_t output_width = ((input_width - 1) * stride[1]) - (padding_n4[2] + padding_n4[3]) +
-                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
 
     // Dimensions of Input to Conv u_op
     uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
