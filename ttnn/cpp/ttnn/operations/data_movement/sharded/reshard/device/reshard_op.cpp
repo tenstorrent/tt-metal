@@ -59,9 +59,9 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
             out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             if (out_mem_config.buffer_type() == BufferType::L1) {
-                return program::ReshardSameWidthFactory</*is_reader*/ true>{};
+                return program::ReshardSameWidthFactory</*local_is_output*/ true>{};
             } else {
-                return program::ReshardSameWidthFactory</*is_reader*/ false>{};
+                return program::ReshardSameWidthFactory</*local_is_output*/ false>{};
             }
         } else if (
             input_tensor.layout() == Layout::ROW_MAJOR &&
@@ -81,9 +81,9 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
                 if (has_padding) {
                     return program::ReshardGenericFactory{};
                 }
-                return program::ReshardSameHeightFactory</*is_reader*/ true>{};
+                return program::ReshardSameHeightFactory</*local_is_output*/ true>{};
             } else {
-                return program::ReshardSameHeightFactory</*is_reader*/ false>{};
+                return program::ReshardSameHeightFactory</*local_is_output*/ false>{};
             }
         } else {
             return program::ReshardGenericFactory{};
@@ -107,13 +107,13 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
         }
         if (input_buffer_type == BufferType::L1 && output_buffer_type == BufferType::L1 &&
             input_page_size != output_page_size) {
-            return program::NdReshardCopyLocalShardFactory</*is_reader*/ true>{};
+            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
         }
 
         if (input_buffer_type == BufferType::DRAM) {
-            return program::NdReshardCopyLocalShardFactory</*is_reader*/ false>{};
+            return program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>{};
         }
-        return program::NdReshardCopyLocalShardFactory</*is_reader*/ true>{};
+        return program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>{};
     }
 }
 

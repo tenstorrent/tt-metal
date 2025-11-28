@@ -22,14 +22,14 @@ struct ReshardDeviceOperation {
     using spec_return_value_t = reshard::spec_return_value_t;
     using tensor_return_value_t = reshard::tensor_return_value_t;
     using program_factory_t = std::variant<
-        program::ReshardSameWidthFactory</*is_reader*/ true>,
-        program::ReshardSameWidthFactory</*is_reader*/ false>,
-        program::ReshardSameHeightFactory</*is_reader*/ true>,
-        program::ReshardSameHeightFactory</*is_reader*/ false>,
+        program::ReshardSameWidthFactory</*local_is_output*/ true>,
+        program::ReshardSameWidthFactory</*local_is_output*/ false>,
+        program::ReshardSameHeightFactory</*local_is_output*/ true>,
+        program::ReshardSameHeightFactory</*local_is_output*/ false>,
         program::ReshardGenericFactory,
         program::NdReshardCopyPagesFactory,
-        program::NdReshardCopyLocalShardFactory</*is_reader*/ true>,
-        program::NdReshardCopyLocalShardFactory</*is_reader*/ false>>;
+        program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
+        program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

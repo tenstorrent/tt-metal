@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement::program {
 
 // Factory for L1<->DRAM or L1->L1 nd reshard (read into local pages in L1)
-template <bool is_reader>
+template <bool local_is_input>
 struct NdReshardCopyLocalShardFactory {
     struct NdReshardCopyLocalShardSharedVariables {
         tt::tt_metal::KernelHandle brisc_kernel_id{};

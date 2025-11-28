@@ -14,7 +14,7 @@ struct ReshardGenericFactory {
         tt::tt_metal::KernelHandle kernel_id_0{};
         tt::tt_metal::KernelHandle kernel_id_1{};
         tt::tt_metal::CBHandle cb_dst0{};
-        CoreRangeSet grid;
+        CoreCoord grid;
         std::vector<CoreCoord> cores;
     };
 

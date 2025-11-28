@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement::program {
 
 // WIDTH_SHARDED -> WIDTH_SHARDED reshard
-template <bool is_reader>
+template <bool local_is_output>
 struct ReshardSameHeightFactory {
     struct ReshardSameHeightSharedVariables {
         tt::tt_metal::KernelHandle kernel_id_0{};

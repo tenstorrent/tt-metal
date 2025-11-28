@@ -13,15 +13,15 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-template <bool is_reader>
-ReshardSameHeightFactory<is_reader>::cached_program_t ReshardSameHeightFactory<is_reader>::create(
+template <bool local_is_output>
+ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFactory<local_is_output>::create(
     const reshard::operation_attributes_t& operation_attributes,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& local_tensor = is_reader ? output : input;
-    const auto& remote_tensor = is_reader ? input : output;
+    const auto& local_tensor = local_is_output ? output : input;
+    const auto& remote_tensor = local_is_output ? input : output;
     const auto local_shard_spec = local_tensor.shard_spec().value();
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
@@ -52,7 +52,7 @@ ReshardSameHeightFactory<is_reader>::cached_program_t ReshardSameHeightFactory<i
     auto cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     const std::string kernel_name =
-        is_reader
+        local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
 

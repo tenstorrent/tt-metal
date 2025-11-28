@@ -14,15 +14,15 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-template <bool is_reader>
-ReshardSameWidthFactory<is_reader>::cached_program_t ReshardSameWidthFactory<is_reader>::create(
+template <bool local_is_output>
+ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFactory<local_is_output>::create(
     const reshard::operation_attributes_t& operation_attributes,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& local_tensor = is_reader ? output : input;
-    const auto& remote_tensor = is_reader ? input : output;
+    const auto& local_tensor = local_is_output ? output : input;
+    const auto& remote_tensor = local_is_output ? input : output;
 
     auto device = input.device();
     tt::tt_metal::Program program{};
@@ -60,7 +60,7 @@ ReshardSameWidthFactory<is_reader>::cached_program_t ReshardSameWidthFactory<is_
     }
     const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
     const std::string kernel_name =
-        is_reader
+        local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 

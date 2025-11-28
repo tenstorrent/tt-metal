@@ -11,8 +11,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 
-template <bool is_reader>
-NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalShardFactory<is_reader>::create(
+template <bool local_is_input>
+NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLocalShardFactory<local_is_input>::create(
     const reshard::operation_attributes_t& operation_attributes,
     const reshard::tensor_args_t& tensor_args,
     reshard::tensor_return_value_t& tensor_return_value) {
@@ -26,9 +26,10 @@ NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalSh
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     // Choose buffer and aligned page size based on is_reader flag
-    auto local_buffer = is_reader ? input_buffer : output_buffer;
+    auto local_buffer = local_is_input ? input_buffer : output_buffer;
     auto aligned_page_size = local_buffer->aligned_page_size();
-    auto other_aligned_page_size = is_reader ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
+    auto other_aligned_page_size =
+        local_is_input ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
 
     // Create Program + Grid
     auto program = CreateProgram();
@@ -82,7 +83,7 @@ NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalSh
     output_accessor_args.append_to(compile_time_args_reader);
     compile_time_args_reader.push_back(aligned_page_size);
     compile_time_args_reader.push_back(other_aligned_page_size);
-    compile_time_args_reader.push_back(is_reader);
+    compile_time_args_reader.push_back(local_is_input);
     compile_time_args_reader.push_back(logical_width);
     compile_time_args_reader.push_back(source_width);
     compile_time_args_reader.push_back(destination_width);
@@ -128,7 +129,7 @@ NdReshardCopyLocalShardFactory<is_reader>::cached_program_t NdReshardCopyLocalSh
     {
         const auto& input = tensor_args.input;
         const auto& output = tensor_return_value;
-        auto local_buffer = is_reader ? input.buffer() : output.buffer();
+        auto local_buffer = local_is_input ? input.buffer() : output.buffer();
         auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
