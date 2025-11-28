@@ -124,8 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", mesh_coord);
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
+    // TODO(p1-0tr): does not seem to be used in all_gather_matmul_async_multi_core_with_workers anyway
+    IDevice* target_device = input_tensors[0].device();
 
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
         input_tensors[0], mesh_coord, this->all_gather_async_struct.cluster_axis);
