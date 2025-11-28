@@ -28,7 +28,7 @@ sfpi_inline void calculate_div_int32_body(
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::int32_to_float.
     a = sfpi::abs(a);
-    b = sfpi::reinterpret<sfpi::vInt>(sfpi::abs(b));
+    b = sfpi::abs(b);
 
     // Convert to floats, but check for the edge case mentioned above.
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
@@ -48,7 +48,7 @@ sfpi_inline void calculate_div_int32_body(
     // Convert from float to int32, truncating any fractional parts.  No sign
     // check is necessary as q will always be positive, due to using abs(a) and
     // abs(b).
-    sfpi::vInt q = 0;
+    sfpi::vUInt q = 0;
     sfpi::vInt exp = sfpi::exexp(q_f);
     v_if(exp >= 0) {
         q = sfpi::exman8(q_f);
@@ -59,24 +59,24 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  Note: we only care about the top ~23 bits.
-    // Keep the top 22 bits of 31-bit q: q_hi = q>>9
-    // Now q2 = q>>20, q1 = q>>9
-    // And so qb = (q2<<20 + q1<<9) * (b2<<22 + b1<<11 + b0)
-    //           = (q2<<20 * b0) + (q1<<9 * b1<<11) + (q1<<9 * b0)
+    // Keep the top 22 bits of 32-bit q: q_hi = q>>10
+    // Now q2 = q>>21, q1 = q>>10
+    // And so qb = (q2<<21 + q1<<10) * (b2<<22 + b1<<11 + b0)
+    //           = (q2<<21 * b0) + (q1<<10 * b1<<11) + (q1<<10 * b0)
 
-    q = q >> 9;
+    q = q >> 10;
     sfpi::vFloat q1 = int32_to_float(q & sfpi::vConstIntPrgm2, 0);
     sfpi::vFloat q2 = int32_to_float(q >> 11, 0);
     sfpi::vFloat b1 = int32_to_float((b >> 11) & sfpi::vConstIntPrgm2, 0);
     sfpi::vFloat b0 = int32_to_float(b & sfpi::vConstIntPrgm2, 0);
-    q = q << 9;
+    q = q << 10;
 
     sfpi::vFloat lo = q1 * b0 + sfpi::vConstFloatPrgm1;
     sfpi::vFloat hi = q2 * b0 + sfpi::vConstFloatPrgm1;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman9(hi) << 20;
-    qb += sfpi::exman9(lo) << 9;
+    sfpi::vInt qb = sfpi::exman9(lo) << 10;
+    qb += sfpi::exman9(hi) << 21;
 
     // Compute remainder.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -121,26 +121,28 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
+    sfpi::vInt result = q;
+
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vInt sign = a ^ b;
     // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
-        q = -q;
+        result = -result;
 
         // Optionally, if we want "floor" rounding, check for a remainder
         // and subtract one for negative numbers, to round towards negative
         // infinity.
 
         if constexpr (floor) {
-            v_if(r != 0) { q -= 1; }
+            v_if(r != 0) { result -= 1; }
             v_endif;
         }
     }
     v_endif;
 
-    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = q;
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
