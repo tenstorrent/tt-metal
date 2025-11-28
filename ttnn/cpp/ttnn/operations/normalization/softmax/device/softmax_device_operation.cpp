@@ -215,6 +215,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             !attributes.is_scale_causal_mask_hw_dims_softmax,
                             "Scale causal mask HW dims softmax not supported in default program config");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                        // Ensure input tensor is sharded when using sharded program config
+                        TT_FATAL(
+                            tensors_args.input_tensor.is_sharded() &&
+                                tensors_args.input_tensor.shard_spec().has_value(),
+                            "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
                         const auto& shape = tensors_args.input_tensor.padded_shape();
                         uint32_t M = tensors_args.input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
