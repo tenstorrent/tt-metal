@@ -64,13 +64,13 @@ class LogProbsCalculator:
         self.vocab_size = vocab_size
         self.mesh_device = mesh_device
         self.enable_log_probs = False  # default to False
-
+        self.cluster_shape = list(mesh_device.shape)
         # Create mask for each user on each chip.
         batch_size = 32
 
         num_devices = self.mesh_device.get_num_devices()
         # TODO: Test this for 6U Galaxy
-        # Enforce working on 8 devices instead of all 32 since logits are sharded across 8 devices
+        # Enforce working on 8 devices instead of all 32 since logits are sharded across 8 devices in column on Galaxy
         num_devices = 8 if num_devices == 32 else num_devices
 
         # Create mask tensor with shape (num_devices, batch_size)
@@ -78,7 +78,7 @@ class LogProbsCalculator:
         mask_tensor = torch.arange(num_devices).unsqueeze(1).expand(num_devices, batch_size)
 
         if self.mesh_device.get_num_devices() == 32:
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=self.cluster_shape)
+            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.cluster_shape)
         elif self.mesh_device.get_num_devices() == 8:
             mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         else:
@@ -154,9 +154,6 @@ class LogProbsCalculator:
         """
         Prepare global idx tensor with correct values on all devices.
         """
-        if self.mesh_device.get_num_devices() == 32:
-            # TODO: Implement method for Llama 3.70b Galaxy with sub_core_grid support for all the ops
-            return None
 
         if not self.enable_log_probs:
             return logits_tensor
@@ -210,9 +207,6 @@ class LogProbsCalculator:
         """
         Calculate log-probs for a given logits tensor.
         """
-        if self.mesh_device.get_num_devices() == 32:
-            # TODO: Currently not implemented for 32 devices due sub_core_grid not supported for all the ops
-            return self.output_tensor
 
         if not self.enable_log_probs:
             return self.output_tensor

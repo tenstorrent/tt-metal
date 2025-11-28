@@ -229,6 +229,7 @@ def create_tt_model(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "log_probs": [True] * 32,
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
@@ -807,7 +808,8 @@ def test_demo_text(
         temperature = sampling_params["temperature"]
         top_k = sampling_params.get("top_k", 32)
         top_p = sampling_params["top_p"]
-        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
+        log_probs = sampling_params["log_probs"]
+        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, log_probs=log_probs)
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
