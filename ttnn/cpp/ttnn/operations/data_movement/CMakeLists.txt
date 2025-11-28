@@ -59,6 +59,7 @@ target_sources(
             reshape_view/reshape_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/reshard/device/reshard_device_operation.hpp
+            sharded/reshard/device/reshard_device_operation_types.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
