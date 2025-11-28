@@ -667,7 +667,12 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
+        # Handle batched prefill: reshape input when batch_size > 1
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+            
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -900,6 +905,10 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
 
+        # Handle batched prefill: reshape output back when batch_size > 1
+        if batch_size > 1:
+            output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len // batch_size, -1])
+
         return output_11SH
 
     def forward(
@@ -913,6 +922,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -923,6 +933,7 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
