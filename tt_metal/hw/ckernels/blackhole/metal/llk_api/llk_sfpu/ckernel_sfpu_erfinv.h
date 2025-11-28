@@ -19,6 +19,8 @@ sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out;
     v_if(val != 0.0f) {
+        // Magic number 0x5f37 is used as an approximation constant in the fast inverse square root algorithm.
+        // See: https://en.wikipedia.org/wiki/Fast_inverse_square_root
         sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::s2vFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
         for (int r = 0; r < 2; r++) {
@@ -35,7 +37,7 @@ template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     sfpi::vFloat log_value = in * in;
     log_value = 1 - log_value;
-    log_value = calculate_log_body<false, false, true>(log_value, 0);
+    log_value = calculate_log_body<false, false, true>(log_value, 0);  // use fp32 to avoid intermediate rounding
     sfpi::vFloat temp = log_value * 0.5;
     temp = 4.5469 + temp;
     temp = -temp;
