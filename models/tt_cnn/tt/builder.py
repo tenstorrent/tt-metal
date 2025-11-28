@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import torch
@@ -168,8 +168,6 @@ class Conv2dConfiguration:
 
     deallocate_activation: bool = False
     reallocate_halo_output: bool = True
-
-    return_output_dim: bool = False
 
     config_tensors_in_dram: bool = False
 
@@ -510,9 +508,7 @@ class TtConv2d:
         self,
         configuration: Conv2dConfiguration,
         device: ttnn.Device,
-        return_output_dim: bool = False,
     ):
-        configuration = replace(configuration, return_output_dim=return_output_dim)
         self.configuration = configuration
         self.conv2d_config = to_conv2d_config(configuration)
         self.compute_config = to_compute_config(configuration, device)
@@ -661,7 +657,7 @@ class TtConv2d:
 
         return accumulated_output, (h_out, w_out)
 
-    def __call__(self, x):
+    def __call__(self, x, return_output_dim: bool = False):
         if not self.weight_slices:
             # No slicing
             x, [h_out, w_out], [self.weight, self.bias] = ttnn.conv2d(
@@ -676,7 +672,7 @@ class TtConv2d:
         else:
             x, (h_out, w_out) = self._apply_channel_slicing(x)
 
-        if self.configuration.return_output_dim:
+        if return_output_dim:
             return x, (h_out, w_out)
 
         return x
