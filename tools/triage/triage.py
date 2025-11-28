@@ -411,6 +411,24 @@ def log_check(success: bool, message: str) -> None:
         FAILURE_CHECKS.append(message)
 
 
+def log_check_device(device: Device, success: bool, message: str) -> None:
+    formatted_message = f"Device {device._id}: {message}"
+    log_check(success, formatted_message)
+
+
+def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
+    device = location.device
+    block_type = device.get_block_type(location)
+    location_str = location.to_user_str()
+    formatted_message = f"{block_type} [{location_str}]: {message}"
+    log_check_device(device, success, formatted_message)
+
+
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
+    formatted_message = f"{risc_name}: {message}"
+    log_check_location(location, success, formatted_message)
+
+
 def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 

@@ -59,7 +59,7 @@ struct Conv2dConfig {
 
     std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
 
-    // used only if override_sharding_config is true
+    // used only if override_sharding_config or override_output_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt;
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
@@ -118,6 +118,12 @@ struct Conv2dConfig {
     // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
     // If not set, then split reader heuristic is used to determine if it should be enabled.
     std::optional<bool> force_split_reader = std::nullopt;
+
+    // override_output_sharding_config enables the user to specify the memory config of the output tensor
+    // This impacts the core grid that executes matmul part of conv2d
+    // Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+    // Additionally, NHW number of cores must match between input and output tensors
+    bool override_output_sharding_config = false;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,7 +146,8 @@ struct Conv2dConfig {
         "in_place",
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
-        "force_split_reader");
+        "force_split_reader",
+        "override_output_sharding_config");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -162,7 +169,8 @@ struct Conv2dConfig {
             std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->override_output_sharding_config));
     }
 };
 
