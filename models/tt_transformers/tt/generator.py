@@ -276,15 +276,19 @@ class Generator:
         for idx, user_id in enumerate(all_users):
             if use_batched_prefill:
                 # Batched prefill: process all users together
+                # Validate that empty_slots contains all indices for batched prefill
+                assert len(empty_slots) == batch_size, f"empty_slots length {len(empty_slots)} must equal batch_size {batch_size} for batched prefill"
+                assert set(empty_slots) == set(range(batch_size)), f"empty_slots must contain all indices from 0 to {batch_size-1} for batched prefill"
+                
                 user_id_list = empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens_list]
                 prefill_seq_len = prefill_seq_lens[0]
                 seq_lens = prompt_lens_list
                 
                 # Reorder tokens if empty_slots are not sequential (from vLLM)
-                # Create a reverse mapping for O(1) lookup
+                # Create a reverse mapping: maps user_id -> position in tokens array
                 empty_slots_map = {slot: idx for idx, slot in enumerate(empty_slots)}
-                inverse_empty_slots = [empty_slots_map.get(i, i) for i in range(batch_size)]
+                inverse_empty_slots = [empty_slots_map[i] for i in range(batch_size)]
                 prefill_ids = torch.cat(
                     [
                         torch.cat(
@@ -335,7 +339,6 @@ class Generator:
                         kv_cache[model_id],
                         prefill_seq_len,
                         trace_enabled=enable_trace_current_prompt,
-                        prefill_seq_len=prefill_seq_len,
                         use_batched_prefill=True,
                     )
                     if page_table is not None
@@ -348,7 +351,6 @@ class Generator:
                         kv_cache[model_id],
                         seq_len,
                         trace_enabled=enable_trace_current_prompt,
-                        prefill_seq_len=prefill_seq_len,
                     )
                     if page_table is not None
                     else None
@@ -392,14 +394,15 @@ class Generator:
 
             # Handle batched prefill output
             if use_batched_prefill:
-                # Reverse the reordering of tokens when empty_slots are not sequential (from vLLM)
-                # logits shape should be [batch_size, 1, vocab_size] after processing
-                # Create reverse mapping for O(1) lookup
-                inverse_empty_slots_map = {idx: i for i, idx in enumerate(inverse_empty_slots)}
-                for i, user_idx in enumerate(empty_slots):
-                    # Extract logits for each user from batched output
-                    user_last_token_idx = last_token_idx[i]
-                    user_logits = logits[inverse_empty_slots_map[i]]  # Get correct user's output
+                # Map batched output back to original empty_slots order
+                # After forward, logits are in user_id order [0, 1, 2, ...]
+                # We need to place them in output_logits according to empty_slots positions
+                for i, user_id in enumerate(empty_slots):
+                    # Get logits for this user_id from the batched output
+                    # inverse_empty_slots[user_id] tells us where user_id's tokens were in the input
+                    # but after processing, logits are ordered by user_id, so we use user_id directly
+                    user_last_token_idx = prompt_lens_list[i] - 1
+                    user_logits = logits[user_id]  # Get user_id's output from batched result
                     output_logits[i] = self.model[model_id].process_output_prefill(
                         user_logits, last_token_idx=(user_last_token_idx % 32)
                     )
@@ -1717,16 +1720,19 @@ class Generator:
     ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
-        num_blocks = 0
-        if trace_enabled:
-            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-        else:
-            num_blocks = num_blocks_in_seq(prefill_len, block_size)
         
         if use_batched_prefill:
             # For batched prefill, return the full page table for all users
             # Ensure it has the right number of blocks per user
             return page_table
+        
+        # For single-user prefill
+        if trace_enabled:
+            # Use prefill_seq_len if provided, otherwise fall back to prefill_len
+            seq_len_for_blocks = prefill_seq_len if prefill_seq_len is not None else prefill_len
+            num_blocks = num_blocks_in_seq(seq_len_for_blocks, block_size)
+        else:
+            num_blocks = num_blocks_in_seq(prefill_len, block_size)
         
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
