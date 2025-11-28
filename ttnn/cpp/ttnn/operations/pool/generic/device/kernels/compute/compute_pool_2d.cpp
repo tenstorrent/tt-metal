@@ -262,7 +262,7 @@ void MAIN {
                         // false>(
                         //     pre_tilize_cb_id)));
                         tensix_sync();
-                        UNPACK(tilizeA_B_uninit(pre_tilize_cb_id));
+                        unpack_tilizeA_B_uninit(pre_tilize_cb_id);
                         // nops are used to avoid a race condition #33429
                         for (uint32_t i = 0; i < 10; i++) {
                             TTI_NOP;
