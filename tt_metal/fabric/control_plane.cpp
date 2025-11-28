@@ -492,7 +492,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // NOTE: This algorithm is only supported for single host systems for now
-    // FIXME: NOTE TO SELF: This might show up in cluster validation script please run and test before merging
     TT_FATAL(
         *distributed_context->size() == 1,
         "Auto discovery is only supported for single host systems, since you are running on a {} host system,"
