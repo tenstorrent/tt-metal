@@ -207,7 +207,16 @@ struct PreprocessedPyTensor {
 };
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
-    DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor.dtype()));
+    auto py_tensor_dtype = py_tensor.dtype();
+    // handle bool types by changing them to uint8
+    // TODO: add proper handling for bool types as a DataType
+    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
+        py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
+        py_tensor_dtype.bits = 8;
+        py_tensor_dtype.lanes = 1;
+    }
+
+    DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
     std::vector<int64_t> shp;
     shp.reserve(py_tensor.ndim());
@@ -220,10 +229,10 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     config.dtype = get_dtype_from_ttnn_datatype(data_type);
     config.order = nb::c_contig::value;  // force row-major contiguous
     config.device_type = nb::device::cpu::value;
-    config.ndim = py_tensor.ndim();
-    // config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import copies
-    // it
-    config.shape = shp.data();  // was getting bad sizes
+    // config.ndim = py_tensor.ndim();
+    //// config.shape = const_cast<decltype(config.shape)>(py_tensor.shape_ptr());  // safe because ndarray_import
+    /// copies / it
+    // config.shape = shp.data();  // was getting bad sizes
 
     TT_FATAL(
         data_type != DataType::INVALID || py_tensor.is_valid(),
