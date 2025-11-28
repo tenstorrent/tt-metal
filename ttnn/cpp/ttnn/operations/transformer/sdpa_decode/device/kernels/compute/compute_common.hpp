@@ -221,20 +221,26 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
-
+    DPRINT << "START OF MUL INPLACE\n";
     uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
+    DPRINT << "after wait in0\n";
     cb_wait_front(in1_cb, rows);
+    DPRINT << "before mul loop\n";
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            DPRINT << "after mul col j=" << (uint32_t)j << "\n";
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_tile(0, in0_cb);
             cb_push_back(in0_cb, 1);
+            DPRINT << "after push back\n";
             release_dst();
+            DPRINT << "after release dst\n";
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -336,6 +342,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     mul_tiles_init(in0_cb, in1_cb);
     DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
+    DPRINT << "after wait in0\n";
     cb_wait_front(in1_cb, num_tiles);
     DPRINT << "before mul loop\n";
     for (uint32_t i = 0; i < num_tiles; i++) {

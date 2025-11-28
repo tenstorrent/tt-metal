@@ -132,7 +132,7 @@ void kernel_main() {
 
     uint32_t chunk_size = 4;  // to be modified with tiny tiles HERE
 
-    const uint32_t new_packet_size_bytes = packet_size_bytes + page_size_bytes * 2;
+    const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
     bool is_forward = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -176,30 +176,30 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
-    DPRINT << "after fabric client connect\n";
+    // DPRINT << "after fabric client connect\n";
 
     cb_reserve_back(packet_header_cb_id, 1);
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
     const uint64_t sender_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr);
-    DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sender_sem_noc_addr << "with core noc x:" << (uint32_t)core_noc_x
-           << "and core noc y: " << (uint32_t)core_noc_y << "\n";
+    // DPRINT << "SEMAPHORE ADDRESS IS: " << (uint64_t)sender_sem_noc_addr << "with core noc x:" << (uint32_t)core_noc_x
+    //        << "and core noc y: " << (uint32_t)core_noc_y << "\n";
 
     // const uint64_t sender_sem_noc_addr = safe_get_noc_addr(out_ready_sem_x, out_ready_sem_y, sender_semaphore_addr,
     // 0);
-    DPRINT << "before sending semaphore inc\n";
+    // DPRINT << "before sending semaphore inc\n";
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, sender_num_hops);
 
     sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sender_sem_noc_addr, 1});
-    DPRINT << "sender_sem noc addr: " << (uint32_t)sender_sem_noc_addr << "\n";
-    DPRINT << "sender semaphore address: " << (uint32_t)sender_semaphore_addr << "\n";
+    // DPRINT << "sender_sem noc addr: " << (uint32_t)sender_sem_noc_addr << "\n";
+    // DPRINT << "sender semaphore address: " << (uint32_t)sender_semaphore_addr << "\n";
 
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
-    DPRINT << "after sending semaphore increment\n";
+    // DPRINT << "after sending semaphore increment\n";
     cb_reserve_back(packet_cb_id, 1);
     uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
@@ -218,15 +218,15 @@ void kernel_main() {
         1,
         chunk_size);
 
-    DPRINT << "after reading from local\n";
-    // receive l, s and m data from sender
+    // DPRINT << "after reading from local\n";
+    //  receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
-    DPRINT << "after waiting on semaphore\n";
+    // DPRINT << "after waiting on semaphore\n";
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
-    DPRINT << "after fabric client disconnect\n";
+    // DPRINT << "after fabric client disconnect\n";
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
@@ -237,7 +237,7 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
-    DPRINT << "after termination sync\n";
+    // DPRINT << "after termination sync\n";
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -249,8 +249,8 @@ void kernel_main() {
     // read the single packet
     // uint64_t packet_noc_addr = packet_buffer.get_noc_addr(packet_idx, 0, 0);
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
-    DPRINT << "reading packet from address: " << (uint32_t)packet_noc_addr << "\n";
-    DPRINT << "reading size: " << (uint32_t)new_packet_size_bytes << "\n";
+    // DPRINT << "reading packet from address: " << (uint32_t)packet_noc_addr << "\n";
+    // DPRINT << "reading size: " << (uint32_t)new_packet_size_bytes << "\n";
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
 
@@ -325,7 +325,7 @@ void kernel_main() {
         local_teardown_address2,
         local_buffer_index_address2);
     mux_connection_handle2 = &mux_connection2;
-    DPRINT << "before waiting for fabric endpoint ready2\n";
+    // DPRINT << "before waiting for fabric endpoint ready2\n";
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x2, fabric_mux_y2, fabric_mux_status_address, local_fabric_mux_status_address2);
 
@@ -336,7 +336,7 @@ void kernel_main() {
     const uint32_t sem_header_addr_2 = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
 
-    DPRINT << "before sending semaphore inc to device 2\n";
+    // DPRINT << "before sending semaphore inc to device 2\n";
     const uint64_t sender_sem_noc_addr_2 = get_noc_addr(core_noc_x, core_noc_y, sender_semaphore_addr2);
     auto* sem_header_ptr_2 = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr_2);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr_2, sender_num_hops);
@@ -371,7 +371,7 @@ void kernel_main() {
     noc_semaphore_wait(local_semaphore_ptr, 1);
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
-    DPRINT << "after fabric client disconnect2\n";
+    // DPRINT << "after fabric client disconnect2\n";
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address2);
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
@@ -382,12 +382,12 @@ void kernel_main() {
         noc_semaphore_inc(dest_addr, 1);
         noc_async_atomic_barrier();
     }
-    DPRINT << "after termination sync2\n";
+    // DPRINT << "after termination sync2\n";
 
     cb_reserve_back(packet_cb_id, 1);
     packet_l1_addr = get_write_ptr(packet_cb_id);
 
-    DPRINT << "after waiting on semaphore from device 2\n";
+    // DPRINT << "after waiting on semaphore from device 2\n";
 
     page_idx_start = 0;
     curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -401,6 +401,8 @@ void kernel_main() {
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    DPRINT << "printing received l in root receiver cb second time\n";
+    print_full_tile(receiver_cb_id_l, 3, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -413,6 +415,10 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
 
+    DPRINT << "printing received s in root receiver cb second time\n";
+    print_full_tile(receiver_cb_id_s, 0, false);
+    DPRINT << "printing received m in root receiver cb second time\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
 

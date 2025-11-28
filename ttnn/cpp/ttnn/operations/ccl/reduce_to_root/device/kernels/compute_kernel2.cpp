@@ -68,13 +68,13 @@ void MAIN {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
         // move l2 input
-        move_block<false>(cb_out_accumulate_im_2, cb_l2_temp, out_chunk_tiles);
+        move_block<true>(cb_out_accumulate_im_2, cb_l2_temp, out_chunk_tiles);
         // move l1 input
-        move_block<false>(cb_out_accumulate_im, cb_l1_temp, out_chunk_tiles);
+        move_block<true>(cb_out_accumulate_im, cb_l1_temp, out_chunk_tiles);
 
         // move s1 and s2
-        move_block<false>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
-        move_block<false>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
+        move_block<true>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
+        move_block<true>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
 
         max_block<vector_mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);  // pushed, pushed, popped
 
