@@ -11,7 +11,12 @@ namespace ttnn::operations::data_movement::nonzero {
 std::vector<Tensor> ExecuteNonZeroIndices::invoke(
     const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::prim::nonzero(input_tensor, input_memory_config);
+    auto [output_0, output_1] = ttnn::prim::nonzero(input_tensor, input_memory_config);
+    std::vector<Tensor> output_tensor_vec;
+    output_tensor_vec.reserve(2);
+    output_tensor_vec.push_back(std::move(output_0));
+    output_tensor_vec.push_back(std::move(output_1));
+    return output_tensor_vec;
 }
 
 }  // namespace ttnn::operations::data_movement::nonzero
