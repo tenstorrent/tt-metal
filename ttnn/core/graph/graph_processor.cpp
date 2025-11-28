@@ -40,6 +40,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     j[ttnn::graph::kParams] = data.params;
     j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
+    j[ttnn::graph::kInputTensors] = data.input_tensors;
     j[ttnn::graph::kStackingLevel] = data.stacking_level;
     return j;
 }
@@ -193,6 +194,10 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
 
     const std::lock_guard<std::mutex> lock(mutex);
     log_debug(tt::LogAlways, "Begin op: {}", function_name);
+
+    // Clear the input tensor list for this new operation
+    current_input_tensors.clear();
+
     std::unordered_map<std::string, std::string> params = {
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
@@ -211,6 +216,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
             .params = std::move(params),
             .arguments = serialized_arguments,
             .connections = {/*current_op_id.top()*/},
+            .input_tensors = {},
             .stacking_level = stacking_level});
         if (last_finished_op_id != -1) {
             graph[last_finished_op_id].connections.push_back(counter);
@@ -230,6 +236,9 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
             log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
         }
     }
+
+    // Populate the input_tensors field of the function_start vertex
+    graph[counter].input_tensors = current_input_tensors;
 }
 
 void GraphProcessor::track_function_end_impl() {
@@ -373,6 +382,7 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
 void GraphProcessor::begin_function_process(const Tensor& tensor) {
     int tensor_id = add_tensor(tensor);
     graph[tensor_id].connections.push_back(current_op_id.top());
+    current_input_tensors.push_back(tensor_id);
 }
 
 template <typename T>
