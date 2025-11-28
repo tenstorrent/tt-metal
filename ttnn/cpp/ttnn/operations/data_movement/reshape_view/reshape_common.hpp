@@ -387,8 +387,8 @@ inline GlobalCompressedReshapeMap compress_mapping_global(
         const auto& segments = mapping_vector[output_page_idx];
         size_t i = 0;
         while (i < segments.size()) {
-            PatternTemplate tmpl;
-            PagePatternInstance instance;
+            PatternTemplate tmpl{};
+            PagePatternInstance instance{};
             size_t run_len = detect_stride_run(segments, i, tmpl, instance, output_page_idx);
             if (run_len >= 2) {
                 uint32_t tmpl_idx;
@@ -468,7 +468,7 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
     const tt::tt_metal::MemoryConfig& memory_config) {
     ReshapeRTArgsEstimate estimate{0, 0, 0, false};
 
-    const auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
