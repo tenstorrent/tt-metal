@@ -15,10 +15,10 @@
 namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b {
 
 struct NlpCreateHeadsFalcon7BDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = qkv_heads_falcon7b::operation_attributes_t;
+    using tensor_args_t = qkv_heads_falcon7b::tensor_args_t;
+    using spec_return_value_t = qkv_heads_falcon7b::spec_return_value_t;
+    using tensor_return_value_t = qkv_heads_falcon7b::tensor_return_value_t;
     using program_factory_t = std::variant<NlpCreateQkvHeadsFalcon7BProgramFactory>;
     using shared_variables_t = NlpCreateQkvHeadsFalcon7BProgramFactory::shared_variables_t;
 
