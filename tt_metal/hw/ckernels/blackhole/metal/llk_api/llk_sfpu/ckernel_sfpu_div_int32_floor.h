@@ -59,28 +59,23 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
+    // Since inv_b is only accurate to ~23 bits, we only care about the upper
+    // 23 bits, so we can compute qb = (q1<<8 + 0) * (b1<<23 + b0)
+    //                               = (q1<<8) * b0
 
-    sfpi::vInt q1 = q >> 23;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt lo;
-    sfpi::vInt hi;
+    q >>= 8;
+    sfpi::vInt qb;
 
     // Despite the name, SFPMUL24 multiplies two 23-bit integers, giving the
     // low or high 23 bits of the product (last argument: 0=lo, 1=hi).  Inputs
     // do not need to be masked as this is done internally.
-    q1.get() = __builtin_rvtt_bh_sfpmul24(b.get(), q1.get(), 0);
-    b1.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b1.get(), 0);
-    lo.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
-    hi.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 1);
+    qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
 
-    q1 += b1;
-    q1 += hi;
-
-    // This is qb.
-    lo += q1 << 23;
+    qb <<= 8;
+    q <<= 8;
 
     // Compute remainder.
-    sfpi::vInt r = a - lo;
+    sfpi::vInt r = a - qb;
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
 
     // Compute correction value in float32.
@@ -90,7 +85,7 @@ sfpi_inline void calculate_div_int32_body(
 
     sfpi::vInt tmp_lo;
     sfpi::vInt tmp_hi;
-    b1 = b >> 23;
+    sfpi::vInt b1 = b >> 23;
     b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
     tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
     tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
