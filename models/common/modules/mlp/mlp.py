@@ -638,3 +638,303 @@ class MLP(LightweightModule):
             )
 
         return w2_out_reduced
+
+    # =========================================================================
+    # TTTv2-style split forward functions (no TG if-else in hot path)
+    # =========================================================================
+
+    def forward_non_tg(self, x: ttnn.Tensor, mode: str) -> ttnn.Tensor:
+        """
+        MLP forward for non-TG (non-Galaxy) devices: N150, N300, T3K.
+
+        Execution path:
+          linear(w1) → linear(w3) → mul+silu → [reshard] → linear(w2) → all_reduce → [reshard]
+
+        Remaining if-else: mode (decode/prefill) - can be split further.
+        """
+        seq_len = x.shape[-2]
+
+        # Per-layer optimization settings
+        activation_dtype = self.optimization_config.activation_dtype
+        li_ff1_3_compute_kernel_cfg = self.optimization_config.li_ff1_3_compute_kernel_cfg
+        li_ff2_compute_kernel_cfg = self.optimization_config.li_ff2_compute_kernel_cfg
+
+        # --- Program config selection (mode-dependent) ---
+        if mode == "decode":
+            pc_1 = self.program_configs.decode_mlp_w1_w3_prg_config
+            pc_2 = self.program_configs.decode_mlp_w2_prg_config
+            pc_3 = self.program_configs.decode_mlp_w1_w3_prg_config
+            memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        else:  # prefill
+            if seq_len >= self.config.prefill_len_cutoff:
+                x = ttnn.reshape(x, [1, seq_len // self.config.prefill_len_cutoff, self.config.prefill_len_cutoff, -1])
+            pc_1 = self.program_configs.prefill_mlp_w1_w3_prg_config(seq_len)
+            pc_2 = self.program_configs.prefill_mlp_w2_prg_config(seq_len)
+            pc_3 = self.program_configs.prefill_mlp_w1_w3_prg_config(seq_len)
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+        # --- STAGE 1: W1/W3 Linear ---
+        w1_out = ttnn.linear(
+            x,
+            self.w1,
+            dtype=activation_dtype or ttnn.bfloat16,
+            core_grid=None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_1,
+            memory_config=memory_config,
+        )
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            dtype=activation_dtype or ttnn.bfloat16,
+            core_grid=None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_3,
+            memory_config=memory_config,
+        )
+        ttnn.deallocate(x)
+
+        # --- STAGE 2: No CCL for non-TG (skip) ---
+
+        # --- STAGE 3: Activation + Multiply ---
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[self.activation_type],
+            dtype=activation_dtype or ttnn.bfloat8_b,
+            memory_config=w1_out.memory_config(),
+        )
+
+        # --- STAGE 3.5: Reshard for w2 (decode only) ---
+        if mode == "decode":
+            w2_in = ttnn.to_memory_config(w2_in, self.program_configs.sharded_mlp2_input_memcfg)
+
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w1_out)
+
+        # --- STAGE 4: No all_gather for non-TG (skip) ---
+
+        # --- STAGE 5: W2 Linear ---
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            compute_kernel_config=li_ff2_compute_kernel_cfg,
+            dtype=activation_dtype or ttnn.bfloat16,
+            program_config=pc_2,
+            memory_config=memory_config,
+            core_grid=None,
+        )
+        ttnn.deallocate(w2_in)
+
+        # --- STAGE 6: Final All-Reduce ---
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=self.config.num_reduce_scatter_links,
+            num_all_gather_links=self.config.num_all_gather_links,
+            sharded=(mode == "decode"),
+            memory_config=w2_out.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+            dtype=self.config.ccl_dtype,
+            use_composite=(self.dim == 8192),
+            topology=self.ccl_topology,
+        )
+
+        # --- STAGE 7: Reshape + Final memory config ---
+        original_shape = w2_out_reduced.shape
+        w2_out_reduced = ttnn.reshape(
+            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        )
+        if mode == "decode":
+            w2_out_reduced = ttnn.to_memory_config(w2_out_reduced, self.program_configs.decode_residual_memcfg)
+
+        return w2_out_reduced
+
+    def forward_tg(self, x: ttnn.Tensor, mode: str) -> ttnn.Tensor:
+        """
+        MLP forward for TG (Galaxy) devices.
+
+        Execution paths (still has dim-based branching):
+          - dim < 8192 decode:  linear → linear → all_reduce(×2) → mul+silu → linear → all_reduce
+          - dim == 8192 OR prefill: linear → linear → reduce_scatter(×2) → mul+silu → all_gather → linear → all_reduce
+
+        Remaining if-else: mode (decode/prefill), dim (8192 vs others) - can be split further.
+        """
+        seq_len = x.shape[-2]
+
+        # Per-layer optimization settings
+        activation_dtype = self.optimization_config.activation_dtype
+        li_ff1_3_compute_kernel_cfg = self.optimization_config.li_ff1_3_compute_kernel_cfg
+        li_ff2_compute_kernel_cfg = self.optimization_config.li_ff2_compute_kernel_cfg
+
+        # --- Program config selection (mode + dim dependent) ---
+        if mode == "decode":
+            pc_1 = self.program_configs.ff1_3_tg_progcfg if self.dim >= 4096 else None
+            pc_2 = self.program_configs.ff2_tg_progcfg if self.dim >= 4096 else None
+            pc_3 = self.program_configs.ff1_3_tg_progcfg if self.dim >= 4096 else None
+            memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        else:  # prefill
+            if seq_len >= self.config.prefill_len_cutoff:
+                x = ttnn.reshape(x, [1, seq_len // self.config.prefill_len_cutoff, self.config.prefill_len_cutoff, -1])
+            pc_1 = self.program_configs.prefill_mlp_w1_w3_prg_config(seq_len)
+            pc_2 = self.program_configs.prefill_mlp_w2_prg_config(seq_len)
+            pc_3 = self.program_configs.prefill_mlp_w1_w3_prg_config(seq_len)
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+        # --- STAGE 1: W1/W3 Linear ---
+        w1_out = ttnn.linear(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat8_b,
+            core_grid=None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_1,
+            memory_config=memory_config,
+        )
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat8_b,
+            core_grid=None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            program_config=pc_3,
+            memory_config=memory_config,
+        )
+        ttnn.deallocate(x)
+
+        # --- STAGE 2: CCL after W1/W3 (dim-dependent path) ---
+        if self.dim == 8192 or mode == "prefill":
+            # Path A: reduce_scatter (for large dim or prefill)
+            input_mem_cfg = w1_out.memory_config()
+            cluster_axis = 1
+
+            w1_out = ttnn.experimental.reduce_scatter_minimal_async(
+                w1_out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=self.config.num_reduce_scatter_links,
+                cluster_axis=cluster_axis,
+                memory_config=self.program_configs.ff1_out_reduce_scatter_memcfg if mode == "decode" else None,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            w3_out = ttnn.experimental.reduce_scatter_minimal_async(
+                w3_out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                num_links=1,
+                cluster_axis=cluster_axis,
+                memory_config=self.program_configs.ff1_out_reduce_scatter_memcfg if mode == "decode" else None,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            use_all_gather = True
+        else:
+            # Path B: all_reduce (for smaller dim in decode)
+            w1_out = tt_all_reduce(
+                w1_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                num_all_gather_links=2,
+                sharded=True,  # decode mode
+                topology=self.ccl_topology,
+                memory_config=self.program_configs.ff1_out_gathered_memcfg,
+            )
+            w3_out = tt_all_reduce(
+                w3_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=1,
+                num_all_gather_links=2,
+                sharded=True,  # decode mode
+                topology=self.ccl_topology,
+                memory_config=self.program_configs.ff1_out_gathered_memcfg,
+            )
+            use_all_gather = False
+
+        # --- STAGE 3: Activation + Multiply ---
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[self.activation_type],
+            dtype=activation_dtype or ttnn.bfloat8_b,
+            memory_config=w1_out.memory_config(),
+        )
+
+        # --- STAGE 3.5: No reshard for TG (skip) ---
+
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w1_out)
+
+        # --- STAGE 4: All-gather before W2 (if we used reduce_scatter) ---
+        if use_all_gather:
+            cluster_axis = 1
+            w2_in = ttnn.experimental.all_gather_async(
+                w2_in,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=2,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=input_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            if mode == "decode":
+                w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+
+        # --- STAGE 5: W2 Linear ---
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            compute_kernel_config=li_ff2_compute_kernel_cfg,
+            dtype=self.config.ccl_dtype,
+            program_config=pc_2,
+            memory_config=memory_config,
+            core_grid=None,
+        )
+        ttnn.deallocate(w2_in)
+
+        # --- STAGE 6: Final All-Reduce ---
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=0 if self.dim < 8192 else 3,
+            num_reduce_scatter_links=self.config.num_reduce_scatter_links,
+            num_all_gather_links=self.config.num_all_gather_links,
+            sharded=(mode == "decode"),
+            memory_config=(
+                self.program_configs.ff2_out_reduce_scatter_memcfg if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            dtype=self.config.ccl_dtype,
+            use_composite=(self.dim == 8192),
+            topology=self.ccl_topology,
+        )
+
+        # --- STAGE 7: Reshape + Final memory config ---
+        original_shape = w2_out_reduced.shape
+        w2_out_reduced = ttnn.reshape(
+            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        )
+        if mode == "decode":
+            w2_out_reduced = ttnn.to_memory_config(w2_out_reduced, self.program_configs.sharded_attn_input_memcfg)
+
+        return w2_out_reduced
