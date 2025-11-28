@@ -47,31 +47,51 @@ pytest {operation_dir}/test_dev/test_stage3_registration.py -v
 
 You MUST follow patterns from `ttnn/cpp/ttnn/operations/examples/example/`. Key patterns:
 
-### Program Factory Structure
+**IMPORTANT**: The scaffolder creates these files you will modify:
+- `device/{operation_name}_op.hpp` - Device operation header with `ProgramFactory` struct
+- `device/{operation_name}_op.cpp` - Device operation implementation (already has stub `ProgramFactory::create`)
+- `device/{operation_name}_program_factory.hpp` - Shared variables struct (`{OperationName}SharedVariables`)
+- `device/{operation_name}_program_factory.cpp` - Program factory function stub (you implement this)
+
+### Program Factory Structure (Created by Scaffolder)
 ```cpp
+// In device/{operation_name}_program_factory.hpp (created by scaffolder)
+namespace ttnn::operations::{operation_name}::detail {
+
+struct {OperationName}SharedVariables {
+    tt::tt_metal::KernelHandle reader_kernel_id;
+    tt::tt_metal::KernelHandle compute_kernel_id;
+    tt::tt_metal::KernelHandle writer_kernel_id;
+    std::vector<tt::tt_metal::CoreCoord> cores;
+};
+
+ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    /* operation-specific params */);
+
+}  // namespace ttnn::operations::{operation_name}::detail
+```
+
+```cpp
+// In device/{operation_name}_op.hpp (created by scaffolder)
 struct {OperationName}DeviceOperation {
-    struct MultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            // Add compute kernel if needed
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-        };
+    struct ProgramFactory {
+        using shared_variables_t = detail::{OperationName}SharedVariables;
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& output);
     };
-    using program_factory_t = std::variant<MultiCore>;
+    using program_factory_t = std::variant<ProgramFactory>;
 };
 ```
 
@@ -244,61 +264,76 @@ Expected: Tests fail because `select_program_factory` throws or returns wrong ty
 
 ### Step 4.2: Write Implementation (GREEN)
 
-Update `device/{operation_name}_device_operation.cpp`:
+**Note**: The scaffolder already creates `device/{operation_name}_op.cpp` with stub implementations. You just need to verify or update as needed.
+
+The scaffolder creates these implementations in `device/{operation_name}_op.cpp`:
 
 ```cpp
+// select_program_factory (already created by scaffolder)
 {OperationName}DeviceOperation::program_factory_t
 {OperationName}DeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args) {
-    // For simple operations, always use MultiCore
-    return MultiCore{};
-
-    // For operations with single-core fallback:
-    // uint32_t num_tiles = tensor_args.input_tensor.physical_volume() / tt::constants::TILE_HW;
-    // if (num_tiles <= threshold) {
-    //     return SingleCore{};
-    // }
-    // return MultiCore{};
+    return ProgramFactory{};
 }
 
+// validate_on_program_cache_miss (already created by scaffolder)
 void {OperationName}DeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args) {
-    // Additional validations that only need to run once per program
-    // Usually can be empty if invoke() handles all validation
-    const auto& input = tensor_args.input_tensor;
-    TT_FATAL(input.buffer() != nullptr,
-        "{operation_name}: Input tensor must be allocated on device");
+    validate_inputs(attributes, tensor_args);
 }
 
+// validate_on_program_cache_hit (already created by scaffolder)
 void {OperationName}DeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args) {
-    // Lightweight checks for cached program reuse
-    TT_FATAL(tensor_args.input_tensor.is_allocated(),
-        "{operation_name}: Input tensor must be allocated for cache hit");
+    validate_inputs(attributes, tensor_args);
 }
 ```
 
-Also add stub for MultiCore::create that throws:
+The scaffolder also creates `ProgramFactory::create` stub that calls the program factory function:
 ```cpp
-{OperationName}DeviceOperation::MultiCore::cached_program_t
-{OperationName}DeviceOperation::MultiCore::create(
+// ProgramFactory::create (already created by scaffolder - calls detail::{operation_name}_single_core)
+{OperationName}DeviceOperation::ProgramFactory::cached_program_t
+{OperationName}DeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    TT_THROW("{operation_name}: Program factory not yet implemented");
+    tensor_return_value_t& output) {
+    return detail::{operation_name}_single_core(
+        tensor_args.input,
+        output,
+        operation_attributes.param1);  // Pass operation-specific params
 }
 
-void {OperationName}DeviceOperation::MultiCore::override_runtime_arguments(
+// override_runtime_arguments (already created by scaffolder)
+void {OperationName}DeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    TT_THROW("{operation_name}: override_runtime_arguments not yet implemented");
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& cores = cached_program.shared_variables.cores;
+
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
+    const uint32_t output_addr = output.buffer()->address();
+
+    for (size_t i = 0; i < cores.size(); ++i) {
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, cores[i]);
+            runtime_args[0] = input_addr;
+        }
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
+            runtime_args[0] = output_addr;
+        }
+    }
 }
 ```
+
+**Your main task in Stage 4-6**: Implement `detail::{operation_name}_single_core()` in `device/{operation_name}_program_factory.cpp`
 
 ### Step 4.3: Verify Tests Pass (GREEN)
 ```bash
@@ -366,48 +401,48 @@ def test_work_distribution(device):
 ./build_metal.sh -b Debug && pytest test_dev/test_stage5_program_factory.py -v
 ```
 
-Expected: Tests fail because `MultiCore::create` throws "not yet implemented".
+Expected: Tests fail because `detail::{operation_name}_single_core` throws "not yet implemented".
 
 ### Step 5.2: Write Implementation (GREEN)
 
-**Create/update** `device/{operation_name}_program_factory.cpp`:
+**Update** `device/{operation_name}_program_factory.cpp` (the scaffolder created a stub that throws):
 
 ```cpp
-#include "{operation_name}_device_operation.hpp"
+#include "{operation_name}_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::{category} {
+namespace ttnn::operations::{operation_name}::detail {
 
-{OperationName}DeviceOperation::MultiCore::cached_program_t
-{OperationName}DeviceOperation::MultiCore::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
+using namespace tt;
+using namespace tt::tt_metal;
 
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto& output_tensor = tensor_return_value;
+ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor,
+    float param1 /* Replace with actual params from spec */) {
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    const auto& input = input_tensor;
+    auto& output = output_tensor;
+
+    auto src_buffer = input.buffer();
+    auto dst_buffer = output.buffer();
 
     tt::tt_metal::Program program{};
 
     // Data formats
     tt::DataFormat input_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t input_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_tile_size = tt::tile_size(output_cb_data_format);
 
     // Work distribution
     // From spec's "Work Distribution" section - extract work unit definition
-    uint32_t num_work_units = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    uint32_t num_work_units = input.physical_volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -444,62 +479,39 @@ namespace ttnn::operations::{category} {
     /*
     // Compile-time args for kernels
     std::vector<uint32_t> reader_compile_time_args = {cb_input_idx};
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    // Add tensor accessor args as needed...
 
     std::vector<uint32_t> writer_compile_time_args = {cb_output_idx};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    // Add tensor accessor args as needed...
 
     // Create kernels
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(...);
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(...);
+    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(...);
+
+    // Build cores vector for shared_variables
+    std::vector<CoreCoord> cores;
+    for (uint32_t i = 0; i < num_cores; i++) {
+        cores.push_back({i / num_cores_y, i % num_cores_y});
+    }
 
     // Set runtime args
     ...
 
     return {
         std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+        {OperationName}SharedVariables{
+            .reader_kernel_id = reader_kernel_id,
+            .compute_kernel_id = compute_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .cores = std::move(cores)}};
     */
 }
 
-void {OperationName}DeviceOperation::MultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    // Will be implemented in Stage 6
-    TT_THROW("{operation_name}: override_runtime_arguments not yet implemented");
-}
-
-}  // namespace ttnn::operations::{category}
+}  // namespace ttnn::operations::{operation_name}::detail
 ```
 
-**Update** `device/{operation_name}_device_operation.hpp` to include program factory declarations:
-```cpp
-struct MultiCore {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        std::size_t num_cores;
-        std::size_t num_cores_y;
-    };
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-};
-```
+**Note**: The scaffolder already creates `device/{operation_name}_op.hpp` with the `ProgramFactory` struct and `shared_variables_t` type alias pointing to `detail::{OperationName}SharedVariables`. You don't need to modify the header - just implement the function in the `.cpp` file.
 
 ### Step 5.3: Verify Tests Pass (GREEN)
 ```bash
@@ -731,18 +743,19 @@ void MAIN {
 }  // namespace NAMESPACE
 ```
 
-**Complete the program factory** - remove the `TT_THROW` and add kernel creation:
+**Complete the program factory** - In `device/{operation_name}_program_factory.cpp`, remove the `TT_THROW` and add kernel creation:
 
 ```cpp
 // In {operation_name}_program_factory.cpp, replace the TT_THROW with:
 
 // Compile-time args for reader
 std::vector<uint32_t> reader_compile_time_args = {cb_input_idx};
-tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+// Add is_dram flag: 1 if DRAM, 0 if L1
+reader_compile_time_args.push_back(src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0);
 
 // Compile-time args for writer
 std::vector<uint32_t> writer_compile_time_args = {cb_output_idx};
-tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+writer_compile_time_args.push_back(dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0);
 
 // Create reader kernel (RISCV_0 / BRISC)
 tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -760,7 +773,7 @@ tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
 
 // Create compute kernel (if needed by spec)
 std::vector<uint32_t> compute_args_group_1 = {num_work_per_core_group_1};
-tt::tt_metal::CreateKernel(
+tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
     program,
     "ttnn/cpp/ttnn/operations/{category}/{operation_name}/device/kernels/compute/{operation_name}_compute.cpp",
     core_group_1,
@@ -779,9 +792,15 @@ if (!core_group_2.ranges().empty()) {
             .compile_args = compute_args_group_2});
 }
 
+// Build cores vector for shared_variables
+std::vector<CoreCoord> cores;
+for (uint32_t i = 0; i < num_cores; i++) {
+    cores.push_back({i / num_cores_y, i % num_cores_y});
+}
+
 // Set runtime args for each core
 for (uint32_t i = 0, tiles_written = 0; i < num_cores; i++) {
-    CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    CoreCoord core = cores[i];
     uint32_t num_tiles_per_core = core_group_1.contains(core)
         ? num_work_per_core_group_1
         : num_work_per_core_group_2;
@@ -799,43 +818,14 @@ for (uint32_t i = 0, tiles_written = 0; i < num_cores; i++) {
 
 return {
     std::move(program),
-    {.reader_kernel_id = reader_kernel_id,
-     .writer_kernel_id = writer_kernel_id,
-     .num_cores = num_cores,
-     .num_cores_y = num_cores_y}};
+    {OperationName}SharedVariables{
+        .reader_kernel_id = reader_kernel_id,
+        .compute_kernel_id = compute_kernel_id,
+        .writer_kernel_id = writer_kernel_id,
+        .cores = std::move(cores)}};
 ```
 
-**Implement override_runtime_arguments:**
-```cpp
-void {OperationName}DeviceOperation::MultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    }
-}
-```
+**Note on override_runtime_arguments**: The scaffolder already creates this in `device/{operation_name}_op.cpp`. It uses `cached_program.shared_variables.cores` to iterate and update buffer addresses. You typically don't need to modify it unless your operation has special requirements.
 
 ### Step 6.3: Verify Tests Pass (GREEN)
 ```bash
