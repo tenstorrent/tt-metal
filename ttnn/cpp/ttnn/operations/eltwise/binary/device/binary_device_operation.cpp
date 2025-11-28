@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -27,15 +26,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
-            return a == b && (
-                a == DataType::FLOAT32 ||
-                a == DataType::INT32 ||
-                a == DataType::UINT32 ||
-                a == DataType::UINT16);
         case BinaryOpType::SQUARED_DIFFERENCE:
             return a == b && (
                 a == DataType::FLOAT32 ||
                 a == DataType::INT32 ||
+                a == DataType::UINT32 ||
                 a == DataType::UINT16);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
@@ -125,7 +120,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
 void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
+
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 

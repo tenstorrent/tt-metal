@@ -6,14 +6,14 @@
 
 #include <umd/device/types/arch.hpp>
 #include <cstdint>
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -51,7 +51,9 @@ protected:
         return true;
     }
 
-    void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_devices(
+        std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
@@ -66,7 +68,7 @@ protected:
             chip_ids.push_back(mmio_device_id);
         }
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
-            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
+            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config, {}, worker_l1_size);
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }

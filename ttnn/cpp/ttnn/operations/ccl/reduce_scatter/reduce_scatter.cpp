@@ -4,15 +4,13 @@
 
 #include "ttnn/common/queue_id.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 #include "reduce_scatter.hpp"
 #include "device/reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
@@ -52,7 +50,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         return composite_common::composite_reduce_scatter(
-            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+            input_tensor, dim, num_links_, topology_, memory_config_, subdevice_id, cluster_axis);
     }
     return ttnn::prim::reduce_scatter(
                input_tensor,

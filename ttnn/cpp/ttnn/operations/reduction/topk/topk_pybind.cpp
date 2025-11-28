@@ -77,13 +77,6 @@ void bind_reduction_topk_operation(py::module& module) {
                 - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
-
-            Example:
-                .. code-block:: python
-
-                    input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
-                    topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
-
         )doc";
 
     using OperationType = decltype(ttnn::topk);

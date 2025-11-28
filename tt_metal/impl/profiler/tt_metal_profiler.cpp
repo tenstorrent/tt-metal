@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include <device_pool.hpp>
 #include <dispatch_core_common.hpp>
 #include <host_api.hpp>
 #include <profiler.hpp>
@@ -54,6 +53,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -853,6 +853,11 @@ bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
            state == ProfilerReadState::NORMAL;
 }
 
+bool getProgramsPerfDataMidRun() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
+           tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process();
+}
+
 void ProcessDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -1056,6 +1061,59 @@ void ReadMeshDeviceProfilerResults(
     mesh_device.wait_for_thread_pool();
 #endif
 }
+
+namespace experimental {
+
+std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
+    std::map<ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data;
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    for (const auto& [device_id, device_programs_perf_analyses] :
+         profiler_state_manager->device_programs_perf_analyses_map) {
+        if (device_programs_perf_analyses.empty()) {
+            latest_programs_perf_data[device_id] = {};
+        } else {
+            latest_programs_perf_data[device_id] = device_programs_perf_analyses.back();
+        }
+    }
+
+#endif
+    return latest_programs_perf_data;
+}
+
+std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
+    std::map<ChipId, std::set<ProgramAnalysisData>> all_programs_perf_data;
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    for (const auto& [device_id, device_programs_perf_analyses] :
+         profiler_state_manager->device_programs_perf_analyses_map) {
+        std::set<ProgramAnalysisData>& device_all_programs_perf_data = all_programs_perf_data[device_id];
+        for (const auto& programs_perf_analysis : device_programs_perf_analyses) {
+            device_all_programs_perf_data.insert(programs_perf_analysis.begin(), programs_perf_analysis.end());
+        }
+    }
+
+#endif
+    return all_programs_perf_data;
+}
+
+}  // namespace experimental
 
 }  // namespace tt_metal
 

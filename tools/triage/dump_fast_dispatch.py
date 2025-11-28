@@ -14,7 +14,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, run_script
+from triage import ScriptConfig, triage_field, run_script, log_check
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
@@ -50,9 +50,13 @@ class DumpWaitGlobalsData:
     x: int | None = triage_field("x", verbose=2)
     y: int | None = triage_field("y", verbose=2)
     last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
+    # Number of extra pages available in the circular buffer that are not included in cb_fence_
+    sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
-def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
+def _read_symbol_value(
+    elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True
+) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_access.
 
     Returns None if the symbol cannot be read.
@@ -60,6 +64,8 @@ def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAc
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
     except Exception:
+        if check_value:
+            log_check(False, f"Failed to read symbol {symbol}")
         return None
 
 
@@ -163,31 +169,41 @@ def read_wait_globals(
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    is_dispatcher_kernel = (
+        dispatcher_core_data.kernel_name == "cq_dispatch"
+        or dispatcher_core_data.kernel_name == "cq_dispatch_subordinate"
+    )
     # Inline: read wait-related globals directly from ELF
-    last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access)
-    last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access)
-    last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
+    last_wait_count = _read_symbol_value(
+        kernel_elf, "last_wait_count", loc_mem_access, check_value=is_dispatcher_kernel
+    )
+    last_wait_stream = _read_symbol_value(
+        kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
+    )
+    last_event = _read_symbol_value(
+        kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
+    )
     try:
-        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence
-    except:
+        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
+    except Exception:
+        if dispatcher_core_data.kernel_name == "cq_dispatch":
+            log_check(False, f"Failed to read circular_buffer_fence for kernel {dispatcher_core_data.kernel_name}")
         circular_buffer_fence = None
-    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
+    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access, check_value=is_dispatcher_kernel)
 
-    def get_const_value(name: str) -> int | None:
+    def get_const_value(name: str, check_value: bool = True) -> int | None:
         try:
             value = kernel_elf.get_constant(name)
             assert isinstance(value, int)
             return value
         except Exception:
+            if check_value:
+                log_check(False, f"Failed to read constant {name} for kernel {dispatcher_core_data.kernel_name}")
             return None
 
-    stream_addr0 = None
-    stream_addr1 = None
-    stream_width = None
-
-    stream_addr0 = get_const_value("stream_addr0")
-    stream_addr1 = get_const_value("stream_addr1")
-    stream_width = get_const_value("stream_width")
+    stream_addr0 = get_const_value("stream_addr0", check_value=is_dispatcher_kernel)
+    stream_addr1 = get_const_value("stream_addr1", check_value=is_dispatcher_kernel)
+    stream_width = get_const_value("stream_width", check_value=is_dispatcher_kernel)
 
     wait_stream_value = None
     if stream_addr0 is not None and stream_addr1 is not None and last_wait_stream is not None:
@@ -197,9 +213,35 @@ def read_wait_globals(
             stream_addr0 + stream_stride_bytes * last_wait_stream,
         )
 
+        if is_dispatcher_kernel:
+            log_check(
+                wait_stream_value is not None,
+                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}",
+            )
+
     if last_wait_count is not None and stream_width is not None:
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
+
+    # Compute sem_minus_local for dispatcher kernels by reading the live semaphore and subtracting local_count_
+    sem_minus_local: int | None = None
+    try:
+        if dispatcher_core_data.kernel_name == "cq_dispatch":
+            my_dispatch_cb_sem_id = int(kernel_elf.get_constant("my_dispatch_cb_sem_id"))
+            fd_core_type_idx = int(kernel_elf.get_constant("fd_core_type_idx"))
+
+            # sem_l1_base is a firmware global array of L1 pointers; index by core type
+            sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+            sem_value = sem_base_ptr[my_dispatch_cb_sem_id * 16 // 4]
+            local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
+
+            # Two's-complement 32-bit wrapping difference
+            delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
+            sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except Exception:
+        log_check(False, f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}")
+        # Leave as None if any lookups fail
+        sem_minus_local = None
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
@@ -233,6 +275,7 @@ def read_wait_globals(
         cq_id=getattr(core_info, "cqId", None),
         servicing_device_id=getattr(core_info, "servicingDeviceId", None),
         last_event_issued_to_cq=getattr(core_info, "eventID", None),
+        sem_minus_local=sem_minus_local,
     )
 
 

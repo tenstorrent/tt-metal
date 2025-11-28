@@ -2,28 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <optional>
+#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
+
+#include <array>
 #include <utility>
 
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include "ttnn/tensor/types.hpp"
 
-namespace ttnn {
-namespace operations::conv {
+namespace ttnn::operations::conv::conv_transpose2d {
 
-using namespace tt;
-using sliding_window::SlidingWindowConfig;
-
-namespace conv_transpose2d {
-
-Result conv_transpose2d(
+Result ConvTranpose2dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -51,7 +45,7 @@ Result conv_transpose2d(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     // Inverse of sliding_window.get_output_shape()
-    SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+    sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
         .input_hw = {input_height, input_width},
         .window_hw = {kernel_size[0], kernel_size[1]},
@@ -86,13 +80,13 @@ Result conv_transpose2d(
     uint32_t input_pad_left = (full_input_width - strided_input_width) / 2;
     uint32_t input_pad_right = full_input_width - strided_input_width - input_pad_left;
 
-    log_debug(LogOp, "Input : {}x{}", input_height, input_width);
-    log_debug(LogOp, "Output : {}x{}", output_height, output_width);
+    log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
+    log_debug(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
-    log_debug(LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
-    log_debug(LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
+    log_debug(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
+    log_debug(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
-    log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
+    log_debug(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(
         kernel_size,
@@ -164,7 +158,9 @@ Result conv_transpose2d(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            input_tensor_post_tm.memory_config());
+            input_tensor_post_tm.memory_config(),
+            /*is_out_tiled*/ true,
+            conv_config.config_tensors_in_dram);
 
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate(/*force*/ true);
@@ -294,7 +290,7 @@ Result conv_transpose2d(
         conv_config.enable_weights_double_buffer,
         false,  // full_inner_dim
         false,  // enable_activation_reuse
-        false,  // config_tensors_in_dram
+        conv_config.config_tensors_in_dram,
         conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -312,54 +308,4 @@ Result conv_transpose2d(
     return conv_output;
 }
 
-Result ConvTranpose2dOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> output_padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config,
-    bool mirror_kernel,
-    bool return_output_dim,
-    bool return_weights_and_bias) {
-    return conv_transpose2d(
-        input_tensor,
-        weight_tensor,
-        device,
-        in_channels,
-        out_channels,
-        batch_size,
-        input_height,
-        input_width,
-        kernel_size,
-        stride,
-        padding,
-        output_padding,
-        dilation,
-        groups,
-        dtype,
-        bias_tensor,
-        conv_config_,
-        compute_config_,
-        memory_config,
-        mirror_kernel,
-        return_output_dim,
-        return_weights_and_bias);
-}
-
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d

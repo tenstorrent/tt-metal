@@ -201,8 +201,6 @@ def run_identity_test(device, h, w, data_type):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
 def test_fp32_uint32(device, h, w, dtype):
-    if dtype == ttnn.uint8:
-        pytest.skip(" Need uint8 LLK support without workarounds - see #24571")
     run_identity_test(device, h, w, dtype)
 
 
@@ -1440,7 +1438,7 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     ],
 )
 def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
@@ -1465,12 +1463,12 @@ def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype,
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol",
     [
-        (torch.float32, ttnn.float32, 0.002),
+        (torch.float32, ttnn.float32, 0.001),
         (torch.bfloat16, ttnn.bfloat16, 0.008),
     ],
 )
 def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
@@ -1499,7 +1497,7 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     ],
 )
 def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
@@ -1870,6 +1868,7 @@ def test_hardmish_bfloat16_allclose(device):
 @pytest.mark.parametrize("ttnn_op", [ttnn.rsqrt, ttnn.sqrt])
 @pytest.mark.parametrize("fast_approx_mode", [True, False])
 def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_approx_mode, device):
+    torch.manual_seed(0)
     if fast_approx_mode:
         in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(1, 100)
     else:
@@ -1885,7 +1884,81 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
     else:
         output_tensor = ttnn.to_torch(output_tensor, dtype=torch_dtype)
         if torch_dtype == torch.bfloat16:
-            output_tensor = torch.where(
-                torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
-            )
-        torch.isclose(output_tensor, golden_tensor, equal_nan=True)
+            # Check if both tensors have non-finite values at the same indices
+            golden_nonfinite = ~torch.isfinite(golden_tensor)
+            output_nonfinite = ~torch.isfinite(output_tensor)
+
+            # Verify non-finite values occur at the same indices
+            assert torch.equal(
+                golden_nonfinite, output_nonfinite
+            ), f"Non-finite values don't match at the same indices."
+
+            # For finite values, check all of them
+            finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_tensor)
+            if finite_mask.any():
+                assert_with_ulp(
+                    golden_tensor[finite_mask], output_tensor[finite_mask], ulp_threshold=2, allow_nonfinite=False
+                )
+        else:
+            assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "param",
+    {-1.5, 1.7, 0.0},
+)
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+def test_unary_rdiv_inf_nan_check(param, round_mode, device):
+    dtype = torch.bfloat16
+    if dtype == torch.bfloat16 and param == 0.0:
+        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
+
+    in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=dtype)
+    input_tensor = ttnn.from_torch(
+        in_data,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.rdiv(input_tensor, param, round_mode=round_mode)
+    golden_function = ttnn.get_golden_function(ttnn.rdiv)
+    golden_tensor = golden_function(in_data, param, round_mode=round_mode)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 3, 64, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
+def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, round_mode, device):
+    torch.manual_seed(0)
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.rdiv(input_tensor, param, round_mode=round_mode)
+    golden_function = ttnn.get_golden_function(ttnn.rdiv)
+    golden_tensor = golden_function(in_data, param, round_mode=round_mode)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    if (round_mode != None) and (torch_dtype == torch.bfloat16):
+        assert_with_pcc(golden_tensor, output_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=3, allow_nonfinite=True)

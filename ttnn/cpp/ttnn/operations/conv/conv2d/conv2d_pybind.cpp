@@ -21,7 +21,6 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::conv::conv2d {
@@ -186,78 +185,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("compute_config") = std::nullopt,
         py::arg("slice_config") = std::nullopt);
 
-    module.def(
-        "convert_conv_weight_tensor_to_tiled_layout",
-        &convert_conv_weight_tensor_to_tiled_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("in1_block_h"),
-        py::arg("in1_block_w"),
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "convert_conv_weight_tensor_to_special_padding_tiled_layout",
-        &convert_conv_weight_tensor_to_special_padding_tiled_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("in1_block_h"),
-        py::arg("in1_block_w"),
-        py::arg("enable_activation_reuse") = false,
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "convert_conv_weight_tensor_to_grouped_layout",
-        &convert_conv_weight_tensor_to_grouped_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("num_groups"),
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "determine_parallel_config",
-        [](const ttnn::TensorMemoryLayout& shard_layout,
-           uint32_t batch_size,
-           uint32_t input_channels,
-           uint32_t output_height,
-           uint32_t output_width,
-           uint32_t output_channels,
-           uint32_t input_channels_alignment,
-           const CoreCoord& compute_grid_size,
-           tt::tt_metal::ShardOrientation block_shard_orientation,
-           bool enable_channels_padding,
-           bool is_shard_height_tile_multiple,
-           bool is_shard_width_tile_multiple) -> ttnn::operations::sliding_window::ParallelConfig {
-            return determine_parallel_config(
-                shard_layout,
-                batch_size,
-                input_channels,
-                output_height,
-                output_width,
-                output_channels,
-                input_channels_alignment,
-                compute_grid_size,
-                block_shard_orientation,
-                enable_channels_padding,
-                is_shard_height_tile_multiple,
-                is_shard_width_tile_multiple);
-        },
-        py::arg("shard_layout"),
-        py::arg("batch_size"),
-        py::arg("input_channels"),
-        py::arg("output_height"),
-        py::arg("output_width"),
-        py::arg("output_channels"),
-        py::arg("input_channels_alignment"),
-        py::arg("compute_grid_size"),
-        py::arg("block_shard_orientation"),
-        py::arg("enable_channels_padding"),
-        py::arg("is_shard_height_tile_multiple") = true,
-        py::arg("is_shard_width_tile_multiple") = true);
-
-    module.def(
-        "create_sharded_memory_config_from_parallel_config",
-        &create_sharded_memory_config_from_parallel_config,
-        py::arg("tensor_shape"),
-        py::arg("parallel_config"),
-        py::arg("tile_size"));
-
     auto py_conv_slice_config = py::class_<Conv2dSliceConfig>(
         module,
         "Conv2dSliceConfig",
@@ -364,6 +291,7 @@ void py_bind_conv2d(py::module& module) {
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
         If true, the activation tensor will be deallocated after the halo micro-op is done.
         Should not be used if the input to the conv op is used by another op.
+        Has no effect if input tensor is in DRAM.
         )doc");
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.

@@ -52,7 +52,7 @@ def test_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 197_713_061
+    expected_device_perf_cycles_per_iteration = 158_803_279
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -117,7 +117,7 @@ def test_refiner_unet(
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_refiner_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 640_816_818
+    expected_device_perf_cycles_per_iteration = 523_063_550
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_refiner_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -146,7 +146,7 @@ def test_sdxl_refiner_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_decode_perf_device():
-    expected_device_perf_cycles_per_iteration = 932_430_106
+    expected_device_perf_cycles_per_iteration = 648_256_413
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -171,7 +171,7 @@ def test_sdxl_vae_decode_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_encode_perf_device():
-    expected_device_perf_cycles_per_iteration = 492_473_727
+    expected_device_perf_cycles_per_iteration = 325_723_130
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

@@ -9,7 +9,7 @@
 #include "dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
-#include "fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #if !defined(COMPILE_FOR_LITE_FABRIC)
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #endif
@@ -230,6 +230,36 @@ FORCE_INLINE
     };
 }
 
+// Forward packet to local relay in UDM mode
+// Unlike execute_chip_unicast_to_local_chip, this sends the FULL packet (header + payload)
+// to the relay, which will then handle forwarding to local chip workers
+//
+// !!!WARNING!!! * ENSURE RELAY HAS SPACE FOR PACKET BEFORE CALLING
+template <typename LocalRelayInterfaceT>
+__attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
+    LocalRelayInterfaceT& local_relay_interface,
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    uint16_t payload_size_bytes,
+    uint32_t transaction_id,
+    uint8_t rx_channel_id) {
+    // Assert that relay has space (best effort check)
+    ASSERT(local_relay_interface.edm_has_space_for_packet());
+
+    // Send the full packet (header + payload) to relay
+    // The relay will handle the local chip forwarding
+    uint32_t packet_address = reinterpret_cast<size_t>(packet_start);
+    uint32_t total_size_bytes = payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
+
+    // Send to relay using the same mechanism as router-to-router forwarding
+    local_relay_interface.template send_payload_non_blocking_from_address_with_trid<
+        enable_deadlock_avoidance,
+        false,  // vc1_has_different_downstream_dest - relay doesn't use VC1
+        tt::tt_fabric::edm_to_downstream_noc,
+        false,  // stateful_api
+        true    // increment_pointers
+        >(packet_address, total_size_bytes, transaction_id);
+}
+
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
@@ -250,7 +280,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 cached_routing_fields) {
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         packet_header->routing_fields.value = cached_routing_fields.value + 1;
     }
@@ -259,29 +289,13 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-#if defined(DYNAMIC_ROUTING_ENABLED)
-    tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
-    // Clear north/south when turning from trunk->branch
-    downstream_edm_interface.template update_edm_buffer_slot_word<false>(
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
-        0,
-        tt::tt_fabric::edm_to_downstream_noc);
-    std::uintptr_t offset =
-        reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::EAST]));
-    downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
-#else
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
         std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
         downstream_edm_interface.template update_edm_buffer_slot_word(
             offset, value, tt::tt_fabric::edm_to_downstream_noc);
     }
-#endif
 }
-
-FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* /*packet_header*/,
-    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring

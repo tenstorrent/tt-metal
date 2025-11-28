@@ -11,7 +11,7 @@ class RefinerModelOptimisations(ModelOptimisations):
         self,
         conv_act_dtype=ttnn.bfloat16,
         conv_w_dtype=ttnn.bfloat16,
-        attention_weights_dtype=ttnn.bfloat16,
+        attention_weights_dtype=ttnn.bfloat8_b,
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)

@@ -289,6 +289,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             num_groups);
     }
 
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of shard spec to address "
+        "this.",
+        num_groups_per_core);
+
     // subblock
     uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
     auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
@@ -398,7 +404,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size;
+    uint32_t in2_CB_size = single_tile_size * (use_welford ? 2 : 1);
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
@@ -409,18 +415,19 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     // input mask
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size = block_wt * in_mask_single_tile_size * 2;  // double buffer
+    uint32_t in_mask_CB_size =
+        block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);  // double buffer
     // negative mask
     uint32_t in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;  // double buffer
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t x_CB_size = interm_block_tiles * single_tile_size;
+    uint32_t x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
     // In welford, we both store mean and var here, so double the size
     uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
-    uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
-    uint32_t ex2pe_CB_size = ex_partial_CB_size;
+    uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);  // the final result Ex
+    uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
 
@@ -560,7 +567,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
-        (std::uint32_t)num_groups_per_core * num_batches_per_core,
+        (std::uint32_t)num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
@@ -569,11 +576,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)TILE_HEIGHT};
     if (use_welford) {
         reader_mcast_sender_compile_time_args.push_back(block_ht * block_wt);
+        reader_mcast_sender_compile_time_args.push_back(num_groups_per_core);
     }
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_groups_per_core * num_batches_per_core,
+        (std::uint32_t)num_batches_per_core * (use_welford ? 1 : num_groups_per_core),
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
@@ -581,6 +589,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)TILE_HEIGHT};
     if (use_welford) {
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
+        reader_mcast_receiver_compile_time_args.push_back(num_groups_per_core);
     }
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -658,7 +667,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_sharded_gn_rm_gb_v2.cpp";
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_writer_unary_sharded_gn_rm_gb_v2.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "writer_unary_sharded_gn_rm_gb_v2.cpp");
     auto writer_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -846,11 +858,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .set_page_size(in3_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
     // in4 scaler-c
-    uint32_t in4_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, cb_data_format}})
-            .set_page_size(in4_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    if (!use_welford) {
+        uint32_t in4_cb_index = tt::CBIndex::c_4;
+        tt::tt_metal::CircularBufferConfig in4_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, cb_data_format}})
+                .set_page_size(in4_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    }
     // gamma
     if (gamma.has_value()) {
         uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1269,6 +1283,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of core grid to address "
+        "this.",
+        num_groups_per_core);
+
     // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
     // computed by testing different powers of 2. This is a heuristic.
     if (num_out_blocks == -1) {
@@ -1447,7 +1467,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     // input mask
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size = block_wt * in_mask_single_tile_size * 2;  // double buffer
+    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+                                           : block_wt * in_mask_single_tile_size * 2;
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
@@ -1459,13 +1480,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     uint32_t xmm_CB_size_group_2 = 0;
     uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
     uint32_t ex2_partial_CB_size = single_tile_size;                         // partial Ex2
-    uint32_t ex_global_CB_size = ex_partial_CB_size;                         // the final result Ex
-    uint32_t ex2_global_CB_size = ex2_partial_CB_size;                       // the final result Ex2
+    uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);  // the final result Ex
+    uint32_t ex2_global_CB_size = ex2_partial_CB_size;                                          // the final result Ex2
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm2_CB_size_group_2 = 0;
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm3_CB_size_group_2 = 0;
-    uint32_t ex2pe_CB_size = ex_partial_CB_size;
+    uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
     uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     // output buffer size
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
@@ -1492,6 +1513,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         // output buffer size
         out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
         out_CB_size_group_2 = in0_block_tiles_group_2 * out_single_tile_size;
+    }
+
+    if (use_welford) {
+        x_CB_size_group_1 = single_tile_size * 1;
+        x_CB_size_group_2 = single_tile_size * 1;
+        xmm_CB_size_group_1 = single_tile_size * 3;
+        xmm_CB_size_group_2 = single_tile_size * 3;
     }
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
@@ -1777,7 +1805,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_writer_unary_gn_rm_gb.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "writer_unary_gn_rm_gb.cpp");
     auto writer_kernels_id_group_1 = CreateKernel(
         program,
         writer_kernel,
@@ -2007,17 +2038,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, repack_cb_config);
     }
     // x
-    if (!use_welford) {
-        uint32_t x_cb_index = tt::CBIndex::c_24;
-        tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
-            tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
-                .set_page_size(x_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
-        tt::tt_metal::CircularBufferConfig x_cb_config_group_2 =
-            tt::tt_metal::CircularBufferConfig(x_CB_size_group_2, {{x_cb_index, cb_data_format}})
-                .set_page_size(x_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, x_cb_config_group_2);
-    }
+    uint32_t x_cb_index = tt::CBIndex::c_24;
+    tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
+            .set_page_size(x_cb_index, single_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig x_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(x_CB_size_group_2, {{x_cb_index, cb_data_format}})
+            .set_page_size(x_cb_index, single_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, x_cb_config_group_2);
     // xmm
     uint32_t xmm_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig xmm_cb_config_group_1 =
@@ -2515,6 +2544,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    TT_FATAL(
+        (!use_welford) || (num_groups_per_core <= 16),
+        "num_groups_per_core ({}) must be <= 16 when use_welfords is true. Increase the width of core grid to address "
+        "this.",
+        num_groups_per_core);
+
     // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
     // computed by testing different powers of 2. This is a heuristic.
     if (num_out_blocks == -1) {
@@ -2648,7 +2683,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     // input mask
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size = block_wt * in_mask_single_tile_size * 2;  // double buffer
+    uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
+                                           : block_wt * in_mask_single_tile_size * 2;
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
@@ -2657,14 +2693,19 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);  // partial Ex
     uint32_t ex2_partial_CB_size = single_tile_size;                         // partial Ex2
-    uint32_t ex_global_CB_size = ex_partial_CB_size;                         // the final result Ex
-    uint32_t ex2_global_CB_size = ex2_partial_CB_size;                       // the final result Ex2
+    uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);  // the final result Ex
+    uint32_t ex2_global_CB_size = ex2_partial_CB_size;                                          // the final result Ex2
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
-    uint32_t ex2pe_CB_size = ex_partial_CB_size;
+    uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
     uint32_t reciprocal_CB_size = reciprocals.has_value() ? reciprocals.value().buffer()->aligned_size_per_bank() : 0;
     // output buffer size
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
+
+    if (use_welford) {
+        x_CB_size_group_1 = single_tile_size * 1;
+        xmm_CB_size_group_1 = single_tile_size * 3;
+    }
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt_group_1: {}", per_core_Mt_group_1);
@@ -2931,7 +2972,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
 
     // writer kernel
     std::string writer_kernel =
-        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
+        (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "welford_writer_unary_gn_rm_gb.cpp"
+                     : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                       "writer_unary_gn_rm_gb.cpp");
     auto writer_kernels_id_group_1 = CreateKernel(
         program,
         writer_kernel,
@@ -3128,13 +3172,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
         tt::tt_metal::CreateCircularBuffer(program, all_cores, repack_cb_config);
     }
     // x
-    if (!use_welford) {
-        uint32_t x_cb_index = tt::CBIndex::c_24;
-        tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
-            tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
-                .set_page_size(x_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
-    }
+    uint32_t x_cb_index = tt::CBIndex::c_24;
+    tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
+            .set_page_size(x_cb_index, single_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
     // xmm
     uint32_t xmm_cb_index = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig xmm_cb_config_group_1 =

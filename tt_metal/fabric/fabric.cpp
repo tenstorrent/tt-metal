@@ -6,11 +6,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,7 +22,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 #include "fabric_host_utils.hpp"
@@ -197,7 +197,8 @@ void append_fabric_connection_rt_args(
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-        const auto sender_channel = is_2d_fabric ? router_direction : 0;
+        // Sender channel 0 is always for local worker in the new design
+        const auto sender_channel = 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
@@ -293,10 +294,6 @@ void append_routing_plane_connection_manager_rt_args(
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
         kernel->add_defines({{"FABRIC_2D", "1"}});
-        if (fabric_context.is_dynamic_routing_enabled()) {
-            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
-            kernel->add_defines({{"DYNAMIC_ROUTING_ENABLED", "1"}});
-        }
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
@@ -337,9 +334,10 @@ void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
-    FabricTensixConfig fabric_tensix_config) {
+    FabricTensixConfig fabric_tensix_config,
+    FabricUDMMode fabric_udm_mode) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
@@ -361,11 +359,7 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
 // TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196

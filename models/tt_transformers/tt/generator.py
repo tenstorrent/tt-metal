@@ -27,7 +27,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.model_config import CheckpointType
 
 
 @dataclass(frozen=True)
@@ -92,8 +91,7 @@ class Generator:
 
         self.prefill_traces_warmup = True
         for model_id in range(self.data_parallel):
-            for supported_length in [128, 256, 512, 1024, 2048, 4096, 8192]:
-                # Only sequence lengths used by Llama-3.1-8B since we only support trace for Llama-3.1-8B for now
+            for supported_length in self.model_args[0].trace_prefill_supported_seq_lens:
                 warmup_tokens = torch.zeros(1, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length], dtype=torch.long)
                 warmup_empty_slots = list(range(1))
@@ -750,9 +748,7 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
-            not self.model_args[0].is_llama_vision()
-        ):
+        if not self.model_args[0].is_llama_vision():
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -969,9 +965,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
-            not self.model_args[0].is_llama_vision()
-        ):
+        if not self.model_args[0].is_llama_vision():
             return self.decode_forward_text(
                 tokens,
                 start_pos,

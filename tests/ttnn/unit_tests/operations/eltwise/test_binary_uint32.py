@@ -49,6 +49,11 @@ BINARY_OP_TEST_CASES = [
         [(0, 100), (500, 1e3), (1e4, 1e5), (1e6, 1e7), (2e9, 2147483647)],
         [(0, 500), (1e3, 1e4), (1e2, 1e4), (1, 1e2), (1, 1)],
     ),
+    (
+        ttnn.squared_difference,
+        [(0, 100), (500, 1000), (1500, 5000), (41000, 80000)],
+        [(0, 500), (1000, 1500), (4500, 10000), (10000, 50000)],
+    ),
     # Comparison and logical ops
     *[
         (op, COMMON_RANGE_A, COMMON_RANGE_B)
@@ -108,6 +113,7 @@ def test_binary_uint32_full_range(ttnn_op, value_ranges_a, value_ranges_b, input
         (ttnn.eq, 0, 1e8, 1e5, 1e9),
         (ttnn.ne, 0, 1e8, 1e5, 1e9),
         (ttnn.logical_and, 0, 1e8, 1e5, 1e9),
+        (ttnn.squared_difference, 0, 32767, 32767, 65535),
     ],
 )
 @pytest.mark.parametrize(
@@ -188,6 +194,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         (ttnn.logical_and, 0, 1073741824, 1073741824, 2147483647),
         (ttnn.logical_or, 0, 1073741824, 1073741824, 2147483647),
         (ttnn.logical_xor, 0, 1073741824, 1073741824, 2147483647),
+        (ttnn.squared_difference, 32767, 65535, 0, 32767),
     ],
 )
 @pytest.mark.parametrize(
@@ -579,3 +586,44 @@ def test_binary_mul_uint32_upper_edge_cases(device):
     # Torch output: tensor([4294967295, 4294967295, 0, 4294967294, 4294967294, 4294967295, 4294967040, 4294836225])
     # TT output: ttnn.Tensor([4294967295, 4294967295, 0, 4294967294, 4294967294, 4294967295, 4294967040, 4294836225],
     #               shape=Shape([8]), dtype=DataType::UINT32, layout=Layout::TILE)
+
+
+def test_binary_squared_difference_uint32_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 1, 0, 5, 10, 65535, 0, 4294967295, 4294901760, 4294967295])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 10, 2, 65535, 65535, 4294901760, 4294967295, 4294901761])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.squared_difference)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    output_tensor = ttnn.squared_difference(input_tensor_a, input_tensor_b)
+
+    # Since ttnn.to_torch does not support uint32 to int64 conversion, we convert torch_output_tensor to uint32 and compare the results using ttnn.eq
+    torch_output_tensor = ttnn.from_torch(
+        torch_output_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    comparison_result = ttnn.eq(output_tensor, torch_output_tensor)
+    comparison_torch = ttnn.to_torch(comparison_result)
+
+    # Verify all comparisons are True (all elements match)
+    assert torch.all(comparison_torch), f"Mismatch found in uint32 squared_difference results"
+    # Torch output: tensor([    0,     1,     1,    25,    64,     0, 4294836225, 4294836225, 4294836225, 4294705156])
+    # TT output: ttnn.Tensor([    0,     1,     1,    25,    64,     0, 4294836225, 4294836225, 4294836225, 4294705156],
+    #               shape=Shape([10]), dtype=DataType::UINT32, layout=Layout::TILE)

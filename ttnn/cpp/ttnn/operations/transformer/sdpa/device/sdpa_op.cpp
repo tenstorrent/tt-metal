@@ -8,6 +8,7 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -37,9 +38,7 @@ void ScaledDotProductAttention::validate(
                 input_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
             input_tensor.dtype());
-        TT_FATAL(
-            input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Operands to SDPA need to be in DRAM");
+        TT_FATAL(!input_tensor.is_sharded(), "Operands to SDPA need to be DRAM/L1 interleaved");
     }
 
     auto validate_padding = [&](const Tensor& tensor) {
@@ -395,9 +394,8 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
 
     // calculate arch specific parameters
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE
-                    ? output_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);

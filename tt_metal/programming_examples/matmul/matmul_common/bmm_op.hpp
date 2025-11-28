@@ -8,7 +8,6 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 #include <umd/device/types/xy_pair.hpp>

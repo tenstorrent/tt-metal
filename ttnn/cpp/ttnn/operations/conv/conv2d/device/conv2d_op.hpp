@@ -29,7 +29,7 @@ struct Conv2dConfig {
     // Fused activation function as UnaryWithParam
     std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
 
-    // If user tensor will be deallocated if it's on device.
+    // If user tensor will be deallocated if it's on device in L1 (will have no effect if input tensor is in DRAM).
     bool deallocate_activation = false;
 
     // If true && dellocate_activation is true, then after halo device op is done,
@@ -192,7 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const sliding_window::ParallelConfig& parallel_config,
     const std::vector<uint32_t>& op_trace_metadata,
@@ -349,7 +349,7 @@ struct Conv2d {
 Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,

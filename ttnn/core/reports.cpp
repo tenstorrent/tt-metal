@@ -11,7 +11,6 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::reports {
