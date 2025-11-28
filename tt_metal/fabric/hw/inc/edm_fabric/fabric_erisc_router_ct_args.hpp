@@ -279,35 +279,7 @@ static_assert(
     "Notify worker marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 6;
-constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
-constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
-constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
-constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 3);
-constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 4);
-constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 5);
-constexpr size_t sender_channel_3_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 6);
-constexpr size_t sender_channel_4_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 7);
-
-constexpr size_t MAIN_CT_ARGS_IDX_4 = MAIN_CT_ARGS_IDX_3 + 8;
-constexpr bool enable_packet_header_recording = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 0) != 0;
-constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 1);
-constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 2);
-constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 3);
-constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 4);
-constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 5);
-constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 6);
-constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 7);
-constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 8);
-constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 9);
-constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 10);
-constexpr size_t sender_3_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 11);
-constexpr size_t sender_3_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 12);
-constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 13);
-constexpr size_t sender_4_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 14);
-
-constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_IDX_4 + 15;
+constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_IDX_2 + 6;
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     fill_array_with_next_n_args<bool, sender_channel_serviced_args_idx, MAX_NUM_SENDER_CHANNELS>();
 constexpr size_t receiver_channel_serviced_args_idx =
@@ -407,10 +379,13 @@ static_assert(
 ///////////////////////////////////////////////
 // Telemetry
 constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
-constexpr PerfTelemetryRecorderType perf_telemetry_mode =
-    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
 
-constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 2;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
 
 

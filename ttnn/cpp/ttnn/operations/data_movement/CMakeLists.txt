@@ -62,7 +62,6 @@ target_sources(
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
-            tilize_with_val_padding/tilize_with_val_padding_common.hpp
             tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
             transpose/transpose.hpp
             untilize/untilize.hpp
@@ -146,7 +145,8 @@ target_sources(
         repeat/repeat.cpp
         repeat_interleave/repeat_interleave.cpp
         reshape_on_device/device/reshape_op.cpp
-        reshape_on_device/device/reshape_program_factory.cpp
+        reshape_on_device/device/reshape_tile_program_factory.cpp
+        reshape_on_device/device/reshape_rm_program_factory.cpp
         reshape_on_device/reshape.cpp
         reshape_view/device/host/reshape_rm_program_factory.cpp
         reshape_view/device/host/reshape_tiled_program_factory.cpp
@@ -175,9 +175,12 @@ target_sources(
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-        slice/device/slice_op.cpp
-        slice/device/slice_program_factory.cpp
-        slice/device/slice_program_factory_stride.cpp
+        slice/device/slice_device_operation.cpp
+        slice/device/slice_program_factory_rm.cpp
+        slice/device/slice_program_factory_rm_sharded.cpp
+        slice/device/slice_program_factory_rm_stride.cpp
+        slice/device/slice_program_factory_tile.cpp
+        slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
         split/device/split_op.cpp
         split/device/split_program_factory.cpp
