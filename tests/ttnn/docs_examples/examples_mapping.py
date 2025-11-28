@@ -339,6 +339,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.prod": reduction.test_prod,
     "ttnn.topk": reduction.test_topk,
     "ttnn.cumsum": reduction.test_cumsum,
+    "ttnn.ema": reduction.test_ema,
+    "ttnn.moe": reduction.test_moe,
     # Data movement
     "ttnn.concat": data_movement.test_concat,
     "ttnn.nonzero": data_movement.test_nonzero,
