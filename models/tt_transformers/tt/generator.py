@@ -86,6 +86,7 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
+        # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
 
     def _chunk_sampling_param(self, values):
@@ -500,8 +501,7 @@ class Generator:
                     sampling_params_list[i], 32
                 )  # Sampling needs params padded to 32 regardless of batch_size
                 sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None:
-                    continue
+                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
                 sampling_module.reset_sampling_params(formatted_params)
                 if reset_batch:
                     sampling_module.reset_seed(formatted_params.seed)
@@ -608,7 +608,6 @@ class Generator:
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
             device_inputs.append(device_inputs_i)
 
-        split_sampling_per_device = []
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             split_enabled = (
@@ -616,7 +615,6 @@ class Generator:
                 and sampling_module is not None
                 and getattr(sampling_module, "enable_internal_trace", False)
             )
-            split_sampling_per_device.append(split_enabled)
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
