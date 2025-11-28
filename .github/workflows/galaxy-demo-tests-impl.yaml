@@ -84,6 +84,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
+          NO_PROMPT: 1
         run: |
           pytest -n auto \
             models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py \
