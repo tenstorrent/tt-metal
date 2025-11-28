@@ -82,6 +82,7 @@ target_sources(
             reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/reshape_kernel_common.hpp
             tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
             untilize/device/kernels/dataflow/reader_unary_start_id.cpp
             untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
