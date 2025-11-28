@@ -18,6 +18,11 @@ void kernel_main() {
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks = get_arg_val<uint32_t>(1);
     uint32_t start_stick_id = get_arg_val<uint32_t>(2);
+    uint32_t cos_angle_bits = get_arg_val<uint32_t>(3);
+    uint32_t sin_angle_bits = get_arg_val<uint32_t>(4);
+    uint32_t center_x_bits = get_arg_val<uint32_t>(5);
+    uint32_t center_y_bits = get_arg_val<uint32_t>(6);
+    uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
 
     // Compile-time arguments
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
@@ -27,14 +32,7 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
 
-    // Rotation parameters (passed as uint32 bit patterns, reinterpreted as float)
-    constexpr uint32_t cos_angle_bits = get_compile_time_arg_val(6);
-    constexpr uint32_t sin_angle_bits = get_compile_time_arg_val(7);
-    constexpr uint32_t center_x_bits = get_compile_time_arg_val(8);
-    constexpr uint32_t center_y_bits = get_compile_time_arg_val(9);
-    constexpr uint32_t fill_value_bf16 = get_compile_time_arg_val(10);
-
-    // Reinterpret bits as float
+    // Reinterpret rotation parameter bits as float
     union {
         uint32_t u;
         float f;
@@ -50,8 +48,8 @@ void kernel_main() {
     const float center_x = cx_conv.f;
     const float center_y = cy_conv.f;
 
-    // Tensor accessor for input tensor (starts at compile-time arg index 11)
-    constexpr auto src_args = TensorAccessorArgs<11>();
+    // Tensor accessor for input tensor (starts at compile-time arg index 6)
+    constexpr auto src_args = TensorAccessorArgs<6>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
     // Precompute constants
@@ -84,6 +82,7 @@ void kernel_main() {
         const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
 
         // Compute corner coordinates for bilinear interpolation
+        // COORDINATE FIX: Use y_in for height, x_in for width (matching grid_sample convention)
         const int32_t h0 = static_cast<int32_t>(floor(y_in));
         const int32_t h1 = h0 + 1;
         const int32_t w0 = static_cast<int32_t>(floor(x_in));

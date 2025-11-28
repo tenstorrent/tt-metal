@@ -97,13 +97,11 @@ ImageRotateDeviceOperation::tensor_return_value_t ImageRotateDeviceOperation::cr
 
 tt::stl::hash::hash_t ImageRotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Cache based on tensor shapes and memory configs, but not angle/center/fill
-    // since those don't affect program structure
+    // Cache based on tensor shape and memory config only
+    // angle, center, and fill are runtime args and don't affect program structure
+    // expand is validated to be false, so doesn't need to be in hash
     return tt::stl::hash::hash_objects_with_default_seed(
-        operation_attributes.expand,
-        operation_attributes.memory_config,
-        tensor_args.input.logical_shape(),
-        tensor_args.input.dtype());
+        operation_attributes.memory_config, tensor_args.input.logical_shape(), tensor_args.input.dtype());
 }
 
 std::tuple<ImageRotateDeviceOperation::operation_attributes_t, ImageRotateDeviceOperation::tensor_args_t>
