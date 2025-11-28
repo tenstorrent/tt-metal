@@ -64,7 +64,7 @@ void kernel_main() {
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_user_id);
 
-    // Send result to compute kernel via mailbox
+    // Send seed to compute kernel via mailbox
     if (is_user_id) {
         ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, seed);
         ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, seed);

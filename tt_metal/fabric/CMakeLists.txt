@@ -49,6 +49,7 @@ target_sources(
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
@@ -64,6 +65,7 @@ target_sources(
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp
+        topology_mapper_utils.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -71,7 +73,7 @@ include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
 )
@@ -117,4 +119,15 @@ install(
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
+)
+
+# Install proto schema files for external use
+install(
+    DIRECTORY
+        protobuf
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/proto
+    COMPONENT metalium-dev
+    FILES_MATCHING
+    PATTERN
+    "*.proto"
 )
