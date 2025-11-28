@@ -74,7 +74,11 @@ NlpCreateHeadsFalcon7BDeviceOperation::create_output_tensors(
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> NlpCreateHeadsFalcon7BDeviceOperation::invoke(
-    const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const Tensor& input,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& preallocated_q,
+    const std::optional<Tensor>& preallocated_k,
+    const std::optional<Tensor>& preallocated_v) {
     const tt::tt_metal::MemoryConfig output_mem_config = memory_config.value_or(input.memory_config());
     return {operation_attributes_t{output_mem_config}, tensor_args_t{input}};
 }
