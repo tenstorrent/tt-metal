@@ -186,6 +186,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"topk_groups", operation_attributes.topk_groups},
         {"n_groups", operation_attributes.n_groups},
         {"log_topk_groups", std::log2(operation_attributes.topk_groups)},
+        {"log_n_groups", std::log2(operation_attributes.n_groups)},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};

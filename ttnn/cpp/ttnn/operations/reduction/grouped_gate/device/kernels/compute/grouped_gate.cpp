@@ -168,18 +168,20 @@ void topk_group_scores(
     acquire_dst();
     // local sort into k groups
     cb_wait_front(group_scores_cb_index, 1);
-    // UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
+    UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
     cb_wait_front(group_indices_cb_index, 1);
-    UNPACK(print_tile(group_indices_cb_index, 0, true, 0, 8, 0, 16));
+    // UNPACK(print_tile(group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     // copy scores tile to dest reg 0
     copy_tile_to_dst_init_short(group_scores_cb_index);
     copy_tile(group_scores_cb_index, 0, 0);
 
     // copy indices tile to dest reg 2
-    copy_tile_to_dst_init_short(group_indices_cb_index);
+    // CVELE: Going to be correctly packed out if we use the reconfig call
+    copy_tile_to_dst_init_short_with_dt(group_scores_cb_index, group_indices_cb_index);
+    // CVELE: If we use this call, dprint will not use the correct data format
+    // copy_tile_to_dst_init_short(group_indices_cb_index);
     copy_tile(group_indices_cb_index, 0, 2);
-    dprint_tensix_dest_reg(2);
 
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
@@ -187,6 +189,8 @@ void topk_group_scores(
     // pack index tile into sorted_group_indices_cb_index
     pack_reconfig_data_format(sorted_group_indices_cb_index);
     pack_tile(2, sorted_group_indices_cb_index);
+    // CVELE: If copy_tile_to_dst_init_short_with_dt is called, this will print correct values
+    PACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     cb_pop_front(group_scores_cb_index, 1);
     // don't pop group indices as it gets re-used for the next tile heights
@@ -224,6 +228,7 @@ void MAIN {
     constexpr uint32_t sorted_group_indices_cb_index = get_named_compile_time_arg_val("sorted_group_indices_cb_index");
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
@@ -285,7 +290,7 @@ void MAIN {
             sorted_group_indices_cb_index,
             switch_dir,
             ascending,
-            log_topk_groups);
+            log_n_groups - 1);
 
         cb_wait_front(sorted_group_indices_cb_index, 1);
         // UNPACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
