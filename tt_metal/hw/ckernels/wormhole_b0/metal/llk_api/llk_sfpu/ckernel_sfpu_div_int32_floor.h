@@ -52,19 +52,12 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);
 
     // Initial approximation q = a * 1/b.
-    sfpi::vFloat q_f = a_f * inv_b_f;
+    // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
+    // the mantissa so that we extract the top 22 bits of the result.
+    sfpi::vFloat q_f = a_f * inv_b_f + 8589934592.0f;
 
-    // Convert from float to int32, truncating any fractional parts.  No sign
-    // check is necessary as q will always be positive, due to using abs(a) and
-    // abs(b).
-    sfpi::vUInt q = 0;
-    sfpi::vInt exp = sfpi::exexp(q_f);
-    v_if(exp >= 0) {
-        q = sfpi::exman8(q_f);
-        exp = exp - 23;
-        q = q << exp;
-    }
-    v_endif;
+    sfpi::vUInt MASK_11 = 0x7ff;
+    sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  Note: we only care about the top ~23 bits.
@@ -72,10 +65,6 @@ sfpi_inline void calculate_div_int32_body(
     // Now q2 = q>>21, q1 = q>>10
     // And so qb = (q2<<21 + q1<<10) * (b2<<22 + b1<<11 + b0)
     //           = (q2<<21 * b0) + (q1<<10 * b1<<11) + (q1<<10 * b0)
-
-    sfpi::vUInt MASK_11 = 0x7ff;
-
-    q = q >> 10;
     sfpi::vFloat q1 = int32_to_float(q & MASK_11, 0);
     sfpi::vFloat q2 = int32_to_float(q >> 11, 0);
     sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, 0);

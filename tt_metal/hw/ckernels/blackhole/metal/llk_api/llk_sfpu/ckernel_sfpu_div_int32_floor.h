@@ -43,19 +43,10 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);
 
     // Initial approximation q = a * 1/b.
-    sfpi::vFloat q_f = a_f * inv_b_f;
-
-    // Convert from float to int32, truncating any fractional parts.  No sign
-    // check is necessary as q will always be positive, due to using abs(a) and
-    // abs(b).
-    sfpi::vUInt q = 0;
-    sfpi::vInt exp = sfpi::exexp(q_f);
-    v_if(exp >= 0) {
-        q = sfpi::exman8(q_f);
-        exp = exp - 23;
-        q = q << exp;
-    }
-    v_endif;
+    // We add a special mantissa alignment factor 2.0f**(23+9), which shifts
+    // the mantissa so that we extract the top 23 bits of the result.
+    sfpi::vFloat q_f = a_f * inv_b_f + 4294967296.0f;
+    sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -63,7 +54,6 @@ sfpi_inline void calculate_div_int32_body(
     // 23 bits, so we can compute qb = (q1<<9 + 0) * (b1<<23 + b0)
     //                               = (q1<<9) * b0
 
-    q >>= 9;
     sfpi::vInt qb;
 
     // Despite the name, SFPMUL24 multiplies two 23-bit integers, giving the
