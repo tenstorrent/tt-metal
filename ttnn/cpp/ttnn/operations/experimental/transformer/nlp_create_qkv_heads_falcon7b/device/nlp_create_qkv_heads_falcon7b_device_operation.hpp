@@ -33,11 +33,7 @@ struct NlpCreateHeadsFalcon7BDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& preallocated_q = std::nullopt,
-        const std::optional<Tensor>& preallocated_k = std::nullopt,
-        const std::optional<Tensor>& preallocated_v = std::nullopt);
+        const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer::qkv_heads_falcon7b
