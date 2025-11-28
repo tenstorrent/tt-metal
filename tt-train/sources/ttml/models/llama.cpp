@@ -257,14 +257,23 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
             }
         }
 
-        // Update cache position
-        // Note: Caller must pass the actual sequence length, not padded length
-        // Prefill (cache_position == 0): increment by prompt length
+        // Update cache position based on mask
+        // Prefill (cache_position == 0): increment by actual sequence length from mask
         // Decode (cache_position > 0): increment by 1 (single token)
         if (m_cache_position == 0) {
-            // Prefill mode - will be set correctly by caller after this forward pass
-            // Don't increment automatically here since we don't know the actual (non-padded) length
-            // This will be fixed in the inference script
+            // Prefill mode - extract actual sequence length from mask
+            // Mask shape: [1, 1, padded_prompt_seq_len, padded_prompt_seq_len]
+            // Count non-zero rows to get actual query sequence length
+            auto mask_tensor = mask->get_value();
+            auto mask_host = mask_tensor.to_vector<float>();
+            auto mask_shape = mask_tensor.logical_shape();
+
+            uint32_t padded_prompt_seq_len = mask_shape[-1];
+
+            // Count rows with at least one non-zero value (valid positions)
+            while (mask_host[m_cache_position * padded_prompt_seq_len] > 0.0f) {
+                m_cache_position++;
+            }
         } else {
             // Decode: always increment by 1 (single token)
             m_cache_position += 1;
