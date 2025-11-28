@@ -785,7 +785,7 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
                 // This ensures (x,y) and (y,x) are treated as the same shape
                 auto larger_dim = std::max(x, y);
                 auto smaller_dim = std::min(x, y);
-                MeshShape shape(larger_dim, smaller_dim);
+                MeshShape shape(smaller_dim, larger_dim);
 
                 // if odd shape then skip
                 if ((larger_dim % 2 != 0 && larger_dim != 1) || (smaller_dim % 2 != 0 && smaller_dim != 1)) {
