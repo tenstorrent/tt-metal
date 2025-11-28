@@ -60,10 +60,10 @@ sfpi_inline void calculate_div_int32_body(
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
     // Since inv_b is only accurate to ~23 bits, we only care about the upper
-    // 23 bits, so we can compute qb = (q1<<8 + 0) * (b1<<23 + b0)
-    //                               = (q1<<8) * b0
+    // 23 bits, so we can compute qb = (q1<<9 + 0) * (b1<<23 + b0)
+    //                               = (q1<<9) * b0
 
-    q >>= 8;
+    q >>= 9;
     sfpi::vInt qb;
 
     // Despite the name, SFPMUL24 multiplies two 23-bit integers, giving the
@@ -71,8 +71,8 @@ sfpi_inline void calculate_div_int32_body(
     // do not need to be masked as this is done internally.
     qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
 
-    qb <<= 8;
-    q <<= 8;
+    qb <<= 9;
+    q <<= 9;
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
