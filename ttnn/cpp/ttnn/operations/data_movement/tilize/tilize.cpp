@@ -40,6 +40,7 @@ ttnn::Tensor ExecuteTilize::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore,
+    bool use_low_perf,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -67,6 +68,7 @@ ttnn::Tensor ExecuteTilize::invoke(
                 use_multicore,
                 enough_space_width,
                 enough_space_height,
+                use_low_perf,
                 sub_core_grids},
             {input_tensor},
             {},

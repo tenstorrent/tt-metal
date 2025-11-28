@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids) {
+    const Tensor& a, Tensor& output, const bool use_low_perf, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     CoreRange default_core({0, 0}, {0, 0});
@@ -48,24 +48,24 @@ operation::ProgramWithCallbacks tilize_single_core(
     uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
-    // Ensure we don't intrude into storage space
-    // uint32_t max_l1_size =
-    //    (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
-    // uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
-    // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
-    /*
-    if (num_tiles_in_row <= max_tiles) {
-        num_tiles_per_block = num_tiles_in_row;
-    } else {
-        for (uint32_t n_t = max_tiles; n_t > 0; n_t--) {
-            if (num_tiles_in_row % n_t == 0) {
-                num_tiles_per_block = n_t;
-                break;
+    if (!use_low_perf) {
+        // Ensure we don't intrude into storage space
+        uint32_t max_l1_size =
+            (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
+        // Currently need the number of tiles in a row to be divisible by tiles in a block
+        if (num_tiles_in_row <= max_tiles) {
+            num_tiles_per_block = num_tiles_in_row;
+        } else {
+            for (uint32_t n_t = max_tiles; n_t > 0; n_t--) {
+                if (num_tiles_in_row % n_t == 0) {
+                    num_tiles_per_block = n_t;
+                    break;
+                }
             }
         }
     }
-    */
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;

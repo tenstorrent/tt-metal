@@ -421,23 +421,21 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
 
 
 @pytest.mark.parametrize("shape", [[32, 128 * 1024]])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize(
     "sub_core_grids",
     (
         # single core
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         # multiple disjoint cores
-        # ttnn.CoreRangeSet(
-        #    [
-        #        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
-        #        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
-        #    ]
-        # ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
     ),
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -447,12 +445,12 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
     ],
     indirect=True,
 )
-def test_to_layout_subgrid(shape, input_layout, output_layout, device, sub_core_grids, dtype):
+def test_to_layout_low_perf(shape, device, sub_core_grids, dtype):
     torch.manual_seed(0)
     input_a = torch.randn(shape, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=dtype)
-    output_tensor = ttnn.to_layout(input_tensor, output_layout, sub_core_grids=sub_core_grids)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+    output_tensor = ttnn.tilize(input_tensor, sub_core_grids=sub_core_grids, use_low_perf=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(input_a, output_tensor)

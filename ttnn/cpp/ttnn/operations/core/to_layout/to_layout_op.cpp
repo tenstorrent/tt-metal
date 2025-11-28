@@ -114,7 +114,7 @@ Tensor to_layout_impl(
                             "TILE_SIZE!");
                     }
                 }
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize, sub_core_grids);
+                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize, false, sub_core_grids);
             } else {
                 throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
