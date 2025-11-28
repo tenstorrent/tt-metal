@@ -13,7 +13,7 @@
 
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
