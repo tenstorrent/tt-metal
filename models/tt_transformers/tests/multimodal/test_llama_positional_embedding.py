@@ -8,11 +8,8 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoModelForVision2Seq
-from transformers.models.mllama.image_processing_mllama import (
-    convert_aspect_ratios_to_ids,
-    get_all_supported_aspect_ratios,
-)
+from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers.models.mllama.image_processing_mllama import convert_aspect_ratios_to_ids
 from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPositionEmbedding
 
 import ttnn
@@ -69,8 +66,6 @@ def test_positional_embedding_inference(
 
     ntok = model_args.vision_chunk_ntok
     dim = model_args.vision_dim
-    image_size = (model_args.vision_chunk_size, model_args.vision_chunk_size)
-    patch_size = (model_args.vision_patch_size, model_args.vision_patch_size)
 
     ##### Check parms #####
     max_num_tiles = model_args.vision_max_num_chunks
@@ -107,26 +102,9 @@ def test_positional_embedding_inference(
 
     tt_aspect_ratios = aspect_ratios.tolist()
 
-    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
-
-    # subclass MllamaPrecomputedPositionEmbedding expects parameters in the following format
-    # Note that the layer assumes square image and patches
-    class Config:
-        def __init__(
-            self,
-            max_num_tiles=max_num_tiles,
-            hidden_size=dim,
-            max_aspect_ratio_id=len(supported_aspect_ratios),
-            image_size=image_size[0],
-            patch_size=patch_size[0],
-        ):
-            self.max_num_tiles = max_num_tiles
-            self.hidden_size = hidden_size
-            self.max_aspect_ratio_id = max_aspect_ratio_id
-            self.image_size = image_size
-            self.patch_size = patch_size
-
-    reference_model = MllamaPrecomputedPositionEmbedding(Config())
+    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen intead
+    config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
+    reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(os.getenv("HF_MODEL"), "gated_positional")
     reference_model.load_state_dict(partial_state_dict)
