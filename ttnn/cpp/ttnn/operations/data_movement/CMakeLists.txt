@@ -60,6 +60,7 @@ target_sources(
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/reshard/device/reshard_op.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
