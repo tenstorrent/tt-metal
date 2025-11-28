@@ -9,6 +9,7 @@ from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
@@ -82,6 +83,8 @@ class DeepseekGenerator:
         override_num_layers: int | None = None,
         single_layer: str | None = None,
         enable_trace: bool = False,
+        signpost: bool = False,
+        prefill_max_tokens: int | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -128,6 +131,8 @@ class DeepseekGenerator:
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
+        self.signpost = signpost
+        self.prefill_max_tokens = prefill_max_tokens
         logger.info(f"Enable trace: {self.enable_trace}")
 
         # Initialize rope_setup once
@@ -522,6 +527,8 @@ class DeepseekGenerator:
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Prefill
+            if self.signpost:
+                signpost(header="prefill")
             profiler.start("inference_prefill")
             num_of_users = tokens_batched.shape[0]
             last_logits = []
@@ -540,6 +547,8 @@ class DeepseekGenerator:
                 self.ccl.reset_sem_counters()
             last_logits = torch.stack(last_logits)
             profiler.end("inference_prefill")
+            if self.signpost:
+                signpost(header="prefill")
 
             assert len(last_logits) == num_of_users
 
@@ -823,6 +832,10 @@ class DeepseekGenerator:
                 and self._trace_id is not None
             )
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
+
+            if self.signpost:
+                signpost(header="decode_execute_trace")
+
             host_tokens = ttnn.from_torch(
                 torch_input,
                 device=None,
@@ -860,6 +873,8 @@ class DeepseekGenerator:
                     self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                 ),
             )
+            if self.signpost:
+                signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
