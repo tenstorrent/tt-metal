@@ -271,11 +271,13 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    const auto has_legacy_only_args = output_dtype.has_value() or accurate_mode;
 
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
+
+    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or output_dtype.has_value() or accurate_mode;
+
     if (not(use_legacy
                 ? *use_legacy
                 : has_legacy_only_args or
@@ -284,9 +286,11 @@ Tensor ExecuteDiv::invoke(
         TT_FATAL(
             not has_legacy_only_args,
             "accurate_mode, optional output_dtype are not valid when passing use_legacy parameter as false in div");
+
         TT_FATAL(
             (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
             "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+
         if (round_mode == "floor") {
             return BinaryOperation<BinaryOpType::DIV_FLOOR>::invoke(
                 input_a,
