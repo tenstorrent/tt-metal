@@ -97,14 +97,14 @@ inline void llk_unpack_AB(
             const uint32_t bytes_per_face = SCALE_DATUM_SIZE(src_format, FACE_WIDTH * FACE_HEIGHT);
 
             uint32_t row_offset_bytes;
-            if (bcast_row_idx < 16) {
+            if (bcast_row_idx < FACE_HEIGHT) {
                 // Rows 0-15 are in Face 0/1
                 // Offset to the row within Face 0
                 row_offset_bytes = bcast_row_idx * bytes_per_row_in_face;
             } else {
                 // Rows 16-31 are in Face 2/3
                 // Skip first two faces, then offset to the row within Face 2
-                row_offset_bytes = 2 * bytes_per_face + (bcast_row_idx - 16) * bytes_per_row_in_face;
+                row_offset_bytes = 2 * bytes_per_face + (bcast_row_idx - FACE_HEIGHT) * bytes_per_row_in_face;
             }
 
             uint32_t row_offset_16B_units = row_offset_bytes >> 4;
