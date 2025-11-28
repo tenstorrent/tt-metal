@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "reshape_rm_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -12,103 +13,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::reshape_on_device {
 
-operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor& output) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
-    CoreRange core({0, 0}, {0, 0});
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
-    uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
-
-    // This should allocate a DRAM buffer on the device
-
-    auto output_shape = output.padded_shape();
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
-
-    std::vector<uint32_t> reader_compile_time_args = {alignment};
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
-        uint32_t src1_cb_index = 1;
-        tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
-                .set_page_size(src1_cb_index, alignment);
-        tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-    }
-
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/"
-        "reader_unary_reshape_interleaved.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        core,
-        {src0_buffer->address(),
-         a.padded_shape()[3] / tt::constants::TILE_WIDTH,
-         (uint32_t)output_shape[0],
-         (uint32_t)output_shape[1],
-         (uint32_t)output_shape[2] / tt::constants::TILE_HEIGHT,
-         (uint32_t)output_shape[3] / tt::constants::TILE_WIDTH});
-
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
-
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-
-        auto dst_buffer = output_tensors.at(0).buffer();
-
-        CoreCoord core = {0, 0};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
-}
-
+namespace {
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm_multi_core(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -207,29 +114,35 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     return ret_val;
 }
+}  // namespace
 
-operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& output) {
+ReshapeRMProgramFactory::cached_program_t ReshapeRMProgramFactory::create(
+    const reshape_on_device::operation_attributes_t& operation_attributes,
+    const reshape_on_device::tensor_args_t& tensor_args,
+    reshape_on_device::tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
-        a.dtype() == output.dtype(),
+        input_tensor.dtype() == output_tensor.dtype(),
         "Input tensor dtype ({}) must match output tensor dtype ({})",
-        a.dtype(),
-        output.dtype());
+        input_tensor.dtype(),
+        output_tensor.dtype());
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto output_shape = output.padded_shape();
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    auto output_shape = output_tensor.padded_shape();
+    tt::tt_metal::Buffer* src0_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* dst_buffer = output_tensor.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t num_old_sticks = a.padded_shape()[0] * a.padded_shape()[1] * a.padded_shape()[2];
+    uint32_t num_old_sticks =
+        input_tensor.padded_shape()[0] * input_tensor.padded_shape()[1] * input_tensor.padded_shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-    uint32_t old_stick_size = a.padded_shape()[3] * a.element_size();
-    uint32_t new_stick_size = output_shape[3] * output.element_size();
+    uint32_t old_stick_size = input_tensor.padded_shape()[3] * input_tensor.element_size();
+    uint32_t new_stick_size = output_shape[3] * output_tensor.element_size();
 
     TT_FATAL(
         std::max(old_stick_size, new_stick_size) % std::min(old_stick_size, new_stick_size) == 0,
@@ -283,8 +196,8 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     auto all_runtime_args = get_runtime_args_rm_multi_core(
-        a,
-        output,
+        input_tensor,
+        output_tensor,
         num_cores_total,
         num_cores,
         num_cores_y,
@@ -304,67 +217,64 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         );
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& src_tensor = input_tensors.at(0);
-
-        auto dst_tensor = output_tensors.at(0);
-
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-        uint32_t num_cores_total = num_cores_x * num_cores_y;
-
-        auto output_shape = dst_tensor.logical_shape();
-
-        uint32_t num_old_sticks =
-            src_tensor.padded_shape()[0] * src_tensor.padded_shape()[1] * src_tensor.padded_shape()[2];
-        uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
-
-        uint32_t old_stick_size = src_tensor.padded_shape()[3] * src_tensor.element_size();
-        uint32_t new_stick_size = output_shape[3] * dst_tensor.element_size();
-
-        bool split_work_by_old_sticks = old_stick_size > new_stick_size;
-
-        auto
-            [num_cores,
-             all_cores,
-             core_group_1,
-             core_group_2,
-             num_sticks_per_core_group_1,
-             num_sticks_per_core_group_2] =
-                tt::tt_metal::split_work_to_cores(
-                    compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
-        auto all_runtime_args = get_runtime_args_rm_multi_core(
-            src_tensor,
-            dst_tensor,
-            num_cores_total,
-            num_cores,
-            num_cores_y,
-            core_group_1,
-            num_sticks_per_core_group_1,
-            core_group_2,
-            num_sticks_per_core_group_2,
-            split_work_by_old_sticks);
-
-        for (uint32_t i = 0; i < num_cores_total; i++) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-            }
-
-            {
-                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
-            }
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size}};
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+void ReshapeRMProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const reshape_on_device::operation_attributes_t& operation_attributes,
+    const reshape_on_device::tensor_args_t& tensor_args,
+    reshape_on_device::tensor_return_value_t& output_tensor) {
+    const auto& src_tensor = tensor_args.input_tensor;
+    auto& dst_tensor = output_tensor;
+
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
+
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+    auto output_shape = dst_tensor.logical_shape();
+
+    uint32_t num_old_sticks =
+        src_tensor.padded_shape()[0] * src_tensor.padded_shape()[1] * src_tensor.padded_shape()[2];
+    uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
+
+    uint32_t old_stick_size = src_tensor.padded_shape()[3] * src_tensor.element_size();
+    uint32_t new_stick_size = output_shape[3] * dst_tensor.element_size();
+
+    bool split_work_by_old_sticks = old_stick_size > new_stick_size;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(
+            compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
+    auto all_runtime_args = get_runtime_args_rm_multi_core(
+        src_tensor,
+        dst_tensor,
+        num_cores_total,
+        num_cores,
+        num_cores_y,
+        core_group_1,
+        num_sticks_per_core_group_1,
+        core_group_2,
+        num_sticks_per_core_group_2,
+        split_work_by_old_sticks);
+
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+        }
+
+        {
+            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+        }
+    }
+}
+
+}  // namespace ttnn::operations::data_movement::reshape_on_device

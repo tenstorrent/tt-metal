@@ -71,11 +71,19 @@
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
 #define MEM_TRISC2_FIRMWARE_SIZE 1536
 
-#define MEM_BRISC_KERNEL_SIZE (48 * 1024)
-#define MEM_NCRISC_KERNEL_SIZE (24 * 1024)
-#define MEM_TRISC0_KERNEL_SIZE (24 * 1024)
-#define MEM_TRISC1_KERNEL_SIZE (24 * 1024)
-#define MEM_TRISC2_KERNEL_SIZE (24 * 1024)
+// Blackhole Architecture - No IRAM constraints
+// Per-kernel limits set to maximum available L1
+// These are enforced by the ELF loader in tt_elffile.cpp
+// The real constraint is the kernel_config_buffer aggregate limit, configurable via
+// worker_l1_size in MeshDevice::create_unit_meshes
+// 1503 KB = 1536 KB (L1 total) - 33 KB (MEM_MAP_END system reserved)
+#define MEM_MAX_KERNEL_SIZE (1503 * 1024)
+
+#define MEM_BRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
+#define MEM_NCRISC_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
+#define MEM_TRISC0_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
+#define MEM_TRISC1_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
+#define MEM_TRISC2_KERNEL_SIZE MEM_MAX_KERNEL_SIZE
 
 #define MEM_ZEROS_SIZE 512
 
