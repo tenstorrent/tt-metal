@@ -50,8 +50,16 @@ from models.tt_transformers.tt.rope import get_rot_mats
         128,
     ),
 )
+@pytest.mark.parametrize(
+    "batch_size",
+    (
+        1,
+        32,
+    ),
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
+    batch_size,
     max_seq_len,
     paged_attention,
     page_params,
@@ -66,7 +74,7 @@ def test_decoder_inference(
         )
 
     dtype = ttnn.bfloat8_b
-    batch_size = 1  # For prefill we only support batch_size = 1
+    # batch_size = 1  # For prefill we only support batch_size = 1
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
