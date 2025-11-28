@@ -9,6 +9,7 @@ from typing import Iterable, List, Tuple
 
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
@@ -83,6 +84,8 @@ class DeepseekGenerator:
         override_num_layers: int | None = None,
         single_layer: str | None = None,
         enable_trace: bool = False,
+        signpost: bool = False,
+        prefill_max_tokens: int | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -139,6 +142,8 @@ class DeepseekGenerator:
         self._trace_positions: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
+        self.signpost = signpost
+        self.prefill_max_tokens = prefill_max_tokens
         logger.info(f"Enable trace: {self.enable_trace}")
         self._prepare_weight_configs(cache_dir)
 
@@ -515,6 +520,8 @@ class DeepseekGenerator:
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
 
         # Prefill
+        if self.signpost:
+            signpost(header="prefill")
         profiler.start("inference_prefill")
         num_of_users = tokens_batched.shape[0]
         last_logits = []
@@ -527,12 +534,14 @@ class DeepseekGenerator:
             logger.info(
                 f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
             )
-            user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
+            user_out = self._prefill(tokens_batched[user_id][: self.prefill_max_tokens], user_id=user_id)
             user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
             last_logits.append(user_out)
             self.ccl.reset_sem_counters()
         last_logits = torch.stack(last_logits)
         profiler.end("inference_prefill")
+        if self.signpost:
+            signpost(header="prefill")
 
         assert len(last_logits) == num_of_users
 
@@ -549,6 +558,8 @@ class DeepseekGenerator:
         logger.info(f"next_tokens shape: {next_tokens.shape}")
         token_value = int(next_tokens[0].item())
         logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
+
+        ttnn.ReadDeviceProfiler(self.mesh_device)
 
         positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
         # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
@@ -782,6 +793,9 @@ class DeepseekGenerator:
             assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
             torch_input = tokens.view(1, 1, -1).to(torch.int32)
 
+            if self.signpost:
+                signpost(header="decode_execute_trace")
+
             host_tokens = ttnn.from_torch(
                 torch_input,
                 device=None,
@@ -821,6 +835,8 @@ class DeepseekGenerator:
                     self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
                 ),
             )
+            if self.signpost:
+                signpost(header="decode_execute_trace")
             return logits.squeeze(0).squeeze(0)
 
 
