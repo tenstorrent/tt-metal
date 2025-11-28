@@ -141,6 +141,32 @@ def test_cumsum(device):
     logger.info(f"Cumsum result: {tensor_output}")
 
 
+def test_ema(device):
+    # Create tensor
+    tensor_input = ttnn.rand((1, 2, 64, 128), device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Apply ttnn.ema() with alpha=0.99
+    tensor_output = ttnn.ema(tensor_input, 0.99)
+    logger.info(f"EMA result: {tensor_output}")
+
+    # With preallocated output
+    preallocated_output = ttnn.rand([1, 2, 64, 128], dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tensor_output = ttnn.ema(tensor_input, 0.99, out=preallocated_output)
+    logger.info(f"EMA with preallocated output result: {tensor_output}")
+
+
+def test_moe(device):
+    N, C, H, W = 1, 1, 32, 64
+    k = 32
+
+    input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tensor_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+    logger.info(f"MOE result: {tensor_output}")
+
+
 def test_manual_seed(device):
     # Set manual seed with scalar seed value for all cores
     ttnn.manual_seed(seeds=42, device=device)

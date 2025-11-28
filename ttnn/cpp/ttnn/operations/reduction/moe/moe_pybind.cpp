@@ -51,7 +51,7 @@ void bind_reduction_moe_operation(py::module& module) {
                         * - BFLOAT16
                           - TILE
 
-                The output tensor will match the data type and layout of the input tensor.
+                The output tensor will be in TILE layout and BFLOAT16.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -64,18 +64,6 @@ void bind_reduction_moe_operation(py::module& module) {
                 - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
                 - All of the shape validations are performed on padded shapes.
                 - Sharding is not supported for this operation.
-
-            Example:
-                .. code-block:: python
-
-                    N, C, H, W = 1, 1, 32, 64
-                    k = 32
-
-                    input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                    expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                    topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-                    ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
 
         )doc";
 
