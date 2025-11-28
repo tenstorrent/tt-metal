@@ -107,7 +107,7 @@ sfpi_inline void calculate_div_int32_body(
 
     // Since the correction might have been rounded, we may need to correct one
     // additional bit.
-    v_if(r < 0) {
+    v_if(r < 0 && (r - 1) < 0) {
         q -= 1;
         r += b;
     }

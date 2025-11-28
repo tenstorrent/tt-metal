@@ -111,7 +111,7 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    v_if(r < 0) {
+    v_if(r < 0 && (r - 1) < 0) {
         q -= 1;
         r += b;
     }
