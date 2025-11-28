@@ -738,7 +738,7 @@ void py_module(py::module& module) {
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
-            input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
+            input_tensors_b (List of ttnn.Tensor): the tensors to be multiplied. Needs to be on the device.
 
         Note:
             The tensors support the following data types and layouts:
@@ -771,9 +771,11 @@ void py_module(py::module& module) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): the global circular buffer to be used for the matmul operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): the sub device id to be used for the matmul operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            List of ttnn.Tensor: the output tensors.
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul_batched_weights)& self,
