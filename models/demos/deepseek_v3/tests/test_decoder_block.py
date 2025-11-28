@@ -11,11 +11,8 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3DecoderLayer
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
-from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -74,7 +71,7 @@ def generate_reference_io(
 
 
 def run_test_forward_pass_decoder1d(
-    DecoderBlockClass: type[DecoderBlock1DBase],
+    DecoderBlockClass,
     module_path,
     reference_layer_idx,
     mode,
@@ -301,10 +298,6 @@ def run_test_forward_pass_decoder2d(
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
-        (DecoderBlock1D, None, 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, None, 3, run_test_forward_pass_decoder1d),
-        (DecoderBlock1D, "model.layers.0", 0, run_test_forward_pass_decoder1d),
-        (MoEDecoderBlock1D, "model.layers.3", 3, run_test_forward_pass_decoder1d),
         (DecoderBlock2D, None, 0, run_test_forward_pass_decoder2d),
         (MoEDecoderBlock2D, None, 3, run_test_forward_pass_decoder2d),
         (DecoderBlock2D, "model.layers.0", 0, run_test_forward_pass_decoder2d),
@@ -320,7 +313,7 @@ def run_test_forward_pass_decoder2d(
     ],
 )
 def test_forward_pass(
-    DecoderBlockClass: type[DecoderBlock1DBase],
+    DecoderBlockClass: type[DecoderBlock2DBase],
     module_path,
     reference_layer_idx,
     mode,
