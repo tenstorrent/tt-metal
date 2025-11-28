@@ -64,15 +64,18 @@ sfpi_inline void calculate_div_int32_body(
     // And so qb = (q2<<21 + q1<<10) * (b2<<22 + b1<<11 + b0)
     //           = (q2<<21 * b0) + (q1<<10 * b1<<11) + (q1<<10 * b0)
 
+    sfpi::vUInt MASK_11 = 0x7ff;
+
     q = q >> 10;
-    sfpi::vFloat q1 = int32_to_float(q & sfpi::vConstIntPrgm2, 0);
+    sfpi::vFloat q1 = int32_to_float(q & MASK_11, 0);
     sfpi::vFloat q2 = int32_to_float(q >> 11, 0);
-    sfpi::vFloat b1 = int32_to_float((b >> 11) & sfpi::vConstIntPrgm2, 0);
-    sfpi::vFloat b0 = int32_to_float(b & sfpi::vConstIntPrgm2, 0);
+    sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, 0);
+    sfpi::vFloat b0 = int32_to_float(b & MASK_11, 0);
     q = q << 10;
 
-    sfpi::vFloat lo = q1 * b0 + sfpi::vConstFloatPrgm1;
-    sfpi::vFloat hi = q2 * b0 + sfpi::vConstFloatPrgm1;
+    sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
+    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
     sfpi::vInt qb = sfpi::exman9(lo) << 10;
@@ -93,9 +96,9 @@ sfpi_inline void calculate_div_int32_body(
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
     sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22);
-    sfpi::vFloat low = correction_f * b0 + sfpi::vConstFloatPrgm1;
-    sfpi::vFloat mid = correction_f * b1 + sfpi::vConstFloatPrgm1;
-    sfpi::vFloat top = correction_f * b2 + sfpi::vConstFloatPrgm1;
+    sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
     sfpi::vInt tmp = sfpi::exman9(low);
     tmp += sfpi::exman9(mid) << 11;
@@ -167,14 +170,11 @@ inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_i
 template <bool APPROXIMATION_MODE>
 inline void div_floor_init() {
     _init_sfpu_reciprocal_<false>();
-    sfpi::vConstFloatPrgm1 = 8388608.0f;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void div_trunc_init() {
     _init_sfpu_reciprocal_<false>();
-    sfpi::vConstFloatPrgm1 = 8388608.0f;
-    sfpi::vConstIntPrgm2 = 0x7ff;
 }
 
 }  // namespace ckernel::sfpu
