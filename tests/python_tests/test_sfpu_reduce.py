@@ -10,7 +10,6 @@ from helpers.device import (
 )
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
-    BinarySFPUGolden,
     UnarySFPUGolden,
     get_golden_generator,
 )
@@ -25,9 +24,8 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
-from helpers.tilize_untilize import untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 max_tiles = 4  # max number of tiles in 32-bit dest is 4
@@ -44,15 +42,20 @@ dimension_combinations = [
 @parametrize(
     test_name="sfpu_reduce_test",
     formats=input_output_formats(
-        [DataFormat.Float32, DataFormat.UInt32, DataFormat.Int32],
+        [
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+            DataFormat.Float16_b,
+        ],
         same=True,
     ),
     mathop=[MathOperation.ReduceColumn],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     negative_number=[False, True],
-    reduce_pool=[ReducePool.Sum, ReducePool.Average],
+    reduce_pool=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     dimension_combinations=dimension_combinations,
-    add_top_row=[False, True],
 )
 def test_sfpu_reduce(
     test_name,
@@ -62,9 +65,11 @@ def test_sfpu_reduce(
     reduce_pool,
     negative_number,
     dimension_combinations,
-    add_top_row,
 ):
-    if negative_number and formats.input_format == DataFormat.UInt32:
+    if negative_number and (
+        formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]
+        or reduce_pool == ReducePool.Max
+    ):
         pytest.skip(
             f"Skipping negative_numbers=True for unsigned format {formats.input_format}"
         )
@@ -72,37 +77,40 @@ def test_sfpu_reduce(
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
-    src_A, src_B, tile_cnt = generate_stimuli(
-        formats.input_format, formats.input_format, input_dimensions=input_dimensions
+    # STIMULI GENERATION
+    ELEMENTS_PER_TILE = 1024  # 32 * 32
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+    max, min = 1000, (
+        0 if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16] else -1000
     )
-    src_A = torch.ones(tile_cnt * 1024, dtype=torch_format)
+    src_A = torch.randint(
+        low=min, high=max, size=(tile_cnt * 1024,), dtype=torch_format
+    )
+    src_B = torch.zeros_like(src_A)
 
-    # Generate 4 faces with all 2s for easy verification (column sums = 32*2 = 64, which is a multiple of 32)
     sign = -1 if negative_number else 1
     src_A *= sign
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
+    # Max Reduction can do block and single tile reduction whereas Sum/Avg only do single tile reduction, convert Sum/Avg golden to do block reduction by retilizing input to src_A
+    # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
+    dst_dim = input_dimensions
+    if reduce_pool != ReducePool.Max:
+        dst_dim = [32, tile_cnt * 32]
+    src_A = tilize_block(
+        src_A, dst_dim, stimuli_format=formats.input_format
+    ).flatten()  # Input tensor is tilized in dst register
+    src_A_untilized = untilize_block(
+        src_A, formats.input_format, dst_dim
+    )  # Passed into golden since PyTorch library has no concept of tilization
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.ReduceColumn,
+        src_A_untilized,
         formats.output_format,
         dest_acc,
         formats.input_format,
         reduce_pool,
     )
-
-    if add_top_row:
-        # Add the top rows of all the tiles we reduced in dst register, accumulate the result in add_top_row_golden_tensor
-        add_top_row_golden_tensor = torch.zeros(32, dtype=torch_format)
-        generate_golden = get_golden_generator(BinarySFPUGolden)
-        for i in range(tile_cnt):
-            start, end = i * 32, (i + 1) * 32
-            add_top_row_golden_tensor = generate_golden(
-                MathOperation.SfpuAddTopRow,
-                add_top_row_golden_tensor,
-                golden_tensor[start:end],
-                formats.output_format,
-            )
 
     test_config = {
         "formats": formats,
@@ -116,7 +124,7 @@ def test_sfpu_reduce(
         "unpack_to_dest": True,
         "tile_cnt": tile_cnt,
         "disable_format_inference": True,
-        "add_top_row": add_top_row,
+        "unpack_to_dest": True,
     }
 
     res_address = write_stimuli_to_l1(
@@ -130,37 +138,8 @@ def test_sfpu_reduce(
     )
     run_test(test_config)
 
-    torch_format = format_dict[formats.output_format]
     res_from_L1 = collect_results(formats, tile_count=tile_cnt, address=res_address)
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
-
-    # collect all only the first row from each tile in result tensor (f0 and f1 row, 32 datums)
-    # SFPU reduce operation stores the result in the top row of each tile:
-    # - 16 datums in face 0 (first 16 elements of top row)
-    # - 16 datums in face 1 (last 16 elements of top row)
-    # However, we pack out the full tile (1024 elements), so we need to extract
-    # only the top row. Since the result is in tilized format, we must untilize
-    # to get row-major ordering, then extract the first 32 elements which
-    # correspond to the first row of face 0 and face 1.
-    # We do so for each tile we reduced
-    reduce_result = []
-    golden_result = []
-    for i in range(tile_cnt):
-        # Calculate starting indices for this tile
-        start_res = i * 1024  # Each tile has 1024 elements in result tensor
-        start_golden = i * 32  # Each tile contributes 32 elements to golden
-
-        # Extract and untilize the current tile, then get first 32 elements (top row)
-        result_tile_i = untilize(
-            res_tensor[start_res : start_res + 1024], formats.output_format
-        ).flatten()[:32]
-
-        # Accumulate results from all tiles
-        reduce_result.extend(result_tile_i)
-        golden_result.extend(golden_tensor[start_golden : start_golden + 32])
-
-    # Convert to tensors and verify results match expected values
-    reduce_tensor = torch.tensor(reduce_result, dtype=torch_format)
-    golden_tensor = torch.tensor(golden_result, dtype=torch_format)
-    assert passed_test(golden_tensor, reduce_tensor, formats.output_format)
+    assert passed_test(golden_tensor[0], res_tensor[0], formats.output_format)

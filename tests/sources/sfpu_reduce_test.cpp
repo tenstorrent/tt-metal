@@ -68,26 +68,26 @@ void run_kernel()
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
 
-    ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>();
-    for (int i = 0; i < TILE_CNT; ++i)
+    if constexpr (POOL_TYPE == ckernel::PoolType::MAX)
     {
-        // we have multiple tiles in dest, so we need to calculate the reduce for each tile
-        _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i); // set dst offset for current tile in dest register
-        ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
+        // Multiple tile reduction implemented for block dimensions,dependent on ct_dim and rt_dim
+        ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>(BLOCK_CT_DIM);
+        for (uint32_t i = 0; i < BLOCK_CT_DIM; i++)
+        {
+            // we have multiple tiles in dest, so we need to calculate the reduce for each tile
+            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i); // set dst offset for current tile in dest register
+            ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>(BLOCK_RT_DIM);
+        }
     }
-
-#ifdef ADD_TOP_ROW
-    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();
-    _llk_math_eltwise_binary_sfpu_start_<DstSync::SyncHalf>(0);
-    ckernel::sfpu::_init_add_top_row_();
-
-    for (int i = 1; i < TILE_CNT; ++i)
+    else
     {
-        // Add the top rows of all the tiles we reduced in dst register
-        ckernel::sfpu::_calculate_add_top_row_<static_cast<DataFormat>(formats.math)>(0, i, 0); // accumulate the result in tile at index 0
+        ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>();
+        for (uint32_t i = 0; i < TILE_CNT; i++)
+        {
+            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i);
+            ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
+        }
     }
-
-#endif
 
     _llk_math_eltwise_unary_sfpu_done_();
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

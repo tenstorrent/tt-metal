@@ -13,7 +13,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.tilize_untilize import tilize_block, untilize
+from helpers.tilize_untilize import tilize_block
 
 # Tile and face dimension constants
 FACE_DIM = 16
@@ -929,6 +929,10 @@ class UnarySFPUGolden:
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
 
+        # Special handling for SumColumns which needs to process the entire tensor
+        if operation == MathOperation.ReduceColumn:
+            return self.ops[operation](operand1, reduce_pool)
+
         # determine the data format for dst
         if self.dest_acc == DestAccumulation.Yes:
             dst_format = DataFormat.Float32
@@ -948,11 +952,7 @@ class UnarySFPUGolden:
 
         tensor = to_tensor(operand1, dst_format)
 
-        # Special handling for SumColumns which needs to process the entire tensor
-        if operation == MathOperation.ReduceColumn:
-            result = self.ops[operation](tensor, reduce_pool)
-        else:
-            result = [self.ops[operation](x) for x in tensor.tolist()]
+        result = [self.ops[operation](x) for x in tensor.tolist()]
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
@@ -1141,31 +1141,22 @@ class UnarySFPUGolden:
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
-        """Reduce columns across tiles, computing sum or average."""
-        x_tensor = to_tensor(x, self.data_format)
-        num_tiles = x_tensor.numel() // ELEMENTS_PER_TILE
+        """Reduce columns across tiles, computing sum, average, or max."""
+        # Reduce columns within this tensor
+        # Take max along the height (dim=0) for each column
+        if reduce_pool == ReducePool.Max:
+            reduced_tile = torch.max(x, dim=0).values
+        elif reduce_pool == ReducePool.Sum:
+            reduced_tile = torch.sum(x, dim=0)
+        elif reduce_pool == ReducePool.Average:
+            reduced_tile = torch.sum(x, dim=0) / x.shape[0]
+        else:
+            raise ValueError(f"Unsupported reduce pool type: {reduce_pool}")
 
-        results = []
-        for i in range(num_tiles):
-            tile_data = x_tensor[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE]
-
-            # Untilize and reshape to 32x32, then sum along columns (dim=0)
-            tile_2d = (
-                untilize(tile_data, self.data_format)
-                .flatten()
-                .view(TILE_SIZE, TILE_SIZE)
-            )
-            column_sums = torch.sum(tile_2d, dim=0)
-
-            # Apply averaging if needed
-            column_results = (
-                column_sums / TILE_SIZE
-                if reduce_pool == ReducePool.Average
-                else column_sums
-            )
-            results.extend(column_results.tolist())
-
-        return results
+        # Construct golden tensor: first row is column max, others are zero
+        reduced_tile_tensor = torch.zeros_like(x)
+        reduced_tile_tensor[0, :] = reduced_tile
+        return reduced_tile_tensor
 
 
 @register_golden
