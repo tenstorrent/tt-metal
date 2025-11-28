@@ -8,6 +8,7 @@
 #include <functional>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::cnn::convert_to_hwc::detail {
 
@@ -290,11 +291,11 @@ inline uint32_t elements_to_bytes(uint32_t element_count, uint32_t element_size)
     return element_count * element_size;
 }
 
-void serialize_low_level_transfer(
+inline void serialize_low_level_transfer(
     const LowLevelGatherTransfer& transfer,
     std::vector<uint32_t>& output,
     const std::vector<CoreCoord>& input_cores,
-    std::function<CoreCoord(const CoreCoord&)> logical_to_worker_core) {
+    const std::function<CoreCoord(const CoreCoord&)>& logical_to_worker_core) {
     // Convert logical core coordinates to worker core coordinates
     CoreCoord logical_core = input_cores[transfer.src_shard_idx];
     auto worker_core = logical_to_worker_core(logical_core);
@@ -310,10 +311,10 @@ void serialize_low_level_transfer(
     output.push_back(worker_core.x);
 }
 
-std::vector<uint32_t> serialize_blocked_transfer_groups(
+inline std::vector<uint32_t> serialize_blocked_transfer_groups(
     const std::vector<BlockedTransferGroup>& groups,
     const std::vector<CoreCoord>& input_cores,
-    std::function<CoreCoord(const CoreCoord&)> logical_to_worker_core) {
+    const std::function<CoreCoord(const CoreCoord&)>& logical_to_worker_core) {
     std::vector<uint32_t> output;
     const uint32_t number_of_blocks = groups.size();
     output.push_back(number_of_blocks);

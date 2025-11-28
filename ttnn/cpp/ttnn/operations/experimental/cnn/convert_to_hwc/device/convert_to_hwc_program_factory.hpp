@@ -57,21 +57,21 @@ constexpr uint32_t CB_OUT = tt::CBIndex::c_5;
 // Configuration class to encapsulate operation parameters
 struct ConvertToHwcConfig {
     // Input tensor properties
-    uint32_t batch_size;
-    uint32_t input_channels;
-    uint32_t hw_total;
-    uint32_t element_size_bytes;
-    tt::DataFormat input_format;
+    uint32_t batch_size{};
+    uint32_t input_channels{};
+    uint32_t hw_total{};
+    uint32_t element_size_bytes{};
+    tt::DataFormat input_format{};
 
     // Shard specifications
-    uint32_t l1_input_shard_height;
-    uint32_t l1_input_shard_width;
-    uint32_t output_shard_height;
-    uint32_t output_shard_width;
+    uint32_t l1_input_shard_height{};
+    uint32_t l1_input_shard_width{};
+    uint32_t output_shard_height{};
+    uint32_t output_shard_width{};
 
     // Gather output shard specifications for CB_IN_BATCH and transfer calculations
-    uint32_t gather_l1_output_shard_height;
-    uint32_t gather_l1_output_shard_width;
+    uint32_t gather_l1_output_shard_height{};
+    uint32_t gather_l1_output_shard_width{};
 
     // Core information
     std::vector<CoreCoord> l1_input_cores;
@@ -81,29 +81,17 @@ struct ConvertToHwcConfig {
     CoreRangeSet output_core_grid;
 
     // DRAM/L1 configuration
-    bool is_input_in_dram;
-    uint32_t remote_address;
-    tt::tt_metal::BufferType remote_buffer_type;
-    tt::CoreType remote_core_type;
+    bool is_input_in_dram{};
+    uint32_t remote_address{};
+    tt::tt_metal::BufferType remote_buffer_type{};
+    tt::CoreType remote_core_type{};
 
     // Alignment requirements
-    uint32_t alignment_elements;
+    uint32_t alignment_elements{};
 
     static ConvertToHwcConfig create_from_tensors(const Tensor& input, const Tensor& output);
     void validate() const;
 };
-
-struct BatchTransferInstruction {
-    uint32_t src_core_idx;
-    uint32_t dst_core_idx;
-    CoreCoord src_core_coord;
-    CoreCoord dst_core_coord;
-    uint32_t src_offset;
-    uint32_t dst_offset;
-    uint32_t transfer_size;
-    uint32_t bank_id;  // 0 for L1 transfers, actual bank_id for DRAM transfers
-};
-
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);
 
