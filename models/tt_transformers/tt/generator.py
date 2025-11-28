@@ -103,10 +103,8 @@ class Generator:
             for supported_length in sequence_lengths_to_warmup:
                 # When model_id = 0, we compile all operators for the first time
                 # Since operators are compiled, we only need to run sequence lengths that can be traced (each mesh has its own captured traces)
-                if (
-                    model_id != 0
-                    and supported_length not in self.model_args[0].trace_prefill_supported_seq_lens
-                    and not enable_trace
+                if model_id != 0 and (
+                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
                 ):
                     continue
 
