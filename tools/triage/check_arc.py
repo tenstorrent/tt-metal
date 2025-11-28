@@ -12,7 +12,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, hex_serializer, log_check, run_script
+from triage import ScriptConfig, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
 from datetime import timedelta
 import time
@@ -39,13 +39,14 @@ class ArcCheckData:
 
 
 def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
-    device_id = arc.location._device._id
+    device = arc.location.device
+    device_id = device.device_id
     # Heartbeat must be increasing
     heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
     delay_seconds = 0.1
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
-    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
+    log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     # Compute uptime
     arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
@@ -53,11 +54,13 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     uptime_seconds = heartbeat_1 / heartbeats_per_second
 
     # Heartbeat must be between 500 and 20000 hb/s
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second >= 500,
         f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s",
     )
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second <= 20000,
         f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s",
     )
@@ -72,13 +75,14 @@ def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 
 
 def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
-    device_id = arc.location._device._id
+    device = arc.location.device
+    device_id = device.device_id
     # Heartbeat must be increasing
     heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
     delay_seconds = 0.2
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
-    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
+    log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     # Compute uptime
     arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
@@ -86,11 +90,13 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     uptime_seconds = heartbeat_1 / heartbeats_per_second
 
     # Heartbeat must be between 10 and 50
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second >= 10,
         f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s",
     )
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second <= 50,
         f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s",
     )
@@ -107,7 +113,8 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
 def check_arc(device: Device):
     arc = device.arc_block
     postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
-    log_check(
+    log_check_device(
+        device,
         (postcode & 0xFFFF0000) == 0xC0DE0000,
         f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
