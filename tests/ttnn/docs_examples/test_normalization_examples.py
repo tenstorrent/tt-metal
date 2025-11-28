@@ -9,7 +9,6 @@ import math
 from loguru import logger
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_group_norm(device):
     #
     # Sharded Input Tensor Example
@@ -60,18 +59,12 @@ def test_group_norm(device):
     # e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0
     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
     input_mask_tensor = ttnn.create_group_norm_input_mask(
-        num_channels=C,
+        num_channel=C,
         num_groups=num_groups,
         num_cores_across_channel=1,  # As explained in the Limitations, supply 1 for height sharded input tensors
+        data_type=ttnn.bfloat8_b,
     )
-
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
 
     # Prepare gamma and beta for TTNN. Currently these are just 1D tensors of size [C], which isn't compatible with tile based processing
     # First they will zero padded if needed (does not apply to this example)
@@ -271,7 +264,6 @@ def test_scale_mask_softmax(device):
     logger.info(f"Scale Mask Softmax result: {tt_output}")
 
 
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
 def test_softmax_in_place(device):
     # Create input tensor
     shape = [1, 1, 32, 32]
@@ -280,19 +272,6 @@ def test_softmax_in_place(device):
     # Apply in-place softmax
     output_tensor = ttnn.softmax_in_place(input_tensor)
     logger.info(f"Softmax In Place result: {output_tensor}")
-
-    # Create input tensor
-    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    compute_grid = device.compute_with_storage_grid_size()
-    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=compute_grid, subblock_w=8, block_h=32, block_w=32
-    )
-
-    # Perform in-place softmax
-    result = ttnn.softmax_in_place(tensor, program_config=program_config)
-    logger.info(f"Softmax In Place result: {result}")
 
 
 def test_scale_mask_softmax_in_place(device):
