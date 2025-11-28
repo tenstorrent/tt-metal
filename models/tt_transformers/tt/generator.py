@@ -282,7 +282,9 @@ class Generator:
                 seq_lens = prompt_lens_list
                 
                 # Reorder tokens if empty_slots are not sequential (from vLLM)
-                inverse_empty_slots = [empty_slots.index(i) for i in range(batch_size)]
+                # Create a reverse mapping for O(1) lookup
+                empty_slots_map = {slot: idx for idx, slot in enumerate(empty_slots)}
+                inverse_empty_slots = [empty_slots_map.get(i, i) for i in range(batch_size)]
                 prefill_ids = torch.cat(
                     [
                         torch.cat(
@@ -392,10 +394,12 @@ class Generator:
             if use_batched_prefill:
                 # Reverse the reordering of tokens when empty_slots are not sequential (from vLLM)
                 # logits shape should be [batch_size, 1, vocab_size] after processing
+                # Create reverse mapping for O(1) lookup
+                inverse_empty_slots_map = {idx: i for i, idx in enumerate(inverse_empty_slots)}
                 for i, user_idx in enumerate(empty_slots):
                     # Extract logits for each user from batched output
                     user_last_token_idx = last_token_idx[i]
-                    user_logits = logits[inverse_empty_slots.index(i)]  # Get correct user's output
+                    user_logits = logits[inverse_empty_slots_map[i]]  # Get correct user's output
                     output_logits[i] = self.model[model_id].process_output_prefill(
                         user_logits, last_token_idx=(user_last_token_idx % 32)
                     )

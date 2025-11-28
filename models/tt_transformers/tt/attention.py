@@ -907,6 +907,7 @@ class Attention(LightweightModule):
 
         # Handle batched prefill: reshape output back when batch_size > 1
         if batch_size > 1:
+            assert seq_len % batch_size == 0, f"seq_len {seq_len} must be divisible by batch_size {batch_size} for batched prefill"
             output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len // batch_size, -1])
 
         return output_11SH

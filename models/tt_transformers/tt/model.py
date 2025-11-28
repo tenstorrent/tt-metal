@@ -181,12 +181,8 @@ class Transformer(LightweightModule):
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
         
-        # Handle batched prefill: reshape to concatenate sequences when batch_size > 1
-        if batch_size > 1:
-            # Concatenate all sequences in the batch into a single long sequence
-            tokens = tokens.reshape(1, 1, 1, -1)
-        else:
-            tokens = tokens.reshape(1, 1, 1, -1)
+        # Reshape tokens to concatenate all sequences in the batch into a single long sequence
+        tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
