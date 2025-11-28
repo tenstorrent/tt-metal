@@ -97,6 +97,9 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
     // Get core and subdevice related information
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    if (operation_attributes.sub_core_grid.has_value()) {
+        subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
+    }
     auto bbox = subdevice_core_range_set.bounding_box();
     auto first_coord = bbox.start_coord;
 
@@ -124,7 +127,8 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         std::nullopt,  // use num workers per link decision making tree
         std::nullopt,  // use num buffers per channel decision making tree
         first_coord,   // first core in the subdevice is our offset as we don't use this version for fusions
-        false);        // reverse_order = false
+        false,         // reverse_order = false
+        operation_attributes.sub_core_grid);
 
     return {
         std::move(program),
