@@ -3,7 +3,7 @@
 """Common utilities for API validation scripts."""
 
 import os
-from typing import Callable, List, Tuple, TypeVar
+from typing import Callable, List, Optional, Tuple, TypeVar
 
 T = TypeVar("T")
 
@@ -26,7 +26,7 @@ def is_cpp_source(filepath: str) -> bool:
     return filepath.endswith(CPP_EXTENSIONS)
 
 
-def find_cpp_sources(directory: str, skip_files: set[str] = None) -> list[str]:
+def find_cpp_sources(directory: str, skip_files: Optional[set[str]] = None) -> list[str]:
     """Find all C++ source files in directory, optionally skipping certain files."""
     skip_files = skip_files or set()
 

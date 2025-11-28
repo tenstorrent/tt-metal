@@ -183,6 +183,7 @@ class Include(NamedTuple):
             return Include(source_file, line_num, match.group(1), quoted=True)
         if match := ANGLE_INCLUDE_PATTERN.match(line):
             return Include(source_file, line_num, match.group(1), quoted=False)
+        return None
 
     @property
     def prefix(self) -> Optional[str]:

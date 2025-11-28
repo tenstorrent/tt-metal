@@ -11,7 +11,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import Iterator, List, NamedTuple, Optional, Tuple
 
 from common import find_cpp_sources, is_cpp_source, partition
 import git_utils
@@ -88,7 +88,7 @@ def scan_file_for_deprecations(file_path: str) -> Iterator[Tuple[str, int, str]]
 
 
 def find_existing_deprecations(files: List[str]) -> List[DeprecatedItem]:
-    items: List[DeprecatedItem] = [item for file_path in files for item in scan_file_for_deprecations(file_path)]
+    items: List[Tuple[str, int, str]] = [item for file_path in files for item in scan_file_for_deprecations(file_path)]
 
     # HEAD is correct here: we want timestamps from current branch history for existing deprecations
     timestamps = git_utils.get_timestamps_for_items(items, "HEAD")
