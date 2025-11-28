@@ -29,11 +29,13 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
+    TT_FATAL(args.sub_core_grids == std::nullopt, "Sub core grids are not supported for sharded input tensors");
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
 
     auto out_shard_spec = output.shard_spec().value();
+
     TT_FATAL(
         out_shard_spec.num_cores() == ncores,
         "Output tensor should have same number of cores {} as input tensor {}",

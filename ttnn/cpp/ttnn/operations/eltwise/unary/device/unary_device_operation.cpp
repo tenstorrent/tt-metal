@@ -52,6 +52,8 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
         return program::UnaryShardedProgramFactory{};
+    } else if(args.sub_core_grids.has_value()) {
+        return program::UnarySubCoreGridProgramFactory{};
     } else {
         return program::UnaryProgramFactory{};
     }
@@ -161,6 +163,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
+        args.sub_core_grids,
         input_shape.volume());
 
     return hash;
@@ -182,7 +185,8 @@ UnaryDeviceOperation::invoke(
     bool fp32_dest_acc_en,
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<Tensor>& preallocated_output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
         operation_attributes_t{
             .op_chain = op_chain,
@@ -191,6 +195,7 @@ UnaryDeviceOperation::invoke(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
+            .sub_core_grids = sub_core_grids,
         },
         tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }

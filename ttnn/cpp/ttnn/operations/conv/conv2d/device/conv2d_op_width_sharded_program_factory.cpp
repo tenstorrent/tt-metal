@@ -45,7 +45,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const sliding_window::ParallelConfig& parallel_config,
     const std::vector<uint32_t>& op_trace_metadata,

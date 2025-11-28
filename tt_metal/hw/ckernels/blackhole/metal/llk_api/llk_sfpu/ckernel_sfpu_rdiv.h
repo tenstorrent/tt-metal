@@ -39,7 +39,7 @@ inline void calculate_rdiv(const uint value) {
 
 template <bool APPROXIMATION_MODE>
 void rdiv_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, false>();
+    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

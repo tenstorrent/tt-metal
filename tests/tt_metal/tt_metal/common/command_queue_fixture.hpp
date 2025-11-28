@@ -51,7 +51,9 @@ protected:
         return true;
     }
 
-    void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_devices(
+        std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
@@ -66,7 +68,7 @@ protected:
             chip_ids.push_back(mmio_device_id);
         }
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
-            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
+            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config, {}, worker_l1_size);
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }

@@ -30,6 +30,8 @@
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 

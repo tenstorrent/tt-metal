@@ -17,6 +17,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 

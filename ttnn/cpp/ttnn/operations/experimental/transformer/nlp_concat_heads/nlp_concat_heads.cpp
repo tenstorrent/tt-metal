@@ -9,18 +9,11 @@
 
 #include <utility>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::nlp_concat_heads {
 
 ttnn::Tensor NLPConcatHeadsOperation::invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return tt::tt_metal::operation::run(
-               NLPConcatHeadsDeviceOperation{memory_config.value_or(input_tensor.memory_config())},
-               {input_tensor},
-               {},
-               {std::move(optional_output_tensor)})
-        .at(0);
+    const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::prim::nlp_concat_heads(input_tensor, memory_config);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::nlp_concat_heads

@@ -63,6 +63,8 @@
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -1188,10 +1190,15 @@ public:
                                 back.flags &= ~CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
                             }
                         }
+                        TT_ASSERT(write_length > 0);
+                        TT_ASSERT(write_length - 1 <= std::numeric_limits<uint16_t>::max());
                         kernel_bins_cmd.dispatch_subcmds.emplace_back(CQDispatchWritePackedLargeSubCmd{
                             .noc_xy_addr = noc_encoding,
                             .addr = kernel_config_buffer_offset,
-                            .length = (uint16_t)write_length,
+                            .length_minus1 =
+                                (uint16_t)(write_length - 1),  // Always store length - 1 as +1 is unconditionally added
+                                                               // in cq_dispatch.cpp This avoids the need to handle the
+                                                               // special case where 65536 bytes overflows to 0
                             .num_mcast_dests = (uint8_t)num_mcast_dests,
                             .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK});
                         RecordDispatchData(
@@ -1335,10 +1342,12 @@ public:
                 }
                 TT_ASSERT(start == transfer_vector.front().start);
                 size_t size = transfer_vector.back().end() - start;
+                TT_ASSERT(size > 0);
+                TT_ASSERT(size - 1 <= std::numeric_limits<uint16_t>::max());
                 batched_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                     .noc_xy_addr = transfer_set.first.first,
                     .addr = start,
-                    .length = (uint16_t)size,
+                    .length_minus1 = (uint16_t)(size - 1),
                     .num_mcast_dests = transfer_set.first.second,
                     .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
 

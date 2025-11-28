@@ -576,7 +576,20 @@ public:
      */
     void commit() { update_remote_cb_config_in_l1(remote_cb_index_); }
 
+    /** @brief Acquire a scoped lock on the RemoteCircularBuffer. In debug mode, reads and writes to this remote
+     * circular buffer are tracked by the debugger while the lock is held.
+     *
+     * @return A scoped lock on the RemoteCircularBuffer
+     */
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t remote_cb_index_;
 };
 

@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 

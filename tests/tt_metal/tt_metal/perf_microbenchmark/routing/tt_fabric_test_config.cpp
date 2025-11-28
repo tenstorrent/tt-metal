@@ -157,6 +157,27 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     return config;
 }
 
+static void validate_latency_test_config(const ParsedTestConfig& test_config) {
+    TT_FATAL(
+        !test_config.patterns.has_value() || test_config.patterns.value().empty(),
+        "Test '{}': latency_test_mode does not support high-level patterns",
+        test_config.name);
+    TT_FATAL(
+        test_config.senders.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one sender, got {}",
+        test_config.name,
+        test_config.senders.size());
+    TT_FATAL(
+        test_config.senders[0].patterns.size() == 1,
+        "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+        test_config.name,
+        test_config.senders[0].patterns.size());
+    TT_FATAL(
+        test_config.senders[0].patterns[0].ftype == ChipSendType::CHIP_UNICAST,
+        "Test '{}': latency_test_mode only supports unicast",
+        test_config.name);
+}
+
 ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
     ParsedTestConfig test_config;
 
@@ -220,8 +241,28 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
+    // Parse performance test mode (replaces benchmark_mode and latency_test_mode)
     if (test_yaml["benchmark_mode"]) {
-        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        bool benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        if (benchmark_mode) {
+            test_config.performance_test_mode = PerformanceTestMode::BANDWIDTH;
+        }
+    }
+
+    if (test_yaml["latency_test_mode"]) {
+        bool latency_test_mode = parse_scalar<bool>(test_yaml["latency_test_mode"]);
+        if (latency_test_mode) {
+            TT_FATAL(
+                test_config.performance_test_mode == PerformanceTestMode::NONE,
+                "Test '{}': benchmark_mode and latency_test_mode are mutually exclusive",
+                test_config.name);
+            test_config.performance_test_mode = PerformanceTestMode::LATENCY;
+        }
+    }
+
+    // Validate latency test mode requirements
+    if (test_config.performance_test_mode == PerformanceTestMode::LATENCY) {
+        validate_latency_test_config(test_config);
     }
 
     if (test_yaml["sync"]) {
@@ -383,9 +424,9 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
             return test_config.fabric_setup.topology == topo;
         } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
             if (filter_value == "true") {
-                return test_config.benchmark_mode;
+                return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
             } else if (filter_value == "false") {
-                return !test_config.benchmark_mode;
+                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
             } else {
                 log_info(
                     tt::LogTest,

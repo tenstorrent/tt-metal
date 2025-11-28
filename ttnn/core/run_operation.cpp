@@ -9,16 +9,13 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 
 #include "ttnn/old_infra_device_operation.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/reflection.hpp>
-#include "tools/profiler/op_profiler.hpp"
-#include "ttnn/config.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/device.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -35,7 +32,7 @@ distributed::MeshDevice* get_device(const Tensors& input_tensors, const Optional
             return optional_input_tensor->device_storage().get_device();
         }
     }
-    auto* device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+    auto* device = ttnn::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
@@ -94,6 +91,7 @@ template OptionalTensors run(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
+<<<<<<< HEAD
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
     DeviceOperation<OutputTensors>&& operation,
@@ -137,6 +135,8 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors);
 
+=======
+>>>>>>> origin/main
 std::vector<Shape> extract_padded_shapes(
     const std::vector<ttnn::TensorSpec>& tensor_specs,
     const std::function<TensorLayout(size_t idx)>& layout_provider,
@@ -153,6 +153,7 @@ std::vector<Shape> extract_padded_shapes(
     return padded_shapes;
 }
 
+<<<<<<< HEAD
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
 Tensors run_with_autoformat(
     DeviceOperation<Tensors>&& operation,
@@ -287,4 +288,6 @@ Tensors run_with_autoformat(
     return output_tensors;
 }
 
+=======
+>>>>>>> origin/main
 }  // namespace tt::tt_metal::operation

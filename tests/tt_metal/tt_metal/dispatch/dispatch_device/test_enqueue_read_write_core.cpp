@@ -10,6 +10,7 @@
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
 
 using namespace tt::tt_metal;
 

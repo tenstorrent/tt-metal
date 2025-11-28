@@ -21,7 +21,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -48,8 +49,18 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_cols = NC * Wt;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
+    uint32_t num_cores;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
+    if (sub_core_grids.has_value()) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(*sub_core_grids, num_cols);
+    } else {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
+    }
 
     // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
@@ -201,8 +212,18 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 .defines = reduce_defines});
     }
 
-    const auto& cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+    std::vector<CoreCoord> cores;
+    if (sub_core_grids.has_value()) {
+        for (const auto& range : all_cores.ranges()) {
+            for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+    }
     if (use_width_sharding) {
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;

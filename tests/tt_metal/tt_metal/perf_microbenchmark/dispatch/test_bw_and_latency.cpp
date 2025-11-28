@@ -42,6 +42,8 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 namespace tt_metal {

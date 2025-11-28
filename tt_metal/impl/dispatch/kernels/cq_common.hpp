@@ -9,7 +9,7 @@
 #include "dataflow_api.h"
 #include "cq_helpers.hpp"
 
-#include "debug/sanitize_noc.h"
+#include "debug/sanitize.h"
 #include "debug/assert.h"
 #include <limits>
 
