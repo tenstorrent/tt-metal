@@ -3189,7 +3189,7 @@ def test_conv2d_sdxl(
                 ttnn.CoreCoord(4, 7),
             ),
         }
-    ) if shard_layout == BS else None
+    ) if shard_layout == BS and is_wormhole_b0() else None
     # Skip all on N300
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
