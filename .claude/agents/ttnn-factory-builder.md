@@ -901,3 +901,198 @@ Kernel names reflect RISC-V core assignment, not necessarily function:
 - "writer" → RISCV_1 (NCRISC), typically NOC1
 
 Both can READ and WRITE. Check spec's "Kernel Data Movement" table for actual functions.
+
+---
+
+## Execution Logging (Optional)
+
+If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file.
+
+### Log File Location
+`{operation_name}_factory_builder_execution_log.md` in the operation directory.
+
+### Log Format
+```markdown
+# Execution Log: {Operation Name} Factory Building
+
+## Session Info
+- **Started**: {timestamp or "session start"}
+- **Operation**: {operation_name}
+- **Spec Path**: {path to spec file}
+- **Operation Path**: {target directory}
+
+## Execution Timeline
+
+### Step 1: {Description}
+**Action**: {What you did - e.g., "Read spec CB requirements", "Create reader kernel"}
+**Command/Tool**: {Tool used and parameters}
+**Result**:
+```
+{Full output - especially important for builds and tests}
+```
+**Decision**: {What you decided based on this result}
+
+### Step 2: {Description}
+...
+
+## Spec Extraction
+| Section | Extracted Value | Used For |
+|---------|-----------------|----------|
+| Circular Buffers | {CB config} | CreateCircularBuffer calls |
+| Work Distribution | {strategy} | split_work_to_cores setup |
+| Data Flow | {pattern} | Kernel responsibilities |
+| Memory Access | {patterns} | Reader/Writer implementation |
+
+## Stage 4: Device Operation
+### Files Modified
+| File | Change | Reason |
+|------|--------|--------|
+| {path} | {what changed} | {why} |
+
+### Build Attempt
+**Command**: `./build_metal.sh -b Debug`
+**Result**: SUCCESS / FAILED
+**Output** (if failed):
+```
+{error output}
+```
+**Fix Applied**: {if any}
+
+### Test Run
+**Command**: `pytest test_dev/test_stage4_device_op.py -v`
+**Result**: PASS / FAIL
+**Output**:
+```
+{test output}
+```
+**Issues**: {if any}
+
+## Stage 5: Program Factory
+### CB Configuration Applied
+| CB ID | Name | Size | Data Format | Reasoning |
+|-------|------|------|-------------|-----------|
+| c_0 | cb_input | 2 tiles | input dtype | Double-buffered for... |
+| c_2 | cb_output | 2 tiles | output dtype | Double-buffered for... |
+
+### Work Distribution Applied
+- **Total work units**: {calculation}
+- **Grid size**: {x} x {y}
+- **Cores used**: {num_cores}
+- **Work per core (group 1)**: {n}
+- **Work per core (group 2)**: {n}
+
+### Files Modified
+| File | Change | Reason |
+|------|--------|--------|
+| {path} | {what changed} | {why} |
+
+### Build Attempt
+...
+
+### Test Run
+**Command**: `pytest test_dev/test_stage5_program_factory.py -v`
+...
+
+## Stage 6: Kernel Compilation
+### Kernels Created
+| Kernel | Type | Path | Compile-Time Args | Runtime Args |
+|--------|------|------|-------------------|--------------|
+| reader | DataMovement | {path} | {args} | {args} |
+| writer | DataMovement | {path} | {args} | {args} |
+| compute | Compute | {path} | {args} | N/A |
+
+### Kernel Code Summary
+#### Reader Kernel
+```cpp
+// Key logic summary
+{brief code summary}
+```
+
+#### Writer Kernel
+```cpp
+// Key logic summary
+{brief code summary}
+```
+
+#### Compute Kernel (if applicable)
+```cpp
+// Key logic summary
+{brief code summary}
+```
+
+### Build Attempt
+...
+
+### Test Run (Kernel JIT Compilation)
+**Command**: `pytest test_dev/test_stage6_kernel_compilation.py -v`
+**Result**: PASS / FAIL
+**Output**:
+```
+{test output - kernel compilation happens here}
+```
+
+### Kernel Compilation Errors (if any)
+| Kernel | Error | Line | Fix Applied |
+|--------|-------|------|-------------|
+| {kernel} | {error message} | {line #} | {fix} |
+
+## Build Attempts Summary
+| Stage | Attempt | Result | Duration | Key Error (if failed) |
+|-------|---------|--------|----------|----------------------|
+| 4 | 1 | PASS/FAIL | {time} | {error} |
+| 5 | 1 | PASS/FAIL | {time} | {error} |
+| 5 | 2 | PASS/FAIL | {time} | {error} |
+| 6 | 1 | PASS/FAIL | {time} | {error} |
+
+## Test Results Summary
+| Test File | Tests Run | Passed | Failed | Errors |
+|-----------|-----------|--------|--------|--------|
+| test_stage4_device_op.py | {n} | {n} | {n} | {n} |
+| test_stage5_program_factory.py | {n} | {n} | {n} | {n} |
+| test_stage6_kernel_compilation.py | {n} | {n} | {n} | {n} |
+
+## Errors Encountered
+| Error | Stage | Context | Resolution |
+|-------|-------|---------|------------|
+| {error message} | 4/5/6 | {what caused it} | {how fixed} |
+
+## Key Decisions
+| Decision | Options | Choice | Rationale |
+|----------|---------|--------|-----------|
+| {topic} | {options} | {choice} | {why} |
+
+## Deviations from Spec
+| Aspect | Spec Said | Actually Implemented | Reason |
+|--------|-----------|---------------------|--------|
+| {aspect} | {spec value} | {actual value} | {why deviated} |
+
+## Final Status
+- **Stage 4 (Device Operation)**: PASS/FAIL
+- **Stage 5 (Program Factory)**: PASS/FAIL
+- **Stage 6 (Kernel Compilation)**: PASS/FAIL
+- **All Builds**: PASS/FAIL
+- **All Tests**: PASS/FAIL
+- **Output Files**: {list all created/modified files}
+- **Issues**: {any unresolved issues}
+- **Ready for kernel implementation**: Yes/No
+```
+
+### What to Log
+1. **Every file created/modified** - path, what changed, why
+2. **Every build attempt** - full command, output (especially errors), result
+3. **Every test run** - command, full output, pass/fail status
+4. **Every build/compilation error** - exact error message, file/line, fix applied
+5. **Kernel compilation errors** - these happen at runtime during tests, capture them!
+6. **CB configuration decisions** - what was configured and why
+7. **Work distribution setup** - how work was divided across cores
+8. **Deviations from spec** - any places where implementation differs from spec
+
+### Logging Guidelines
+- Log in real-time as you work, not retrospectively
+- **ALWAYS capture full build and test output** - this is critical for debugging
+- Kernel errors only appear during test runs (JIT compilation) - pay special attention
+- Include exact error messages, not paraphrases
+- Document the fix for each error before moving on
+- If multiple build/test attempts, document what finally worked
+- Be explicit about which stage each action belongs to
+- Note any deviations from spec with clear rationale
