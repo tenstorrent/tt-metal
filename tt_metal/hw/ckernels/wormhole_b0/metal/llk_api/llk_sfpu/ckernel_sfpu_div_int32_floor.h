@@ -19,8 +19,8 @@ sfpi_inline void calculate_div_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
     // When converting to float, integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems; the
