@@ -13,7 +13,7 @@ struct IndexedFillSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     std::vector<CoreCoord> cores;
-    uint32_t page_size;
+    uint32_t page_size = 0;
 };
 
 struct IndexedFillProgramFactory {
