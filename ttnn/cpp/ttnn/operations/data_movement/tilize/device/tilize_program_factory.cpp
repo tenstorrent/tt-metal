@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     CoreRange default_core({0, 0}, {0, 0});
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks tilize_single_core(
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_block(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -176,7 +176,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    CoreRangeSet available_grid(default_cores);
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
@@ -445,7 +446,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -466,7 +467,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    CoreRangeSet available_grid(default_cores);
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(available_grid, nblocks);
 

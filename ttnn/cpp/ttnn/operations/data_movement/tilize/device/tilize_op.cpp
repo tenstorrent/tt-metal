@@ -108,15 +108,16 @@ operation::ProgramWithCallbacks Tilize::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-
+    bool use_single_core =
+        (!this->use_multicore) || (this->sub_core_grids.has_value() && (this->sub_core_grids.value().num_cores() < 2));
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification\n");
+        TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification");
         return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor);
     }
     if (!this->enough_space_height) {
         return detail::tilize_multi_core_block(input_tensor_a, output_tensor, this->sub_core_grids);
     }
-    if (!this->use_multicore) {
+    if (use_single_core) {
         return detail::tilize_single_core(input_tensor_a, output_tensor, this->sub_core_grids);
     }
 
