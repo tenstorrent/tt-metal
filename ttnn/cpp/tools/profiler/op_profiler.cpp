@@ -210,7 +210,7 @@ json get_kernels_json(ChipId device_id, const Program& program) {
     return ret;
 }
 
-static json get_tensor_json(const Tensor& tensor) {
+json get_tensor_json(const Tensor& tensor) {
     json ret;
     std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {

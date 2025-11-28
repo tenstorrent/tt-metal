@@ -96,6 +96,8 @@ auto compute_program_hash(
     }
 }
 
+json get_tensor_json(const Tensor& tensor);
+
 template <typename device_operation_t>
 json get_base_json(
     uint32_t operation_id,
