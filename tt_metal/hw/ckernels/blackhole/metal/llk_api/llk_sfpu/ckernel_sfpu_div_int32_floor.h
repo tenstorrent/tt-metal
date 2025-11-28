@@ -85,16 +85,8 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-
-    // Convert to integer, truncating the fractional part.
-    sfpi::vInt correction = 0;
-    exp = sfpi::exexp(correction_f);
-    v_if(exp >= 0) {
-        correction = sfpi::exman8(correction_f);
-        exp = exp - 23;
-        correction = correction << exp;
-    }
-    v_endif;
+    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
+    correction_f = sfpi::int32_to_float(correction);
 
     sfpi::vInt tmp_lo;
     sfpi::vInt tmp_hi;
@@ -105,6 +97,7 @@ sfpi_inline void calculate_div_int32_body(
     tmp_hi += b1;
     tmp_hi <<= 23;
     tmp_lo += tmp_hi;
+
     v_if(r < 0) {
         q -= correction;
         r += tmp_lo;
@@ -115,14 +108,13 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    v_if(r >= b) {
-        q += 1;
-        r -= b;
-    }
-    v_endif;
     v_if(r < 0) {
         q -= 1;
         r += b;
+    }
+    v_elseif(r >= b) {
+        q += 1;
+        r -= b;
     }
     v_endif;
 
