@@ -112,70 +112,47 @@ void run_inference_with_kv_cache(
 
     fmt::print("Prompt tokens: [");
     for (size_t i = 0; i < std::min(size_t(10), prompt_tokens.size()); ++i) {
-        fmt::print("{}", prompt_tokens[i]);
+        fmt::print("{}", generated_tokens[i]);
         if (i < std::min(size_t(10), prompt_tokens.size()) - 1)
             fmt::print(", ");
     }
     if (prompt_tokens.size() > 10)
         fmt::print(", ...");
     fmt::print("]\n");
-    fmt::print("Prompt length: {}\n", prompt_len);
-    fmt::print("Cache position at start: {}\n\n", model->get_cache_position());
+    fmt::print("Prompt length: {}\n\n", prompt_len);
 
-    // ============================================================================
-    // Phase 1: PREFILL - Process entire prompt at once
-    // ============================================================================
-    fmt::print("=== PREFILL PHASE ===\n");
-    auto start_prefill = std::chrono::high_resolution_clock::now();
+    auto start_timer = std::chrono::high_resolution_clock::now();
 
-    auto prompt_tensor = tokens_to_tensor(prompt_tokens, max_seq_len, device);
-    auto prefill_mask = create_causal_mask(device, prompt_len, 0);
+    // Generate tokens one by one
+    // First iteration: prefill with entire prompt (cache_position == 0)
+    // Subsequent iterations: decode single tokens (cache_position > 0)
+    for (uint32_t step = 0; step < inference_config.max_new_tokens; ++step) {
+        // For first step (prefill): use all prompt tokens
+        // For subsequent steps (decode): use only the last generated token
+        std::vector<uint32_t> input_tokens;
+        uint32_t cache_pos = model->get_cache_position();
 
-    // Forward pass - fills KV cache with all prompt tokens
-    auto logits = (*model)(prompt_tensor, prefill_mask);
-
-    // Update cache position to reflect number of tokens processed
-    model->set_cache_position(prompt_len);
-
-    auto end_prefill = std::chrono::high_resolution_clock::now();
-    auto prefill_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_prefill - start_prefill).count();
-
-    fmt::print("Prefill completed in {} ms\n", prefill_duration);
-    fmt::print("Cache position after prefill: {}\n", model->get_cache_position());
-
-    // Sample first new token (greedy)
-    uint32_t next_token = sample_token(logits, prompt_len);
-    generated_tokens.push_back(next_token);
-
-    fmt::print("First generated token: {}\n\n", next_token);
-
-    // ============================================================================
-    // Phase 2: DECODE - Generate tokens one by one using KV cache
-    // ============================================================================
-    fmt::print("=== DECODE PHASE ===\n");
-    fmt::print("Generating {} more tokens...\n\n", inference_config.max_new_tokens - 1);
-
-    auto start_decode = std::chrono::high_resolution_clock::now();
-    std::vector<uint32_t> decode_tokens;
-    decode_tokens.push_back(next_token);
-
-    for (uint32_t step = 0; step < inference_config.max_new_tokens - 1; ++step) {
-        // Deallocate previous iteration's logits to prevent memory accumulation
-        if (logits) {
-            auto old_logits = logits->get_value();
-            ttnn::deallocate(old_logits);
+        if (cache_pos == 0) {
+            // Prefill: process entire prompt
+            input_tokens = generated_tokens;
+        } else {
+            // Decode: process only last token
+            input_tokens = {generated_tokens.back()};
         }
 
-        std::vector<uint32_t> single_token = {next_token};
-        auto token_tensor = tokens_to_tensor(single_token, max_seq_len, device);
+        auto token_tensor = tokens_to_tensor(input_tokens, max_seq_len, device);
 
-        auto decode_mask = create_causal_mask(device, 1, model->get_cache_position());
+        // Create causal mask
+        // For prefill: query_len = prompt_len, key_len = prompt_len
+        // For decode: query_len = 1, key_len = cache_position + 1
+        auto mask = create_causal_mask(device, input_tokens.size(), cache_pos);
 
-        logits = (*model)(token_tensor, decode_mask);
-        next_token = sample_token(logits, 1);
+        // Forward pass (cache position updated automatically inside model)
+        auto logits = (*model)(token_tensor, mask);
 
+        // Sample next token from the last position
+        uint32_t next_token = sample_token(logits, input_tokens.size());
         generated_tokens.push_back(next_token);
-        decode_tokens.push_back(next_token);
 
         if (step % 10 == 0) {
             fmt::print("Step {}: token={}, cache_pos={}\n", step, next_token, model->get_cache_position());
@@ -187,21 +164,17 @@ void run_inference_with_kv_cache(
         }
     }
 
-    auto end_decode = std::chrono::high_resolution_clock::now();
-    auto decode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_decode - start_decode).count();
-
-    fmt::print("\nDecode completed in {} ms\n", decode_duration);
-    fmt::print(
-        "Average time per token: {} ms\n", decode_tokens.size() > 0 ? decode_duration / decode_tokens.size() : 0);
-    fmt::print("Final cache position: {}\n\n", model->get_cache_position());
+    auto end_timer = std::chrono::high_resolution_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
 
     // ============================================================================
     // Summary
     // ============================================================================
-    fmt::print("=== GENERATION SUMMARY ===\n");
+    uint32_t new_tokens = generated_tokens.size() - prompt_len;
+    fmt::print("\n=== GENERATION SUMMARY ===\n");
     fmt::print("Total tokens generated: {}\n", generated_tokens.size());
     fmt::print("  Prompt: {} tokens\n", prompt_len);
-    fmt::print("  New: {} tokens\n", generated_tokens.size() - prompt_len);
+    fmt::print("  New: {} tokens\n", new_tokens);
     fmt::print("\nGenerated token sequence: [");
     for (size_t i = 0; i < std::min(size_t(20), generated_tokens.size()); ++i) {
         fmt::print("{}", generated_tokens[i]);
@@ -212,7 +185,9 @@ void run_inference_with_kv_cache(
         fmt::print(", ...");
     fmt::print("]\n");
 
-    fmt::print("\nTotal time: {} ms\n", prefill_duration + decode_duration);
+    fmt::print("\nTotal time: {} ms\n", total_duration);
+    fmt::print("Average time per token: {} ms\n", new_tokens > 0 ? total_duration / new_tokens : 0);
+    fmt::print("Final cache position: {}\n", model->get_cache_position());
     fmt::print("Cache entries: {}\n", device->num_program_cache_entries());
     fmt::print("{}\n", std::string(80, '='));
 }
