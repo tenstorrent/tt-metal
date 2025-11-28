@@ -54,6 +54,7 @@ jobs:
 
   single-card-demo-tests:
     needs: build-artifact
+    if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
@@ -65,7 +66,7 @@ jobs:
 
   t3000-demo-tests:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version }}
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -76,7 +77,7 @@ jobs:
 
   galaxy-demos:
     needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version }}
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -117,7 +118,7 @@ jobs:
   #   runs-on: ubuntu-latest
   #   permissions:
   #     id-token: write  # Required for AWS OIDC
-  #   if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
+  #   if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/main' && inputs.dry-run) }}
   #   steps:
   #     - name: Set up Python
   #       uses: actions/setup-python@v4
