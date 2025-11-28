@@ -209,7 +209,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/clip_grad_norm/clip_grad_norm_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_${PY_BINDING}.cpp
@@ -584,7 +583,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
-        TTNN::Ops::Experimental::ClipGradNorm
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::Matmul
@@ -759,7 +757,6 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
-add_subdirectory(cpp/ttnn/operations/experimental/clip_grad_norm)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
