@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "ttnn/operations/data_movement/repeat/device/host/repeat_program_factory.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
