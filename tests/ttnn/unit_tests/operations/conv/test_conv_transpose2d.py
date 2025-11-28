@@ -220,7 +220,7 @@ def run_conv_transpose2d(
         (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         # Vanilla Unet
         # Filter Size = 2 not supported in Block sharded
-        # (1, 30, 40, 512, 256, 3, 3, 2, 2, 1, 1, 1, 1,  {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED), # Issue with reading block sharded tensor
+        (1, 30, 40, 512, 256, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
     ),
 )
 @pytest.mark.parametrize(
