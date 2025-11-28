@@ -2,6 +2,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+from models.common.utility_functions import comp_ulp_check
 
 
 @pytest.mark.parametrize("exponent", [2.0, -2.0, 3.56, -3.56, 0.5, -0.5])
@@ -34,7 +35,7 @@ def test_pow(exponent, device):
     assert assert_with_ulp(torch_output, ttnn_output, 2 if exponent == 3.56 else 1)
 
 
-@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 0.65, -1.0, -2.0, -0.65, 3.56, -3.56])
+@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, -1.0, -2.0, -0.65, 3.56, -3.56, 3.0, -3.0, 0.65])
 def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
     fp32 = torch.arange(0, 2**16, dtype=torch.int32).to(torch.float32)
@@ -62,5 +63,7 @@ def test_pow_arange_masking(exponent, device):
 
     tt_result = ttnn.pow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
+    print(f"Exponent: {exponent}")
+    comp_ulp_check(tt_input, golden, result, 1, allow_nonfinite=True, exponent=exponent)
 
     assert_with_ulp(golden, result, 1, allow_nonfinite=True)
