@@ -5,6 +5,7 @@ import concurrent.futures
 import gc
 import os
 from glob import glob
+from time import perf_counter
 from typing import Any, Callable
 
 import torch
@@ -43,6 +44,8 @@ def load_model_weights(
     model_path: str, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
     safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
+    logger.info(f"Loading HF weights from {model_path}: found {len(safetensors_filepaths)} files")
+    t0 = perf_counter()
     weights_dict = {}
     iterable = (
         map(lambda safetensor_filepath: weights_dict.update(load_file(safetensor_filepath)), safetensors_filepaths)
@@ -58,8 +61,8 @@ def load_model_weights(
             desc="Loading weights",
         )
     )
-
-    print("Loaded all weights")
+    elapsed_ms = (perf_counter() - t0) * 1e3
+    logger.info(f"Loaded all weights ({len(weights_dict)} tensors) in {elapsed_ms:.1f} ms")
     return weights_dict
 
 

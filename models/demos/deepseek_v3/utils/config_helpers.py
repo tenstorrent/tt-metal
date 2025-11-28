@@ -6,6 +6,7 @@ import json
 import math
 from itertools import takewhile
 from pathlib import Path
+from time import perf_counter
 from types import NoneType
 from typing import Any, Sequence
 
@@ -615,6 +616,10 @@ def shard_and_save(
     convert_meta=False,
 ) -> SavedWeight:
     """Shard a tensor and save it to a file."""
+    t0 = perf_counter()
+    logger.debug(
+        f"Sharding and saving tensor to {path} (shard_dims={shard_dims}, remove_dims={remove_dims}, dtype={dtype}, layout={layout}, mem={memory_config}, torch_impl={_torch_impl})"
+    )
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
     assert isinstance(remove_dims, bool) or all(isinstance(remove_dim, bool) for remove_dim in remove_dims)
     assert len(shard_dims) == 2, "shard_dims must be exactly 2 dimensions (can repeat)"
@@ -650,6 +655,7 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    t_convert0 = perf_counter()
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -672,6 +678,7 @@ def shard_and_save(
             layout=layout,
             memory_config=memory_config,
         )
+    convert_s = perf_counter() - t_convert0
 
     # Ensure the path has an appropriate extension
     if not path.name.endswith(TENSOR_CACHE_EXTENSION):
@@ -681,7 +688,9 @@ def shard_and_save(
 
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
+    t_dump0 = perf_counter()
     ttnn.dump_tensor(path, ttnn_tensor)
+    dump_s = perf_counter() - t_dump0
 
     if not convert_meta:
         path_str = str(path)
@@ -694,6 +703,10 @@ def shard_and_save(
             raise ValueError(f"Invalid path structure after 'mesh_': {path}")
         path = Path(parts[1])
 
+    total_s = perf_counter() - t0
+    logger.info(
+        f"Sharded and saved tensor to {path} (convert {convert_s:.1f} s, dump {dump_s:.1f} s, total {total_s:.1f} s)"
+    )
     return SavedWeight(path, memory_config)
 
 
@@ -886,65 +899,103 @@ def get_weight_config(
     )
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"
+    logger.info(f"Weight cache root: {weight_cache_path}")
+    t_validate = perf_counter()
     for _ in range(1):
         if force_recalculate:
+            logger.info("Forcing weight cache recalculation (flag set)")
             break
         if not config_path.exists():
+            logger.debug(f"Cache config not found at {config_path}")
             break
         weight_config = json.load(config_path.open(), object_hook=try_decode_saved_weight)
         if not _check_weights_exist_and_convert(weight_cache_path, weight_config):
             break
-        logger.info(f"Using weights cached at {weight_cache_path}")
+        validate_ms = (perf_counter() - t_validate) * 1e3
+        logger.info(f"Using weights cached at {weight_cache_path} (validated in {validate_ms:.1f} ms)")
         return weight_config
 
     # Only prepare state dicts if we need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
+    validate_ms = (perf_counter() - t_validate) * 1e3
+    logger.info(f"Cache miss; caching weights at {weight_cache_path} (validation took {validate_ms:.1f} ms)")
     if state_dicts is None:
         from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
 
+        t_prepare = perf_counter()
         model_state = prepare_model_state_dict(
             hf_config=hf_config,
             random_weights=random_weights,
             model_path=model_path,
             single_layer=single_layer,
         )
+        prepare_ms = (perf_counter() - t_prepare) * 1e3
+        logger.info(f"Prepared model state dict ({prepare_ms:.1f} ms)")
         state_dicts = (model_state,)
 
     # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
+    logger.info("Converting weights to SavedWeight format...")
+    t_convert = perf_counter()
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    convert_s = perf_counter() - t_convert
     json.dump(weight_config, config_path.open("w"), cls=WeightConfigEncoder)
+    t_check = perf_counter()
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
-    logger.info("Converting weights to TTNN SavedWeight format...done")
+    check_ms = (perf_counter() - t_check) * 1e3
+    logger.info(f"Done converting weights to SavedWeight format (convert {convert_s:.1f} s, verify {check_ms:.1f} ms)")
     return weight_config
 
 
 def _check_weights_exist_and_convert(root_path: Path, weight_config: WeightConfig) -> bool:
-    if isinstance(weight_config, dict):
-        entries = weight_config.values()
-    else:
-        entries = weight_config
-    for entry in entries:
-        if entry is None:
-            continue
-        if isinstance(entry, SavedWeight):
-            if (
-                not (entry.path.is_absolute())
-                and not (root_path / entry.path).exists()
-                or entry.path.suffix != TENSOR_CACHE_EXTENSION
-            ):
-                return False
-            elif (
-                not (entry.path.is_absolute())
-                and (root_path / entry.path).exists()
-                and entry.path.suffix == TENSOR_CACHE_EXTENSION
-            ):
-                entry.path = root_path / entry.path
-            elif entry.path.is_absolute() and (not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION):
-                return False
-        elif not _check_weights_exist_and_convert(root_path, entry):
-            return False
-    return True
+    """
+    Verify that SavedWeight paths exist and have the correct extension; convert relative paths to absolute.
+    Logs a summary with timing at INFO and per-entry actions at DEBUG.
+    """
+    t0 = perf_counter()
+    stats = {"scanned": 0, "resolved": 0, "missing": 0}
+
+    def _check_impl(root_path_local: Path, cfg: WeightConfig) -> bool:
+        if isinstance(cfg, dict):
+            entries_local = cfg.values()
+        else:
+            entries_local = cfg
+        for entry in entries_local:
+            if entry is None:
+                continue
+            if isinstance(entry, SavedWeight):
+                stats["scanned"] += 1
+                if (
+                    not (entry.path.is_absolute())
+                    and not (root_path_local / entry.path).exists()
+                    or entry.path.suffix != TENSOR_CACHE_EXTENSION
+                ):
+                    logger.debug(f"Missing or invalid cache file: {entry.path} (root={root_path_local})")
+                    stats["missing"] += 1
+                    return False
+                elif (
+                    not (entry.path.is_absolute())
+                    and (root_path_local / entry.path).exists()
+                    and entry.path.suffix == TENSOR_CACHE_EXTENSION
+                ):
+                    entry.path = root_path_local / entry.path
+                    stats["resolved"] += 1
+                    logger.debug(f"Resolved relative SavedWeight path to absolute: {entry.path}")
+                elif entry.path.is_absolute() and (
+                    not entry.path.exists() or entry.path.suffix != TENSOR_CACHE_EXTENSION
+                ):
+                    logger.debug(f"Absolute path missing or invalid extension: {entry.path}")
+                    stats["missing"] += 1
+                    return False
+            else:
+                if not _check_impl(root_path_local, entry):
+                    return False
+        return True
+
+    ok = _check_impl(root_path, weight_config)
+    elapsed_ms = (perf_counter() - t0) * 1e3
+    logger.info(
+        f"Validated weight cache entries under {root_path}: ok={ok}, scanned={stats['scanned']}, resolved={stats['resolved']}, missing={stats['missing']} ({elapsed_ms:.1f} ms)"
+    )
+    return ok
 
 
 def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> list[ttnn.MeshCoordinate]:

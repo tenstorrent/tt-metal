@@ -7,9 +7,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
 
@@ -41,6 +43,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
 
         # If _full_to_file is provided then we are a now a view ofthe original LazyStateDict.
         if _full_to_file is None:
+            t0 = perf_counter()
             index_path = self._model_path / "model.safetensors.index.json"
             if not index_path.is_file():
                 raise ValueError(f"Unable to find index file at {index_path}. Is the model path correct?")
@@ -50,6 +53,16 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             except Exception as e:
                 raise ValueError(f"Failed to parse index JSON at {index_path}: {e}") from e
             self._full_to_file = dict(index_obj["weight_map"])
+            elapsed_ms = (perf_counter() - t0) * 1e3
+            try:
+                num_keys = len(self._full_to_file)
+                num_files = len(set(self._full_to_file.values()))
+            except Exception:
+                num_keys = -1
+                num_files = -1
+            logger.info(
+                f"LazyStateDict initialized from {index_path} ({num_keys} keys across {num_files} files) in {elapsed_ms:.1f} ms"
+            )
         else:
             self._full_to_file = _full_to_file
         self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
@@ -71,6 +84,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
 
         # Inherit parent's layer filter if not explicitly overridden
         child_num_layers = self._num_layers if num_layers is None else num_layers
+        logger.debug(
+            f"LazyStateDict view created: base_prefix='{self._base_prefix}', add_prefix='{prefix}', combined='{combined_prefix}', num_layers={child_num_layers}"
+        )
 
         return LazyStateDict(
             self._model_path,
@@ -102,6 +118,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         if full_key in self._cache:
+            logger.debug(f"LazyStateDict cache hit: '{full_key}'")
             return self._cache[full_key]
         if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
             raise KeyError(key)
@@ -111,8 +128,17 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             raise FileNotFoundError(
                 f"Attempted to load weight {full_key} from file {filepath} but the file does not exist."
             )
+        t0 = perf_counter()
+        logger.debug(f"Opening safetensors file '{filepath}' to load key '{full_key}'")
         with safe_open(filepath, framework="pt", device="cpu") as f:
             tensor = f.get_tensor(full_key)
+        load_ms = (perf_counter() - t0) * 1e3
+        try:
+            logger.debug(
+                f"Loaded '{full_key}' from '{filename}' in {load_ms:.1f} ms (shape={tuple(tensor.shape)}, dtype={tensor.dtype})"
+            )
+        except Exception:
+            logger.debug(f"Loaded '{full_key}' from '{filename}' in {load_ms:.1f} ms")
         self._cache[full_key] = tensor
         return tensor
 

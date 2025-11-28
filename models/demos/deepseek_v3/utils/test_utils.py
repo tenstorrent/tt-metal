@@ -25,12 +25,22 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 def load_state_dict(model_path: Path, module_path: str):
     # Lazily load HF weights: only access tensors when keys are used.
+    from time import perf_counter
+
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
+    logger.info(f"Creating LazyStateDict for model_path={model_path} (module_path='{module_path or ''}')")
+    t0 = perf_counter()
     lazy = LazyStateDict(model_path)
+    create_ms = (perf_counter() - t0) * 1e3
+    logger.debug(f"LazyStateDict created in {create_ms:.1f} ms")
     if module_path:
         # Ensure dot suffix so that keys are trimmed properly in the view
-        return lazy.view_with_prefix(module_path + ".")
+        t1 = perf_counter()
+        view = lazy.view_with_prefix(module_path + ".")
+        view_ms = (perf_counter() - t1) * 1e3
+        logger.debug(f"Created LazyStateDict view for prefix '{module_path}.' in {view_ms:.1f} ms")
+        return view
     return lazy
 
 

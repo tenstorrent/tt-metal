@@ -40,6 +40,8 @@ def mesh_device(request, device_params):
     Yields:
         mesh_device: Initialized device mesh object.
     """
+    from time import perf_counter
+
     import ttnn
 
     device_ids = ttnn.get_device_ids()
@@ -63,11 +65,18 @@ def mesh_device(request, device_params):
         ttnn.set_fabric_config(fabric_config)
 
     updated_device_params.setdefault("mesh_shape", default_mesh_shape)
+    logger.info(
+        f"Opening mesh device with shape {updated_device_params['mesh_shape']} (env={mesh_device_env or 'unset'})"
+    )
+    t0 = perf_counter()
     mesh_device = ttnn.open_mesh_device(**updated_device_params)
-
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
+    open_s = perf_counter() - t0
+    logger.info(
+        f"Mesh device ready: {mesh_device.get_num_devices()} devices, shape={mesh_device.shape} ({open_s:.1f} s)"
+    )
     yield mesh_device
 
+    t1 = perf_counter()
     for submesh in mesh_device.get_submeshes():
         ttnn.close_mesh_device(submesh)
 
@@ -75,6 +84,8 @@ def mesh_device(request, device_params):
     if fabric_config:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     del mesh_device
+    close_ms = (perf_counter() - t1) * 1e3
+    logger.debug(f"Closed mesh device and submeshes ({close_ms:.1f} ms)")
 
 
 @pytest.fixture(scope="session")
@@ -85,13 +96,26 @@ def model_path():
 @pytest.fixture(scope="session")
 def hf_config(model_path):
     """Load DeepSeek config for testing"""
+    from time import perf_counter
+
+    logger.info(f"Loading HuggingFace config from {model_path}...")
+    t0 = perf_counter()
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    load_ms = (perf_counter() - t0) * 1e3
+    logger.info(f"HuggingFace config loaded ({load_ms:.1f} ms)")
     return config
 
 
 @pytest.fixture(scope="session")
 def state_dict(model_path):
-    return load_state_dict(model_path, "")
+    from time import perf_counter
+
+    logger.info(f"Initializing lazy state dict from {model_path}...")
+    t0 = perf_counter()
+    sd = load_state_dict(model_path, "")
+    init_ms = (perf_counter() - t0) * 1e3
+    logger.info(f"Lazy state dict ready ({init_ms:.1f} ms)")
+    return sd
 
 
 @pytest.fixture(scope="session")
@@ -99,6 +123,9 @@ def hf_config_short(request, hf_config):
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
     hf_config_out.max_seq_len = 3 * 1024
+    logger.debug(
+        f"Using short HF config: num_hidden_layers={hf_config_out.num_hidden_layers}, max_seq_len={hf_config_out.max_seq_len}"
+    )
     return hf_config_out
 
 
@@ -112,8 +139,10 @@ def mesh_row(mesh_device):
     """
     if ttnn.get_num_devices() >= 32:
         rows = mesh_device.create_submeshes(ttnn.MeshShape(1, 8))
+        logger.debug("Created (1,8) submesh; using first row for tests")
         yield rows[0]
     else:
+        logger.debug("Single-row mesh not required; using full mesh_device")
         yield mesh_device
 
 
@@ -141,7 +170,9 @@ def force_recalculate_weight_config(request):
     """
     Fixture to control whether weight configuration files should be recalculated.
     """
-    return request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+    val = request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+    logger.debug(f"Force recalculate weight config: {val}")
+    return val
 
 
 @pytest.fixture(scope="session")
@@ -150,4 +181,6 @@ def cache_path():
         default_cache = f"/localdev/{os.getlogin()}/deepseek-v3-cache"
     except OSError:
         default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
-    return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
+    cache = Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
+    logger.debug(f"Using cache path: {cache}")
+    return cache
