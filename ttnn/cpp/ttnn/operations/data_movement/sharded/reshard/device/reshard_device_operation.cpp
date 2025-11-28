@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
 

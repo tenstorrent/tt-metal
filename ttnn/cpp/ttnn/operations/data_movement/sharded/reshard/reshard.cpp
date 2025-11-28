@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
-#include "device/reshard_op.hpp"
+#include "device/reshard_device_operation.hpp"
 #include "reshard.hpp"
 
 using namespace tt::tt_metal;
