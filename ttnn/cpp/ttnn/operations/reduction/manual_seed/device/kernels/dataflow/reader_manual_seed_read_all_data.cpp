@@ -59,6 +59,7 @@ void kernel_main() {
             break;
         }
     }
+
     // Send result to compute kernel via mailbox
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_user_id);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_user_id);
