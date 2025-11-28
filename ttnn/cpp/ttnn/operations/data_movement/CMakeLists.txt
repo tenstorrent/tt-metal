@@ -161,8 +161,11 @@ target_sources(
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
         sharded/reshard/device/reshard_op.cpp
-        sharded/reshard/device/reshard_program_factory.cpp
-        sharded/reshard/device/nd_reshard_program_factory.cpp
+        sharded/reshard/device/reshard_program_factory_same_width.cpp
+        sharded/reshard/device/reshard_program_factory_same_height.cpp
+        sharded/reshard/device/reshard_program_factory_generic.cpp
+        sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
+        sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp

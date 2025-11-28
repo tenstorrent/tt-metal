@@ -7,9 +7,12 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 
-#include "reshard_device_operation_types.hpp"
-#include "reshard_program_factory.hpp"
-#include "nd_reshard_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_width.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_height.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_generic.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
 namespace ttnn::operations::data_movement {
 
