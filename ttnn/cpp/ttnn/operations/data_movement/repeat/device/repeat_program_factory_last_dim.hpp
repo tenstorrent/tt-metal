@@ -4,32 +4,11 @@
 
 #pragma once
 
-#include <tt-metalium/core_coord.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
 
 namespace ttnn::operations::data_movement::repeat::program {
-
-struct RepeatSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::CoreRange total_cores{tt::tt_metal::CoreCoord{0, 0}};
-};
-
-struct RepeatProgramFactorySecondDim {
-    using shared_variables_t = RepeatSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-};
 
 struct RepeatProgramFactoryLastDim {
     using shared_variables_t = RepeatSharedVariables;
