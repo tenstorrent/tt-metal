@@ -8,13 +8,13 @@
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::indexed_fill {
 
 struct IndexedFillDeviceOperation {
-    using operation_attributes_t = ttnn::operations::data_movement::operation_attributes_t;
-    using tensor_args_t = ttnn::operations::data_movement::tensor_args_t;
-    using spec_return_value_t = ttnn::operations::data_movement::spec_return_value_t;
-    using tensor_return_value_t = ttnn::operations::data_movement::tensor_return_value_t;
+    using operation_attributes_t = operation_attributes_t;
+    using tensor_args_t = tensor_args_t;
+    using spec_return_value_t = spec_return_value_t;
+    using tensor_return_value_t = tensor_return_value_t;
     using program_factory_t = std::variant<program::IndexedFillProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -37,9 +37,10 @@ struct IndexedFillDeviceOperation {
         int64_t dim);
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::indexed_fill
 
 namespace ttnn::prim {
-constexpr auto indexed_fill =
-    ttnn::register_operation<"ttnn::prim::indexed_fill", ttnn::operations::data_movement::IndexedFillDeviceOperation>();
+constexpr auto indexed_fill = ttnn::register_operation<
+    "ttnn::prim::indexed_fill",
+    ttnn::operations::data_movement::indexed_fill::IndexedFillDeviceOperation>();
 }  // namespace ttnn::prim

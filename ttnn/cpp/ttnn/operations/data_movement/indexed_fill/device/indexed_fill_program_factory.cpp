@@ -2,19 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <math.h>
-
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::indexed_fill::program {
 
 IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -153,4 +149,4 @@ void IndexedFillProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::indexed_fill::program

@@ -8,7 +8,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::indexed_fill {
 
 IndexedFillDeviceOperation::program_factory_t IndexedFillDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -90,4 +90,4 @@ IndexedFillDeviceOperation::invoke(
         }};
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::indexed_fill

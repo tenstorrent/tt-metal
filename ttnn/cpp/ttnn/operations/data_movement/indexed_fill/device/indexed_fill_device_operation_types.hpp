@@ -5,9 +5,8 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::indexed_fill {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -23,4 +22,4 @@ struct tensor_args_t {
 using spec_return_value_t = TensorSpec;
 using tensor_return_value_t = Tensor;
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::indexed_fill
