@@ -707,10 +707,13 @@ class Generator:
         enable_trace = kwargs["enable_trace"]
         sampling_params = kwargs["sampling_params"]
         self.warmup_prefill_traces(
+            tokens=None,
             page_table=page_table,
             kv_cache=kv_cache,
+            prompt_lens=None,
             enable_trace=enable_trace,
             sampling_params=sampling_params,
+            empty_slots=None,
             tt_out_logits_all_users=None,
         )
 
