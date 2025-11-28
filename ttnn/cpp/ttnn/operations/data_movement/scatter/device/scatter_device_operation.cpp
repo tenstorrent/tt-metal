@@ -85,10 +85,9 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
     const ScatterReductionType& reduction,
-    const std::optional<CoreRangeSet>& sub_core_grid,
-    uint32_t l1_reserved_memory_bytes) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     return {
-        operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid, l1_reserved_memory_bytes},
+        operation_attributes_t{dim, output_memory_config, reduction, sub_core_grid},
         tensor_args_t{input_tensor, index_tensor, source_tensor}};
 }
 
