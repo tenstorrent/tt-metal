@@ -32,11 +32,6 @@ from models.tt_transformers.tt.load_checkpoints import (
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     HfModelWrapper,
-    MathFidelitySetting,
-    ModelOptimizations,
-    OpGroup,
-    PrecisionSetting,
-    TensorGroup,
     determine_device_name,
     num_to_coregrid,
     num_to_corerange,
@@ -45,66 +40,6 @@ from models.tt_transformers.tt.model_config import (
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
-
-def parse_optimizations(string):
-    """
-    Parse the optimizations full name and return a ModelOptimizations instance.
-    """
-    # Find the precision and fidelity config sections
-    precision_start = string.find("precision_cfg")
-    fidelity_start = string.find("fidelity_cfg")
-
-    if precision_start == -1 and fidelity_start == -1:
-        raise ValueError("String must contain either precision_cfg or fidelity_cfg")
-
-    # Extract the config dictionaries between { }
-    def extract_config(start_idx, cfg_name):
-        open_brace = string.find("{", start_idx)
-        if open_brace == -1:
-            raise ValueError(f"Missing opening brace for {cfg_name}")
-
-        close_brace = string.find("}", open_brace)
-        if close_brace == -1:
-            raise ValueError(f"Missing closing brace for {cfg_name}")
-
-        return string[open_brace + 1 : close_brace].strip()
-
-    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
-    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
-
-    # Create ModelOptimizations instance with the parsed configs
-    settings = {"TensorPrecision": {}, "OpFidelity": {}}
-
-    # Parse precision config
-    for pair in precision_dict.split(","):
-        if ":" not in pair:
-            raise ValueError("Invalid format - missing ':' separator")
-        key, value = pair.split(":")
-        key = TensorGroup(key.strip())
-        value = value.strip()
-        if key == TensorGroup.ACTIVATION and value == "mixed":
-            # special case for activation's mixed precision, which is the default configuration
-            continue
-
-        settings["TensorPrecision"][key] = PrecisionSetting(value)
-
-    # Parse fidelity config
-    for pair in fidelity_dict.split(","):
-        if ":" not in pair:
-            raise ValueError("Invalid format - missing ':' separator")
-        key, value = pair.split(":")
-        key = OpGroup(key.strip())
-        value = MathFidelitySetting(value.strip())
-        settings["OpFidelity"][key] = value
-
-    model_opt = ModelOptimizations(settings)
-
-    def apply_settings(model_args):
-        return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
-
-    apply_settings.__name__ = model_opt.__name__
-    return apply_settings
 
 
 class ModelArgs:
