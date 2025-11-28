@@ -10,10 +10,6 @@
 
 namespace ttnn::operations::data_movement {
 
-namespace program {
-struct IndexedFillProgramFactory;
-}  // namespace program
-
 struct IndexedFillDeviceOperation {
     using operation_attributes_t = ttnn::operations::data_movement::operation_attributes_t;
     using tensor_args_t = ttnn::operations::data_movement::tensor_args_t;
