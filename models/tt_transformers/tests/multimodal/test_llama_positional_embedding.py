@@ -102,7 +102,7 @@ def test_positional_embedding_inference(
 
     tt_aspect_ratios = aspect_ratios.tolist()
 
-    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen intead
+    # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
     reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
