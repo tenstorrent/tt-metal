@@ -1758,7 +1758,7 @@ jobs:
                 echo "metalium-developers-infra"
                 ;;
               "@tenstorrent/metalium-developers-ttnn-core")
-                echo "metalium-ttnn-core-team"
+                echo "metalium-developers-ttnn-core"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
                 echo "metalium-developers-convolutions"
