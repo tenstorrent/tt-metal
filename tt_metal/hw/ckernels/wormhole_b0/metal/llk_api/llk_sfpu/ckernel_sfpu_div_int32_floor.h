@@ -58,8 +58,8 @@ sfpi_inline void calculate_div_int32_body(
     v_endif;
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
-    // the target `a`.  We split into 23-bit chunks.
-    // Idea: maybe just keep the top 22 bits of 31-bit q: q_hi = q>>9
+    // the target `a`.  Note: we only care about the top ~23 bits.
+    // Keep the top 22 bits of 31-bit q: q_hi = q>>9
     // Now q2 = q>>20, q1 = q>>9
     // And so qb = (q2<<20 + q1<<9) * (b2<<22 + b1<<11 + b0)
     //           = (q2<<20 * b0) + (q1<<9 * b1<<11) + (q1<<9 * b0)
