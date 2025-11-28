@@ -616,7 +616,7 @@ class Generator:
             page_table=page_table,
         )
 
-        if self.enable_split_sampling:
+        if self.enable_split_sampling and not return_logits:
             return self.model.sampling.sample(
                 logits=trace_tok_rm[0],
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
