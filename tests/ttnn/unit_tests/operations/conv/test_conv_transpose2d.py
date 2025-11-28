@@ -217,7 +217,7 @@ def run_conv_transpose2d(
         (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
-        # # (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED), # Issue with reading block sharded tensor
+        (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         # Vanilla Unet
         # Filter Size = 2 not supported in Block sharded
         # (1, 30, 40, 512, 256, 3, 3, 2, 2, 1, 1, 1, 1,  {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED), # Issue with reading block sharded tensor
@@ -368,7 +368,7 @@ def test_conv_transpose2d_model_fruit(
     (
         # Test config_tensors_in_dram parameter with various configurations
         # No l1_small_size fixture - the point is to test DRAM storage to avoid L1_SMALL usage
-        (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ),
