@@ -4,8 +4,22 @@
 
 import ttnn
 
+# Import signpost for profiling
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ImportError:
+    use_signpost = False
+
+    def signpost(header):
+        pass
+
 
 def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device):
+    if use_signpost:
+        signpost(header="multi_scale_deformable_attn_start")
+
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     value_list = []
@@ -15,6 +29,9 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     sampling_value_list = []
 
     for level, (H_, W_) in enumerate(value_spatial_shapes):
+        if use_signpost:
+            signpost(header=f"deformable_attn_level_{level}_start")
+
         value_l_ = value_list[level]
         value_l_ = ttnn.reshape(value_l_, [value_l_.shape[0], value_l_.shape[1], value_l_.shape[2] * value_l_.shape[3]])
         value_l_ = ttnn.permute(value_l_, (0, 2, 1))
@@ -36,7 +53,15 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
 
         value_l_ = ttnn.permute(value_l_, (0, 2, 3, 1))
         value_l_ = ttnn.to_layout(value_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if use_signpost:
+            signpost(header=f"grid_sample_level_{level}_start")
+
         sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
+
+        if use_signpost:
+            signpost(header=f"grid_sample_level_{level}_end")
+
         ttnn.deallocate(value_l_)
         ttnn.deallocate(sampling_grid_l_)
         sampling_value_l_ = ttnn.permute(sampling_value_l_, (0, 3, 1, 2))
@@ -46,6 +71,9 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
 
         attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
+
+        if use_signpost:
+            signpost(header=f"deformable_attn_level_{level}_end")
 
     output = ttnn.stack(sampling_value_list, -2)
     ttnn.deallocate(sampling_grids)
@@ -66,6 +94,9 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
     ttnn.deallocate(attention_weights)
     ttnn.deallocate(sampling_value_l_)
     ttnn.deallocate(value)
+
+    if use_signpost:
+        signpost(header="multi_scale_deformable_attn_end")
 
     return output
 

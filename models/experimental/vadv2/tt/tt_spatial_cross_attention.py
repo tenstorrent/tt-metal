@@ -6,6 +6,17 @@ import warnings
 import ttnn
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
+# Import signpost for profiling
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ImportError:
+    use_signpost = False
+
+    def signpost(header):
+        pass
+
 
 class TtSpatialCrossAttention:
     def __init__(
@@ -49,6 +60,9 @@ class TtSpatialCrossAttention:
         flag="encoder",
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="spatial_cross_attn_start")
+
         if key is None:
             key = query
         if value is None:
@@ -61,6 +75,9 @@ class TtSpatialCrossAttention:
             query = query + query_pos
 
         bs, num_query, _ = query.shape
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_mask_compute_start")
 
         D = reference_points_cam.shape[3]
         indexes = []
@@ -82,6 +99,12 @@ class TtSpatialCrossAttention:
 
         max_len = max([each.shape[0] for each in indexes])
 
+        if use_signpost:
+            signpost(header="spatial_cross_attn_mask_compute_end")
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_rebatch_start")
+
         query_torch = ttnn.to_torch(query)
         reference_points_cam_torch = ttnn.to_torch(reference_points_cam)
 
@@ -98,6 +121,13 @@ class TtSpatialCrossAttention:
 
         queries_rebatch = ttnn.from_torch(queries_rebatch, dtype=ttnn.bfloat16, device=self.device)
         reference_points_rebatch = ttnn.from_torch(reference_points_rebatch, dtype=ttnn.bfloat16, device=self.device)
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_rebatch_end")
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_deformable_start")
+
         num_cams, l, bs, embed_dims = key.shape
         num_cams, l, bs, embed_dims = key.shape
 
@@ -116,6 +146,9 @@ class TtSpatialCrossAttention:
         )
         ttnn.deallocate(queries_rebatch)
         ttnn.deallocate(reference_points_rebatch)
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_deformable_end")
 
         queries = ttnn.reshape(queries, (bs, self.num_cams, max_len, self.embed_dims))
 
@@ -154,6 +187,9 @@ class TtSpatialCrossAttention:
         output = slots + inp_residual
         ttnn.deallocate(slots)
         ttnn.deallocate(inp_residual)
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_end")
 
         return output
 

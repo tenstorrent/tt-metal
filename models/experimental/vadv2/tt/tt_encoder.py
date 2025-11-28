@@ -11,6 +11,17 @@ from models.experimental.vadv2.tt.tt_temporal_self_attention import TtTemporalSe
 from models.experimental.vadv2.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
 
+# Import signpost for profiling
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ImportError:
+    use_signpost = False
+
+    def signpost(header):
+        pass
+
 
 def matmul_hybrid_chunked_batched(
     lidar2img,
@@ -349,8 +360,14 @@ class TtBEVFormerEncoder:
         shift=0.0,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="bevformer_encoder_start")
+
         output = bev_query
         intermediate = []
+
+        if use_signpost:
+            signpost(header="encoder_reference_points_start")
 
         ref_3d = self.get_reference_points_ttnn(
             bev_h,
@@ -365,6 +382,12 @@ class TtBEVFormerEncoder:
         ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
 
         reference_points_cam, bev_mask = self.point_sampling_ttnn(ref_3d, self.pc_range, kwargs["img_metas"])
+
+        if use_signpost:
+            signpost(header="encoder_reference_points_end")
+
+        if use_signpost:
+            signpost(header="encoder_shift_ref_start")
 
         shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
@@ -388,7 +411,13 @@ class TtBEVFormerEncoder:
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
 
+        if use_signpost:
+            signpost(header="encoder_shift_ref_end")
+
         for lid, layer in enumerate(self.layers):
+            if use_signpost:
+                signpost(header=f"encoder_layer_{lid}_start")
+
             output = layer(
                 bev_query,
                 key,
@@ -408,6 +437,9 @@ class TtBEVFormerEncoder:
             )
             ttnn.ReadDeviceProfiler(self.device)
 
+            if use_signpost:
+                signpost(header=f"encoder_layer_{lid}_end")
+
             bev_query = output
             if self.return_intermediate:
                 intermediate.append(output)
@@ -419,7 +451,14 @@ class TtBEVFormerEncoder:
             stacked = ttnn.stack(intermediate)
             for it in intermediate:
                 ttnn.deallocate(it)
+
+            if use_signpost:
+                signpost(header="bevformer_encoder_end")
+
             return stacked
+
+        if use_signpost:
+            signpost(header="bevformer_encoder_end")
 
         return output
 
@@ -532,6 +571,9 @@ class TtBEVFormerLayer:
 
         for layer in self.operation_order:
             if layer == "self_attn":
+                if use_signpost:
+                    signpost(header="layer_self_attn_start")
+
                 spatial_shapes_1 = torch.tensor([[bev_h, bev_w]])
                 spatial_shapes_1 = ttnn.from_torch(
                     spatial_shapes_1, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -553,7 +595,13 @@ class TtBEVFormerLayer:
                 attn_index += 1
                 identity = query
 
+                if use_signpost:
+                    signpost(header="layer_self_attn_end")
+
             elif layer == "norm":
+                if use_signpost:
+                    signpost(header="layer_norm_start")
+
                 query = ttnn.layer_norm(
                     query,
                     weight=self.params.norms[f"norm{norm_index}"].weight,
@@ -563,8 +611,14 @@ class TtBEVFormerLayer:
                 # ttnn.deallocate(self.params.norms[f"norm{norm_index}"].bias)
                 norm_index += 1
 
+                if use_signpost:
+                    signpost(header="layer_norm_end")
+
             # spaital cross attention
             elif layer == "cross_attn":
+                if use_signpost:
+                    signpost(header="layer_cross_attn_start")
+
                 query = self.attentions[attn_index](
                     query,
                     key,
@@ -584,8 +638,17 @@ class TtBEVFormerLayer:
                 attn_index += 1
                 identity = query
 
+                if use_signpost:
+                    signpost(header="layer_cross_attn_end")
+
             elif layer == "ffn":
+                if use_signpost:
+                    signpost(header="layer_ffn_start")
+
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
                 ffn_index += 1
+
+                if use_signpost:
+                    signpost(header="layer_ffn_end")
 
         return query
