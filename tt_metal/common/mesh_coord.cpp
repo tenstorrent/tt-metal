@@ -112,18 +112,6 @@ size_t MeshShape::mesh_size() const {
 bool operator==(const MeshShape& lhs, const MeshShape& rhs) = default;
 bool operator!=(const MeshShape& lhs, const MeshShape& rhs) = default;
 
-bool operator<(const MeshShape& lhs, const MeshShape& rhs) {
-    if (lhs.dims() != rhs.dims()) {
-        return lhs.dims() < rhs.dims();
-    }
-    for (size_t i = 0; i < lhs.dims(); ++i) {
-        if (lhs[i] != rhs[i]) {
-            return lhs[i] < rhs[i];
-        }
-    }
-    return false;
-}
-
 std::ostream& operator<<(std::ostream& os, const MeshShape& shape) {
     os << "MeshShape([";
     for (size_t i = 0; i < shape.dims(); ++i) {

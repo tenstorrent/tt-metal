@@ -801,12 +801,12 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
     std::vector<MeshShape> one_d_shapes;
 
     // Try from total_number_of_chips down to 1
-    for (std::uint32_t num_chips = total_number_of_chips; num_chips >= 1; num_chips--) {
+    for (std::uint32_t num_chips = total_number_of_chips; num_chips > 0; num_chips--) {
         // Find all divisor pairs (x, y) where x * y = num_chips
         // Only check divisors up to sqrt(num_chips) for efficiency
         std::uint32_t sqrt_num_chips = static_cast<std::uint32_t>(std::sqrt(num_chips));
 
-        for (std::uint32_t i = sqrt_num_chips; i >= 1; i--) {
+        for (std::uint32_t i = sqrt_num_chips; i > 0; i--) {
             if (num_chips % i == 0) {
                 auto x = num_chips / i;
                 auto y = i;
@@ -914,12 +914,6 @@ MeshGraph MeshGraph::generate_from_physical_system_descriptor(
     }
     // Throw if no possible mesh shape is found to match, this means there are no devices! This should never happen
     TT_THROW("No possible mesh shape found to match physical adjacency matrix");
-
-    // FIXME: Placeholder mesh graph for now
-    auto mesh_graph = generate_mesh_graph_of_shape(mesh_shapes_to_try[0], fabric_type, number_of_connections);
-
-    // Form a mesh graph of that size and return it
-    return mesh_graph;
 }
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(

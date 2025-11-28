@@ -651,7 +651,7 @@ void MetalContext::initialize_control_plane() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
-    // If no custom mesh graph descrriptor use auto discovery to generate mesh graph
+    // If no custom mesh graph descriptor use auto discovery to generate mesh graph
     log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
     this->construct_control_plane();

@@ -49,7 +49,6 @@ public:
 
     friend bool operator==(const MeshShape& lhs, const MeshShape& rhs);
     friend bool operator!=(const MeshShape& lhs, const MeshShape& rhs);
-    friend bool operator<(const MeshShape& lhs, const MeshShape& rhs);
     friend std::ostream& operator<<(std::ostream& os, const MeshShape& shape);
 
 private:
