@@ -696,7 +696,7 @@ jobs:
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@vjovanovic/dispatch_timeout_command
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -930,7 +930,7 @@ jobs:
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@vjovanovic/dispatch_timeout_command
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1023,7 +1023,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@vjovanovic/dispatch_timeout_command
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1137,7 +1137,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@vjovanovic/dispatch_timeout_command
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

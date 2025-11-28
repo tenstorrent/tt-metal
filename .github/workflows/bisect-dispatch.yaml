@@ -114,7 +114,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@vjovanovic/dispatch_timeout_command
         timeout-minutes: 10
         with:
           fetch-depth: 0
