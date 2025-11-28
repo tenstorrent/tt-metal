@@ -8,7 +8,9 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
+#include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 
