@@ -51,6 +51,8 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
           0 /*relu_treshold*/,
           false /*tilize*/>(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false /*untilize*/>(ocb)));
+
+    set_g_states(icb0, icb1, ocb);
 }
 
 // clang-format off

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "reconfig_data_format.h"
-#include "compute_kernel_hw_startup.h"
 #include "tt_metal/include/compute_kernel_api/common_globals.h"
 
 namespace ckernel {
@@ -122,7 +121,7 @@ ALWI void state_impl_transpose(uint32_t cb) {
 // --- BINARY Operation Handler ---
 template <bool to_from_int8>
 ALWI void state_impl_binary(uint32_t cb_a, uint32_t cb_b) {
-    reconfigure_dual_operand(cb_a, cb_b);
+    // reconfigure_dual_operand(cb_a, cb_b);
 }
 
 // --- MATMUL Operation Handler ---
@@ -217,13 +216,17 @@ ALWI void state_configure(uint32_t cb) {
         "Invalid operation type for single-operand state_configure");
 
     if constexpr (op_type == Operation::UNARY) {
-        state_impl_unary<to_from_int8>(cb);
+        reconfigure_single_operand(cb, true);
+        // state_impl_unary<to_from_int8>(cb);
     } else if constexpr (op_type == Operation::COPY) {
-        state_impl_copy<to_from_int8>(cb);
+        // state_impl_copy<to_from_int8>(cb);
+        reconfigure_single_operand(cb, true);
     } else if constexpr (op_type == Operation::TRANSPOSE) {
-        state_impl_transpose<to_from_int8>(cb);
+        // state_impl_transpose<to_from_int8>(cb);
+        reconfigure_single_operand(cb, true);
     } else if constexpr (op_type == Operation::PACK) {
-        state_impl_pack<to_from_int8>(cb);
+        // state_impl_pack<to_from_int8>(cb);
+        reconfigure_pack_operand(cb);
     }
 }
 
@@ -231,26 +234,43 @@ ALWI void state_configure(uint32_t cb) {
  * BINARY, MATMUL, REDUCE operations
  * Dispatches to operation-specific implementation
  */
-template <Operation::Type op_type, bool to_from_int8>
+template <Operation::Type op_type, bool to_from_int8 = false>
 ALWI void state_configure(uint32_t cb_a, uint32_t cb_b) {
     static_assert(
         op_type == Operation::BINARY || op_type == Operation::MATMUL || op_type == Operation::REDUCE,
         "Invalid operation type for dual-operand state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        state_impl_binary<to_from_int8>(cb_a, cb_b);
+        // state_impl_binary<to_from_int8>(cb_a, cb_b);
+        reconfigure_dual_operand(cb_a, cb_b);
     } else if constexpr (op_type == Operation::MATMUL) {
-        state_impl_matmul<to_from_int8>(cb_a, cb_b);
+        // state_impl_matmul<to_from_int8>(cb_a, cb_b);
     } else if constexpr (op_type == Operation::REDUCE) {
-        state_impl_reduce<to_from_int8>(cb_a, cb_b);
+        // state_impl_redce<to_from_int8>(cb_a, cb_b);
+        reconfigure_dual_operand(cb_a, cb_b);
     }
 }
+
+ALWI void set_g_states(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
+    g_state_srca_cb = cb_a;
+    g_state_srcb_cb = cb_b;
+    g_state_pack_cb = cb_out;
+}
+
+ALWI void set_g_srca_srcb(uint32_t cb_a, uint32_t cb_b) {
+    g_state_srca_cb = cb_a;
+    g_state_srcb_cb = cb_b;
+}
+
+ALWI void set_g_srca(uint32_t cb_a) { g_state_srca_cb = cb_a; }
+ALWI void set_g_srcb(uint32_t cb_b) { g_state_srcb_cb = cb_b; }
+ALWI void set_g_pack(uint32_t cb_out) { g_state_pack_cb = cb_out; }
 
 /**
  * UNARY, TRANSPOSE, TILIZE, UNTILIZE with output
  * Dispatches to operation-specific implementation
  */
-template <Operation::Type op_type, bool to_from_int8>
+template <Operation::Type op_type, bool to_from_int8 = false>
 ALWI void state_configure_with_output(uint32_t cb_in, uint32_t cb_out) {
     static_assert(
         op_type == Operation::UNARY || op_type == Operation::TRANSPOSE || op_type == Operation::TILIZE ||
@@ -258,13 +278,13 @@ ALWI void state_configure_with_output(uint32_t cb_in, uint32_t cb_out) {
         "Invalid operation type for state_configure_with_output");
 
     if constexpr (op_type == Operation::UNARY) {
-        state_impl_unary_with_output<to_from_int8>(cb_in, cb_out);
+        // state_impl_unary_with_output<to_from_int8>(cb_in, cb_out);
     } else if constexpr (op_type == Operation::TRANSPOSE) {
-        state_impl_transpose_with_output<to_from_int8>(cb_in, cb_out);
+        // state_impl_transpose_with_output<to_from_int8>(cb_in, cb_out);
     } else if constexpr (op_type == Operation::TILIZE) {
-        state_impl_tilize<to_from_int8>(cb_in, cb_out);
+        // state_impl_tilize<to_from_int8>(cb_in, cb_out);
     } else if constexpr (op_type == Operation::UNTILIZE) {
-        state_impl_untilize<to_from_int8>(cb_in, cb_out);
+        // state_impl_untilize<to_from_int8>(cb_in, cb_out);
     }
 }
 
@@ -276,18 +296,20 @@ ALWI void state_configure_with_output(uint32_t cb_in, uint32_t cb_out) {
  * BINARY, MATMUL, REDUCE with output
  * Dispatches to operation-specific implementation
  */
-template <Operation::Type op_type, bool to_from_int8>
+template <Operation::Type op_type, bool to_from_int8 = false>
 ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     static_assert(
         op_type == Operation::BINARY || op_type == Operation::MATMUL || op_type == Operation::REDUCE,
         "Invalid operation type for full pipeline state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        state_impl_binary_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        // state_impl_binary_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        reconfig_all_operands(cb_a, cb_b, cb_out);
     } else if constexpr (op_type == Operation::MATMUL) {
-        state_impl_matmul_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        // state_impl_matmul_with_output<to_from_int8>(cb_a, cb_b, cb_out);
     } else if constexpr (op_type == Operation::REDUCE) {
-        state_impl_reduce_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        // state_impl_reduce_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        reconfig_all_operands(cb_a, cb_b, cb_out);
     }
 }
 
