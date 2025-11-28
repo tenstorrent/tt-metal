@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "non_zero_indices.hpp"
 #include "ttnn-nanobind/decorators.hpp"

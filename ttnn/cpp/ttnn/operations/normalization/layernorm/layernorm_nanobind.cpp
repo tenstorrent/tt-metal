@@ -16,8 +16,10 @@
 
 namespace ttnn::operations::normalization::detail {
 
+struct LayerNormProgramConfigPlaceholder {};
+
 void bind_normalization_layernorm_program_config(nb::module_& mod) {
-    // nb::class_<LayerNormProgramConfig>(mod, "LayerNormProgramConfig").def(nb::init<>());
+    nb::class_<LayerNormProgramConfigPlaceholder>(mod, "LayerNormProgramConfig");
 
     nb::class_<LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(

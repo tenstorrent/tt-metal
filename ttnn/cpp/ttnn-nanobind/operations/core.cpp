@@ -23,6 +23,8 @@
 
 namespace ttnn::operations::core {
 
+struct DeviceComputeKernelConfigPlaceholder {};
+
 void py_module_types(nb::module_& mod) {
     nb::enum_<compute_throttle_utils::ThrottleLevel>(mod, "ThrottleLevel", R"doc(
         Enum for controlling compute throttling.
@@ -45,7 +47,7 @@ void py_module_types(nb::module_& mod) {
 
     // variant of (Grayskull|Wormhole)ComputeKernelConfig
     // opaque and this line seem mutually exclusive. variant typecaster should handle it?
-    // nb::class_<DeviceComputeKernelConfig>(mod, "DeviceComputeKernelConfig");
+    nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
 
     nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
         .def(

@@ -67,7 +67,7 @@ ttnn.attach_golden_function(
 )
 
 
-# SoftmaxProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxProgramConfig
+SoftmaxProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxProgramConfig
 SoftmaxDefaultProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig
 SoftmaxShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxShardedMultiCoreProgramConfig
 
@@ -116,7 +116,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
-# LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
+LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
 LayerNormDistributedDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDistributedDefaultProgramConfig
