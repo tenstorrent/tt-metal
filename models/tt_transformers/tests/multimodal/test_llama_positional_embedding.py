@@ -24,7 +24,9 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 def load_partial_weights(weights_path, embedding_layer_prefix):
     partial_state_dict = {}
-    model = AutoModelForVision2Seq.from_pretrained(weights_path, torch_dtype="auto", local_files_only=True)
+    model = AutoModelForVision2Seq.from_pretrained(
+        weights_path, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+    )
     weights = model.state_dict()
     keys = weights.keys()
     for key in keys:
