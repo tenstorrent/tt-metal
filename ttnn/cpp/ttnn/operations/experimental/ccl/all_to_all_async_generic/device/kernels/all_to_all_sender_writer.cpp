@@ -313,6 +313,7 @@ void kernel_main() {
         }
     }
 
+    noc_async_write_barrier();
     fabric_connection.close();
 
     noc_semaphore_wait(global_semaphore_addr_ptr, num_devices);
