@@ -28,7 +28,7 @@ void test_deit_embeddings_inference(const std::string& model_path) {
     const double pcc_threshold = 0.99;
 
     // Setup base address
-    std::string base_address = "model.embeddings.";
+    std::string base_address = "model.embeddings";
     bool use_mask_token = false;
 
     // Load state dict and model
@@ -61,7 +61,7 @@ void test_deit_embeddings_inference(const std::string& model_path) {
         }
 
         for (const auto& required : required_params) {
-            std::string full_key = base_address + required;
+            std::string full_key = base_address+ "." + required;
             if (param_map.find(full_key) != param_map.end()) {
                 state_dict[full_key] = param_map[full_key];
             } else {

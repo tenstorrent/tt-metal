@@ -80,7 +80,7 @@ void test_deit_for_image_classification_inference(const std::string& model_path)
     auto [state_dict, model] = load_deit_image_classification_model(model_path);
 
     // Use a sample image path for testing (you can replace this with any valid image file)
-    std::string test_image_path = "/home/openkylin/like/github/tt/like/tt-metal/models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
+    std::string test_image_path ="models/experimental/deit/deit_cpp/deit_model/input_image.jpg";
 
     torch::Tensor pixel_values = image_utils::load_and_preprocess_image(test_image_path);
 
