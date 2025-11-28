@@ -4,16 +4,15 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/device_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_operation_types.hpp"
 
 namespace ttnn::operations::data_movement::repeat::program {
 
 struct RepeatSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::CoreRange total_cores;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::CoreRange total_cores{tt::tt_metal::CoreCoord{0, 0}};
 };
 
 struct RepeatProgramFactorySecondDim {
