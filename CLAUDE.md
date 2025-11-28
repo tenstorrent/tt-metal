@@ -128,7 +128,7 @@ tt-smi -tr 0  # Reset device 0
 # Build with debug symbols
 ./build_metal.sh -b Debug
 
-!!!IMPORTANT!!! Claude agents should work ONLY with Debug builds.
+!!!IMPORTANT!!! Unless Release builds are explicitly asked for, you should work ONLY with Debug builds.
 
 # Run with GDB
 gdb --args <generated_binary>
