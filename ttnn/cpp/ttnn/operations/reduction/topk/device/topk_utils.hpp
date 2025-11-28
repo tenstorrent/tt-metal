@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstdint>
 #include <optional>
-#include <vector>
 
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::reduction::topk::utils {
 
