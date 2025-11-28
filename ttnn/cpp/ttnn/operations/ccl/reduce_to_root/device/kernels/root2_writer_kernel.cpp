@@ -123,18 +123,20 @@ void kernel_main() {
     DPRINT << "the packet cb id: " << (uint32_t)packet_cb_id << "\n";
     cb_reserve_back(packet_cb_id, 1);
     const uint32_t packet_base_addr = get_write_ptr(packet_cb_id);
-    cb_push_back(packet_cb_id, 1);
+    // cb_push_back(packet_cb_id, 1);
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
     uint32_t packet_idx = 0;  // page_idx_start / max_pages_per_packet_l;
 
+    DPRINT << "before noc semaphore wait\n";
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
     // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
     // in subsequent program cache hits
     noc_semaphore_set(local_semaphore_ptr, 0);
+    DPRINT << "after noc semaphore set\n";
 
     cb_wait_front(cb_id_l, chunk_size);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
@@ -152,6 +154,10 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         packet_base_addr + payload_size_bytes + aligned_page_size_bytes, src_page_base_addr_m, aligned_page_size_bytes);
     cb_pop_front(cb_id_m, 1);
+    DPRINT << "before sending packet to root device 1\n";
+
+    DPRINT << "print data from packet cb before send\n";
+    cb_push_back(packet_cb_id, 1);
 
     // const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);
     const uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
