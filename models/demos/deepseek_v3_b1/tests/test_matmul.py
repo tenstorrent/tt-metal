@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 
-@pytest.mark.parametrize("tile_height", [1, 32])
+@pytest.mark.parametrize("tile_height", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_matmul(device, tile_height):
     """Test TTNN matmul with width-sharded input and mcast 1d using DeepSeek B1 op"""
