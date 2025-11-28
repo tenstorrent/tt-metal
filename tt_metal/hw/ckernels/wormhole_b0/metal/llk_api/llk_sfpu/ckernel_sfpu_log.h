@@ -43,7 +43,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
     sfpi::vFloat result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     if constexpr (HAS_BASE_SCALING) {
-        result *= sfpi::s2vFloat16a(log_base_scale_factor);
+        result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
     }
 
     ////////////////////////////
@@ -176,7 +176,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         result = expf * LN2 + ln_m;                 // log(x) = log2(x) / log(2)
 
         if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::vFloat(log_base_scale_factor);
+            result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
     }
     v_endif;
@@ -209,8 +209,6 @@ template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en = 
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
-
-        // XXXXX could do these to higher precision
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
