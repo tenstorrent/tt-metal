@@ -356,16 +356,23 @@ def test_log_probs_calculation2(shape, mesh_device):
     [
         # [1, 1, 256, 256],  # llama on TG and T3K
         # [1, 1, 32, 8 * 64],  # llama on N300
-        [1, 1, 32, 128256],  # llama on T3K with 8 chips
+        [1, 1, 32, 8 * 16 * 1024],  # llama on TG with 8 chips sharded vocab
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
 )
 def test_log_probs_with_sub_core_grids(shape, mesh_device):
     seed = 1234
@@ -379,13 +386,19 @@ def test_log_probs_with_sub_core_grids(shape, mesh_device):
         torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
 
     # torch_tensor = torch_tensor[:, :, :, torch.randperm(shape[-1])]
+    if mesh_device.get_num_devices() == 8:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+    elif mesh_device.get_num_devices() == 32:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=list(mesh_device.shape))
+    else:
+        raise ValueError(f"Unsupported number of devices: {mesh_device.get_num_devices()}")
 
     logits_tensor = ttnn.from_torch(
         torch_tensor,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=mesh_mapper,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     log_probs_calculator.set_log_probs_mode(True)
