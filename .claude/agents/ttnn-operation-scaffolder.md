@@ -7,7 +7,64 @@ color: yellow
 
 You are an expert TTNN operation implementer. Given a spec file path, implement Stages 1-3 scaffolding.
 
-**Your Mission**: Read the spec, create the scaffolding files, and ensure the build passes.
+**Your Mission**: Read the spec, create the scaffolding files using the **MODERN device operation pattern**, and ensure the build passes.
+
+---
+
+## ⚠️ CRITICAL: ALWAYS USE THE MODERN DEVICE OPERATION PATTERN ⚠️
+
+**Pre-commit hooks will REJECT legacy patterns.** Even if reference operations in the codebase use the legacy pattern, you MUST use the modern pattern described below.
+
+### How to Identify Legacy vs Modern Patterns
+
+**LEGACY PATTERN (NEVER USE):**
+```cpp
+// WRONG - pre-commit will reject this!
+struct MyOperation {
+    const float param1_;  // Direct member variables
+
+    // NON-STATIC member functions - THIS IS LEGACY!
+    void validate(const std::vector<Tensor>& inputs) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& inputs) const;
+    operation::ProgramWithCallbacks create_program(...) const;
+};
+```
+
+**MODERN PATTERN (ALWAYS USE):**
+```cpp
+// CORRECT - this will pass pre-commit hooks
+struct MyOperationDeviceOperation {
+    struct operation_attributes_t { ... };  // Nested struct for params
+    struct tensor_args_t { ... };           // Nested struct for tensors
+
+    // ALL STATIC functions - THIS IS MODERN!
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(...);
+
+    struct ProgramFactory {
+        using cached_program_t = ttnn::device_operation::CachedProgram<SharedVariables>;
+        static cached_program_t create(...);
+        static void override_runtime_arguments(...);
+    };
+};
+```
+
+### Key Differences Summary
+
+| Aspect | Legacy (REJECTED) | Modern (REQUIRED) |
+|--------|-------------------|-------------------|
+| Struct name | `{Op}` | `{Op}DeviceOperation` |
+| Parameters | Direct members (`param1_`) | `operation_attributes_t` struct |
+| Tensor inputs | `std::vector<Tensor>` | `tensor_args_t` struct |
+| Functions | Non-static member functions | **ALL static functions** |
+| Validation | Single `validate()` | `validate_on_program_cache_miss/hit()` |
+| Program creation | `create_program()` | `ProgramFactory::create()` |
+| Return type | `ProgramWithCallbacks` | `CachedProgram<SharedVariables>` |
+| Registration | `operation::run()` | `ttnn::prim::` namespace |
+| Include | `ttnn/run_operation.hpp` | `ttnn/device_operation.hpp` |
 
 ---
 
@@ -21,6 +78,8 @@ ls -la {operation_path}/device/
 
 If files exist, READ them first. They may have partial scaffolding you should build upon, not overwrite.
 
+**WARNING**: If existing files use the LEGACY pattern, you must REWRITE them using the MODERN pattern!
+
 ---
 
 ## Files Overview
@@ -31,9 +90,10 @@ If files exist, READ them first. They may have partial scaffolding you should bu
 | `{op}.cpp` | invoke() implementation | Stage 3 |
 | `{op}_pybind.hpp` | Pybind declaration | Stage 1 |
 | `{op}_pybind.cpp` | Pybind implementation | Stage 1 (stub) -> Stage 3 (registered) |
-| `device/{op}_op.hpp` | Device operation struct (modern pattern) | Stage 3 |
-| `device/{op}_op.cpp` | Static validation, output specs, program factory | Stage 3 |
-| `device/{op}_program_factory.hpp` | Shared variables struct + factory declaration | Stage 3 |
+| `device/{op}_device_operation.hpp` | Device operation struct (MODERN pattern) | Stage 3 |
+| `device/{op}_device_operation.cpp` | Static validation, output specs | Stage 3 |
+| `device/{op}_device_operation_types.hpp` | operation_attributes_t, tensor_args_t | Stage 3 |
+| `device/{op}_program_factory.hpp` | ProgramFactory struct | Stage 3 |
 | `device/{op}_program_factory.cpp` | Program factory stub | Stage 3 |
 
 ### Files to MODIFY:
@@ -169,17 +229,42 @@ void py_bind_{operation_name}(py::module& module) {
 
 ---
 
-## Stage 3: TTNN Registration (Modern Device Operation Pattern)
+## Stage 3: TTNN Registration (MODERN Device Operation Pattern)
 
-**Goal**: Operation properly registered using the **modern device operation pattern** with static functions.
+**Goal**: Operation properly registered using the **MODERN device operation pattern** with ALL STATIC functions.
 
-**IMPORTANT**: The modern pattern uses:
-- `operation_attributes_t` and `tensor_args_t` nested structs
-- All **static** functions (NOT instance methods)
-- `ProgramFactory` with `shared_variables_t` for program caching
-- Registration via `ttnn::prim::` namespace
+### Step 3.1: Create Types Header (NEW - Required for Modern Pattern)
 
-### Step 3.1: Create Program Factory Header (NEW - Required for Modern Pattern)
+**Create `device/{operation_name}_device_operation_types.hpp`:**
+```cpp
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::{operation_name} {
+
+struct operation_attributes_t {
+    const float param1;  // Replace with actual params from spec
+    const float param2;
+    const tt::tt_metal::MemoryConfig output_mem_config;
+};
+
+struct tensor_args_t {
+    const Tensor& input;
+};
+
+using tensor_return_value_t = Tensor;
+
+using spec_return_value_t = TensorSpec;
+
+}  // namespace ttnn::operations::{operation_name}
+```
+
+### Step 3.2: Create Program Factory Header
 
 **Create `device/{operation_name}_program_factory.hpp`:**
 ```cpp
@@ -189,35 +274,41 @@ void py_bind_{operation_name}(py::module& module) {
 
 #pragma once
 
-#include <optional>
-#include <tuple>
-#include <vector>
-
-#include "ttnn/tensor/tensor.hpp"
+#include "{operation_name}_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::{operation_name}::detail {
+namespace ttnn::operations::{operation_name}::program {
 
-// Shared variables for program caching - stores kernel handles and core info
 struct {OperationName}SharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle compute_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> cores;
+    tt::tt_metal::KernelHandle reader_kernel_id = 0;
+    tt::tt_metal::KernelHandle compute_kernel_id = 0;
+    tt::tt_metal::KernelHandle writer_kernel_id = 0;
+    CoreRangeSet all_cores;
+    uint32_t num_cores = 0;
 };
 
-// Program factory function declaration
-ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    /* operation-specific params from spec */);
+struct {OperationName}ProgramFactory {
+    using shared_variables_t = {OperationName}SharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-}  // namespace ttnn::operations::{operation_name}::detail
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::{operation_name}::program
 ```
 
-### Step 3.2: Create Device Operation Header
+### Step 3.3: Create Device Operation Header
 
-**Create `device/{operation_name}_op.hpp`:**
+**Create `device/{operation_name}_device_operation.hpp`:**
 ```cpp
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
@@ -226,133 +317,105 @@ ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation
 #pragma once
 
 #include <optional>
-#include <tuple>
-#include <vector>
-#include <variant>
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "{operation_name}_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "{operation_name}_device_operation_types.hpp"
 
 namespace ttnn::operations::{operation_name} {
 
-// Forward declare the shared variables type from program factory
-namespace detail {
-struct {OperationName}SharedVariables;
-}
-
 struct {OperationName}DeviceOperation {
-    // Operation attributes - non-tensor parameters
-    struct operation_attributes_t {
-        const float param1;  // Replace with actual params from spec
-        const MemoryConfig output_mem_config;
-    };
+    using operation_attributes_t = {operation_name}::operation_attributes_t;
+    using tensor_args_t = {operation_name}::tensor_args_t;
+    using spec_return_value_t = {operation_name}::spec_return_value_t;
+    using tensor_return_value_t = {operation_name}::tensor_return_value_t;
+    using program_factory_t = std::variant<program::{OperationName}ProgramFactory>;
 
-    // Tensor arguments - input and optional output tensors
-    struct tensor_args_t {
-        const Tensor& input;
-        const std::optional<Tensor>& output;
-    };
-
-    // Return type aliases
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
-
-    // Program factory with cached program support
-    struct ProgramFactory {
-        using shared_variables_t = detail::{OperationName}SharedVariables;
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
-
-    using program_factory_t = std::variant<ProgramFactory>;
-
-    // ALL STATIC functions - this is the modern pattern
+    // ALL STATIC FUNCTIONS - This is the modern pattern!
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // invoke() returns tuple of attributes and tensor args
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        float param1,  // Replace with actual params from spec
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config);
-
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        float param1,  // Replace with actual params from spec
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace ttnn::operations::{operation_name}
 
-// Register as primitive operation
 namespace ttnn::prim {
-constexpr auto {operation_name} = ttnn::register_operation<
-    "ttnn::prim::{operation_name}",
-    ttnn::operations::{operation_name}::{OperationName}DeviceOperation>();
+constexpr auto {operation_name} =
+    ttnn::register_operation<"ttnn::prim::{operation_name}", ttnn::operations::{operation_name}::{OperationName}DeviceOperation>();
 }  // namespace ttnn::prim
 ```
 
-### Step 3.3: Create Device Operation Implementation
+### Step 3.4: Create Device Operation Implementation
 
-**Create `device/{operation_name}_op.cpp`:**
+**Create `device/{operation_name}_device_operation.cpp`:**
 ```cpp
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "{operation_name}_op.hpp"
-#include "{operation_name}_program_factory.hpp"
+#include "{operation_name}_device_operation.hpp"
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::{operation_name} {
-
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Validation logic - called by both cache miss and cache hit
-void {OperationName}DeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Input must be allocated");
-    TT_FATAL(input.logical_shape().rank() == 4, "Input must be 4D");
-    // Add all validations from spec...
-}
-
-void {OperationName}DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
+{OperationName}DeviceOperation::program_factory_t {OperationName}DeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return program::{OperationName}ProgramFactory{};
 }
 
 void {OperationName}DeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
-// Compute output tensor specifications
-{OperationName}DeviceOperation::spec_return_value_t {OperationName}DeviceOperation::compute_output_specs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void {OperationName}DeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    // Output shape from spec formula
-    ttnn::Shape output_shape = input.logical_shape();  // Same as input for this example
+    // Storage type validation
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
+    TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated");
+
+    // Tensor rank validation - adjust based on spec
+    TT_FATAL(
+        input.logical_shape().rank() == 4,
+        "Input tensor must be 4D, got rank {}",
+        input.logical_shape().rank());
+
+    // Layout validation - adjust based on spec
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Input tensor must be in ROW_MAJOR layout");
+
+    // Dtype validation - adjust based on spec
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::FLOAT32,
+        "Input tensor dtype must be bfloat16 or float32");
+
+    // Add other validations from spec...
+}
+
+spec_return_value_t {OperationName}DeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+
+    // Output shape - adjust formula based on spec
+    ttnn::Shape output_shape = input.logical_shape();
     ttnn::Shape output_padded = input.padded_shape();
 
     return TensorSpec(
@@ -360,91 +423,47 @@ void {OperationName}DeviceOperation::validate_on_program_cache_hit(
         TensorLayout::fromPaddedShape(
             input.dtype(),
             PageConfig(Layout::ROW_MAJOR),
-            attributes.output_mem_config,
+            args.output_mem_config,
             output_shape,
             output_padded));
 }
 
-// Create output tensors
-{OperationName}DeviceOperation::tensor_return_value_t {OperationName}DeviceOperation::create_output_tensors(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.output.has_value()) {
-        return tensor_args.output.value();
-    }
-    return create_device_tensor(compute_output_specs(attributes, tensor_args), tensor_args.input.device());
+tt::stl::hash::hash_t {OperationName}DeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    const auto& input_shape = input.padded_shape();
+
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<{OperationName}DeviceOperation>(
+        args,
+        input.dtype(),
+        input.memory_config(),
+        input_shape);
+
+    return hash;
 }
 
-// Convert user-facing parameters to operation attributes and tensor args
+tensor_return_value_t {OperationName}DeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto output_spec = compute_output_specs(args, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
+}
+
 std::tuple<{OperationName}DeviceOperation::operation_attributes_t, {OperationName}DeviceOperation::tensor_args_t>
 {OperationName}DeviceOperation::invoke(
-    const Tensor& input,
+    const Tensor& input_tensor,
     float param1,  // Replace with actual params from spec
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{
             .param1 = param1,
-            .output_mem_config = memory_config.value_or(input.memory_config())},
-        tensor_args_t{.input = input, .output = output}};
-}
-
-// Select which program factory to use
-{OperationName}DeviceOperation::program_factory_t {OperationName}DeviceOperation::select_program_factory(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
-}
-
-// Compute hash for program caching
-tt::stl::hash::hash_t {OperationName}DeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return tt::stl::hash::hash_objects(
-        typeid(ProgramFactory).hash_code(),
-        tensor_args.input.padded_shape(),
-        tensor_args.input.dtype(),
-        attributes.param1);
-}
-
-// ProgramFactory::create - calls the actual program factory function
-{OperationName}DeviceOperation::ProgramFactory::cached_program_t {OperationName}DeviceOperation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    return detail::{operation_name}_single_core(
-        tensor_args.input,
-        output,
-        operation_attributes.param1);  // Pass operation-specific params
-}
-
-// Override runtime arguments for cached programs
-void {OperationName}DeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
-
-    const uint32_t input_addr = tensor_args.input.buffer()->address();
-    const uint32_t output_addr = output.buffer()->address();
-
-    for (size_t i = 0; i < cores.size(); ++i) {
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, cores[i]);
-            runtime_args[0] = input_addr;
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-            runtime_args[0] = output_addr;
-        }
-    }
+            .output_mem_config = memory_config.value_or(input_tensor.memory_config())},
+        tensor_args_t{.input = input_tensor}};
 }
 
 }  // namespace ttnn::operations::{operation_name}
 ```
 
-### Step 3.4: Create Program Factory Stub
+### Step 3.5: Create Program Factory Stub
 
 **Create `device/{operation_name}_program_factory.cpp`:**
 ```cpp
@@ -455,25 +474,35 @@ void {OperationName}DeviceOperation::ProgramFactory::override_runtime_arguments(
 #include "{operation_name}_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::{operation_name}::detail {
+namespace ttnn::operations::{operation_name}::program {
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Stub - to be implemented by ttnn-factory-builder agent
-ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation_name}_single_core(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
-    float param1 /* Replace with actual params from spec */) {
-    TT_THROW("{operation_name}_single_core is not yet implemented. Awaiting Stage 4-6 implementation.");
+// Stub implementation - to be implemented by ttnn-factory-builder agent in Stages 4-6
+{OperationName}ProgramFactory::cached_program_t {OperationName}ProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    TT_THROW(
+        "{OperationName}ProgramFactory::create is not yet implemented. "
+        "This stub awaits Stage 4-6 implementation by the ttnn-factory-builder agent.");
 }
 
-}  // namespace ttnn::operations::{operation_name}::detail
+void {OperationName}ProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Stub - update runtime arguments for cached program
+    // This will update tensor buffer addresses when program is reused
+}
+
+}  // namespace ttnn::operations::{operation_name}::program
 ```
 
-### Step 3.5: Create Operation Registration Header
+### Step 3.6: Create Operation Registration Header
 
 **Create `{operation_name}.hpp`:**
 ```cpp
@@ -484,7 +513,9 @@ ttnn::device_operation::CachedProgram<{OperationName}SharedVariables> {operation
 #pragma once
 
 #include <optional>
+#include <tuple>
 #include "ttnn/decorators.hpp"
+#include "device/{operation_name}_device_operation.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -500,14 +531,14 @@ struct Execute{OperationName} {
 }  // namespace {operation_name}
 }  // namespace operations
 
+// Register the operation
 constexpr auto {operation_name} =
-    ttnn::register_operation<"ttnn::{operation_name}",
-    ttnn::operations::{operation_name}::Execute{OperationName}>();
+    ttnn::register_operation<"ttnn::{operation_name}", ttnn::operations::{operation_name}::Execute{OperationName}>();
 
 }  // namespace ttnn
 ```
 
-### Step 3.6: Create Operation Implementation
+### Step 3.7: Create Operation Implementation
 
 **Create `{operation_name}.cpp`:**
 ```cpp
@@ -516,7 +547,6 @@ constexpr auto {operation_name} =
 // SPDX-License-Identifier: Apache-2.0
 
 #include "{operation_name}.hpp"
-#include "device/{operation_name}_op.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -529,14 +559,14 @@ ttnn::Tensor Execute{OperationName}::invoke(
     const ttnn::Tensor& input_tensor,
     float param1,  // Replace with actual params from spec
     const std::optional<MemoryConfig>& memory_config) {
-    // Call the primitive operation (registered in device/{operation_name}_op.hpp)
-    return ttnn::prim::{operation_name}(input_tensor, param1, std::nullopt, memory_config);
+    // Call the primitive device operation
+    return ttnn::prim::{operation_name}(input_tensor, param1, memory_config);
 }
 
 }  // namespace ttnn::operations::{operation_name}
 ```
 
-### Step 3.7: Update Pybind to Use Registered Operation
+### Step 3.8: Update Pybind to Use Registered Operation
 
 **Replace `{operation_name}_pybind.cpp` contents:**
 ```cpp
@@ -572,18 +602,16 @@ void py_bind_{operation_name}(py::module& module) {
 }  // namespace ttnn::operations::{operation_name}
 ```
 
-### Step 3.8: Update CMakeLists
+### Step 3.9: Update CMakeLists
 
 **Edit `ttnn/cpp/ttnn/operations/{category}/CMakeLists.txt`** - add:
 ```cmake
-{operation_name}/device/{operation_name}_op.cpp
+{operation_name}/device/{operation_name}_device_operation.cpp
 {operation_name}/device/{operation_name}_program_factory.cpp
 {operation_name}/{operation_name}.cpp
 ```
 
-**Note:** The program factory header (`{operation_name}_program_factory.hpp`) doesn't need to be added to CMakeLists as it's included by the .cpp files.
-
-### Step 3.9: Build and Verify
+### Step 3.10: Build and Verify
 ```bash
 ./build_metal.sh -b Debug 2>&1 | tail -50
 ```
@@ -604,8 +632,9 @@ When complete, report:
 - {operation_path}/{operation_name}.cpp
 - {operation_path}/{operation_name}_pybind.hpp
 - {operation_path}/{operation_name}_pybind.cpp
-- {operation_path}/device/{operation_name}_op.hpp
-- {operation_path}/device/{operation_name}_op.cpp
+- {operation_path}/device/{operation_name}_device_operation.hpp
+- {operation_path}/device/{operation_name}_device_operation.cpp
+- {operation_path}/device/{operation_name}_device_operation_types.hpp
 - {operation_path}/device/{operation_name}_program_factory.hpp
 - {operation_path}/device/{operation_name}_program_factory.cpp
 
@@ -625,22 +654,31 @@ When complete, report:
 
 ## Common Mistakes
 
-1. **Using legacy device operation pattern**: Pre-commit hooks will REJECT operations with non-static `validate()`, `compute_output_specs()`, or `create_program()` member functions. Always use the modern pattern with static functions and `operation_attributes_t`/`tensor_args_t` structs.
-2. **Wrong API methods**: Use `logical_shape()` not `get_logical_shape()`, `dtype()` not `get_dtype()`, `padded_shape()` not `get_padded_shape()`
-3. **Missing program factory header**: The `{operation_name}_program_factory.hpp` file is required for the `{OperationName}SharedVariables` struct
-4. **Missing program factory stub**: Will cause linker error
-5. **Forgetting CMake updates**: Both main and category CMakeLists need updates
-6. **Not checking existing files**: May overwrite partial work
-7. **Using `operation::run()` instead of `ttnn::prim::`**: The modern pattern calls `ttnn::prim::{operation_name}()` directly
+1. **Using legacy device operation pattern**: Pre-commit hooks will REJECT operations with non-static `validate()`, `compute_output_specs()`, or `create_program()` member functions. ALWAYS use the modern pattern with static functions and nested `operation_attributes_t`/`tensor_args_t` structs.
 
-## Legacy vs Modern Pattern Quick Reference
+2. **Copying from legacy reference operations**: Even if `grid_sample`, `upsample`, or other existing operations use the legacy pattern, you MUST use the modern pattern. Do NOT copy their structure.
 
-| Aspect | Legacy (REJECTED) | Modern (REQUIRED) |
-|--------|-------------------|-------------------|
-| Operation struct | `{OperationName}` | `{OperationName}DeviceOperation` |
-| Member functions | Non-static `validate()`, `create_program()` | All **static** functions |
-| Parameters | Direct struct members (`const float param1_`) | Nested `operation_attributes_t` struct |
-| Tensor args | `std::vector<Tensor>` params | Nested `tensor_args_t` struct |
-| Program return | `ProgramWithCallbacks` | `CachedProgram<SharedVariables>` |
-| Registration | Instance-based with `operation::run()` | `ttnn::prim::` namespace |
-| Invocation | `operation::run({OperationName}{...}, tensors)` | `ttnn::prim::{operation_name}(...)` |
+3. **Wrong API methods**: Use `logical_shape()` not `get_logical_shape()`, `dtype()` not `get_dtype()`, `padded_shape()` not `get_padded_shape()`
+
+4. **Missing types header**: The `{operation_name}_device_operation_types.hpp` file is required for the modern pattern
+
+5. **Missing program factory header**: The `{operation_name}_program_factory.hpp` file is required for the `SharedVariables` struct
+
+6. **Missing program factory stub**: Will cause linker error
+
+7. **Forgetting CMake updates**: Both main and category CMakeLists need updates
+
+8. **Not checking existing files**: May overwrite partial work
+
+9. **Using `operation::run()` instead of `ttnn::prim::`**: The modern pattern calls `ttnn::prim::{operation_name}()` directly
+
+10. **Using `ttnn/run_operation.hpp`**: Use `ttnn/device_operation.hpp` instead
+
+## Files Naming Convention (Modern Pattern)
+
+The modern pattern uses these file names:
+- `device/{op}_device_operation.hpp` (NOT `{op}_op.hpp`)
+- `device/{op}_device_operation.cpp` (NOT `{op}_op.cpp`)
+- `device/{op}_device_operation_types.hpp` (NEW - required)
+- `device/{op}_program_factory.hpp` (required)
+- `device/{op}_program_factory.cpp` (required)
