@@ -146,3 +146,37 @@ class TestTriage:
         assert (
             len(FAILURE_CHECKS) == 0
         ), f"Binary integrity check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_dump_fast_dispatch(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
+            args=None,
+            context=None,
+            argv=[],
+            return_result=True,
+        )
+        assert (
+            len(FAILURE_CHECKS) == 0
+        ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_check_arc(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "check_arc.py"),
+            args=None,
+            context=None,
+            argv=[],
+            return_result=True,
+        )
+
+        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        for check in result:
+            assert check.location == check.device.arc_block.location, f"Incorrect ARC location: {check.location}"
+            assert 0 < check.clock_mhz < 10000, f"Invalid ARC clock: {check.clock_mhz}"

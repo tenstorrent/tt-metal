@@ -363,8 +363,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
 
-    this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
+    this->wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -635,6 +634,19 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     if (using_fast_dispatch_) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
+}
+
+uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
+    // Return user-configured timeout or default value
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_simulator_enabled()) {
+        return 15000;  // Keep simulator timeout unchanged
+    }
+
+    auto timeout = rtoptions.get_fabric_router_sync_timeout_ms();
+
+    // Return user override if set, otherwise use fabric default
+    return timeout.value_or(10000);
 }
 
 void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
@@ -930,8 +942,9 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
                 const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
                 for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                     auto [tensix_termination_address, tensix_signal] =
-                        tensix_config.get_termination_address_and_signal(dev->id(), eth_chan_id);
+                        tensix_config.get_termination_address_and_signal(core_id);
                     std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
                     auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 

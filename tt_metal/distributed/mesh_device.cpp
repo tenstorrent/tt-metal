@@ -60,6 +60,7 @@
 #include "impl/dispatch/system_memory_manager.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {

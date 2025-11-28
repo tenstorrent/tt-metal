@@ -39,6 +39,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 #include <array>
 #include <bit>
