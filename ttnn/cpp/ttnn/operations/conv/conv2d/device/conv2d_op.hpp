@@ -121,6 +121,8 @@ struct Conv2dConfig {
 
     // override_output_sharding_config enables the user to specify the memory config of the output tensor
     // This impacts the core grid that executes matmul part of conv2d
+    // Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+    // Additionally, NHW number of cores must match between input and output tensors
     bool override_output_sharding_config = false;
     // ===============================================================
 

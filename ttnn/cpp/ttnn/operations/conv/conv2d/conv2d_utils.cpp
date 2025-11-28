@@ -112,7 +112,7 @@ CoreCoord get_output_compute_grid_size(
     if (conv_config.override_output_sharding_config) {
         TT_FATAL(
             conv_config.core_grid.has_value(),
-            "When override_sharding_config is set to true, core_grid must have a value.");
+            "When override_output_sharding_config is set to true, core_grid must have a value.");
         TT_FATAL(
             input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED,
             "Output sharding config override is only supported for BLOCK_SHARDED layout.");
