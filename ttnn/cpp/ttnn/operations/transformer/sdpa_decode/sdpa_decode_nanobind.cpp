@@ -11,6 +11,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/variant.h>
 
 #include "sdpa_decode.hpp"
 #include "ttnn-nanobind/decorators.hpp"

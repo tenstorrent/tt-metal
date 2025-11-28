@@ -4,6 +4,7 @@
 
 #include "transpose_nanobind.hpp"
 
+#include <cstdint>
 #include <optional>
 
 #include <nanobind/nanobind.h>
@@ -44,18 +45,16 @@ void bind_transpose(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const int64_t& dim1,
-               const int64_t& dim2,
+               int64_t dim1,
+               int64_t dim2,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<float>& pad_value) {
-                return self(input_tensor, dim1, dim2, memory_config, pad_value);
-            },
+               std::optional<float> pad_value) { return self(input_tensor, dim1, dim2, memory_config, pad_value); },
             nb::arg("input_tensor"),
             nb::arg("dim1"),
             nb::arg("dim2"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
+            nb::arg("pad_value") = nb::none(),
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

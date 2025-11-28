@@ -18,16 +18,15 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
-// is a variant. revisit afuller change to see if that fixes things
-NB_MAKE_OPAQUE(ttnn::operations::matmul::MatmulProgramConfig);
-
 namespace ttnn::operations::matmul {
+
+struct MatmulProgramConfigPlaceholder {};
 
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(nb::module_& mod) {
-    auto matmul_program_config = tt_serializable_class<MatmulProgramConfig>(mod, "MatmulProgramConfig", R"doc(
-        Class defining matmul program config
+    auto matmul_program_config = nb::class_<MatmulProgramConfigPlaceholder>(mod, "MatmulProgramConfig", R"doc(
+        Variant defining matmul program config
     )doc");
 
     auto matmul_multi_core_reuse_program_config =

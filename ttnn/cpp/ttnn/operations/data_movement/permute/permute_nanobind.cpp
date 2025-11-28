@@ -53,7 +53,7 @@ void bind_permute(nb::module_& mod) {
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
+            nb::arg("pad_value") = nb::none(),
         });
 }
 

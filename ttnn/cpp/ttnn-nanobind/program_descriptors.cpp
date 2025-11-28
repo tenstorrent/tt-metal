@@ -20,8 +20,9 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);

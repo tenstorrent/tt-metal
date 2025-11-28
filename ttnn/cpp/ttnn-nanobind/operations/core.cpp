@@ -372,8 +372,11 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "num_cores_to_corerangeset_in_subcoregrids",
-        nb::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
-            &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
+        &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids,
+        nb::arg("start_core"),
+        nb::arg("target_num_cores"),
+        nb::arg("sub_core_grids"),
+        nb::arg("row_wise") = false,
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
 }
 

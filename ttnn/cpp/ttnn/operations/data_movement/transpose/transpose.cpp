@@ -81,10 +81,10 @@ ttnn::Tensor transpose_nd(
 
 ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor,
-    const int64_t& dim1,
-    const int64_t& dim2,
+    int64_t dim1,
+    int64_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<float>& pad_value) {
+    std::optional<float> pad_value) {
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
@@ -146,7 +146,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
 }
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2, const std::optional<float>& pad_value) {
+    const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, std::optional<float> pad_value) {
     return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
