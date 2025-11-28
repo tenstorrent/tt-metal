@@ -60,6 +60,53 @@ FORCE_INLINE int32_t get_next_chunk_tile(
     }
 }
 
+/**
+keep track of:
+current subchunk offset, start by computing subchunk row first, and set that
+keep track of current subchunk row, start at 0
+
+compute new chunk col (chunkcol = chunkcol + num workers)
+if new chunk col > chunk w {
+   chunk col = chunkcol - chunk w
+   row++
+   if(row > subchunk height)
+      row = row - subchunk_height
+      subchunk offset += subchunk_height_stride
+}
+
+**/
+FORCE_INLINE int32_t get_chunk_tile(
+    uint32_t& tensor_row,
+    uint32_t& tensor_col,
+    uint32_t num_workers,
+    uint32_t& subchunk_end_row,
+    uint32_t subchunk_height_stride,
+    uint32_t chunk_start_col,
+    uint32_t chunk_end_col,
+    uint32_t tensor_Wt,
+    uint32_t tensor_Ht) {
+    // Compute the returned tile index
+    uint32_t tile_index = -1;
+    if (tensor_row < tensor_Ht) {
+        tile_index = tensor_row * tensor_Wt + tensor_col;
+    }
+
+    // Update the next tensor row and col
+    tensor_col = tensor_col + num_workers;
+    if (tensor_col > chunk_end_col) {
+        tensor_col = chunk_start_col + (tensor_col - chunk_end_col - 1);
+        tensor_row = tensor_row + 1;
+        if (tensor_row > subchunk_end_row) {
+            uint32_t new_subchunk_rows = tensor_row - subchunk_end_row;
+            tensor_row = subchunk_end_row + subchunk_height_stride + new_subchunk_rows - 1;
+            subchunk_end_row = subchunk_end_row + subchunk_height_stride;
+        }
+    }
+
+    // Return the tile index
+    return tile_index;
+}
+
 FORCE_INLINE uint32_t
 get_sender_id(uint32_t direction, uint32_t my_chip_id, uint32_t slices_received, uint32_t ring_size) {
     int32_t sender_chip_id;
@@ -107,6 +154,16 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
     uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_iter = 0;
+    uint32_t worker_chunk_start_tile = chunk_start_tile + worker_tile_offset;
+    uint32_t chunk_start_row = worker_chunk_start_tile / input_tensor_Wt;
+    uint32_t chunk_start_col = worker_chunk_start_tile % input_tensor_Wt;
+    if (read_output) {
+        chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
+    }
+    uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
+    uint32_t chunk_row = chunk_start_row;
+    uint32_t chunk_col = chunk_start_col;
+    uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
@@ -114,20 +171,16 @@ FORCE_INLINE uint32_t read_chunk(
         cb_reserve_back(cb_output_id, max_tiles_per_packet);
         size_t l1_write_addr = get_write_ptr(cb_output_id);
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
-            int32_t tile_id = get_next_chunk_tile(
-                chunk_tile_iter,
-                chunk_start_tile,
-                chunk_width,
-                subchunk_height,
-                subchunk_height_stride,
-                worker_tile_offset,
+            int32_t tile_id = get_chunk_tile(
+                chunk_row,
+                chunk_col,
                 ag_worker_cores,
-                input_tensor_Wt,
-                input_tensor_Ht,
-                output_tensor_Wt,
-                actual_sender_chip_id,
-                read_output);
-
+                subchunk_end_row,
+                subchunk_height_stride,
+                chunk_start_col,
+                chunk_end_col,
+                read_output ? output_tensor_Wt : input_tensor_Wt,
+                input_tensor_Ht);
             if (tile_id >= 0) {
                 uint64_t noc_read_addr =
                     get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
