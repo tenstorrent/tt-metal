@@ -83,26 +83,30 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
     correction_f = sfpi::int32_to_float(correction);
 
-    sfpi::vInt tmp_lo;
+    // Compute tmp = correction * b.
     sfpi::vInt tmp_hi;
+    sfpi::vInt tmp_lo;
     sfpi::vInt b1 = b >> 23;
     b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
-    tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
     tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
+    tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
     tmp_hi += b1;
     tmp_hi <<= 23;
-    tmp_lo += tmp_hi;
+    sfpi::vInt tmp = tmp_lo + tmp_hi;
 
+    // Apply correction and adjust remainder.
     v_if(r < 0) {
         q -= correction;
-        r += tmp_lo;
+        r += tmp;
     }
     v_else {
         q += correction;
-        r -= tmp_lo;
+        r -= tmp;
     }
     v_endif;
 
+    // Since the correction might have been rounded, we may need to correct one
+    // additional bit.
     v_if(r < 0) {
         q -= 1;
         r += b;
@@ -116,6 +120,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt result = q;
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
+    // Reload signed values here due to register pressure.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vInt sign = a ^ b;
