@@ -20,7 +20,7 @@ RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_f
     }
 }
 
-void RepeatDeviceOperation::validate_on_program_cache_hit(
+void RepeatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Validate the input tensor
     const Tensor& input_tensor_a = tensor_args.input;
@@ -42,9 +42,9 @@ void RepeatDeviceOperation::validate_on_program_cache_hit(
         "Output tensor must have the same memory layout as input tensor");
 }
 
-void RepeatDeviceOperation::validate_on_program_cache_miss(
+void RepeatDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_hit(operation_attributes, tensor_args);
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(
@@ -92,7 +92,10 @@ std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     return {
         operation_attributes_t{
-            .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
-        tensor_args_t{.input = input, .repetition_vector = repetition_vector}};
+            .m_num_repeats = m_num_repeats,
+            .m_is_last_dim = m_is_last_dim,
+            .m_output_mem_config = output_mem_config,
+            .repetition_vector = repetition_vector},
+        tensor_args_t{.input = input}};
 }
 }  // namespace ttnn::operations::data_movement::repeat

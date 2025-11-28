@@ -55,9 +55,7 @@ ttnn::Tensor repeat_upper_dims_rm(
 
     constexpr bool is_final_dim = false;
     auto out_tensor =
-        tt::tt_metal::operation::run(
-            repeat::RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
-            .at(0);
+        ttnn::prim::repeat(input_tensor, ttnn::SmallVector<uint32_t>{}, repetitions, is_final_dim, output_mem_config);
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
@@ -81,9 +79,10 @@ ttnn::Tensor repeat_last_dim_rm(
 
     constexpr bool is_final_dim = true;
     auto out_tensor =
-        tt::tt_metal::operation::run(
-            repeat::RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
-            .at(0);
+        // tt::tt_metal::operation::run(
+        //     repeat::RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {})
+        //     .at(0);clear
+        ttnn::prim::repeat(input_tensor, ttnn::SmallVector<uint32_t>{}, repetitions, is_final_dim, output_mem_config);
 
     auto expected_shape = input_shape;
     expected_shape[-1] *= repetitions;
