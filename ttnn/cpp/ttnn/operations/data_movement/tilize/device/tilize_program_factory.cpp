@@ -18,10 +18,12 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_single_core(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    CoreRange core({0, 0}, {0, 0});
+    CoreRange default_core({0, 0}, {0, 0});
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value(), 1).at(0) : default_core;
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -161,7 +163,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_multi_core_block(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -172,6 +175,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
@@ -193,7 +198,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -349,7 +354,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     }
 
     // RUNTIME ARGS
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -439,7 +444,8 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks tilize_multi_core_interleaved(
+    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet> sub_core_grids) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -459,8 +465,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet available_grid(default_cores);
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, nblocks);
+        ttnn::split_blocks_for_tilize(available_grid, nblocks);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -482,9 +490,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
                  has_cliff_col,
                  full_cores_per_row,
                  full_cores_per_col] =
-                    ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
-                return tilize_multi_core_block(a, output);
+                return tilize_multi_core_block(a, output, sub_core_grids);
             }
         }
     }
@@ -551,7 +560,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
 

@@ -14,7 +14,8 @@ struct ExecuteTilize {
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
+        bool use_multicore = false,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace operations::data_movement
