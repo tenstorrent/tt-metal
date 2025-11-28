@@ -11,6 +11,36 @@ You are an expert TTNN operation implementer. Given a spec file path, implement 
 
 ---
 
+## 🚨🚨🚨 ABSOLUTE REQUIREMENTS - READ THIS FIRST 🚨🚨🚨
+
+**DO NOT look at or copy from existing operations in the codebase.** Most existing operations use the LEGACY pattern which will be REJECTED by pre-commit hooks.
+
+**You MUST create these EXACT files (substitute operation name):**
+```
+device/{op}_device_operation.hpp        ← NOT {op}_op.hpp!
+device/{op}_device_operation.cpp        ← NOT {op}_op.cpp!
+device/{op}_device_operation_types.hpp  ← REQUIRED (new file)
+device/{op}_program_factory.hpp         ← REQUIRED
+device/{op}_program_factory.cpp         ← REQUIRED
+{op}.hpp
+{op}.cpp
+{op}_pybind.hpp
+{op}_pybind.cpp
+```
+
+**BANNED file names (pre-commit will REJECT):**
+- ❌ `device/{op}_op.hpp` - WRONG! Use `device/{op}_device_operation.hpp`
+- ❌ `device/{op}_op.cpp` - WRONG! Use `device/{op}_device_operation.cpp`
+
+**BANNED code patterns (pre-commit will REJECT):**
+- ❌ `#include "ttnn/run_operation.hpp"` - WRONG! Use `#include "ttnn/device_operation.hpp"`
+- ❌ `operation::run(...)` - WRONG! Use `ttnn::prim::{op}(...)`
+- ❌ Non-static member functions like `void validate(...) const` - WRONG! Use `static void validate_on_program_cache_miss(...)`
+- ❌ `operation::ProgramWithCallbacks` - WRONG! Use `ttnn::device_operation::CachedProgram<SharedVariables>`
+- ❌ Direct member variables like `const float param1_;` - WRONG! Use nested `operation_attributes_t` struct
+
+---
+
 ## ⚠️ CRITICAL: ALWAYS USE THE MODERN DEVICE OPERATION PATTERN ⚠️
 
 **Pre-commit hooks will REJECT legacy patterns.** Even if reference operations in the codebase use the legacy pattern, you MUST use the modern pattern described below.
@@ -682,3 +712,42 @@ The modern pattern uses these file names:
 - `device/{op}_device_operation_types.hpp` (NEW - required)
 - `device/{op}_program_factory.hpp` (required)
 - `device/{op}_program_factory.cpp` (required)
+
+---
+
+## 🔍 MANDATORY VERIFICATION CHECKLIST
+
+**BEFORE reporting completion, verify ALL of the following:**
+
+### File Names Check:
+```bash
+# Run this and verify output matches modern pattern
+ls -la {operation_path}/device/
+# MUST see: {op}_device_operation.hpp, {op}_device_operation.cpp, {op}_device_operation_types.hpp, {op}_program_factory.hpp, {op}_program_factory.cpp
+# MUST NOT see: {op}_op.hpp or {op}_op.cpp
+```
+
+### Code Pattern Check:
+```bash
+# Check for BANNED patterns - these commands should return NO matches:
+grep -r "run_operation.hpp" {operation_path}/
+grep -r "operation::run" {operation_path}/
+grep -r "ProgramWithCallbacks" {operation_path}/
+grep -r "void validate.*const$" {operation_path}/device/
+
+# Check for REQUIRED patterns - these commands SHOULD return matches:
+grep -r "device_operation.hpp" {operation_path}/
+grep -r "ttnn::prim::" {operation_path}/
+grep -r "static void validate_on_program_cache" {operation_path}/device/
+grep -r "CachedProgram" {operation_path}/device/
+grep -r "operation_attributes_t" {operation_path}/device/
+```
+
+### Struct Check:
+```bash
+# Verify the device operation struct has ONLY static functions
+grep -A 20 "struct.*DeviceOperation" {operation_path}/device/*_device_operation.hpp
+# ALL functions must have "static" keyword
+```
+
+**If ANY verification fails, fix the code before reporting completion.**
