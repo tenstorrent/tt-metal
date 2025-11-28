@@ -78,15 +78,14 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     auto grid_cores = corerange_to_cores(grid);
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
-    // Adjust nblocks_per_core and determine the optimal block size.
+    // Find the closest square larger than nblocks_per_core
     auto [adjusted_nblocks_per_core, single_block_size] =
         closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
     nblocks_per_core = adjusted_nblocks_per_core;
 
     // Helper lambda for ceiling division.
-    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
-    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     // Sets to hold different core ranges.
@@ -154,9 +153,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     nblocks_per_core = adjusted_nblocks_per_core;
 
     // Helper lambda for ceiling division.
-    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
-    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
-    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size);
     const uint32_t total_blocks = total_blocks_width * total_blocks_height;
     const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     // Sets to hold different core ranges.
