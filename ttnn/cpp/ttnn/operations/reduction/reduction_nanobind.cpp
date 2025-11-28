@@ -5,6 +5,7 @@
 #include "reduction_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/export_enum.hpp"
 

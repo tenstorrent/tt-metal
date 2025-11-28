@@ -18,8 +18,7 @@ void bind_rotate_half(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
         ttnn::experimental::rotate_half,
-        R"doc(rotate_half(input: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
             Performs a rotate half operation used by RotaryEmbedding
 
             Args:

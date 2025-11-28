@@ -18,7 +18,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
 
-NB_MAKE_OPAQUE(ttnn::DeviceComputeKernelConfig);
+// variant of two other classes defined here
+// NB_MAKE_OPAQUE(ttnn::DeviceComputeKernelConfig);
 
 namespace ttnn::operations::core {
 
@@ -43,13 +44,14 @@ void py_module_types(nb::module_& mod) {
         .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
     // variant of (Grayskull|Wormhole)ComputeKernelConfig
-    nb::class_<DeviceComputeKernelConfig>(mod, "DeviceComputeKernelConfig");
+    // opaque and this line seem mutually exclusive. variant typecaster should handle it?
+    // nb::class_<DeviceComputeKernelConfig>(mod, "DeviceComputeKernelConfig");
 
     nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
         .def(
             nb::init<MathFidelity, bool, bool>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = MathFidelity::Invalid,
+            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("dst_full_sync_en") = false)
         .def_rw("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
@@ -60,7 +62,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             nb::init<MathFidelity, bool, bool, bool, bool, ttnn::operations::compute_throttle_utils::ThrottleLevel>(),
             nb::kw_only(),
-            nb::arg("math_fidelity") = MathFidelity::Invalid,
+            nb::arg("math_fidelity") = nb::cast(MathFidelity::Invalid),
             nb::arg("math_approx_mode") = true,
             nb::arg("fp32_dest_acc_en") = false,
             nb::arg("packer_l1_acc") = false,
@@ -81,12 +83,12 @@ void py_module(nb::module_& mod) {
         nb::arg("arch"),
         nb::arg("device_kernel_config") = nb::none(),
         nb::kw_only(),
-        nb::arg("math_fidelity") = MathFidelity::LoFi,
+        nb::arg("math_fidelity") = nb::cast(MathFidelity::LoFi),
         nb::arg("math_approx_mode") = true,
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("packer_l1_acc") = false,
         nb::arg("dst_full_sync_en") = false,
-        nb::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
+        nb::arg("throttle_level") = nb::cast(ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE));
     mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
 
     mod.def(

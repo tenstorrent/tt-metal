@@ -13,9 +13,7 @@
 
 namespace ttnn::global_semaphore {
 
-void py_module_types(nb::module_& mod) {
-    nb::class_<GlobalSemaphore>(mod, "global_sempahore");
-}
+void py_module_types(nb::module_& mod) { nb::class_<GlobalSemaphore>(mod, "global_semaphore"); }
 
 void py_module(nb::module_& mod) {
     // Single Device Creation API
@@ -26,7 +24,7 @@ void py_module(nb::module_& mod) {
         nb::arg("device"),
         nb::arg("cores"),
         nb::arg("initial_value"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("buffer_type") = nb::cast(tt::tt_metal::BufferType::L1),
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 
@@ -45,7 +43,7 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("cores"),
         nb::arg("initial_value"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("buffer_type") = nb::cast(tt::tt_metal::BufferType::L1),
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 

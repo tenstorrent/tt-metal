@@ -67,7 +67,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
+            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
             nb::arg("memory_config") = nb::none()});
 }
 
@@ -122,7 +122,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
-            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
+            nb::arg("distributed_program_config") = nb::cast(LayerNormDistributedDefaultProgramConfig{}),
             nb::arg("dtype") = nb::none()});
 }
 

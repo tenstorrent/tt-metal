@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void bind_llama_rs_create_heads(nb::module_& mod) {
     auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 
             Args:
@@ -30,6 +29,7 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
+                topology (ttnn.Topology): Communication topology for the reduce-scatter stage.
                 num_links (number, optional): the number of links. Defaults to `3`.
 
             Keyword Args:

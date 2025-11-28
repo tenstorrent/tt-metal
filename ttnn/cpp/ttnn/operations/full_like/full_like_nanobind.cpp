@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>  // bound function takes a variant
 
 #include "full_like.hpp"
 #include "ttnn-nanobind/decorators.hpp"

@@ -4,8 +4,6 @@
 
 #include "clone_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 

@@ -9,6 +9,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>  // split returns a vector
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn-nanobind/decorators.hpp"

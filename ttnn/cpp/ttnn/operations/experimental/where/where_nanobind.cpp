@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/where/where_nanobind.hpp"
+#include "where_nanobind.hpp"
 
 #include <optional>
 #include <utility>

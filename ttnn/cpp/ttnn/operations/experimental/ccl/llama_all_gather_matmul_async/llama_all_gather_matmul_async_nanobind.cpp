@@ -90,7 +90,6 @@ void bind_llama_all_gather_matmul_async(nb::module_& mod) {
         mod,
         ttnn::experimental::llama_all_gather_matmul_async,
         R"doc(
-
         Performs an all-gather-matml operation on multi-device :attr:`input_tensor0` and :attr:`input_tensor1` across all devices.
 
         Args:
@@ -100,7 +99,7 @@ void bind_llama_all_gather_matmul_async(nb::module_& mod) {
             dim (int): Dimension to perform All-Gather operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather-replicate operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather-replicate operation on.
-            topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
+            topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear; callers must provide the desired value.
             multi_device_global_semaphore (ttnn.GlobalSemaphore): The global semaphore to use for the operation.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md

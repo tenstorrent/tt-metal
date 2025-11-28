@@ -245,9 +245,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         true /*convert*/,
         nullptr);
 
-    nb::ndarray<nb::array_api> converted_array{converted_tensor_handle};
-
-    return {.contiguous_py_tensor = converted_array, .data_type = data_type};
+    return {.contiguous_py_tensor{converted_tensor_handle}, .data_type = data_type};
 }
 
 Tensor convert_python_tensor_to_tt_tensor(

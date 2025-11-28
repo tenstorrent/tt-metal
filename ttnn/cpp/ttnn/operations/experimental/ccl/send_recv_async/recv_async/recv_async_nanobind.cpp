@@ -40,7 +40,6 @@ void bind_recv_async(nb::module_& mod) {
         mod,
         ttnn::experimental::recv_async,
         R"doc(
-
         Performs a recv operation from a :attr:`mesh_socket`.
 
         Args:

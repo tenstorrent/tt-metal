@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "repeat_and_interleave_eltwise_mul.hpp"
-#include "cpp/ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
 
 namespace nb = nanobind;
 

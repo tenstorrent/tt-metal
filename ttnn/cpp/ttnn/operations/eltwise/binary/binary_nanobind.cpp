@@ -14,6 +14,8 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/variant.h>
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 
@@ -1275,7 +1277,7 @@ void bind_div(
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool accurate_mode,
-               const std::optional<std::string> round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -2309,7 +2311,7 @@ void py_module(nb::module_& mod) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_operation(
         mod,
@@ -2319,7 +2321,7 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_fast_approx(
         mod,
         ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",

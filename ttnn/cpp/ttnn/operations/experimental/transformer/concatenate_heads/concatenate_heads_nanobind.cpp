@@ -17,8 +17,7 @@ namespace ttnn::operations::experimental::transformer::detail {
 
 void bind_concatenate_heads(nb::module_& mod) {
     auto concatenate_heads_doc =
-        R"doc(concatenate_heads(input_tensor: ttnn.Tensor, compute_with_storage_grid_size: ttnn.CoreCoord: *, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
             Reshuffles a [9, 16, 384, 64] ttnn.Layout.TILE BFLOAT8_B tensor into a tensor with shape [9, 1, 384, 1024].
 
             Args:
@@ -30,7 +29,6 @@ void bind_concatenate_heads(nb::module_& mod) {
         )doc";
 
     using OperationType = decltype(ttnn::experimental::concatenate_heads);
-
     ttnn::bind_registered_operation(
         mod,
         ttnn::experimental::concatenate_heads,

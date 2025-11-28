@@ -285,7 +285,8 @@ constexpr DataType get_ttnn_datatype_from_dtype(nbdlp::dtype dt) noexcept {
         case DtypeID::FLOAT32: return py_to_<DtypeID::FLOAT32>::ttnn_DataType;
         case DtypeID::FLOAT16: return py_to_<DtypeID::FLOAT16>::ttnn_DataType;
         case DtypeID::BFLOAT16: return py_to_<DtypeID::BFLOAT16>::ttnn_DataType;
-        default: TT_THROW("get_ttnn_datatype_from_dtype: got unexpected dlpack dtype.");
+        default:
+            TT_THROW("get_ttnn_datatype_from_dtype: got unexpected dlpack dtype. code: {}, bits: {}", dt.code, dt.bits);
     }
 
     return DataType::INVALID;
