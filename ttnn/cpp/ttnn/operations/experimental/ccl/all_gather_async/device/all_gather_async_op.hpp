@@ -66,7 +66,7 @@ struct AllGatherAsync {
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         bool reverse_order = false,
-        const std::optional<CoreRangeSet> sub_core_grid = std::nullopt) :
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -161,7 +161,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     bool reverse_order,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
@@ -199,7 +199,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
@@ -223,7 +223,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -257,7 +257,7 @@ Tensor all_gather_async(
     bool use_all_gather_async_llama_sharded = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -276,7 +276,7 @@ Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 // same as above but for vector of mesh
 std::vector<Tensor> all_gather_async(
@@ -296,7 +296,7 @@ std::vector<Tensor> all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -313,7 +313,7 @@ Tensor all_gather_async(
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet> sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

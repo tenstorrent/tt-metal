@@ -150,6 +150,9 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
+    TT_FATAL(
+        subdevice_core_range_set.num_cores() != 0,
+        "There are no cores available to run ALL Gather after considering sub device and sub core grid");
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -170,7 +173,7 @@ AllGatherDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const std::optional<CoreRangeSet> sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     return {
         operation_attributes_t{
             .memory_config = memory_config,

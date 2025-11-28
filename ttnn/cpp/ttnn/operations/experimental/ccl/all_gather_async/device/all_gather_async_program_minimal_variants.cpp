@@ -55,7 +55,7 @@ uint32_t default_workers(
     uint32_t ring_size,
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
-    const std::optional<CoreRangeSet> sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     if (sub_core_grid.has_value()) {
@@ -211,7 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     const bool reverse_order,
-    const std::optional<CoreRangeSet> sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -261,7 +261,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet> sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -777,7 +777,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet> sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Call the builder to create the program and get artifacts
     auto
         [reader_kernel_ids,

@@ -93,7 +93,7 @@ struct AllGatherDeviceOperation {
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
-        const std::optional<CoreRangeSet> sub_core_grid);
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::ccl
