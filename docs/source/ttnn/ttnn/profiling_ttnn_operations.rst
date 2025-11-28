@@ -20,7 +20,7 @@ The ``profile_this.py`` script and its CLI options are explained under `profile_
 
 The headers for the CSV are explained under `Perf Report Headers`_.
 
-Instructions on using the performance report with `TT-NN Visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_ are under `Using the Performance Report with TT-NN Visualizer`_.
+Instructions on using the performance report with `TT-NN Visualizer <https://github.com/tenstorrent/ttnn-visualizer>`_ can be found in their documentation under `Loading Data <https://docs.tenstorrent.com/ttnn-visualizer/src/installing.html#loading-data>`_.
 
 **IMPORTANT NOTES**:
 
