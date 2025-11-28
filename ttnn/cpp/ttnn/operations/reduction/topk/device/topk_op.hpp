@@ -18,6 +18,7 @@ struct TopK {
     const bool sorted;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const CoreRangeSet sub_core_grids;
+    const bool stable;
 
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors,

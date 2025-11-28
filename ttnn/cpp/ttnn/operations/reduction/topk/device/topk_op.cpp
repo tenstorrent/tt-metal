@@ -188,7 +188,8 @@ operation::ProgramWithCallbacks TopK::create_program(
             this->sorted,
             this->sub_core_grids,
             output_tensors.at(0),
-            output_tensors.at(1));
+            output_tensors.at(1),
+            this->stable);
     }
 
     return detail::topk_single_core_interleaved(
@@ -200,7 +201,8 @@ operation::ProgramWithCallbacks TopK::create_program(
         uint16_output,
         this->sub_core_grids,
         output_tensors.at(0),
-        output_tensors.at(1));
+        output_tensors.at(1),
+        this->stable);
 }
 
 }  // namespace ttnn::operations::reduction

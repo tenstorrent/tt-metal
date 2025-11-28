@@ -15,7 +15,8 @@ tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
     bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
-    Tensor& index_tensor);
+    Tensor& index_tensor,
+    bool stable);
 
 tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
@@ -26,5 +27,6 @@ tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
     bool sorted,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
-    Tensor& index_tensor);
+    Tensor& index_tensor,
+    bool stable);
 }  // namespace ttnn::operations::reduction::detail

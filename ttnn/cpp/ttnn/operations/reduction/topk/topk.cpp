@@ -109,7 +109,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
+    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors,
+    const bool stable) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     auto rank = input_tensor.padded_shape().rank();
@@ -144,7 +145,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     padded_tensor = ttnn::fill_implicit_tile_padding(padded_tensor, pad_val);
 
     auto output_tensor_vec = tt::tt_metal::operation::run(
-        TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
+        TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids, stable},
         {padded_tensor},
         {indices_tensor},
         optional_output_tensors.has_value()

@@ -8,7 +8,6 @@
 #include "topk_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include <iostream>
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -24,7 +23,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     const bool uint16_output,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
-    Tensor& index_tensor) {
+    Tensor& index_tensor,
+    const bool stable) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -170,8 +170,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         Ht,
         Wt,
         Ktiles,
-        (std::uint32_t)largest,
-    };
+        static_cast<std::uint32_t>(largest),
+        static_cast<std::uint32_t>(stable)};
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
@@ -252,7 +252,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     const bool sorted,
     const CoreRangeSet& sub_core_grids,
     Tensor& value_tensor,
-    Tensor& index_tensor) {
+    Tensor& index_tensor,
+    const bool stable) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
@@ -464,8 +465,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_local),
-        (std::uint32_t)largest,
-        (std::uint32_t)sorted,
+        static_cast<std::uint32_t>(largest),
+        static_cast<std::uint32_t>(sorted),
+        static_cast<std::uint32_t>(stable),
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -486,8 +488,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_final),
-        (std::uint32_t)largest,
-        (std::uint32_t)sorted,
+        static_cast<std::uint32_t>(largest),
+        static_cast<std::uint32_t>(sorted),
+        static_cast<std::uint32_t>(stable),
     };
 
     tt::tt_metal::CreateKernel(

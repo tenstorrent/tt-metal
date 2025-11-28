@@ -27,9 +27,6 @@ void bind_sort_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
 
-        Additional info:
-            * For now the `stable` argument is not supported.
-
         Note:
 
             Supported dtypes and layout for input tensor values:

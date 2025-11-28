@@ -39,6 +39,7 @@ void bind_reduction_topk_operation(py::module& module) {
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
                 indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor. Defaults to `None`.
+                stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -91,10 +92,11 @@ void bind_reduction_topk_operation(py::module& module) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
-               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
-               const std::optional<ttnn::Tensor>& indices_tensor) {
+               const std::optional<ttnn::Tensor>& indices_tensor,
+               const bool stable) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     k,
@@ -104,7 +106,8 @@ void bind_reduction_topk_operation(py::module& module) {
                     memory_config,
                     sub_core_grids,
                     indices_tensor,
-                    optional_output_tensors);
+                    optional_output_tensors,
+                    stable);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("k") = 32,
@@ -115,7 +118,8 @@ void bind_reduction_topk_operation(py::module& module) {
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("indices_tensor") = std::nullopt});
+            py::arg("indices_tensor") = std::nullopt,
+            py::arg("stable") = false});
 }
 
 }  // namespace ttnn::operations::reduction::detail
