@@ -363,7 +363,11 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
+    "ttnn.layer_norm_pre_all_gather": normalization.test_layernorm_distributed,
+    "ttnn.layer_norm_post_all_gather": normalization.test_layernorm_distributed,
     "ttnn.rms_norm": normalization.test_rms_norm,
+    "ttnn.rms_norm_pre_all_gather": normalization.test_rms_norm_distributed,
+    "ttnn.rms_norm_post_all_gather": normalization.test_rms_norm_distributed,
     "ttnn.batch_norm": normalization.test_batch_norm,
     "ttnn.softmax": normalization.test_softmax,
     "ttnn.scale_mask_softmax": normalization.test_scale_mask_softmax,
