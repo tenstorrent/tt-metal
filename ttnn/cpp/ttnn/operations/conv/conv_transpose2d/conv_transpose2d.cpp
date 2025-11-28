@@ -19,8 +19,6 @@
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
-
-using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
 ResultWithOptions result_to_result_with_options(
@@ -443,13 +441,13 @@ Result conv_transpose2d_DRAM(
     uint32_t input_pad_left = (full_input_width - strided_input_width) / 2;
     uint32_t input_pad_right = full_input_width - strided_input_width - input_pad_left;
 
-    log_debug(LogOp, "Input : {}x{}", input_height, input_width);
-    log_debug(LogOp, "Output : {}x{}", output_height, output_width);
+    log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
+    log_debug(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
-    log_debug(LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
-    log_debug(LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
+    log_debug(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
+    log_debug(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
-    log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
+    log_debug(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(
         kernel_size,
@@ -549,12 +547,12 @@ Result conv_transpose2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
-    Tensor dram_output_tensor = tt_metal::create_device_tensor(
+    Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
         TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
-            tt_metal::TensorLayout(
+            tt::tt_metal::TensorLayout(
                 output_dtype,
-                tt_metal::PageConfig(conv_config.output_layout),
+                tt::tt_metal::PageConfig(conv_config.output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
@@ -823,8 +821,8 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
     int output_slice_height_end, output_slice_width_end;
     std::tie(output_slice_height_start, output_slice_width_start) = output_slice_start;
     std::tie(output_slice_height_end, output_slice_width_end) = output_slice_end;
-    int input_slice_height_start = div_up((output_slice_height_start - (int)padding_n4[0]), (int)stride[0]);
-    int input_slice_width_start = div_up((output_slice_width_start - (int)padding_n4[2]), (int)stride[1]);
+    int input_slice_height_start = tt::div_up((output_slice_height_start - (int)padding_n4[0]), (int)stride[0]);
+    int input_slice_width_start = tt::div_up((output_slice_width_start - (int)padding_n4[2]), (int)stride[1]);
     int unpadded_output_height_start = std::max<int>(0, output_slice_height_start - (int)padding_n4[0]);
     int unpadded_output_width_start = std::max<int>(0, output_slice_width_start - (int)padding_n4[2]);
     int pad_top_offset = unpadded_output_height_start % (int)stride[0] == 0
@@ -834,11 +832,11 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
                               ? 0
                               : stride[1] - (unpadded_output_width_start % (int)stride[1]);
 
-    int input_slice_height_end = div_up(
+    int input_slice_height_end = tt::div_up(
         (output_slice_height_end - (int)padding_n4[0] + ((int)kernel_size[0] - 1) * ((int)dilation[0] - 1) +
          (int)kernel_size[0] - 1),
         (int)stride[0]);
-    int input_slice_width_end = div_up(
+    int input_slice_width_end = tt::div_up(
         (output_slice_width_end - (int)padding_n4[2] + ((int)kernel_size[1] - 1) * ((int)dilation[1] - 1) +
          (int)kernel_size[1] - 1),
         (int)stride[1]);
@@ -887,7 +885,7 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
     if (output_slice_width % width_rounding_value != 0) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
         log_debug(
-            LogOp,
+            tt::LogOp,
             "Conv2d Transpose DRAM Slicing: Additional padding of {} added to the right side.",
             additional_padded_width);
         this_output_pad[1] += additional_padded_width;

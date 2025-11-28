@@ -299,10 +299,10 @@ def test_simple_conv_t2d(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
     (
         # fmt: off
-        (1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
-        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
-        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 32}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
-        (1, 512, 512, 512, 512, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 32}, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 8, SliceWidth ),
+        (1, 512, 512, 64, 64, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 256, 256, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1, 512, 512, 512, 512, 3, 3, 1, 1, 1, 1, 0, 0, {'act_block_h' : 256}, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 8, SliceWidth ),
         # fmt: on
     ),
 )
