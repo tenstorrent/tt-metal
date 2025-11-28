@@ -10,13 +10,13 @@
 
 namespace ttnn::operations::data_movement::repeat {
 
-program_factory_t RepeatDeviceOperation::select_program_factory(
+RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool is_last_dim = operation_attributes.m_is_last_dim;
     if (is_last_dim) {
-        return operations::data_movement::repeat::RepeatProgramFactoryLastDim{};
+        return program::RepeatProgramFactoryLastDim{};
     } else {
-        return operations::data_movement::repeat::RepeatProgramFactorySecondDim{};
+        return program::RepeatProgramFactorySecondDim{};
     }
 }
 
@@ -47,13 +47,13 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 }
 
-spec_return_value_t RepeatDeviceOperation::compute_output_specs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) const {
+RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
     const auto& input_tensor_a = input_tensors.input;
     auto output_shape = input_tensor_a.logical_shape();
-    output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
+    output_shape[operation_attributes.m_is_last_dim ? -1 : 1] *= operation_attributes.m_num_repeats;
 
-    auto mem_config = this->m_output_mem_config;
+    auto mem_config = operation_attributes.m_output_mem_config;
     if (input_tensor_a.memory_config().is_sharded()) {
         auto shard_spec = input_tensor_a.shard_spec().value();
         shard_spec.shape[0] = output_shape[0];
@@ -65,30 +65,24 @@ spec_return_value_t RepeatDeviceOperation::compute_output_specs(
             input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config));
 }
 
-tensor_return_value_t RepeatDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) const {
+RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
     return create_device_tensor(
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-RepeatDeviceOperation::create_op_performance_model(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = output_tensors.at(0);
-    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        input_tensors, output_tensors, ideal_dev_clock_cycles);
-    return result;
-}
-
-tt::tt_metal::operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    return operations::data_movement::repeat::rm_repeat_program_factory(
-        input_tensors.at(0), m_num_repeats, output_tensors.at(0), m_is_last_dim);
-}
+// tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+// RepeatDeviceOperation::create_op_performance_model(
+//     const std::vector<Tensor>& input_tensors,
+//     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+//     std::vector<Tensor>& output_tensors) const {
+//     const auto& input_tensor = input_tensors.at(0);
+//     const auto& output_tensor = output_tensors.at(0);
+//     int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
+//     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+//         input_tensors, output_tensors, ideal_dev_clock_cycles);
+//     return result;
+// }
 
 std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
     const Tensor& input,

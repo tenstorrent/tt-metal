@@ -11,12 +11,13 @@
 
 namespace ttnn::operations::data_movement::repeat {
 
-using program_factory_t = std::variant<program::RepeatProgramFactorySecondDim, program::RepeatProgramFactoryLastDim>;
-
 struct RepeatDeviceOperation {
-    // const uint32_t m_num_repeats;
-    // const bool m_is_last_dim;
-    // tt::tt_metal::MemoryConfig m_output_mem_config;
+    using operation_attributes_t = operation_attributes_t;
+    using tensor_args_t = tensor_args_t;
+    using spec_return_value_t = spec_return_value_t;
+    using tensor_return_value_t = tensor_return_value_t;
+    using program_factory_t =
+        std::variant<program::RepeatProgramFactorySecondDim, program::RepeatProgramFactoryLastDim>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -27,9 +28,9 @@ struct RepeatDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     // use this one, skip the input
-    spec_return_value_t compute_output_specs(
+    static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
-    tensor_return_value_t create_output_tensors(
+    static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
 
     // use this one with appropriate types?
