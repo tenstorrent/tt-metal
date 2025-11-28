@@ -361,38 +361,3 @@ def test_scale_causal_mask_hw_dims_softmax_in_place(device):
         program_config=program_config,
     )
     logger.info(f"Scale Causal Mask HW Dims Softmax In Place result: {tt_output_sharded}")
-
-
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
-def test_softmax_default_program_config(device):
-    # Create input tensor
-    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    compute_grid = device.compute_with_storage_grid_size()
-    program_config = ttnn.SoftmaxDefaultProgramConfig()
-
-    # Perform softmax
-    result = ttnn.softmax(tensor, dim=-1, program_config=program_config)
-    logger.info(f"Softmax with Program Config result: {result}")
-
-
-@pytest.mark.skip("Non-working example from the documentation. GH issue: #32364")
-def test_softmax_sharded_multi_core_program_config(device):
-    # Create input tensor
-    compute_grid = device.compute_with_storage_grid_size()
-    fuse_head = 2
-    batch = compute_grid.x
-    num_cores_r = compute_grid.y
-
-    input_shape = (batch, num_cores_r, fuse_head * 384, 768)
-    input_tensor = ttnn.rand(input_shape, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    # Configure softmax program
-    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=compute_grid, subblock_w=8, block_h=32, block_w=32
-    )
-
-    # Perform softmax
-    result = ttnn.softmax(input_tensor, dim=-1, program_config=program_config)
-    logger.info(f"Softmax with Sharded Multi Core Program Config result: {result}")
