@@ -282,6 +282,9 @@ def test_cache_reuse_across_views_single_open(tmp_path: Path, monkeypatch: pytes
     # Access via prefixed view
     sub = sub_state_dict(state, "model.layers.0.")
     _ = sub["w"]
+    # Views must share underlying structures (no copying of cache or index)
+    assert sub._cache is state._cache
+    assert sub._full_to_file is state._full_to_file
     assert open_counts.get(file1.name, 0) == 1
 
 
