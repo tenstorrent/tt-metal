@@ -110,14 +110,18 @@ class ModelOptimisations:
         )
 
         # BLOCK SHARDED
-        override_output_sharding_config = True
-        override_output_core_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(4, 7),
-                ),
-            }
+        override_output_sharding_config = not force_full_grid
+        override_output_core_grid = (
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(4, 7),
+                    ),
+                }
+            )
+            if override_output_sharding_config
+            else None
         )
 
         self.conv_configs["ABH_0_ADB_WDB_BS"] = ttnn.Conv2dConfig(
