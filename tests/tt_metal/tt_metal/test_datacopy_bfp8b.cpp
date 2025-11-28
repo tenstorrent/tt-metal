@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        CoreCoord core = {0, 0};
+        CoreCoord core = {6, 6};
 
         uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
         TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
