@@ -16,7 +16,7 @@ struct ReshardSameWidthFactory {
         tt::tt_metal::KernelHandle kernel_id_0{};
         tt::tt_metal::KernelHandle kernel_id_1{};
         tt::tt_metal::CBHandle cb_0{};
-        std::vector<CoreCoord> local_cores{};
+        std::vector<CoreCoord> local_cores;
     };
 
     using shared_variables_t = ReshardSameWidthSharedVariables;

@@ -14,8 +14,8 @@ struct NdReshardCopyPagesFactory {
     struct NdReshardCopyPagesSharedVariables {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
-        CoreRangeSet grid{};
-        std::vector<CoreCoord> cores{};
+        CoreRangeSet grid;
+        std::vector<CoreCoord> cores;
     };
 
     using shared_variables_t = NdReshardCopyPagesSharedVariables;

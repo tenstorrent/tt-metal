@@ -15,8 +15,8 @@ struct NdReshardCopyLocalShardFactory {
     struct NdReshardCopyLocalShardSharedVariables {
         tt::tt_metal::KernelHandle brisc_kernel_id{};
         tt::tt_metal::KernelHandle ncrisc_kernel_id{};
-        CoreRangeSet grid{};
-        std::vector<CoreCoord> cores{};
+        CoreRangeSet grid;
+        std::vector<CoreCoord> cores;
     };
 
     using shared_variables_t = NdReshardCopyLocalShardSharedVariables;

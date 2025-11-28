@@ -14,8 +14,8 @@ struct ReshardGenericFactory {
         tt::tt_metal::KernelHandle kernel_id_0{};
         tt::tt_metal::KernelHandle kernel_id_1{};
         tt::tt_metal::CBHandle cb_dst0{};
-        CoreCoord grid{};
-        std::vector<CoreCoord> cores{};
+        CoreRangeSet grid;
+        std::vector<CoreCoord> cores;
     };
 
     using shared_variables_t = ReshardGenericSharedVariables;
