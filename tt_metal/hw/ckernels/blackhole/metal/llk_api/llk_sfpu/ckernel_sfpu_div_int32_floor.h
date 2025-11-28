@@ -48,7 +48,7 @@ sfpi_inline void calculate_div_int32_body(
     // Convert from float to int32, truncating any fractional parts.  No sign
     // check is necessary as q will always be positive, due to using abs(a) and
     // abs(b).
-    sfpi::vInt q = 0;
+    sfpi::vUInt q = 0;
     sfpi::vInt exp = sfpi::exexp(q_f);
     v_if(exp >= 0) {
         q = sfpi::exman8(q_f);
@@ -113,26 +113,28 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
+    sfpi::vInt result = q;
+
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vInt sign = a ^ b;
     // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
-        q = -q;
+        result = -result;
 
         // Optionally, if we want "floor" rounding, check for a remainder
         // and subtract one for negative numbers, to round towards negative
         // infinity.
 
         if constexpr (floor) {
-            v_if(r != 0) { q -= 1; }
+            v_if(r != 0) { result -= 1; }
             v_endif;
         }
     }
     v_endif;
 
-    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = q;
+    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
