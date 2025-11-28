@@ -19,6 +19,11 @@ sfpi_inline void calculate_div_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
+    // SFPI tries to use MOD0_FMT_INT32_SM, which interprets values as
+    // sign-magnitude integers, and is deprecated on Blackhole.  Instead, we
+    // want to use MOD0_FMT_INT32=4, which gives us the original two's
+    // complement integers.
+
     // sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     // sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vUInt a = __builtin_rvtt_sfpload(
