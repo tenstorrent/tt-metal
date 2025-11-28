@@ -16,7 +16,7 @@ Description:
 from ttexalens.coordinate import OnChipCoordinate
 from run_checks import run as get_run_checks
 from ttexalens.context import Context
-from triage import ScriptConfig, log_check, run_script
+from triage import ScriptConfig, log_check_location, run_script
 
 script_config = ScriptConfig(
     depends=["run_checks"],
@@ -38,10 +38,10 @@ def check_cb_idle(location: OnChipCoordinate, noc_id: int):
     for cb_index in range(4):  # CB indices 0-3
         reg_name = generate_cb_reg_name(cb_index)
         value = register_store.read_register(reg_name)
-        log_check(
+        log_check_location(
+            location,
             value == 0,
-            f"Device {location._device._id} {location._device.get_block_type(location)} "
-            f"[{location.to_str('logical')}] at {location.to_str(noc_str)}: {noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
+            f"{noc_str} CB{cb_index} active (0x{value:08X}). NoC is likely hung.",
         )
 
 
