@@ -261,16 +261,17 @@ Tensor AddcmulOperation::invoke(
                             (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
 
-    if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
-        is_sharded(output) || is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
-        log_debug(tt::LogOp, "Addcmul Fallback - TTT");
+    // if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
+    //     is_sharded(output) || is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+        log_info(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
     // Use HLK implementation - pass value as scalar parameter
-    log_debug(tt::LogOp, "Addcmul HLK - TTT");
+    log_info(tt::LogOp, "Addcmul HLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::ADDCMUL,
         input_a,
