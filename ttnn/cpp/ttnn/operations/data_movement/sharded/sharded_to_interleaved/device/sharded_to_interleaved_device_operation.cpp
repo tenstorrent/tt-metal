@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include <tt-metalium/hal.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -81,6 +82,17 @@ ShardedToInterleavedDeviceOperation::tensor_return_value_t ShardedToInterleavedD
     const auto& input_tensor = tensor_args.input_tensor;
     auto spec = compute_output_specs(args, tensor_args);
     return create_device_tensor(spec, input_tensor.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedDeviceOperation::tensor_return_value_t>
+ShardedToInterleavedDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) const {
+    int ideal_dev_clock_cycles = common_tm_bw_model(tensor_args.input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {tensor_args.input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    return result;
 }
 
 std::tuple<
