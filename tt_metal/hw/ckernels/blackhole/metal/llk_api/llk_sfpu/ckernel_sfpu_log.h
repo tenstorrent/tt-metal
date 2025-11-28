@@ -117,8 +117,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
         constexpr float SQRT2 = 1.4142135623730951f;  // sqrt(2)
         v_if(m >= SQRT2) {
-            // m = m * 0.5f;  // Divide by 2
-            m = m * 0.5f;
+            m = m * 0.5f;   // Divide by 2
             exp = exp + 1;  // Increment exponent
         }
         v_endif;
