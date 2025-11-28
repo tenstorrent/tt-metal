@@ -124,6 +124,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt result = q;
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
+    // Reload signed values here due to register pressure.
     a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vInt sign = a ^ b;
