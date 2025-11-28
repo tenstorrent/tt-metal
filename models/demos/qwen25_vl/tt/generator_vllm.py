@@ -169,7 +169,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         images,
         page_table,
         kv_cache,
-        prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
+        prompt_lens,
+        **kwargs,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
     ):
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
