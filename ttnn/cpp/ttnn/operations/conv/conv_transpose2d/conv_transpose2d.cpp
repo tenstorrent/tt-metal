@@ -104,6 +104,8 @@ Result ConvTranpose2dOperation::invoke(
             conv_config.weights_dtype = weight_tensor.dtype();
         }
         // In this case we deduce the shard layout.
+        // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and padding=0.
+        // We must pass these values to auto-shard to ensure correct halo and reader indices calculation.
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
             mm_conv,
@@ -122,9 +124,9 @@ Result ConvTranpose2dOperation::invoke(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
-            stride,
+            {1, 1},  // stride is always 1x1 for conv2d micro-op in transposed conv
             dilation,
-            sliding_window::get_pair_n4_padding(padding),
+            std::array<uint32_t, 4>{0, 0, 0, 0},  // padding is 0 (halo already added padding)
             groups,
             bias_tensor.has_value(),
             compute_config);

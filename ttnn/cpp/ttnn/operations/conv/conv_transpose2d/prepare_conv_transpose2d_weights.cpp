@@ -2,22 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
+
 #include <cstdint>
 #include <optional>
-#include <tt_stl/assert.hpp>
-#include "tt-metalium/buffer.hpp"
-#include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/mesh_device.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
-#include "ttnn/operations/core/core.hpp"
-namespace ttnn {
 
-namespace operations::conv {
-namespace conv_transpose2d {
+#include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
+
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+
+namespace ttnn::operations::conv::conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
@@ -126,6 +122,23 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         weights_format == "IOHW",
         "PyTorch expects weights for ConvTranspose2D in IOHW format. If you have passed the correct weights, then make "
         "sure that the weights_format string is set to \"IOHW\".");
+
+    // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
+    // "full_input" dimensions (after halo/padding expansion), not the original input dimensions.
+    // Calculate the transposed conv output dimensions and full_input dimensions.
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    uint32_t pad_h = padding_n4[0];
+    uint32_t pad_w = padding_n4[2];
+
+    // Note: prepare_conv_transpose2d_weights is called from Python and doesn't receive output_padding,
+    // so we assume output_padding = 0 for weight preparation (the actual conv op handles output_padding)
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * pad_h) + (dilation[0] * (kernel_size[0] - 1)) + 1;
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * pad_w) + (dilation[1] * (kernel_size[1] - 1)) + 1;
+
+    // Full input dimensions that conv2d micro-op will use
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
+
     Tensor mirrored_weight_tensor = transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel);
     return prepare_conv_weights(
         mirrored_weight_tensor,
@@ -135,11 +148,11 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         in_channels,
         out_channels,
         batch_size,
-        input_height,
-        input_width,
+        full_input_height,  // Use full_input dimensions, not original
+        full_input_width,   // Use full_input dimensions, not original
         kernel_size,
-        stride,
-        padding,
+        {1, 1},                               // stride is always 1x1 for conv2d micro-op in transposed conv
+        std::array<uint32_t, 4>{0, 0, 0, 0},  // padding is 0 (halo already added padding)
         dilation,
         has_bias,
         groups,
@@ -170,6 +183,18 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and operates on
+    // full_input dimensions. Calculate these dimensions for bias preparation.
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    uint32_t pad_h = padding_n4[0];
+    uint32_t pad_w = padding_n4[2];
+
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * pad_h) + (dilation[0] * (kernel_size[0] - 1)) + 1;
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * pad_w) + (dilation[1] * (kernel_size[1] - 1)) + 1;
+
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
+
     return prepare_conv_bias(
         bias_tensor,
         input_memory_config,
@@ -177,11 +202,11 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         in_channels,
         out_channels,
         batch_size,
-        input_height,
-        input_width,
+        full_input_height,  // Use full_input dimensions
+        full_input_width,   // Use full_input dimensions
         kernel_size,
-        stride,
-        padding,
+        {1, 1},                               // stride is always 1x1 for conv2d micro-op in transposed conv
+        std::array<uint32_t, 4>{0, 0, 0, 0},  // padding is 0 (halo already added padding)
         dilation,
         groups,
         device,
@@ -191,6 +216,4 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         compute_config_);
 }
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d

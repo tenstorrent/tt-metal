@@ -85,10 +85,9 @@ def run_conv_transpose2d(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
-    if shard_layout is None and not auto_shard:
-        shard_layout = (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        )
+    if auto_shard:
+        shard_layout = None
+
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
@@ -292,12 +291,12 @@ def test_simple_conv_t2d(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(
-    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_act_double_buffer, shard_layout",
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_act_double_buffer",
     (
-        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True),
+        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True),
+        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True),
+        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True),
     ),
 )
 # fmt: on
@@ -332,7 +331,6 @@ def test_conv_transpose2d_model_fruit(
     out_pad_w,
     config,
     enable_act_double_buffer,
-    shard_layout,
     mirror_kernel=False,
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
@@ -356,7 +354,6 @@ def test_conv_transpose2d_model_fruit(
         out_pad_h=out_pad_h,
         out_pad_w=out_pad_w,
         config_override=config,
-        shard_layout=shard_layout,
         auto_shard=True,
         enable_act_double_buffer=enable_act_double_buffer,
         mirror_kernel=mirror_kernel,
@@ -364,13 +361,13 @@ def test_conv_transpose2d_model_fruit(
 
 
 @pytest.mark.parametrize(
-    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, shard_layout",
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w",
     (
         # Test config_tensors_in_dram parameter with various configurations
         # No l1_small_size fixture - the point is to test DRAM storage to avoid L1_SMALL usage
-        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
-        (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
-        (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 0, 0),
+        (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0),
+        (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0),
     ),
 )
 def test_conv_transpose2d_config_tensors_in_dram(
@@ -388,7 +385,6 @@ def test_conv_transpose2d_config_tensors_in_dram(
     pad_w,
     out_pad_h,
     out_pad_w,
-    shard_layout,
 ):
     run_conv_transpose2d(
         device,
@@ -408,6 +404,5 @@ def test_conv_transpose2d_config_tensors_in_dram(
         pad_w=pad_w,
         out_pad_h=out_pad_h,
         out_pad_w=out_pad_w,
-        shard_layout=shard_layout,
         config_tensors_in_dram=True,
     )
