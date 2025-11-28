@@ -1249,7 +1249,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-developers-ttnn-core" | "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
@@ -1735,7 +1735,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-developers-ttnn-core" | "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
@@ -1757,7 +1757,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "metalium-developers-infra"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-developers-ttnn-core" | "@tenstorrent/metalium-ttnn-core-team")
                 echo "metalium-developers-ttnn-core"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
@@ -2248,7 +2248,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-developers-ttnn-core" | "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
