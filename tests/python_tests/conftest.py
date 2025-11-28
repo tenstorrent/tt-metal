@@ -10,7 +10,6 @@ import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import reset_mailboxes
 from helpers.format_config import InputOutputFormat
-from helpers.log_utils import _format_log
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from ttexalens import tt_exalens_init
 from ttexalens.tt_exalens_lib import arc_msg
@@ -173,14 +172,6 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    BOLD = "\033[1m"
-    YELLOW = "\033[93m"
-    RESET = "\033[0m"
-    if _format_log:
-        print(f"\n\n{BOLD}{YELLOW} Cases Where Dest Accumulation Turned On:{RESET}")
-        for input_fmt, output_fmt in _format_log:
-            print(f"{BOLD}{YELLOW}  {input_fmt} -> {output_fmt}{RESET}")
-
     test_target = TestTargetConfig()
     if not test_target.run_simulator:
         # Send ARC message for GO IDLE signal. This should decrease device clock speed.
