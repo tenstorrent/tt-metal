@@ -43,7 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange default_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     CoreRangeSet total_cores = sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(default_cores);
-    uint32_t num_cores_total = total_cores.size();
+    uint32_t num_cores_total = total_cores.num_cores();
 
     auto input_log_shape = input.logical_shape();
     auto output_log_shape = output.logical_shape();
