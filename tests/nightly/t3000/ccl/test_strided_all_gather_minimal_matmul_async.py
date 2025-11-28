@@ -338,6 +338,7 @@ def run_strided_all_gather_minimal_matmul_impl(
         (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
         (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
         (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        (64, 4096, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
         (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
         (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
@@ -355,6 +356,7 @@ def run_strided_all_gather_minimal_matmul_impl(
         "kblock22workers",  # make m block size greater than 1, plus 2 workers
         "nblock21worker",  # make n block size greater than 1
         "nblock22workers",  # make n block size greater than 1, plus 2 workers
+        "morerows",
         "4k4k4k",
         "4x4mmcores",  # increase to a larger core grid
         "fulltest",
