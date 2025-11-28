@@ -64,10 +64,13 @@ ImageRotateDeviceOperation::ProgramFactory::cached_program_t ImageRotateDeviceOp
     const float sin_angle = std::sin(angle_rad);
 
     // Center point - default to image center if not specified
+    // Note: PyTorch uses pixel-center coordinates (pixel i has center at i+0.5)
+    // Our kernel uses pixel-center-at-integer coordinates (pixel i has center at i)
+    // So we subtract 0.5 from PyTorch-style coordinates to match our convention
     float center_x, center_y;
     if (operation_attributes.center.has_value()) {
-        center_x = std::get<0>(operation_attributes.center.value());
-        center_y = std::get<1>(operation_attributes.center.value());
+        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
+        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
     } else {
         center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
         center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
@@ -285,10 +288,13 @@ void ImageRotateDeviceOperation::ProgramFactory::override_runtime_arguments(
     const uint32_t input_width = input_shape[2];
     const uint32_t input_height = input_shape[1];
 
+    // Note: PyTorch uses pixel-center coordinates (pixel i has center at i+0.5)
+    // Our kernel uses pixel-center-at-integer coordinates (pixel i has center at i)
+    // So we subtract 0.5 from PyTorch-style coordinates to match our convention
     float center_x, center_y;
     if (operation_attributes.center.has_value()) {
-        center_x = std::get<0>(operation_attributes.center.value());
-        center_y = std::get<1>(operation_attributes.center.value());
+        center_x = std::get<0>(operation_attributes.center.value()) - 0.5f;
+        center_y = std::get<1>(operation_attributes.center.value()) - 0.5f;
     } else {
         center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
         center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
