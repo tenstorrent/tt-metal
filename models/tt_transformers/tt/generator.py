@@ -479,9 +479,17 @@ class Generator:
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         sampling_params_list = None
         if sampling_params is not None:
-            chunked_fields = {
-                field: self._chunk_sampling_param(getattr(sampling_params, field)) for field in SAMPLING_PARAM_FIELDS
-            }
+            # Fall back to dataclass defaults when optional fields are omitted
+            chunked_fields = {}
+            for field in SAMPLING_PARAM_FIELDS:
+                try:
+                    val = getattr(sampling_params, field)
+                except AttributeError:
+                    if hasattr(SamplingParams, field):
+                        val = getattr(SamplingParams, field)
+                    else:
+                        raise
+                chunked_fields[field] = self._chunk_sampling_param(val)
             prompt_chunks = (
                 torch.chunk(prompt_tokens, self.data_parallel, 0)
                 if prompt_tokens is not None

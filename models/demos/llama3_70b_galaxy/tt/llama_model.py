@@ -552,9 +552,6 @@ class TtTransformer(LightweightModule):
         )
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
-        if capture_sampling_trace:
-            return tt_logits
-
         if return_logits:
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
@@ -579,6 +576,9 @@ class TtTransformer(LightweightModule):
             )
             tt_out_logits = tt_out_logits[0, 0, 0, :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
+
+        if capture_sampling_trace:
+            return tt_logits
 
         tt_toks = self.sampling.sample(
             tt_logits[0],
