@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_math_fidelities,
+)
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, MathFidelity, MathOperation
+from helpers.llk_params import MathOperation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import ALL_RUN_TYPES, perf_benchmark, update_report
 
@@ -16,21 +20,14 @@ from helpers.perf import ALL_RUN_TYPES, perf_benchmark, update_report
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     tile_count=16,
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(
+        formats, mathop, PERF_RUN=True
+    ),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
 )
 def test_perf_eltwise_binary_fpu(
     perf_report, test_name, formats, mathop, tile_count, math_fidelity, dest_acc
 ):
-
-    # MathFidelity is only used for Elwmul
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     test_config = {
         "testname": test_name,
