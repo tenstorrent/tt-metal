@@ -483,7 +483,12 @@ void ControlPlane::init_control_plane(
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         const size_t board_size = cluster.get_unique_chip_ids().size();
-        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32) {  // Using full board size for UBB Galaxy
+        const size_t distributed_size = *distributed_context->size();
+
+        // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
+        // multi-host machines should be limited via rank bindings so should be ok
+        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
+            distributed_size == 1) {  // Using full board size for UBB Galaxy
             int y_size = this->mesh_graph_->get_mesh_shape(MeshId{0})[1];
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
