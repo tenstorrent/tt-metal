@@ -198,3 +198,79 @@ Create a markdown file named `{operation_name}_analysis.md` in the same director
 - Check that the analysis would be useful to someone trying to understand or modify the operation
 
 Remember: Your analysis will serve as the definitive reference for this operation's implementation. Prioritize accuracy, depth, and clarity. When in doubt, research more deeply rather than making assumptions.
+
+---
+
+## Execution Logging (Optional)
+
+If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file alongside your analysis output.
+
+### Log File Location
+`{operation_name}_analyzer_execution_log.md` in the same directory as the analysis output.
+
+### Log Format
+```markdown
+# Execution Log: {Operation Name} Analysis
+
+## Session Info
+- **Started**: {timestamp or "session start"}
+- **Operation**: {operation_name}
+- **Program Factory Path**: {path}
+
+## Execution Timeline
+
+### Step 1: {Description}
+**Action**: {What you did - e.g., "Read program factory file"}
+**Command/Tool**: {Tool used and parameters}
+**Result**:
+```
+{Full output or summary if very long}
+```
+**Decision**: {What you decided based on this result}
+
+### Step 2: {Description}
+...
+
+## Files Read
+| File | Purpose | Key Findings |
+|------|---------|--------------|
+| {path} | {why read} | {what learned} |
+
+## DeepWiki Queries
+| Query | Response Summary | How Used |
+|-------|------------------|----------|
+| {question} | {answer summary} | {how it informed analysis} |
+
+## Errors Encountered
+| Error | Context | Resolution |
+|-------|---------|------------|
+| {error message} | {what caused it} | {how resolved} |
+
+## Key Decisions
+| Decision Point | Options Considered | Choice Made | Rationale |
+|----------------|-------------------|-------------|-----------|
+| {topic} | {options} | {choice} | {why} |
+
+## Files Created/Modified
+| File | Action | Description |
+|------|--------|-------------|
+| {path} | Created/Modified | {what was done} |
+
+## Final Status
+- **Completed**: Yes/No
+- **Output File**: {path to analysis.md}
+- **Issues**: {any unresolved issues}
+```
+
+### What to Log
+1. **Every file read** - path, why, key findings
+2. **Every DeepWiki query** - question, response summary, how it was used
+3. **Every decision point** - what options existed, what was chosen, why
+4. **Any errors or unexpected situations** - what happened, how resolved
+5. **All files created or modified** - path and description
+
+### Logging Guidelines
+- Log in real-time as you work, not retrospectively
+- Include enough detail that someone could reproduce your analysis
+- If output is very long (>50 lines), summarize but note "full output available in {file}"
+- Be honest about uncertainty or areas where you made assumptions

@@ -298,3 +298,95 @@ Return to the user:
 2. Summary of key design decisions
 3. List of open questions requiring user input
 4. Confirmation that spec is ready for scaffolder
+
+---
+
+## Execution Logging (Optional)
+
+If the caller includes **"enable detailed logging"** or **"with execution log"** in the prompt, you MUST create a detailed execution log file alongside your spec output.
+
+### Log File Location
+`{new_operation}_planner_execution_log.md` in the same directory as the spec output.
+
+### Log Format
+```markdown
+# Execution Log: {New Operation} Planning
+
+## Session Info
+- **Started**: {timestamp or "session start"}
+- **New Operation**: {new_operation_name}
+- **Reference Analysis**: {path to reference analysis}
+
+## Execution Timeline
+
+### Step 1: {Description}
+**Action**: {What you did - e.g., "Read reference analysis file"}
+**Command/Tool**: {Tool used and parameters}
+**Result**:
+```
+{Full output or summary if very long}
+```
+**Decision**: {What you decided based on this result}
+
+### Step 2: {Description}
+...
+
+## Reference Analysis Extraction
+| Section | Key Information Extracted |
+|---------|---------------------------|
+| Work Unit | {extracted info} |
+| Data Flow | {extracted info} |
+| CB Configuration | {extracted info} |
+| ... | ... |
+
+## Files Read
+| File | Purpose | Key Findings |
+|------|---------|--------------|
+| {path} | {why read} | {what learned} |
+
+## DeepWiki Queries
+| Query | Response Summary | How Used |
+|-------|------------------|----------|
+| {question} | {answer summary} | {how it informed design} |
+
+## Design Decisions Made
+| Decision | Options Considered | Choice | Rationale |
+|----------|-------------------|--------|-----------|
+| {topic} | {options} | {choice} | {why} |
+
+## Comparison Analysis
+| Aspect | Reference Op | New Op | Impact |
+|--------|--------------|--------|--------|
+| {aspect} | {ref behavior} | {new behavior} | {implementation impact} |
+
+## Errors/Issues Encountered
+| Issue | Context | Resolution |
+|-------|---------|------------|
+| {issue} | {what caused it} | {how resolved} |
+
+## Files Created/Modified
+| File | Action | Description |
+|------|--------|-------------|
+| {path} | Created/Modified | {what was done} |
+
+## Final Status
+- **Completed**: Yes/No
+- **Output File**: {path to spec.md}
+- **Open Questions**: {list any unresolved questions}
+```
+
+### What to Log
+1. **Reference analysis reading** - what was extracted and how it informed the design
+2. **Every file read** - path, why, key findings
+3. **Every DeepWiki query** - question, response summary, how it was used
+4. **Every design decision** - what options existed, what was chosen, why
+5. **Comparison analysis** - how new op differs from reference
+6. **Any errors or issues** - what happened, how resolved
+7. **All files created** - path and description
+
+### Logging Guidelines
+- Log in real-time as you work, not retrospectively
+- Include enough detail that someone could understand your design rationale
+- Document WHY design choices were made, not just WHAT was chosen
+- If output is very long (>50 lines), summarize but note "full output available in {file}"
+- Be explicit about assumptions and areas of uncertainty
