@@ -19,8 +19,12 @@ sfpi_inline void calculate_div_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    // sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    // sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vUInt a = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+    sfpi::vUInt b = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
     // When converting to float, integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems; the
@@ -82,7 +86,9 @@ sfpi_inline void calculate_div_int32_body(
     qb += sfpi::exman9(hi) << 21;
 
     // Compute remainder.
-    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    // a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    a = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
     a = sfpi::abs(a);
     sfpi::vInt r = a - qb;
     sfpi::vFloat r_f = sfpi::int32_to_float(sfpi::abs(r), 0);
@@ -128,8 +134,12 @@ sfpi_inline void calculate_div_int32_body(
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
     // Reload signed values here due to register pressure.
-    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    // a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    // b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    a = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+    b = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
     sfpi::vInt sign = a ^ b;
     // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
@@ -146,7 +156,9 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+    // sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+    __builtin_rvtt_sfpstore(
+        result.get(), 4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].get());
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
