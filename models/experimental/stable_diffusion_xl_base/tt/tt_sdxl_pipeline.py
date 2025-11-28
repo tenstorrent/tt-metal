@@ -487,113 +487,50 @@ class TtSDXLPipeline(LightweightModule):
         self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids, all_prompt_embeds_torch, torch_add_text_embeds
     ):
         # Allocation of device tensors for the input data.
-        import hashlib
+        # Always allocate fresh tensors - no caching (trace capture disabled)
+        profiler.start("allocate_input_tensors")
 
-        embed_hash = hashlib.md5(all_prompt_embeds_torch.cpu().numpy().tobytes()).hexdigest()[:8]
-        logger.info(
-            f"__allocate_device_tensors called, allocated={self.allocated_device_tensors}, embed_hash={embed_hash}"
+        self.tt_latents_device = ttnn.allocate_tensor_on_device(
+            tt_latents.shape,
+            tt_latents.dtype,
+            tt_latents.layout,
+            self.ttnn_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if not self.allocated_device_tensors:
-            profiler.start("allocate_input_tensors")
+        # Create device tensor with mesh mapper
+        self.tt_prompt_embeds_device = ttnn.from_torch(
+            all_prompt_embeds_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.ttnn_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+        )
 
-            self.tt_latents_device = ttnn.allocate_tensor_on_device(
-                tt_latents.shape,
-                tt_latents.dtype,
-                tt_latents.layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            )
+        # Create device tensor with mesh mapper
+        self.tt_text_embeds_device = ttnn.from_torch(
+            torch_add_text_embeds,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.ttnn_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+        )
 
-            # Create device tensor with mesh mapper (like tt_time_ids)
-            self.tt_prompt_embeds_device = ttnn.from_torch(
-                all_prompt_embeds_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.ttnn_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-            )
+        self.tt_time_ids_device = ttnn.from_torch(
+            tt_time_ids,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.ttnn_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
+        )
+        self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
+        ttnn.synchronize_device(self.ttnn_device)
+        profiler.end("allocate_input_tensors")
 
-            # Create device tensor with mesh mapper (like tt_time_ids)
-            self.tt_text_embeds_device = ttnn.from_torch(
-                torch_add_text_embeds,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.ttnn_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-            )
-
-            self.tt_time_ids_device = ttnn.from_torch(
-                tt_time_ids,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.ttnn_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
-            )
-            self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
-            ttnn.synchronize_device(self.ttnn_device)
-            profiler.end("prepare_input_tensors")
-
-            self.allocated_device_tensors = True
-        else:
-            logger.info(f"ELSE branch: Updating existing device tensors with new embeddings")
-            logger.info(
-                f"  Updating device tensors: prompts={id(self.tt_prompt_embeds_device)}, texts={id(self.tt_text_embeds_device)}"
-            )
-            tt_time_ids_host = ttnn.from_torch(
-                tt_time_ids,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
-            )
-            tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
-
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-
-            # Update prompt_embeds
-            tt_prompt_embeds_host = ttnn.from_torch(
-                all_prompt_embeds_torch,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-            )
-            logger.info(f"Copying prompt_embed tensors to device...")
-            for idx, (host_tensor, device_tensor) in enumerate(
-                zip(tt_prompt_embeds_host, self.tt_prompt_embeds_device)
-            ):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-            logger.info(f"✓ Prompt embeds copied to device (updated {idx+1} tensors)")
-
-            # WORKAROUND: copy_host_to_device_tensor() doesn't actually update device memory,
-            # so invalidate trace and re-allocate tensors with new embeddings
-            if self.pipeline_config.capture_trace and self.image_processing_compiled:
-                self.invalidate_trace()
-                # Recursively call to go through IF branch with fresh allocation
-                return self.__allocate_device_tensors(
-                    tt_latents,
-                    tt_prompt_embeds,
-                    tt_text_embeds,
-                    tt_time_ids,
-                    all_prompt_embeds_torch,
-                    torch_add_text_embeds,
-                )
-
-            # Update text_embeds (only reached if not using trace capture)
-            tt_add_text_embeds_host = ttnn.from_torch(
-                torch_add_text_embeds,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-            )
-            for host_tensor, device_tensor in zip(tt_add_text_embeds_host, self.tt_text_embeds_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
-
-            # Synchronize to ensure async copies complete before trace execution
-            ttnn.synchronize_device(self.ttnn_device)
+        self.allocated_device_tensors = True
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
@@ -671,18 +608,6 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
         self._traces_released = False  # New traces captured, reset flag
-
-    def invalidate_trace(self):
-        """Invalidate current trace AND device tensors to force complete re-initialization.
-
-        Call this when embeddings change to ensure trace uses updated values.
-        This is a workaround for copy_host_to_device_tensor() not properly updating device memory.
-        """
-        logger.info("Invalidating trace and device tensors due to embedding update")
-        if not self._traces_released:
-            self.release_traces()
-        self.image_processing_compiled = False
-        self.allocated_device_tensors = False  # Force re-allocation with new embeddings
 
     def release_traces(self):
         """Release captured traces before device cleanup.
