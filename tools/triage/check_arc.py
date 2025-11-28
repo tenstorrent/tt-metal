@@ -43,7 +43,8 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     delay_seconds = 0.2
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
-    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
+    device = arc.location.device
+    log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
