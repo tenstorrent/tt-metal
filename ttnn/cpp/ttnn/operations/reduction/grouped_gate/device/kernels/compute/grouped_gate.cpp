@@ -168,7 +168,7 @@ void topk_group_scores(
     acquire_dst();
     // local sort into k groups
     cb_wait_front(group_scores_cb_index, 1);
-    UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
+    // UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
     cb_wait_front(group_indices_cb_index, 1);
     // UNPACK(print_tile(group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
@@ -190,7 +190,7 @@ void topk_group_scores(
     pack_reconfig_data_format(sorted_group_indices_cb_index);
     pack_tile(2, sorted_group_indices_cb_index);
     // CVELE: If copy_tile_to_dst_init_short_with_dt is called, this will print correct values
-    PACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
+    // PACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     cb_pop_front(group_scores_cb_index, 1);
     // don't pop group indices as it gets re-used for the next tile heights
@@ -242,6 +242,10 @@ void MAIN {
         // Perform sigmoid on scores
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             cb_wait_front(scores_cb_index, 1);
+            // if (width_tile == 3 || width_tile == 6) {
+            //     UNPACK(DPRINT << "Pre-sigmoid Width tile: " << width_tile << ENDL());
+            //     UNPACK(print_tile(scores_cb_index, 0, true, 0, 1));
+            // }
 
             tile_regs_acquire();
             // copy tile from scores cb to destination register 0
@@ -249,13 +253,25 @@ void MAIN {
             copy_tile(scores_cb_index, 0, 0);
 
             sigmoid_tile_init();
+            // if (width_tile == 3 || width_tile == 6) {
+            //     MATH(DPRINT << "Pre-sigmoid Width tile: " << width_tile << ENDL());
+            //     dprint_tensix_dest_reg(0);
+            // }
             sigmoid_tile(0);
+            // if (width_tile == 3 || width_tile == 6) {
+            //     MATH(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
+            //     dprint_tensix_dest_reg(0);
+            // }
             tile_regs_commit();
 
             cb_reserve_back(sigmoid_input_cb_index, 1);
             tile_regs_wait();
             pack_tile<true>(0, sigmoid_input_cb_index, 0);
             tile_regs_release();
+            if (width_tile == 3 || width_tile == 6) {
+                PACK(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
+                PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
+            }
             cb_push_back(sigmoid_input_cb_index, 1);
 
             cb_pop_front(scores_cb_index, 1);

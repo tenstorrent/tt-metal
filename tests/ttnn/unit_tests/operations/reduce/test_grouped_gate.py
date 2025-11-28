@@ -21,6 +21,10 @@ def grouped_gate_golden(
 
     # then add bias (used for selection only)
     biased_scores = scores + bias
+    index3 = 3
+    logger.info(f"group 3 scores: {biased_scores[:, :, :, index3*32:(index3+1)*32]}")
+    index6 = 6
+    logger.info(f"group 6 scores: {biased_scores[:, :, :, index6*32:(index6+1)*32]}")
 
     # then reshape based on number of groups
     grouped_scores = biased_scores.reshape(scores.shape[:-1] + (n_groups, scores.shape[-1] // n_groups))
@@ -94,6 +98,7 @@ def test_grouped_gate(device):
     # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
     scores = torch.randn(1, 1, seq_len, total_experts, dtype=torch.bfloat16)
     bias = 2 * torch.ones(1, 1, seq_len, total_experts, dtype=torch.bfloat16)  # no bias for simplicity
+
     n_groups = 8
     summed_experts_per_group = 2  # number of experts to sum per group
     topk_groups = 4  # top groups to keep
