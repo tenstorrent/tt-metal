@@ -158,9 +158,6 @@ def test_layer_norm_with_tile_layout(device, h, w):
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm(device, h, w, use_welford, dtype):
-    if h == 2080:
-        pytest.skip("Bug, see https://github.com/tenstorrent/tt-metal/issues/27126")
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -282,9 +279,6 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
 @pytest.mark.parametrize("w", [2880, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
-    if not use_welford:
-        pytest.skip("Low PCC, see https://github.com/tenstorrent/tt-metal/issues/27291")
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)

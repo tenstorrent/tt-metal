@@ -130,8 +130,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     bool use_welford,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const uint32_t no_weights_max_size = 120;
-    const uint32_t with_weights_max_size = 60;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -230,7 +228,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
-    bool large_tensor_needed = false;
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
@@ -252,6 +249,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
+
+    bool large_tensor_needed = false;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -273,12 +272,13 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
             large_tensor_needed = true;
-            WtB = with_weights_max_size;
+            WtB = 60;
         } else if (!cb_fits_in_L1) {
             large_tensor_needed = true;
-            WtB = no_weights_max_size;
+            WtB = 120;
         }
     }
+
     if (large_tensor_needed) {
         in0_t = WtB;
         im0_t = WtB;  // buffer for saving xmm
@@ -321,7 +321,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     const auto fuse_pre_add = b.has_value();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size, Wt};
     if (!large_tensor_needed) {
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
@@ -390,6 +390,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    // float winv = 1.0f / W;
+    union {
+        float f;
+        uint32_t u;
+    } winv{};
+    winv.f = 1.0f / W;
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
@@ -400,8 +406,17 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     } else {
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
+        compute_args.push_back(winv.u);
     }
 
+    // The large-tensor non-Welford reduce kernel needs
+    // an intermediate Float32 CB that can be unpacked
+    // directly to dest (if doing a Float32 reduction)
+    constexpr auto large_tensor_im_fp32_cb = tt::CBIndex::c_26;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (float32_reduction) {
+        unpack_to_dest_mode[large_tensor_im_fp32_cb] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel
@@ -416,6 +431,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_args,
             .defines = compute_defines});
@@ -465,6 +481,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed4_config);
+    if (large_tensor_needed && !use_welford) {
+        CircularBufferConfig cb_fp32_config =
+            CircularBufferConfig(single_tile_size, {{large_tensor_im_fp32_cb, tt::DataFormat::Float32}})
+                .set_page_size(large_tensor_im_fp32_cb, single_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_fp32_config);
+    }
     if (gamma.has_value() || beta.has_value()) {
         CircularBufferConfig c_intermed5_config =
             CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
@@ -510,14 +532,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / W;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
-    } e{};
-    e.f = eps;  // epsilon
+    } e{}, one{};
+    e.f = eps;
+    one.f = 1.0f;
+    auto bfloat_one_value = bfloat16(one.f);
+    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -538,9 +561,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             core,
             {a_addr,
              num_tile_rows_per_core,
-             Wt,
              tile_offset,
-             packed_winv_value,
+             packed_one_value,
              e.u,  // 0-5
              gamma_dram_addr,
              beta_dram_addr,
