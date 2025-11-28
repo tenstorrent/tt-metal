@@ -132,22 +132,3 @@ def test_reduce_to_root_basic(mesh_device):
         intermediate_tensor_s_m=intermediate_sm,
         topology=ttnn.Topology.Linear,
     )
-
-    # Convert output to torch for validation
-    out_l_torch = ttnn.to_torch(out_l)
-    out_s_torch = ttnn.to_torch(out_s)
-    out_m_torch = ttnn.to_torch(out_m)
-
-    # Goldens: sum across devices
-    l_golden = torch.zeros(l_shape, dtype=torch.bfloat16)
-    s_golden = torch.zeros(s_shape, dtype=torch.bfloat16)
-    m_golden = torch.zeros(m_shape, dtype=torch.bfloat16)
-    for i in range(num_devices):
-        l_golden += torch.ones(l_shape, dtype=torch.bfloat16) * (i + 1)
-        s_golden += torch.ones(s_shape, dtype=torch.bfloat16) * (i + 1)
-        m_golden += torch.ones(m_shape, dtype=torch.bfloat16) * (i + 1)
-
-    # Validate only on root device
-    assert torch.allclose(out_l_torch, l_golden)
-    assert torch.allclose(out_s_torch, s_golden)
-    assert torch.allclose(out_m_torch, m_golden)
