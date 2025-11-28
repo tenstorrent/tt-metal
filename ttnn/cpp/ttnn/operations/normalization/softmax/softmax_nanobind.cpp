@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "softmax.hpp"
@@ -31,14 +32,14 @@ namespace ttnn::operations::normalization::detail {
  * @param module The Python module to bind the classes to
  */
 void bind_normalization_softmax_program_config_operation(nb::module_& mod) {
-    nb::class_<SoftmaxProgramConfig>(mod, "SoftmaxProgramConfig", R"doc(
-        Base program configuration class for Softmax operations.
+    // nb::class_<SoftmaxProgramConfig>(mod, "SoftmaxProgramConfig", R"doc(
+    //     Base program configuration class for Softmax operations.
 
-        This is the base class for all Softmax program configurations. It provides
-        a common interface for different types of program configurations used in
-        softmax operations.
-    )doc")
-        .def(nb::init<>());
+    //    This is the base class for all Softmax program configurations. It provides
+    //    a common interface for different types of program configurations used in
+    //    softmax operations.
+    //)doc")
+    //    .def(nb::init<>());
 
     nb::class_<SoftmaxDefaultProgramConfig>(mod, "SoftmaxDefaultProgramConfig", R"doc(
         Default program configuration for Softmax operations.

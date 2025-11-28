@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "layernorm.hpp"
@@ -16,7 +17,7 @@
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_layernorm_program_config(nb::module_& mod) {
-    nb::class_<LayerNormProgramConfig>(mod, "LayerNormProgramConfig").def(nb::init<>());
+    // nb::class_<LayerNormProgramConfig>(mod, "LayerNormProgramConfig").def(nb::init<>());
 
     nb::class_<LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(

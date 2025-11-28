@@ -351,7 +351,7 @@ from ttnn.operations.matmul import (
 )
 
 from ttnn.operations.normalization import (
-    SoftmaxProgramConfig,
+    # SoftmaxProgramConfig,
     SoftmaxDefaultProgramConfig,
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
