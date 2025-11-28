@@ -12,7 +12,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, hex_serializer, log_check, run_script
+from triage import ScriptConfig, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
 import time
 from ttexalens.coordinate import OnChipCoordinate
@@ -49,11 +49,13 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
 
     # Heartbeat must be between 10 and 50
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second >= 10,
         f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}10{RST}hb/s",
     )
-    log_check(
+    log_check_device(
+        device,
         heartbeats_per_second <= 50,
         f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}50{RST}hb/s",
     )
@@ -69,7 +71,8 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
 def check_arc(device: Device):
     arc = device.arc_block
     postcode = arc.get_register_store().read_register("ARC_RESET_SCRATCH0")
-    log_check(
+    log_check_device(
+        device,
         (postcode & 0xFFFF0000) == 0xC0DE0000,
         f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
