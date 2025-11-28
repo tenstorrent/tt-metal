@@ -187,9 +187,9 @@ def test_image_rotate_with_fill_value(device, input_shape, fill_value):
 @pytest.mark.parametrize(
     "center",
     [
-        None,  # Default center only for now
-        pytest.param((8.0, 8.0), marks=pytest.mark.skip(reason="Custom center needs investigation")),
-        pytest.param((0.0, 0.0), marks=pytest.mark.skip(reason="Custom center needs investigation")),
+        None,  # Default center
+        (8.0, 8.0),  # Custom center - fixed!
+        (0.0, 0.0),  # Corner center - fixed!
     ],
 )
 def test_image_rotate_with_custom_center(device, input_shape, center):
