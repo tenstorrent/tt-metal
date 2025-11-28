@@ -56,7 +56,10 @@ ImageRotateDeviceOperation::ProgramFactory::cached_program_t ImageRotateDeviceOp
     const uint32_t input_channels = input_shape[3];
 
     // Calculate rotation parameters
-    const float angle_rad = -operation_attributes.angle * M_PI / 180.0f;  // Negative for inverse rotation
+    // PyTorch convention: positive angle = clockwise rotation
+    // For backward mapping (output->input), we use the inverse transformation
+    // which requires positive angle (no negation needed)
+    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);
     const float sin_angle = std::sin(angle_rad);
 
@@ -131,13 +134,6 @@ ImageRotateDeviceOperation::ProgramFactory::cached_program_t ImageRotateDeviceOp
         input_height,        // ct_arg[4]: input_height
         input_width,         // ct_arg[5]: input_width
     };
-
-    // Append cos/sin/center as reinterpreted uint32_t values
-    reader_compile_time_args.push_back(std::bit_cast<uint32_t>(cos_angle));  // ct_arg[6]: cos_angle (as uint32)
-    reader_compile_time_args.push_back(std::bit_cast<uint32_t>(sin_angle));  // ct_arg[7]: sin_angle (as uint32)
-    reader_compile_time_args.push_back(std::bit_cast<uint32_t>(center_x));   // ct_arg[8]: center_x (as uint32)
-    reader_compile_time_args.push_back(std::bit_cast<uint32_t>(center_y));   // ct_arg[9]: center_y (as uint32)
-    reader_compile_time_args.push_back(fill_value_bf16);                     // ct_arg[10]: fill_value_bf16
 
     // Append tensor accessor args for input tensor
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -233,9 +229,14 @@ ImageRotateDeviceOperation::ProgramFactory::cached_program_t ImageRotateDeviceOp
 
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
-            num_sticks,                        // rt_arg[1]: num_sticks
-            sticks_processed                   // rt_arg[2]: start_stick_id
+            input_tensor.buffer()->address(),       // rt_arg[0]: input_buffer_address
+            num_sticks,                             // rt_arg[1]: num_sticks
+            sticks_processed,                       // rt_arg[2]: start_stick_id
+            std::bit_cast<uint32_t>(cos_angle),     // rt_arg[3]: cos_angle (as uint32 bits)
+            std::bit_cast<uint32_t>(sin_angle),     // rt_arg[4]: sin_angle (as uint32 bits)
+            std::bit_cast<uint32_t>(center_x),      // rt_arg[5]: center_x (as uint32 bits)
+            std::bit_cast<uint32_t>(center_y),      // rt_arg[6]: center_y (as uint32 bits)
+            static_cast<uint32_t>(fill_value_bf16)  // rt_arg[7]: fill_value (bfloat16)
         };
 
         // Writer runtime args
@@ -274,12 +275,39 @@ void ImageRotateDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = output.buffer();
 
+    // Recalculate rotation parameters (these are runtime args now)
+    const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
+    const float cos_angle = std::cos(angle_rad);
+    const float sin_angle = std::sin(angle_rad);
+
+    // Center point
+    const auto& input_shape = tensor_args.input.padded_shape();
+    const uint32_t input_width = input_shape[2];
+    const uint32_t input_height = input_shape[1];
+
+    float center_x, center_y;
+    if (operation_attributes.center.has_value()) {
+        center_x = std::get<0>(operation_attributes.center.value());
+        center_y = std::get<1>(operation_attributes.center.value());
+    } else {
+        center_x = (static_cast<float>(input_width) - 1.0f) / 2.0f;
+        center_y = (static_cast<float>(input_height) - 1.0f) / 2.0f;
+    }
+
+    const uint16_t fill_value_bf16 = float_to_bfloat16(operation_attributes.fill);
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            // Update rotation parameters (rt_args 3-7)
+            runtime_args[3] = std::bit_cast<uint32_t>(cos_angle);
+            runtime_args[4] = std::bit_cast<uint32_t>(sin_angle);
+            runtime_args[5] = std::bit_cast<uint32_t>(center_x);
+            runtime_args[6] = std::bit_cast<uint32_t>(center_y);
+            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
         }
 
         {
