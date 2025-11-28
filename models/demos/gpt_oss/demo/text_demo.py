@@ -117,7 +117,7 @@ def prepare_gpt_oss_generator_args(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params",
     [
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -500,20 +500,29 @@ def test_gpt_oss_demo(
 
     logger.info("GPT-OSS demo completed successfully!")
 
-    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
-    tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
-    model_name = model_args[0].model_name
-    model_device_key = f"{tt_device_name}_{model_name}"
-
-    perf_targets = json.load(open(Path(__file__).parent.parent.joinpath("perf_targets.json")))
-
-    targets = {
-        "prefill_t/s": perf_targets["targets"]["TTFT"][model_device_key],
-        "decode_t/s": perf_targets["targets"]["decode_tok_s"][model_device_key],
-        "decode_t/s/u": perf_targets["targets"]["decode_tok_s_u"][model_device_key],
-    }
-
     if is_ci_env:
+        tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
+        tt_device_name = "GLX" if tt_device_name == "TG" else tt_device_name  # TG is old nomenclature of 4U galaxy.
+        model_name = model_args[0].model_name
+        model_device_key = f"{tt_device_name}_{model_name}"
+
+        perf_targets = json.load(open(Path(__file__).parent.parent.joinpath("perf_targets.json")))
+        prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
+        if (
+            f"prefill_{prefill_pad_length}" in perf_targets["targets"]
+            and model_device_key in perf_targets["targets"][f"prefill_{prefill_pad_length}"]
+        ):
+            targets = {
+                "prefill_t/s": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key]["TTFT"],
+                "decode_t/s": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key][
+                    "decode_tok_s"
+                ],
+                "decode_t/s/u": perf_targets["targets"][f"prefill_{prefill_pad_length}"][model_device_key][
+                    "decode_tok_s_u"
+                ],
+            }
+        else:
+            targets = {}
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
@@ -557,30 +566,39 @@ def test_gpt_oss_demo(
         )
 
         # check measurements against CI performance targets
-        logger.info(f"Checking measurements against CI performance targets for {model_name} on {tt_device_name}")
+        logger.info(
+            f"Checking measurements against CI performance targets for {model_name} on {tt_device_name} for padded prefill length {prefill_pad_length}"
+        )
         # Only call verify_perf if the model_device_key exists in the targets
-        ci_targets = {}
-        if model_device_key in perf_targets["ci"]["TTFT"]:
-            current_ttft_target = perf_targets["ci"]["TTFT"][model_device_key]
-            if isinstance(current_ttft_target, list):
-                high_tol_percentage = current_ttft_target[1]
-                current_ttft_target = current_ttft_target[0]
+        if f"prefill_{prefill_pad_length}" in perf_targets["ci"]:
+            if model_device_key in perf_targets["ci"][f"prefill_{prefill_pad_length}"]:
+                current_ttft_target = perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key]["TTFT"]
+                if isinstance(current_ttft_target, list):
+                    high_tol_percentage = current_ttft_target[1]
+                    current_ttft_target = current_ttft_target[0]
+                else:
+                    high_tol_percentage = 1.15
+                ci_targets = {
+                    "prefill_time_to_token": current_ttft_target / 1000,  # convert to seconds
+                    "decode_t/s/u": perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key][
+                        "decode_tok_s_u"
+                    ],
+                    "decode_t/s": perf_targets["ci"][f"prefill_{prefill_pad_length}"][model_device_key][
+                        "decode_tok_s_u"
+                    ]
+                    * global_batch_size,  # calculate from per-user rate
+                }
+                verify_perf(
+                    measurements,
+                    ci_targets,
+                    high_tol_percentage=high_tol_percentage,
+                    expected_measurements={k: True for k in ci_targets.keys()},
+                )
             else:
-                high_tol_percentage = 1.15
-            ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
-        if model_device_key in perf_targets["ci"]["decode_tok_s_u"]:
-            ci_targets["decode_t/s/u"] = perf_targets["ci"]["decode_tok_s_u"][model_device_key]
-            # calculate from per-user rate
-            ci_targets["decode_t/s"] = perf_targets["ci"]["decode_tok_s_u"][model_device_key] * global_batch_size
-
-        if ci_targets:  # Only verify performance if we have targets for this model/device combination
-            verify_perf(
-                measurements,
-                ci_targets,
-                high_tol_percentage=high_tol_percentage,
-                expected_measurements={k: True for k in ci_targets.keys()},
-            )
+                logger.warning(
+                    f"No CI performance targets found for model {model_name} on device {tt_device_name} for prefill length {prefill_pad_length}. Skipping performance verification."
+                )
         else:
             logger.warning(
-                f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+                f"No CI performance targets found for prefill length {prefill_pad_length}. Skipping performance verification."
             )
