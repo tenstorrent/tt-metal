@@ -159,6 +159,11 @@ enum class EnvVarID {
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
 
     // ========================================
+    // LIGHTWEIGHT KERNEL DEBUGGING
+    // ========================================
+    TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,  // Enable lightweight kernel asserts
+
+    // ========================================
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
@@ -1061,6 +1066,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
+        // TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS
+        // Enables lightweight kernel assertions. If watcher asserts are enabled, they take precedence.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
+        case EnvVarID::TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS: this->lightweight_kernel_asserts = true; break;
+
         // ========================================
         // DEVICE MANAGER
         // ========================================
@@ -1337,6 +1348,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
+    hash_str += std::to_string(get_lightweight_kernel_asserts());
     std::hash<std::string> hash_fn;
     return hash_fn(hash_str);
 }

@@ -240,6 +240,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }
 
+    if (rtoptions.get_lightweight_kernel_asserts()) {
+        this->defines_ += "-DLIGHTWEIGHT_KERNEL_ASSERTS ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {
