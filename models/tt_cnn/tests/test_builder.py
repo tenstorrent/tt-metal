@@ -567,9 +567,9 @@ def test_conv2d_return_output_dim(input_size, channel_config, kernel_config, dev
     )
 
     torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
-    layer = TtConv2d(configuration, device, return_output_dim=True)
+    layer = TtConv2d(configuration, device)
 
-    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor)
+    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor, return_output_dim=True)
 
     expected_h = (input_height + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
     expected_w = (input_width + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
@@ -603,9 +603,9 @@ def test_conv2d_return_output_dim_with_channel_slicing(input_size, channels, ker
     torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    layer = TtConv2d(configuration, device, return_output_dim=True)
+    layer = TtConv2d(configuration, device)
 
-    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor)
+    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor, return_output_dim=True)
 
     expected_h = (input_height + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
     expected_w = (input_width + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
