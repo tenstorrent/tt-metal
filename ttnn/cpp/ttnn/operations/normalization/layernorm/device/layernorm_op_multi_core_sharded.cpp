@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core_sharded.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -22,7 +22,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layer_norm {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -101,28 +101,47 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-operation::ProgramWithCallbacks layernorm_multi_core_sharded(
-    const Tensor& a,
-    const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& stats,
-    Tensor& output,
-    LayerNormType norm_type,
-    DistributedLayerNormStage distributed_norm_stage,
-    float eps,
-    CoreCoord compute_grid_size,
-    uint32_t subblock_wt,
-    uint32_t block_ht,
-    uint32_t block_wt,
-    bool legacy_reduction,
-    bool legacy_rsqrt,
-    bool use_welford,
-    DeviceComputeKernelConfig compute_kernel_config) {
+LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
-    bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
+
+    // Extract from operation_attributes and tensor_args
+    const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const auto& gamma = tensor_args.weight;
+    const auto& beta = tensor_args.bias;
+    const auto& stats = tensor_args.stats;
+    auto& output = tensor_return_value;
+    bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
+    bool is_pre_all_gather = operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
+    bool is_post_all_gather = operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
+    float eps = operation_attributes.eps;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+
+    // Extract program config
+    CoreCoord compute_with_storage_grid_size;
+    uint32_t subblock_wt = 0;
+    uint32_t block_ht = 0;
+    uint32_t block_wt = 0;
+    bool legacy_reduction = false;
+    bool legacy_rsqrt = false;
+    bool use_welford = false;
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+                subblock_wt = program_config.subblock_w;
+                block_ht = program_config.block_h;
+                block_wt = program_config.block_w;
+                legacy_reduction = program_config.legacy_reduction;
+                legacy_rsqrt = program_config.legacy_rsqrt;
+                use_welford = program_config.use_welford;
+            }
+        },
+        operation_attributes.program_config);
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
@@ -1377,7 +1396,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
 
-    LayerNormShardedOverrideRuntimeArgumentsCapture capture{
+    shared_variables_t shared_variables{
         writer_kernel_ids,
         writer_mcast_sender_kernels_id,
         writer_mcast_receiver_kernels_id,
@@ -1390,33 +1409,23 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         cb_output,
         cores};
 
-    auto override_runtime_arguments_callback =
-        [capture](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            update_layernorm_multi_core_sharded_args(
-                capture, operation, program, input_tensors, optional_input_tensors, output_tensors);
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{std::move(program), std::move(shared_variables)};
 }
 
-void update_layernorm_multi_core_sharded_args(
-    const LayerNormShardedOverrideRuntimeArgumentsCapture& capture,
-    const void* operation,
-    Program& program,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    const std::vector<Tensor>& output_tensors) {
-    const auto src_buffer_a = input_tensors.at(0).buffer();
-    const auto& b_tensor = optional_input_tensors.at(0);
-    const auto& gamma_tensor = optional_input_tensors.at(1);
-    const auto& beta_tensor = optional_input_tensors.at(2);
-    const auto& stats_tensor = optional_input_tensors.at(3);
-    const auto dst_buffer = output_tensors.at(0).buffer();
+void LayerNormShardedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto src_buffer_a = tensor_args.input.buffer();
+    const auto& b_tensor = tensor_args.residual_input_tensor;
+    const auto& gamma_tensor = tensor_args.weight;
+    const auto& beta_tensor = tensor_args.bias;
+    const auto& stats_tensor = tensor_args.stats;
+    const auto dst_buffer = tensor_return_value.buffer();
+
+    const auto& capture = cached_program.shared_variables;
+    auto& program = cached_program.program;
 
     UpdateDynamicCircularBufferAddress(program, capture.cb_in0, *src_buffer_a);
 
@@ -1458,4 +1467,4 @@ void update_layernorm_multi_core_sharded_args(
     }
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::layer_norm

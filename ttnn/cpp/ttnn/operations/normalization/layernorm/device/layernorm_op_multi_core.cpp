@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -22,7 +22,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layer_norm {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -86,22 +86,39 @@ bool CB_can_fit_in_L1(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-operation::ProgramWithCallbacks layernorm_multi_core(
-    const Tensor& a,
-    const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    Tensor& output,
-    LayerNormType norm_type,
-    float eps,
-    bool legacy_reduction,
-    bool legacy_rsqrt,
-    bool use_welford,
-    DeviceComputeKernelConfig compute_kernel_config) {
+LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const uint32_t no_weights_max_size = 120;
     const uint32_t with_weights_max_size = 60;
-    bool rms_norm = norm_type == LayerNormType::RMSNORM;
+
+    // Extract from operation_attributes and tensor_args
+    const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const auto& gamma = tensor_args.weight;
+    const auto& beta = tensor_args.bias;
+    auto& output = tensor_return_value;
+    bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
+    float eps = operation_attributes.eps;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+
+    // Extract program config
+    bool legacy_reduction = false;
+    bool legacy_rsqrt = false;
+    bool use_welford = false;
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                legacy_reduction = program_config.legacy_reduction;
+                legacy_rsqrt = program_config.legacy_rsqrt;
+                use_welford = program_config.use_welford;
+            }
+        },
+        operation_attributes.program_config);
+
     const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
@@ -520,48 +537,38 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         curr_row += num_tile_rows_per_core;
     }
 
-    LayerNormMultiCoreOverrideRuntimeArgsCapture capture = {
+    shared_variables_t shared_variables = {
         .reader_kernel_id = reader_kernels_id,
         .writer_kernel_id = writer_kernels_id,
         .num_cores = num_cores,
         .grid_size = grid_size};
 
-    auto override_runtime_arguments_callback =
-        [capture](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            update_layernorm_multi_core_args(
-                capture, operation, program, input_tensors, optional_input_tensors, output_tensors);
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{std::move(program), std::move(shared_variables)};
 }
 
-void update_layernorm_multi_core_args(
-    const LayerNormMultiCoreOverrideRuntimeArgsCapture& capture,
-    const void* operation,
-    const Program& program,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    const std::vector<Tensor>& output_tensors) {
-    const auto src_a_dram_buffer = input_tensors.at(0).buffer();
-    const auto& src_b_tensor = optional_input_tensors.at(0);
-    const auto& gamma_tensor = optional_input_tensors.at(1);
-    const auto& beta_tensor = optional_input_tensors.at(2);
-    const auto dst_dram_buffer = output_tensors.at(0).buffer();
+void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto src_a_dram_buffer = tensor_args.input.buffer();
+    const auto& src_b_tensor = tensor_args.residual_input_tensor;
+    const auto& gamma_tensor = tensor_args.weight;
+    const auto& beta_tensor = tensor_args.bias;
+    const auto dst_dram_buffer = tensor_return_value.buffer();
 
     auto src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
     auto gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
     auto beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
 
-    for (uint32_t i = 0; i < capture.num_cores; ++i) {
-        CoreCoord core = {i % capture.grid_size.x, i / capture.grid_size.x};
+    const auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+
+    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
+        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
 
         {
-            auto& runtime_args = GetRuntimeArgs(program, capture.reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
             runtime_args[0] = src_a_dram_buffer->address();
             if (src_b_dram_buffer != nullptr) {
                 runtime_args[8] = src_b_dram_buffer->address();
@@ -575,10 +582,10 @@ void update_layernorm_multi_core_args(
         }
 
         {
-            auto& runtime_args = GetRuntimeArgs(program, capture.writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
         }
     }
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::layer_norm

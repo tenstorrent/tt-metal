@@ -51,7 +51,7 @@ target_sources(
         groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
-        layernorm/device/layernorm_op.cpp
+        layernorm/device/layernorm_device_operation.cpp
         layernorm/device/layernorm_common.cpp
         layernorm/device/layernorm_op_multi_core.cpp
         layernorm/device/layernorm_op_multi_core_sharded.cpp
