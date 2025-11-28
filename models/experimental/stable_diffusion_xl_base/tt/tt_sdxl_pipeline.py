@@ -187,8 +187,51 @@ class TtSDXLPipeline(LightweightModule):
 
             self.image_processing_compiled = True
 
-    def encode_prompts(self, prompts, negative_prompts):
+    def check_inputs(
+        self,
+        prompts,
+        negative_prompts,
+        prompt_2=None,
+        negative_prompt_2=None,
+    ):
+        """
+        Validates prompt-related input parameters before generation.
+        Raises ValueError if any parameter is invalid.
+        """
+        assert prompts is not None, "Provide `prompts`. Cannot be None."
+
+        if prompt_2 is not None:
+            assert isinstance(
+                prompt_2, (str, list)
+            ), f"`prompt_2` has to be of type `str` or `list` but is {type(prompt_2)}"
+
+        # Validate negative prompts
+        if negative_prompts is not None:
+            if isinstance(negative_prompts, list):
+                assert len(negative_prompts) == len(prompts), (
+                    f"`negative_prompts` list length ({len(negative_prompts)}) must match "
+                    f"`prompts` list length ({len(prompts)})"
+                )
+            else:
+                assert isinstance(
+                    negative_prompts, str
+                ), f"`negative_prompts` has to be of type `str` or `list` but is {type(negative_prompts)}"
+
+        if negative_prompt_2 is not None:
+            assert isinstance(
+                negative_prompt_2, (str, list)
+            ), f"`negative_prompt_2` has to be of type `str` or `list` but is {type(negative_prompt_2)}"
+
+    def encode_prompts(self, prompts, negative_prompts, prompt_2=None, negative_prompt_2=None):
         # Encode prompts using the text encoders.
+
+        # Validate prompt inputs at the beginning of execution
+        self.check_inputs(
+            prompts=prompts,
+            negative_prompts=negative_prompts,
+            prompt_2=prompt_2,
+            negative_prompt_2=negative_prompt_2,
+        )
 
         if self.pipeline_config.encoders_on_device:
             # Prompt encode on device
@@ -204,18 +247,24 @@ class TtSDXLPipeline(LightweightModule):
                     if isinstance(negative_prompts, list)
                     else negative_prompts
                 )
+                batch_prompts_2 = prompt_2[i : i + self.batch_size] if isinstance(prompt_2, list) else prompt_2
+                current_negative_prompts_2 = (
+                    negative_prompt_2[i : i + self.batch_size]
+                    if isinstance(negative_prompt_2, list)
+                    else negative_prompt_2
+                )
                 batch_embeds = batch_encode_prompt_on_device(
                     self.torch_pipeline,
                     self.tt_text_encoder,
                     self.tt_text_encoder_2,
                     self.ttnn_device,
                     prompt=batch_prompts,  # Pass the entire batch
-                    prompt_2=None,
+                    prompt_2=batch_prompts_2,
                     device=self.cpu_device,
                     num_images_per_prompt=1,
                     do_classifier_free_guidance=True,
                     negative_prompt=current_negative_prompts,
-                    negative_prompt_2=None,
+                    negative_prompt_2=current_negative_prompts_2,
                     prompt_embeds=None,
                     negative_prompt_embeds=None,
                     pooled_prompt_embeds=None,
@@ -252,12 +301,12 @@ class TtSDXLPipeline(LightweightModule):
             profiler.start("encode_prompts")
             all_embeds = self.torch_pipeline.encode_prompt(
                 prompt=prompts,  # Pass the entire list at once
-                prompt_2=None,
+                prompt_2=prompt_2,
                 device=self.cpu_device,
                 num_images_per_prompt=1,
                 do_classifier_free_guidance=True,
                 negative_prompt=negative_prompts,
-                negative_prompt_2=None,
+                negative_prompt_2=negative_prompt_2,
                 prompt_embeds=None,
                 negative_prompt_embeds=None,
                 pooled_prompt_embeds=None,
