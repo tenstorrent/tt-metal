@@ -23,14 +23,10 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
     rope_scaling_model_factory,
 )
-from models.tt_transformers.tt.load_checkpoints import (
-    convert_hf_to_meta,
-    convert_meta_to_hf,
-    reverse_permute,
-    standardize_hf_keys,
-)
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
+    HfAttentionWrapper,
     HfModelWrapper,
     determine_device_name,
     num_to_coregrid,
@@ -2033,73 +2029,6 @@ class ModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-
-
-class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb):
-        from transformers import DynamicCache
-
-        super().__init__()
-        self.attention = attention
-        self.past_key_value = DynamicCache()
-        # self.past_key_value = StaticCache(config=attention.config, max_batch_size=1, max_cache_len=256)
-        self.head_dim = head_dim
-        self.rotary_emb = rotary_emb
-
-    def forward(self, x, start_pos, freqs_cis_i, mask=None):
-        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-
-        if mask is not None:
-            while len(mask.shape) < 4:
-                mask = mask.unsqueeze(0)
-
-        if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
-                x,
-                position_embeddings=position_embeddings,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                attention_mask=mask,
-            )
-        else:
-            output, _, self.past_key_value = self.attention(
-                x,
-                past_key_value=self.past_key_value,
-                use_cache=True,
-                position_ids=position_ids,
-                attention_mask=mask,
-            )
-        return output
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
-    def load_state_dict(self, state_dict):
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
-
-    @property
-    def cache_k(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
-        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-        batch_size, seq_len, n_heads, head_dim = hf_k.shape
-
-        meta_k = torch.zeros_like(hf_k)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
-
-        return meta_k
-
-    @property
-    def cache_v(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
-        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class HfGemmaDecoderWrapper:
