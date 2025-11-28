@@ -424,10 +424,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_tile_dims(packet_header_cb_id, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_header_config);
 
+    auto total_pkt_size = packet_size_bytes + 1024;  /// HEREE TO DO TODO FIX THIS
     constexpr auto packet_cb_id = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
-        tt::tt_metal::CircularBufferConfig(packet_size_bytes, {{packet_cb_id, input_dataformat}})
-            .set_page_size(packet_cb_id, packet_size_bytes)
+        tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_dataformat}})
+            .set_page_size(packet_cb_id, total_pkt_size)
             .set_tile_dims(packet_cb_id, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_packet_config);
 
@@ -632,8 +633,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t num_workers_per_direction = 4;  // todo change it to 4 when adding all cores;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
-    const std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};  // to be modified based on device type
+    std::vector<CoreCoord> mux_cores = {CoreCoord(2, 0), CoreCoord(2, 1)};  // to be modified based on device type
     // TODO here change above to 4 cores for 2 links
+    if (is_sender_device) {
+        mux_cores = {CoreCoord(2, 0)};
+    }
 
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
 
@@ -741,7 +745,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
         writer_ct_args = {
-            compute_out_cb_l, compute_out_cb_s, compute_out_cb_m, packet_header_cb_id_2, packet_cb_id_2, l1_alignment};
+            0,
+            compute_out_cb_l,
+            compute_out_cb_s,
+            compute_out_cb_m,
+            packet_header_cb_id_2,
+            packet_cb_id_2,
+            l1_alignment};
         writer_ct_args[0] = writer_ct_args.size();
 
         fabric_mux_ct_args(
@@ -950,7 +960,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     reader_runtime_args);
 
                 reader_runtime_args[0] = reader_runtime_args.size();
-                printf("reader_rt_args size for fabric  2: %zu\n", reader_ct_args.size());
+                printf("reader_rt_args size for fabric  2: %zu\n", reader_runtime_args.size());
 
                 // then receiving from device on the right
                 fabric_mux_rt_args(

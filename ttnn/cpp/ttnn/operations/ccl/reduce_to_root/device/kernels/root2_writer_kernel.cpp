@@ -40,6 +40,13 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(fabric_ct_idx + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(fabric_ct_idx + 4);
 
+    DPRINT << "FABRIC MUX CT ARGS: \n";
+    DPRINT << "num buffers per channel: " << (uint32_t)fabric_mux_num_buffers_per_channel << "\n";
+    DPRINT << "channel buffer size bytes: " << (uint32_t)fabric_mux_channel_buffer_size_bytes << "\n";
+    DPRINT << "status address: " << (uint32_t)fabric_mux_status_address << "\n";
+    DPRINT << "termination signal address: " << (uint32_t)fabric_mux_termination_signal_address << "\n";
+    DPRINT << "num mux clients: " << (uint32_t)num_mux_clients << "\n";
+
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
     const uint32_t page_idx_start = get_arg_val<uint32_t>(1);
     const uint32_t page_idx_end = get_arg_val<uint32_t>(2);
@@ -83,10 +90,29 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "FABRIC MUX 1 RT ARGS: \n";
+    DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
+    DPRINT << "fabric mux x: " << (uint32_t)fabric_mux_x << "\n";
+    DPRINT << "fabric mux y: " << (uint32_t)fabric_mux_y << "\n";
+    DPRINT << "channel base address: " << (uint32_t)fabric_mux_channel_base_address << "\n";
+    DPRINT << "connection info address: " << (uint32_t)fabric_mux_connection_info_address << "\n";
+    DPRINT << "connection handshake address: " << (uint32_t)fabric_mux_connection_handshake_address << "\n";
+    DPRINT << "flow control address: " << (uint32_t)fabric_mux_flow_control_address << "\n";
+    DPRINT << "buffer index address: " << (uint32_t)fabric_mux_buffer_index_address << "\n";
+    DPRINT << "channel id: " << (uint32_t)fabric_mux_channel_id << "\n";
+    DPRINT << "terminaton sync address: " << (uint32_t)termination_sync_address << "\n";
+    DPRINT << "local fabric mux status address: " << (uint32_t)local_fabric_mux_status_address << "\n";
+    DPRINT << "local flow control address: " << (uint32_t)local_flow_control_address << "\n";
+    DPRINT << "local teardown address: " << (uint32_t)local_teardown_address << "\n";
+    DPRINT << "local buffer index address: " << (uint32_t)local_buffer_index_address << "\n";
+    DPRINT << "termination master noc x: " << (uint32_t)termination_master_noc_x << "\n";
+    DPRINT << "termination master noc y: " << (uint32_t)termination_master_noc_y << "\n";
+
     DPRINT << "is termination master: " << (uint32_t)is_termination_master << "\n";
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
+    DPRINT << "before building connection to fabric endpoint\n";
     mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
         fabric_mux_x,
         fabric_mux_y,
@@ -102,9 +128,11 @@ void kernel_main() {
         local_teardown_address,
         local_buffer_index_address);
     mux_connection_handle = &mux_connection;
+    DPRINT << "after building connection to fabric endpoint\n";
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
+    DPRINT << "after waiting for fabric endpoint ready\n";
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
     // set up packet header buffer
@@ -138,6 +166,10 @@ void kernel_main() {
     noc_semaphore_set(local_semaphore_ptr, 0);
     DPRINT << "after noc semaphore set\n";
 
+    DPRINT << "writer waiting front on cbs: l, s, m\n";
+    DPRINT << "cb id l: " << (uint32_t)cb_id_l << "\n";
+    DPRINT << "cb id s: " << (uint32_t)cb_id_s << "\n";
+    DPRINT << "cb id m: " << (uint32_t)cb_id_m << "\n";
     cb_wait_front(cb_id_l, chunk_size);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
     tt_memmove<false, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
