@@ -59,14 +59,30 @@ Document every divergence:
 - **Index calculation differences**: Different tensor traversal order?
 - **Core distribution differences**: Different parallelization strategy?
 
-### Step 5: Make Design Decisions
+### Step 5: Classify Arguments as Compile-Time vs Runtime
+
+**CRITICAL**: This decision affects program caching and recompilation.
+
+**Compile-time** (affects kernel structure): Kernel configs, CB sizing, tensor shapes/dimensions, core distribution, data type sizes, layout constants
+
+**Runtime** (execution data): Buffer addresses, work quantities, **user-specified parameters** (angles, seeds, thresholds, fills), index offsets
+
+**Key Rule**: User-facing API parameters that vary per call → **MUST be runtime**
+
+Examples:
+- ✅ Runtime: `angle`, `fill`, `seed` (user varies these)
+- ✅ Compile-time: `num_tiles_c`, `element_size` (derived from tensor properties, affects CB sizing)
+
+**Watch out**: Precomputed values (e.g., cos/sin from angle) are still user-variable → also runtime, OR accept cache miss per unique value
+
+### Step 6: Make Design Decisions
 For each difference, decide:
 - What approach will you take?
 - Why is this the right choice?
 - What are the alternatives considered?
 - What are the tradeoffs?
 
-### Step 6: Consult Documentation
+### Step 7: Consult Documentation
 Use DeepWiki and local documentation to verify:
 - Are there existing patterns for this type of operation?
 - Are there hardware constraints to consider?
@@ -210,6 +226,36 @@ Note: Despite naming conventions:
 
 ### Compute Access
 {CB read/write patterns}
+
+## Compile-Time Arguments
+
+**Rule**: User-facing API parameters that vary per call → runtime. Compile-time only for: CB sizing, tensor shape derivatives, kernel configs.
+
+### Reader Kernel: `{name}.cpp`
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+
+### Compute Kernel: `{name}.cpp`
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+
+### Writer Kernel: `{name}.cpp`
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+
+## Runtime Arguments
+
+### Reader Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+
+### Compute Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+
+### Writer Kernel
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
 
 ## Edge Cases
 | Condition | Expected Behavior |
