@@ -161,7 +161,7 @@ void topk_group_scores(
     bool switch_dir,
     bool& ascending,
     int log_topk_groups) {
-    // topk_tile_init();
+    topk_tile_init();
     cb_reserve_back(sorted_group_indices_cb_index, 1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -179,16 +179,15 @@ void topk_group_scores(
 
     // copy indices tile to dest reg 2
     // CVELE: Going to be correctly packed out if we use the reconfig call
-    // copy_tile_to_dst_init_short_with_dt(group_scores_cb_index, group_indices_cb_index);
+    copy_tile_to_dst_init_short_with_dt(group_scores_cb_index, group_indices_cb_index);
     // CVELE: If we use this call, dprint will not use the correct data format
-    copy_tile_to_dst_init_short(group_indices_cb_index);
+    // copy_tile_to_dst_init_short(group_indices_cb_index);
     copy_tile(group_indices_cb_index, 0, 2);
 
     dprint_tensix_dest_reg(2);
 
-    // CVELE: If we omit this, we just expect to see group_indices_cb_index in sorted_group_indices_cb_index
     // llk_topk_sort -> inplace
-    // ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
+    ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
 
     // pack index tile into sorted_group_indices_cb_index
     pack_reconfig_data_format(sorted_group_indices_cb_index);
