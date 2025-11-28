@@ -10,7 +10,7 @@
 
 #if defined(COMPILE_FOR_ERISC)
 // Forward declare these functions to avoid including erisc.h -> circular dependency via noc_nonblocking_api.h,
-// sanitize_noc.h.
+// sanitize.h.
 namespace internal_ {
 void risc_context_switch();
 void disable_erisc_app();

@@ -36,6 +36,7 @@
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
