@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import math
 import os
 from pathlib import Path
@@ -29,9 +28,17 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_meta_to_hf,
     reverse_permute,
     standardize_hf_keys,
-    standardize_hf_keys_multimodal,
 )
-from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup, PrecisionSetting, TensorGroup
+from models.tt_transformers.tt.model_config import (
+    DecodersPrecision,
+    MathFidelitySetting,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+    determine_device_name,
+    num_to_coregrid,
+    num_to_corerange,
+)
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -280,55 +287,6 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
-    """
-    Reads a JSON file and returns a DecodersPrecision instance.
-    """
-    if not json_file_path:
-        return None
-
-    json_file_path = Path(json_file_path)
-    if not json_file_path.exists():
-        raise FileNotFoundError(f"JSON configuration file not found: {json_file_path}")
-
-    try:
-        with open(json_file_path, "r") as f:
-            config_data = json.load(f)
-
-        if "decoders" not in config_data:
-            raise ValueError("Invalid JSON format: Missing 'decoders' key")
-
-        num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        placeholder_model_name = "model"
-        decoder_conf = default_optimization(placeholder_model_name)
-        default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
-        default_op_fidelity_settings = decoder_conf.op_fidelity_settings
-        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
-
-        for decoder_id, settings in config_data["decoders"].items():
-            decoder_id = int(decoder_id)
-
-            tensor_precision = (
-                {TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()}
-                if "precision_cfg" in settings
-                else default_tensor_dtype_settings
-            )
-
-            op_fidelity = (
-                {OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()}
-                if "fidelity_cfg" in settings
-                else default_op_fidelity_settings
-            )
-
-            custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
-            decoders_precision.set_decoder_conf(decoder_id, custom_opt)
-
-        return decoders_precision
-
-    except Exception as e:
-        raise ValueError(f"Error loading JSON configuration: {e}")
-
-
 class ModelArgs:
     OP_KEYS = (
         # Embedding
@@ -427,13 +385,11 @@ class ModelArgs:
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
         else:
-            assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
+            assert False, "Please set HF_MODEL to a HuggingFace name e.g. google/gemma-3-27b-it"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
-            assert os.path.exists(
-                self.CKPT_DIR
-            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            assert os.path.exists(self.CKPT_DIR), f"Checkpoint directory {self.CKPT_DIR} does not exist"
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
@@ -470,21 +426,6 @@ class ModelArgs:
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Llama-3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
-                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -503,10 +444,7 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (
-            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
-            and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
+        if self.base_model_name in ["gemma-3-27b", "gemma-3-4b"] and self.device_name == "N150":
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -1162,9 +1100,6 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_llama_vision():
-                self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok if self.is_gemma else nearest_32(self.vision_chunk_ntok)
-
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
@@ -1185,10 +1120,8 @@ class ModelArgs:
                 ),
             )
 
-            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
-                ttnn.DRAM_MEMORY_CONFIG if self.is_gemma else ttnn.L1_MEMORY_CONFIG
-            )
-            self.lm_head_dtype = ttnn.bfloat16 if self.is_gemma else None
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
+            self.lm_head_dtype = ttnn.bfloat16
 
             self.set_tg_attention_config()
 
@@ -1382,10 +1315,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_llama_vision():
-            return "text_model."
-        else:
-            return ""
+        return ""
 
     def _get_hidden_activation_type(self, config):
         activation_map = {
@@ -1460,22 +1390,11 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
-            raise AssertionError(
-                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
-            )
-
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
         if self.num_devices:
-            # Default padding cores for each model, 0 if not set here
-            default_padded_cores = {
-                "Qwen2.5-VL-72B": 32,
-                "Qwen2.5-VL-32B": 16,
-                "Qwen2.5-72B": 32,
-                "Qwen2.5-7B": 16,
-                "QwQ-32B": 16,
-            }.get(self.base_model_name, 0)
+            # Default padding for Gemma models
+            default_padded_cores = 0
 
             # Override MLP padding cores from env var
             mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
@@ -1528,7 +1447,7 @@ class ModelArgs:
         # self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
+        self.is_multimodal = "vision_config" in config
 
         self._set_model_specific_params()
 
@@ -1613,11 +1532,7 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-        if "Qwen/Qwen2.5-VL" in self.model_name:
-            from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-        else:
-            from transformers import AutoConfig
+        from transformers import AutoConfig
 
         if self.dummy_weights:
             logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
@@ -1628,12 +1543,6 @@ class ModelArgs:
         if "text_config" in self.hf_config or "vision_config" in self.hf_config:
             if self.is_gemma:
                 self._set_params_from_dict(self.hf_config)
-                if "vision_config" in self.hf_config:
-                    merged_vision_config = merge_vision_config(self.hf_config)
-                    self._set_vision_params(merged_vision_config)
-            else:
-                merged_text_config = merge_text_config(self.hf_config)
-                self._set_params_from_dict(merged_text_config)
                 if "vision_config" in self.hf_config:
                     merged_vision_config = merge_vision_config(self.hf_config)
                     self._set_vision_params(merged_vision_config)
@@ -1660,20 +1569,15 @@ class ModelArgs:
 )"""
 
     def is_llama_vision(self):
-        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
+        return False
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         if self.is_gemma:
             if is_vision:
                 text_prefix = "model.vision_tower.vision_model.encoder."
-
             else:
                 # text_prefix = "model.language_model."
-
                 text_prefix = ""
-
-        else:
-            text_prefix = self.state_dict_text_prefix
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
@@ -1732,15 +1636,7 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
-
-                print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-            else:
-                from transformers import AutoModelForCausalLM
+            from transformers import AutoModelForCausalLM
 
             model = AutoModelForCausalLM.from_pretrained(
                 self.CKPT_DIR,
@@ -1756,8 +1652,6 @@ class ModelArgs:
         if self.is_multimodal:
             if self.is_gemma:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-            else:
-                state_dict = standardize_hf_keys_multimodal(state_dict)
         else:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -2062,25 +1956,6 @@ class ModelArgs:
     def create_tokenizer(self):
         from transformers import AutoTokenizer
 
-        # Mapping of base model names to their known tokenizer paths
-        # These are the original models that have proper tokenizers
-        base_model_tokenizer_mapping = {
-            "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
-            "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
-            "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
-            "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
-            "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
-            "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
-            "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
-            "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
-            "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
-            "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
-            "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
-            "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-            "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
-            "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
-        }
-
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
         logger.info(f"Model name: {self.model_name}")
         logger.info(f"Base model name: {self.base_model_name}")
@@ -2091,51 +1966,8 @@ class ModelArgs:
             logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
         except Exception as e:
             logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
-
-            # Try to use base model tokenizer as fallback
-            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
-
-            # If no direct match, try to infer from model name patterns
-            if not fallback_tokenizer_path:
-                model_name_lower = self.model_name.lower()
-                if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-                elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
-                elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
-                elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
-                elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
-                elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
-                elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
-                    fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
-                elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
-                    fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
-                elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
-                    fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
-                elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
-                    fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
-                elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
-                    fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
-                elif "mistral" in model_name_lower and "7b" in model_name_lower:
-                    fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
-
-            if fallback_tokenizer_path:
-                logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                try:
-                    tokenizer = AutoTokenizer.from_pretrained(
-                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
-                    )
-                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                except Exception as fallback_e:
-                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                    raise fallback_e
-            else:
-                logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-                raise e
+            logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+            raise e
 
         # Add meta-compatible stop token list to the HF tokenizer
         if not "stop_tokens" in tokenizer.__dict__:
@@ -2160,11 +1992,7 @@ class ModelArgs:
         return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
-        # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-        if "Qwen/Qwen2.5-VL" in self.model_name:
-            from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-        else:
-            from transformers import AutoConfig, AutoModel
+        from transformers import AutoConfig, AutoModel
 
         # HF is much faster at loading from a checkpoint than generating from config
         # so use that by preference unless we don't have a checkpoint
@@ -2247,13 +2075,6 @@ class ModelArgs:
                 from transformers import Gemma3ForConditionalGeneration
 
                 model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-            else:
-                if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
-                else:
-                    model = self.cached_hf_model
-                model.model.layers = model.model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper
@@ -2361,19 +2182,13 @@ class ModelArgs:
         if self.is_gemma:
             rotary_emb_local = model.model.rotary_emb_local
             wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
-        else:
-            wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
 
         return wrapper
 
     def reference_attention(self, rope_embeddings="global"):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].self_attn
-        use_position_embeddings = layer.__class__.__name__ in (
-            "Qwen3Attention",
-            "MistralAttention",
-            "Gemma3Attention",
-        )
+        use_position_embeddings = layer.__class__.__name__ in ("Gemma3Attention",)
         if "gemma-3" in self.model_name:
             if rope_embeddings == "local":
                 rotary_emb = model.model.rotary_emb_local
@@ -2671,142 +2486,3 @@ class HfModelWrapper:
     def cache_v(self):
         [(k, v)] = self.past_key_values.to_legacy_cache()
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-
-
-class DecodersPrecision:
-    @classmethod
-    def accuracy(cls, num_decoders, model_name):
-        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
-        inst.__name__ = "accuracy"
-        return inst
-
-    @classmethod
-    def performance(cls, num_decoders, model_name):
-        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
-        inst.__name__ = "performance"
-        return inst
-
-    def __init__(self, num_decoders, model_name, decoder_conf: dict = None):
-        if decoder_conf is None:
-            decoder_conf = ModelOptimizations.accuracy(model_name)
-        self.decoder_optimizations = {decoder_id: decoder_conf for decoder_id in range(num_decoders)}
-        self._update_full_name()
-
-    def set_decoder_conf(self, decoder_id, conf: ModelOptimizations):
-        self.decoder_optimizations[decoder_id] = conf
-        self._update_full_name()
-
-    def get_tensor_dtype(self, decoder_id, tensor: TensorGroup):
-        precision_setting_lookup = {
-            PrecisionSetting.BFP4: ttnn.bfloat4_b,
-            PrecisionSetting.BFP8: ttnn.bfloat8_b,
-            PrecisionSetting.BF16: ttnn.bfloat16,
-            None: None,  # this signals that original dtype should be used
-        }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
-
-    def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
-        math_fidelity_setting_lookup = {
-            MathFidelitySetting.LOFI: configuration.compute_kernel_config_lofi,
-            MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
-            MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
-            MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
-            MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
-            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
-        }
-        return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
-
-    def _update_full_name(self):
-        self._full_name = " | ".join(
-            f"Decoder {decoder_id}: {conf._full_name}" for decoder_id, conf in self.decoder_optimizations.items()
-        )
-
-    @classmethod
-    def _precision_factory(cls, num_decoders, model_name, optimization_level):
-        # use respective configuration for each optimization level
-        decoder_config_filename = None
-        match optimization_level:
-            case ModelOptimizations.accuracy:
-                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
-            case ModelOptimizations.performance:
-                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
-            case _:
-                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
-
-        # check if decoder config exists, if it exists load it else use optimization_level
-        model_params_dir = Path(__file__).parent.parent
-        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
-        inst = None
-        if decoder_config_path.exists():
-            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
-            logger.info(
-                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
-            )
-        else:
-            inst = cls(num_decoders, model_name, optimization_level(model_name))
-
-        return inst
-
-
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
-    return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
-    )
-
-
-def num_to_coregrid(x):
-    if x % 8 == 0:
-        return ttnn.CoreGrid(y=x // 8, x=8)
-    if x == 12:
-        return ttnn.CoreGrid(y=2, x=6)
-    if x == 20:
-        return ttnn.CoreGrid(y=4, x=5)
-
-
-def determine_device_name(mesh_device):
-    """
-    Determine device name based on number of devices and architecture.
-
-    Args:
-        mesh_device (MeshDevice): MeshDevice object
-
-    Returns:
-        str: Device name (e.g., "CPU", "N150", "P100", etc.)
-
-    Raises:
-        ValueError: If architecture or device count is unsupported
-    """
-    num_devices = mesh_device.get_num_devices() if mesh_device else 0
-    arch_name = ttnn.get_arch_name()
-    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
-
-    if num_devices == 0:
-        return "CPU"
-
-    if is_blackhole():
-        dict_device_names = {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-        }
-    elif is_wormhole_b0():
-        dict_device_names = {
-            1: "N150",
-            2: "N300",
-            4: "N150x4",
-            8: "T3K",
-            32: "TG",
-        }
-    else:
-        raise ValueError(f"Unsupported architecture: {arch_name}")
-
-    if num_devices in dict_device_names:
-        return dict_device_names[num_devices]
-    else:
-        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
