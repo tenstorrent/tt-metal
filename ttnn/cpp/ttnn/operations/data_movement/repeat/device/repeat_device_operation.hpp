@@ -33,11 +33,10 @@ struct RepeatDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors);
 
-    // use this one with appropriate types?
-    // tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
-    //     const std::vector<Tensor>& input_tensors,
-    //     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //     std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor) const;
 
     // the compiler will take care of invoke
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

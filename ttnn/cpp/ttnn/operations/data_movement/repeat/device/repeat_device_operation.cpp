@@ -71,18 +71,17 @@ RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
 
-// tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
-// RepeatDeviceOperation::create_op_performance_model(
-//     const std::vector<Tensor>& input_tensors,
-//     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-//     std::vector<Tensor>& output_tensors) const {
-//     const auto& input_tensor = input_tensors.at(0);
-//     const auto& output_tensor = output_tensors.at(0);
-//     int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
-//     tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-//         input_tensors, output_tensors, ideal_dev_clock_cycles);
-//     return result;
-// }
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+RepeatDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) const {
+    const auto& input_tensor = tensor_args.input;
+    int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    return result;
+}
 
 std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
     const Tensor& input,
