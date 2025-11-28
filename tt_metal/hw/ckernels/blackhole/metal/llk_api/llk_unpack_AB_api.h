@@ -70,7 +70,6 @@ inline void llk_unpack_AB(
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    const bool transpose_of_faces = 0 /*not used*/,
     const std::uint32_t bcast_row_idx = 0) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
@@ -115,7 +114,7 @@ inline void llk_unpack_AB(
     }
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_<BType>(address_a, address_b, transpose_of_faces > 0);
+    _llk_unpack_AB_<BType>(address_a, address_b);
     WAYPOINT("UABD");
 }
 
