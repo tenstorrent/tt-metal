@@ -179,9 +179,8 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         logger.info("Loading reference model weights...")
         reference_weights = setup["model_args"].load_state_dict(
             weights_path=setup["model_args"].model_path,
-            head_dim=setup["model_args"].hf_config.head_dim,
             dummy_weights=setup["model_args"].dummy_weights,
-            convert_to_meta_format=setup["model_args"].convert_to_meta_format,
+            convert_to_meta_format=True,
         )
 
         # Create reference model and load the real weights

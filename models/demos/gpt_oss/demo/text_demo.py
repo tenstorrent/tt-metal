@@ -150,7 +150,7 @@ def prepare_gpt_oss_generator_args(
         #     "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
         #     1,  # data_parallel
         #     1,  # batch_size
-        #     1,  # repeat_batchesx
+        #     1,  # repeat_batches
         #     8 * 1024,  # max_seq_len
         #     200,  # max_generated_tokens
         #     {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
@@ -286,11 +286,14 @@ def test_gpt_oss_demo(
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
-        all_prompts = input_prompts
-    else:  # Inputs from file
-        input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, instruct=False)
+    elif isinstance(input_prompts, str):  # Inputs from file
+        input_prompts, _ = load_inputs(input_prompts, global_batch_size, instruct=False)
+    else:
+        raise ValueError(
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+        )
     profiler.end("loading_inputs")
 
     # Create repeat batches (like tt-transformers)
@@ -506,7 +509,8 @@ def test_gpt_oss_demo(
         model_name = model_args[0].model_name
         model_device_key = f"{tt_device_name}_{model_name}"
 
-        perf_targets = json.load(open(Path(__file__).parent.parent.joinpath("perf_targets.json")))
+        with open(Path(__file__).parent.parent.joinpath("perf_targets.json"), "r") as f:
+            perf_targets = json.load(f)
         prefill_pad_length = 1 << max(prefill_lens).bit_length()  # round up to the next power of 2
         if (
             f"prefill_{prefill_pad_length}" in perf_targets["targets"]
