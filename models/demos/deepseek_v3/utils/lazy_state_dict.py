@@ -68,12 +68,16 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
           different prefixes while allowing reuse for the same full key.
         """
         combined_prefix = self._base_prefix + prefix
+
+        # Inherit parent's layer filter if not explicitly overridden
+        child_num_layers = self._num_layers if num_layers is None else num_layers
+
         return LazyStateDict(
             self._model_path,
             combined_prefix,
             _full_to_file=self._full_to_file,
             _cache=self._cache,
-            _num_layers=num_layers,
+            _num_layers=child_num_layers,
         )
 
     def _full_key(self, key: str) -> str:

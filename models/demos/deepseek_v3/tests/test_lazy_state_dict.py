@@ -330,3 +330,57 @@ def test_non_numeric_layer_segment_not_filtered(tmp_path: Path):
 
     # Access works for non-numeric segment
     _ = view["model.layers.foo.bar"]
+
+
+def test_view_inherits_parent_layer_filter(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    keys = {
+        "model.layers.0.k": torch.randn(1),
+        "model.layers.1.k": torch.randn(1),
+        "model.layers.2.k": torch.randn(1),
+    }
+    safetensors.torch.save_file(keys, str(file1))
+    _write_index(model_dir, {k: file1.name for k in keys.keys()})
+
+    state = load_state_dict(model_dir, "")
+    parent = state.view_with_prefix("", num_layers=2)  # allow layers 0,1 only
+    child = parent.view_with_prefix("model.layers.")  # no num_layers argument -> inherit parent's
+
+    child_keys = set(child.keys())
+    assert "0.k" in child_keys
+    assert "1.k" in child_keys
+    assert "2.k" not in child_keys  # inherited filter still hides layer 2
+
+
+def test_view_override_parent_layer_filter(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    file1 = model_dir / "a.safetensors"
+    keys = {
+        "model.layers.0.k": torch.randn(1),
+        "model.layers.1.k": torch.randn(1),
+        "model.layers.3.k": torch.randn(1),
+    }
+    safetensors.torch.save_file(keys, str(file1))
+    _write_index(model_dir, {k: file1.name for k in keys.keys()})
+
+    state = load_state_dict(model_dir, "")
+    parent = state.view_with_prefix("", num_layers=2)  # allows 0,1
+
+    # Tighter override
+    child_tight = parent.view_with_prefix("model.layers.", num_layers=1)  # allows only 0
+    tight_keys = set(child_tight.keys())
+    assert "0.k" in tight_keys
+    assert "1.k" not in tight_keys
+    assert "3.k" not in tight_keys
+
+    # Looser override
+    child_loose = parent.view_with_prefix("model.layers.", num_layers=5)  # allows 0..4
+    loose_keys = set(child_loose.keys())
+    assert "0.k" in loose_keys
+    assert "1.k" in loose_keys
+    assert "3.k" in loose_keys
