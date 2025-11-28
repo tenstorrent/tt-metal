@@ -61,7 +61,7 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
         ttnn.rsub,
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True])
+@pytest.mark.parametrize("use_legacy", [True, False])
 def test_binary_int32(input_shapes, low_a, high_a, low_b, high_b, ttnn_op, use_legacy, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
