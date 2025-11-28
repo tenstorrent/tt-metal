@@ -469,8 +469,8 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
-        // Pin start or mesh to match the Galaxy Topology so that external QSFP links align with corner of fabric mesh
-        // node ids This is for performance optimizations to make sure that MGD mapping does not bisect a device
+        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the corner node IDs of the fabric mesh.
+        // This is a performance optimization to ensure that MGD mapping does not bisect a device.
 
         // * * o o < Pinned corners marked with *
         // * o o o
