@@ -804,7 +804,7 @@ class DeepseekGenerator:
             )
             return logits.squeeze(0).squeeze(0)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace) -> None:
+    def warmup_model_prefill(self, **kwargs) -> None:
         logger.warning("Warmup model prefill not implemented for DeepseekGenerator")
         logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator")
 
