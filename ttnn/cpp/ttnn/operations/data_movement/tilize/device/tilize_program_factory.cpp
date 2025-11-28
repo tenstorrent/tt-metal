@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks tilize_single_core(
     tt::tt_metal::Program program{};
 
     CoreRange default_core({0, 0}, {0, 0});
-    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value(), 1).at(0) : default_core;
+    CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -49,11 +49,12 @@ operation::ProgramWithCallbacks tilize_single_core(
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size =
-        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
+    // uint32_t max_l1_size =
+    //    (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
+    /*
     if (num_tiles_in_row <= max_tiles) {
         num_tiles_per_block = num_tiles_in_row;
     } else {
@@ -64,6 +65,7 @@ operation::ProgramWithCallbacks tilize_single_core(
             }
         }
     }
+    */
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
@@ -136,29 +138,27 @@ operation::ProgramWithCallbacks tilize_single_core(
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
-    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, core](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
+            CoreCoord core_0 = corerange_to_cores(core).at(0);
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_0);
+                runtime_args[0] = src_buffer->address();
+            }
 
-        CoreCoord core = {0, 0};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    };
+            {
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core_0);
+                runtime_args[0] = dst_buffer->address();
+            }
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -170,7 +170,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-
+    printf("Using multi core block\n");
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     IDevice* device = a.device();
